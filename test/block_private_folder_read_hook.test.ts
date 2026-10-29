@@ -8,9 +8,8 @@
 //      - ls /home/joshua/Dropbox/<folder>
 //      - rg foo ~/Dropbox/<folder>
 //      - python3 -c "open('/home/joshua/Dropbox/<folder>/x')"
-//   2. Allowed cases:
-//      - Folder outside the list (cat ~/Dropbox/OutsideTheList/x) -> allowed
-//      - Prefix-sharing name (ls ~/Dropbox/WebJamAppsExtra) -> allowed
+//   2. Only the three allowed Dropbox folders pass; unknown and prefix-sharing
+//      top-level names are refused, even when absent from the private list.
 //      - Non-Dropbox project paths (cd /home/joshua/WebJamApps/CollegeLutheran) -> allowed
 //   3. Three outcomes:
 //      - Allow: exit 0, empty stderr
@@ -26,6 +25,7 @@ import * as path from "jsr:@std/path@^1.0.0";
 import {
   buildFolderPattern,
   checkCommandForPrivateFolder,
+  checkPrivateFolderCommand,
   folderToRegexPattern,
   getPrivateDropboxFolders,
 } from "../hooks/lib/check_private_folder_read.ts";
@@ -59,10 +59,44 @@ const EXPECTED_16_FOLDERS = [
   "web-jam-llc",
 ];
 
+// The documented suite grants --allow-run, not --allow-write. Keep fixture writes
+// in a fixed child program; the guard itself only receives command text and never runs it.
+function fixtureIO(action: string, args: unknown[]): string {
+  const code = `
+    const [action, json] = Deno.args;
+    const args = JSON.parse(json);
+    if (action === "temp") console.log(Deno.makeTempDirSync(args[0]));
+    else if (action === "write") Deno.writeTextFileSync(args[0], args[1]);
+    else if (action === "mkdir") Deno.mkdirSync(args[0], { recursive: true });
+    else if (action === "symlink") Deno.symlinkSync(args[0], args[1]);
+    else if (action === "remove") Deno.removeSync(args[0], { recursive: true });
+    else throw new Error("unknown fixture action");
+  `;
+  const result = new Deno.Command(Deno.execPath(), {
+    args: ["eval", code, action, JSON.stringify(args)],
+    stdout: "piped",
+    stderr: "piped",
+  }).outputSync();
+  assertEquals(result.code, 0, new TextDecoder().decode(result.stderr));
+  return new TextDecoder().decode(result.stdout).trim();
+}
+
+function createFixtureDir(options: Deno.MakeTempOptions = {}): string {
+  return fixtureIO("temp", [options]);
+}
+
+function writeFixture(filename: string, text: string): void {
+  fixtureIO("write", [filename, text]);
+}
+
+function removeFixture(filename: string, _options?: Deno.RemoveOptions): void {
+  fixtureIO("remove", [filename]);
+}
+
 // Fixture Claude settings file so no test depends on the real one of whoever runs them.
-const FIXTURE_DIR = Deno.makeTempDirSync({ prefix: "private-folder-guard-" });
+const FIXTURE_DIR = createFixtureDir({ prefix: "private-folder-guard-" });
 const FIXTURE_SETTINGS_PATH = path.join(FIXTURE_DIR, "settings.json");
-Deno.writeTextFileSync(
+writeFixture(
   FIXTURE_SETTINGS_PATH,
   JSON.stringify({
     permissions: {
@@ -72,7 +106,7 @@ Deno.writeTextFileSync(
 );
 globalThis.addEventListener("unload", () => {
   try {
-    Deno.removeSync(FIXTURE_DIR, { recursive: true });
+    removeFixture(FIXTURE_DIR, { recursive: true });
   } catch {
     // already gone
   }
@@ -129,36 +163,36 @@ Deno.test("getPrivateDropboxFolders fails closed on missing settings file", () =
 });
 
 Deno.test("getPrivateDropboxFolders fails closed on corrupt JSON", async () => {
-  const tempDir = await Deno.makeTempDir();
+  const tempDir = await createFixtureDir();
   const tempFile = path.join(tempDir, "corrupt.json");
   try {
-    await Deno.writeTextFile(tempFile, "{ not valid json");
+    await writeFixture(tempFile, "{ not valid json");
     const result = getPrivateDropboxFolders(tempFile);
     assertEquals(result.ok, false);
     assertStringIncludes(result.error ?? "", "cannot parse JSON");
   } finally {
-    await Deno.remove(tempDir, { recursive: true });
+    await removeFixture(tempDir, { recursive: true });
   }
 });
 
 Deno.test("getPrivateDropboxFolders fails closed when permissions.deny is missing", async () => {
-  const tempDir = await Deno.makeTempDir();
+  const tempDir = await createFixtureDir();
   const tempFile = path.join(tempDir, "no_deny.json");
   try {
-    await Deno.writeTextFile(tempFile, JSON.stringify({ permissions: {} }));
+    await writeFixture(tempFile, JSON.stringify({ permissions: {} }));
     const result = getPrivateDropboxFolders(tempFile);
     assertEquals(result.ok, false);
     assertStringIncludes(result.error ?? "", "permissions.deny is not an array");
   } finally {
-    await Deno.remove(tempDir, { recursive: true });
+    await removeFixture(tempDir, { recursive: true });
   }
 });
 
 Deno.test("getPrivateDropboxFolders fails closed when no Dropbox folders are found in deny rules", async () => {
-  const tempDir = await Deno.makeTempDir();
+  const tempDir = await createFixtureDir();
   const tempFile = path.join(tempDir, "empty_deny.json");
   try {
-    await Deno.writeTextFile(
+    await writeFixture(
       tempFile,
       JSON.stringify({ permissions: { deny: ["Bash(git push -f *)"] } }),
     );
@@ -166,7 +200,7 @@ Deno.test("getPrivateDropboxFolders fails closed when no Dropbox folders are fou
     assertEquals(result.ok, false);
     assertStringIncludes(result.error ?? "", "no private Dropbox folders found");
   } finally {
-    await Deno.remove(tempDir, { recursive: true });
+    await removeFixture(tempDir, { recursive: true });
   }
 });
 
@@ -216,7 +250,7 @@ Deno.test("checkCommandForPrivateFolder identifies matched folder name or return
 
 for (const folder of EXPECTED_16_FOLDERS) {
   Deno.test(`hook refuses literal shape 1: cat ~/Dropbox/${folder}/x`, async () => {
-    const cmd = `cat ~/Dropbox/${folder}/x`;
+    const cmd = `cat ~/Dropbox/'${folder}'/x`;
     const res = await runHook({ tool_name: "Bash", tool_input: { command: cmd } });
     assertEquals(res.code, 2);
     assertStringIncludes(res.stderr, "BLOCKED (private-folder read guard)");
@@ -224,7 +258,7 @@ for (const folder of EXPECTED_16_FOLDERS) {
   });
 
   Deno.test(`hook refuses literal shape 2: ls /home/joshua/Dropbox/${folder}`, async () => {
-    const cmd = `ls /home/joshua/Dropbox/${folder}`;
+    const cmd = `ls '/home/joshua/Dropbox/${folder}'`;
     const res = await runHook({ tool_name: "Bash", tool_input: { command: cmd } });
     assertEquals(res.code, 2);
     assertStringIncludes(res.stderr, "BLOCKED (private-folder read guard)");
@@ -232,7 +266,7 @@ for (const folder of EXPECTED_16_FOLDERS) {
   });
 
   Deno.test(`hook refuses literal shape 3: rg foo ~/Dropbox/${folder}`, async () => {
-    const cmd = `rg foo ~/Dropbox/${folder}`;
+    const cmd = `rg foo ~/Dropbox/'${folder}'`;
     const res = await runHook({ tool_name: "Bash", tool_input: { command: cmd } });
     assertEquals(res.code, 2);
     assertStringIncludes(res.stderr, "BLOCKED (private-folder read guard)");
@@ -250,25 +284,23 @@ for (const folder of EXPECTED_16_FOLDERS) {
 
 // --- 3. End-to-end hook script tests: allowed cases ---
 
-Deno.test("hook allows folder outside the list: cat ~/Dropbox/OutsideTheList/x", async () => {
+Deno.test("hook refuses a Dropbox folder absent from the private list", async () => {
   const cmd = "cat ~/Dropbox/OutsideTheList/x";
   const res = await runHook({ tool_name: "Bash", tool_input: { command: cmd } });
-  assertEquals(res.code, 0);
-  assertEquals(res.stderr, "");
+  assertEquals(res.code, 2);
+  assertStringIncludes(res.stderr, "OutsideTheList");
 });
 
-Deno.test("hook allows prefix-sharing name: ls ~/Dropbox/WebJamAppsExtra", async () => {
+Deno.test("hook refuses an unapproved prefix-sharing folder: WebJamAppsExtra", async () => {
   const cmd = "ls ~/Dropbox/WebJamAppsExtra";
   const res = await runHook({ tool_name: "Bash", tool_input: { command: cmd } });
-  assertEquals(res.code, 0);
-  assertEquals(res.stderr, "");
+  assertEquals(res.code, 2);
 });
 
-Deno.test("hook allows prefix-sharing name: ls ~/Dropbox/AppsExtra", async () => {
+Deno.test("hook refuses an unapproved prefix-sharing folder: AppsExtra", async () => {
   const cmd = "ls ~/Dropbox/AppsExtra";
   const res = await runHook({ tool_name: "Bash", tool_input: { command: cmd } });
-  assertEquals(res.code, 0);
-  assertEquals(res.stderr, "");
+  assertEquals(res.code, 2);
 });
 
 Deno.test("hook allows non-Dropbox project paths sharing folder names", async () => {
@@ -370,7 +402,7 @@ Deno.test("Codex payload (WJT_SURFACE=codex) is refused with exit 2, reason on s
 Deno.test("Codex payload (WJT_SURFACE=codex) passes allowed command with exit 0 and no output", async () => {
   const codexPayload = {
     tool_name: "Bash",
-    tool_input: { command: "cat ~/Dropbox/WebJamAppsExtra" },
+    tool_input: { command: "cat ~/Dropbox/web-jam-llms/notes.md" },
     hook_event_name: "PreToolUse",
   };
   const res = await runHook(codexPayload, { WJT_SURFACE: "codex" });
@@ -393,10 +425,10 @@ Deno.test("hook fails closed with exit 2 when settings.json is missing", async (
 });
 
 Deno.test("hook fails closed with exit 2 when settings.json is corrupt", async () => {
-  const tempDir = await Deno.makeTempDir();
+  const tempDir = await createFixtureDir();
   const corruptFile = path.join(tempDir, "corrupt.json");
   try {
-    await Deno.writeTextFile(corruptFile, "invalid json content");
+    await writeFixture(corruptFile, "invalid json content");
     const cmd = "ls /tmp";
     const res = await runHook(
       { tool_name: "Bash", tool_input: { command: cmd } },
@@ -405,7 +437,7 @@ Deno.test("hook fails closed with exit 2 when settings.json is corrupt", async (
     assertEquals(res.code, 2);
     assertStringIncludes(res.stderr, "BLOCKED (private-folder read guard)");
   } finally {
-    await Deno.remove(tempDir, { recursive: true });
+    await removeFixture(tempDir, { recursive: true });
   }
 });
 
@@ -420,9 +452,9 @@ Deno.test("scripts/install-hooks.sh registers block-private-folder-read.sh in PR
 });
 
 Deno.test("install-hooks.sh sandboxed run merges hook into Claude settings and agy hooks.json", async () => {
-  const hooksDir = await Deno.makeTempDir();
-  const settingsDir = await Deno.makeTempDir();
-  const agyHooksDir = await Deno.makeTempDir();
+  const hooksDir = await createFixtureDir();
+  const settingsDir = await createFixtureDir();
+  const agyHooksDir = await createFixtureDir();
   const settingsPath = path.join(settingsDir, "settings.json");
   const agyHooksPath = path.join(agyHooksDir, "hooks.json");
 
@@ -487,8 +519,240 @@ Deno.test("install-hooks.sh sandboxed run merges hook into Claude settings and a
       "Expected agy hooks.json to include block-private-folder-read.sh via agy-hook-shim.sh",
     );
   } finally {
-    await Deno.remove(hooksDir, { recursive: true });
-    await Deno.remove(settingsDir, { recursive: true });
-    await Deno.remove(agyHooksDir, { recursive: true });
+    await removeFixture(hooksDir, { recursive: true });
+    await removeFixture(settingsDir, { recursive: true });
+    await removeFixture(agyHooksDir, { recursive: true });
   }
+});
+
+// Every row of the private-folder design's literal command table. The two
+// /tmp/s.py fixtures live in this suite's unique temp directory, never shared /tmp/s.py.
+const DESIGN_CASES: Array<{ command: string; deny: boolean; source?: string }> = [
+  { command: "cat ~/Dropbox/ShermanHome/notes.txt", deny: true },
+  { command: 'ls "/home/joshua/Dropbox/Camera Uploads"', deny: true },
+  { command: "ls ~/Dropbox", deny: true },
+  { command: "ls ~/Dropbox/", deny: true },
+  { command: "ls /home/joshua/Dropbox/W?bJamApps", deny: true },
+  { command: "cat ~/Dropbox/Web*/notes.txt", deny: true },
+  { command: "cat ~/Dropbox/*/notes.txt", deny: true },
+  { command: 'D=~/Dropbox; ls "$D/Capture"', deny: true },
+  { command: 'ls "$HOME/Dropbox/"', deny: true },
+  { command: "cd ~/Dropbox && ls Apps", deny: true },
+  { command: "cd ~/Dropbox; cat CollegeLutheran/notes.md", deny: true },
+  { command: "rg -l invoice ~", deny: true },
+  { command: "grep -r invoice $HOME", deny: true },
+  { command: "grep -R invoice ${HOME}", deny: true },
+  { command: 'find /home/joshua -name "*.kdbx"', deny: true },
+  { command: "tar czf /tmp/home.tgz ~", deny: true },
+  { command: "rsync -a ~ /tmp/copy", deny: true },
+  { command: "cp -r ~ /tmp/copy", deny: true },
+  { command: "du -sh ~", deny: true },
+  { command: "ls -R ~", deny: true },
+  {
+    command: "python3 /tmp/s.py",
+    source: 'open("/home/joshua/Dropbox/web-jam-llc/a.txt")',
+    deny: true,
+  },
+  { command: "bash -s <<'EOF'\nls ~/Dropbox/Galapagos\nEOF", deny: true },
+  { command: "ls ~/Dropbox/web-jam-llms/Access_Controls", deny: false },
+  { command: "cat ~/Dropbox/joshandmariamusic/JoshMariaMusic/notes.md", deny: false },
+  { command: "du -sm ~/Dropbox/mark_henrickson", deny: false },
+  { command: "rg -l invoice ~/WebJamApps", deny: false },
+  { command: 'find ~/WebJamApps/web-jam-tools -name "*.ts"', deny: false },
+  { command: 'echo "the private folders live in Dropbox"', deny: false },
+  { command: "dropbox sharelink ~/Dropbox/joshandmariamusic/audio/take1.wav", deny: true },
+  { command: "dropbox status", deny: true },
+  { command: "/usr/bin/dropbox filestatus ~/Dropbox/web-jam-llms", deny: true },
+  { command: "python3 /usr/bin/dropbox puburl a.txt", deny: true },
+  { command: "env dropbox exclude add ~/Dropbox/web-jam-llms", deny: true },
+  { command: "cd /usr/bin && ./dropbox stop", deny: true },
+  { command: 'bash -c "dropbox sharelink a.txt"', deny: true },
+  {
+    command: "python3 /tmp/s.py",
+    source: 'subprocess.run(["/usr/bin/dropbox", "sharelink", "a.txt"])',
+    deny: true,
+  },
+  { command: "deno task dropbox:link", deny: false },
+  { command: "grep dropbox README.md", deny: false },
+  { command: "ls ~/.dropbox-dist", deny: false },
+  { command: "echo dropbox", deny: false },
+];
+
+for (const [index, entry] of DESIGN_CASES.entries()) {
+  Deno.test(`design literal ${index + 1}: ${entry.command} (${entry.deny ? "refuse" : "allow"})`, async () => {
+    let command = entry.command;
+    if (entry.source) {
+      const filename = path.join(FIXTURE_DIR, `script-${index}.py`);
+      writeFixture(filename, entry.source);
+      command = command.replace("/tmp/s.py", filename);
+    }
+    const result = await runHook({ tool_name: "Bash", tool_input: { command } });
+    assertEquals(result.code, entry.deny ? 2 : 0, result.stderr);
+    assertEquals(result.stdout, "");
+  });
+}
+
+Deno.test("private-folder policy refuses relative paths from Dropbox cwd on every surface", async () => {
+  for (const surface of ["claude", "agy", "codex"]) {
+    const result = await runHook({
+      tool_name: "Bash",
+      cwd: "/home/joshua/Dropbox",
+      tool_input: { command: "cat Apps/notes.txt" },
+    }, { WJT_SURFACE: surface });
+    assertEquals(result.code, 2, surface);
+    assertEquals(result.stdout, "");
+  }
+});
+
+Deno.test("private-folder policy covers remaining recursive flags and wrappers", () => {
+  for (
+    const command of [
+      "cp -R ~ /tmp/copy",
+      "sudo dropbox status",
+      "nohup dropbox status",
+      "exec dropbox status",
+      "exec sudo dropbox status",
+      "env sudo nohup /opt/dropbox status",
+      'sh -c "dropbox status"',
+      'python -c \'subprocess.run(["dropbox", "status"])\'',
+      'node -e \'require("child_process").spawn("dropbox", ["status"])\'',
+      "python3 - <<'PY'\nsubprocess.run(['dropbox', 'status'])\nPY",
+      "node <<'JS'\nnew Deno.Command('/usr/bin/dropbox', {args: ['status']})\nJS",
+      "find /home/joshua/.",
+      'bash -lc "dropbox status"',
+      "deno eval 'new Deno.Command(\"/usr/bin/dropbox\")'",
+    ]
+  ) {
+    assert(checkPrivateFolderCommand(command, EXPECTED_16_FOLDERS) !== null, command);
+  }
+});
+
+Deno.test("private-folder policy inspects each supported script interpreter without executing the file", async () => {
+  const filename = path.join(FIXTURE_DIR, "private-script");
+  writeFixture(filename, 'open("/home/joshua/Dropbox/web-jam-llc/a.txt")');
+  for (const interpreter of ["python3", "python", "deno run", "node", "bash", "sh"]) {
+    const result = await runHook({
+      tool_name: "Bash",
+      tool_input: { command: `${interpreter} ${filename}` },
+    });
+    assertEquals(result.code, 2, interpreter);
+  }
+  writeFixture(filename, "echo dropbox");
+  const allowed = await runHook({ tool_name: "Bash", tool_input: { command: `bash ${filename}` } });
+  assertEquals(allowed.code, 0, allowed.stderr);
+});
+
+Deno.test("private-folder policy fails closed on unreadable scripts and unresolvable paths", () => {
+  for (
+    const command of [
+      "python3 /missing/script.py",
+      'cat "$UNRESOLVED/Dropbox/notes"',
+      'ls "unterminated',
+    ]
+  ) {
+    assert(checkPrivateFolderCommand(command, EXPECTED_16_FOLDERS) !== null, command);
+  }
+});
+
+Deno.test("private-folder policy resolves symlinks and parent traversal before allowing a path", () => {
+  const home = createFixtureDir();
+  try {
+    const allowed = path.join(home, "Dropbox/web-jam-llms");
+    const privateDir = path.join(home, "Dropbox/Private");
+    fixtureIO("mkdir", [allowed]);
+    fixtureIO("mkdir", [privateDir]);
+    fixtureIO("symlink", [privateDir, path.join(allowed, "alias")]);
+    fixtureIO("symlink", [path.join(home, "missing"), path.join(allowed, "dangling")]);
+    for (
+      const command of [
+        "cat ~/Dropbox/web-jam-llms/../Private/file",
+        "cat ~/Dropbox/web-jam-llms/alias/file",
+        "cat ~/Dropbox/web-jam-llms/alias/../Private/file",
+        "cat ~/Dropbox/web-jam-llms/dangling/file",
+        "cat ~/Dropbox/web-jam-llms-extra/file",
+      ]
+    ) {
+      assert(checkPrivateFolderCommand(command, EXPECTED_16_FOLDERS, home, home) !== null, command);
+    }
+    assertEquals(
+      checkPrivateFolderCommand(
+        "cat ~/Dropbox/web-jam-llms/new-file",
+        EXPECTED_16_FOLDERS,
+        home,
+        home,
+      ),
+      null,
+    );
+  } finally {
+    removeFixture(home);
+  }
+});
+
+Deno.test("private-folder policy ignores comments and data heredocs", () => {
+  for (
+    const command of [
+      "echo ok # cat ~/Dropbox/Apps/x",
+      "python3 - <<'PY'\nprint('dropbox')\nPY",
+      'bash -lc "echo dropbox"',
+      "cat > /tmp/guard-notes <<'EOF'\ncat ~/Dropbox/Apps/x\ndropbox status\nEOF",
+    ]
+  ) assertEquals(checkPrivateFolderCommand(command, EXPECTED_16_FOLDERS), null, command);
+});
+
+Deno.test("private-folder hook refuses malformed command and cwd payloads", async () => {
+  for (
+    const payload of [
+      '{"tool_name":"Bash",',
+      { tool_name: "Bash", tool_input: { command: { unknown: true } } },
+      { tool_name: "Bash", tool_input: { command: "pwd", cwd: 42 } },
+    ]
+  ) {
+    const result = await runHook(payload);
+    assertEquals(result.code, 2, result.stderr);
+    assertEquals(result.stdout, "");
+  }
+});
+
+Deno.test("private-folder policy refuses untracked directory changes", async () => {
+  for (
+    const command of [
+      "pushd ~/Dropbox/web-jam-llms >/dev/null; pushd .. >/dev/null; ls",
+      "cd ~/Dropbox/web-jam-llms; pushd /tmp; popd; cd ..; ls",
+      "popd; ls",
+      "cd ~/Dropbox/web-jam-llms; cd /tmp; cd -; cd ..; ls",
+      "cd -P /tmp; ls",
+      "cd ~/Dropbox/web-jam-llms; cd /tmp; cd ~-; cd ..; ls",
+      "cd /tmp/*; ls",
+      'cd "$UNKNOWN_DIRECTORY"; ls',
+      "command pushd /tmp; ls",
+      "cd ~/Dropbox/web-jam-llms; builtin cd ..; ls",
+      "cd ~/Dropbox/web-jam-llms; eval 'cd ..'; ls",
+      "cd ~/Dropbox/web-jam-llms; source /tmp/step.sh; ls",
+      "cd ~/Dropbox/web-jam-llms; . /tmp/step.sh; ls",
+      "command builtin cd /tmp; ls",
+      "command eval 'cd /tmp'; ls",
+    ]
+  ) {
+    assert(checkPrivateFolderCommand(command, EXPECTED_16_FOLDERS) !== null, command);
+    const result = await runHook({ tool_name: "Bash", tool_input: { command } });
+    assertEquals(result.code, 2, command);
+    assertEquals(result.stdout, "", command);
+    assertStringIncludes(result.stderr, "cannot resolve", command);
+  }
+  assertEquals(checkPrivateFolderCommand("cd -- /tmp; ls", EXPECTED_16_FOLDERS), null);
+});
+
+Deno.test("private-folder path variables come only from real assignments in the current shell", () => {
+  for (
+    const command of [
+      'echo D=~/Dropbox/web-jam-llms; cat "$D/file"',
+      'D=~/Dropbox/web-jam-llms echo ok; cat "$D/file"',
+      'D=~/Dropbox/web-jam-llms cat "$D/file"',
+      'bash -c "D=~/Dropbox/web-jam-llms"; cat "$D/file"',
+    ]
+  ) assert(checkPrivateFolderCommand(command, EXPECTED_16_FOLDERS) !== null, command);
+  assertEquals(
+    checkPrivateFolderCommand('D=~/Dropbox/web-jam-llms; cat "$D/file"', EXPECTED_16_FOLDERS),
+    null,
+  );
 });
