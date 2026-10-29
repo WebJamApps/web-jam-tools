@@ -58,7 +58,7 @@ async function createFixtureHome(): Promise<string> {
     printf 'notes' > "$jm/Mission/notes.txt"
     printf 'readme' > "$jm/JoshMariaMusic/readme.txt"
     printf 'png' > "$tmp_home/Dropbox/web-jam-llms/old.png"
-    printf 'os.remove("/home/joshua/Dropbox/joshandmariamusic/audio/take1.wav")\\n' > /tmp/clean.py
+    printf 'os.remove("/home/joshua/Dropbox/joshandmariamusic/audio/take1.wav")\\n' > "$tmp_home/clean.py"
     printf '%s' "$tmp_home"
   `);
   assertEquals(res.code, 0, `fixture setup failed: ${res.stderr}`);
@@ -66,8 +66,12 @@ async function createFixtureHome(): Promise<string> {
 }
 
 async function cleanupFixtureHome(tmpHome: string): Promise<void> {
+<<<<<<< HEAD
   await runBash(`rm -rf "$1" /tmp/clean.py`, { 1: tmpHome });
   await runBash(`rm -rf "${tmpHome}" /tmp/clean.py`);
+=======
+  await runBash(`rm -rf "${tmpHome}"`);
+>>>>>>> cd224a7 (test(hooks): isolate production-media script fixtures)
 }
 
 async function runHookLauncher(
@@ -508,7 +512,12 @@ Deno.test("production-media guard: all 39 literal cases from the hooks design ta
   try {
     for (const tc of DESIGN_TABLE_CASES) {
       await t.step(tc.label, () => {
-        const decision = evaluatePayload(JSON.stringify(tc.payload), REPO_ROOT, tmpHome);
+        // Keep the literal design case label while isolating its helper script per fixture.
+        const payload = JSON.stringify(tc.payload).replaceAll(
+          "/tmp/clean.py",
+          path.join(tmpHome, "clean.py"),
+        );
+        const decision = evaluatePayload(payload, REPO_ROOT, tmpHome);
         assertEquals(
           decision.allowed,
           tc.expectedAllowed,
