@@ -1,33 +1,38 @@
-// Dropbox share-link CLI (web-jam-tools#171). Turns a Dropbox path — either an
-// account-relative path or a local `~/Dropbox/...` path — into the two link
-// forms WebJamApps needs when adding a song to the web-jam-back Setlist:
+// Dropbox share-link CLI (web-jam-tools#171, web-jam-tools#1581). Turns a Dropbox
+// path — either an account-relative path or a local `~/Dropbox/...` path — into
+// the two link forms WebJamApps needs when adding a song to the web-jam-back
+// Setlist:
 //   - Setlist form:  www.dropbox.com/scl/fi/...?rlkey=...&dl=0  (viewer link)
 //   - Songs/widget:  dl.dropboxusercontent.com/scl/fi/...?rlkey=...&dl=1 (direct stream)
 // Both derive from a single shared link (one API call per path).
 //
 // Auth is a durable OAuth refresh token (the `webjam-setlist-links` Dropbox
 // app; scopes files.metadata.read, sharing.read, sharing.write; account
-// web.jam.adm@gmail.com) — no more regenerating a 4-hour throwaway token.
-// Mirrors web-jam-back/src/lib/calendar.ts's refresh-token pattern: plain
-// fetch, no SDK, env-driven secrets. Dropbox's token endpoint wants the app
-// key/secret as HTTP Basic auth (Google's puts client_id/secret in the body
-// instead — see calendar.ts / send_daily_devotional.ts for that variant).
+// web.jam.adm@gmail.com). All three secret values (app key, app secret, and
+// refresh token) live only in KeePass and are read at run time via
+// `keepassxc-cli`, which prompts for the KeePass master password on each run
+// and never prints any of the three values.
 //
 // Idempotent: create_shared_link_with_settings 409s with
 // shared_link_already_exists on a path that already has a link; the fallback
 // list_shared_links(direct_only) call fetches that same existing link, so
 // re-running on the same path never creates a duplicate.
 //
-// One-time OAuth setup + env vars: see README.md "Dropbox share-link CLI".
+// One-time OAuth setup + KeePass storage: see README.md "Dropbox share-link CLI".
 //
 // Run (batch: multiple path args and/or newline-separated paths on stdin):
 //   deno task dropbox:link -- /joshandmariamusic/song.mp3
 //   deno task dropbox:link -- ~/Dropbox/joshandmariamusic/song.mp3
 //   printf '/a.mp3\n/b.mp3\n' | deno task dropbox:link --
 
+import fs from "node:fs";
+
 const TOKEN_URL = "https://api.dropboxapi.com/oauth2/token";
 const CREATE_LINK_URL = "https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings";
 const LIST_LINKS_URL = "https://api.dropboxapi.com/2/sharing/list_shared_links";
+
+export const DEFAULT_KEEPASS_DB_SUFFIX = "/Dropbox/web-jam-llc/webjamllc.kdbx";
+export const DEFAULT_KEEPASS_ENTRY = "webjam-setlist-links";
 
 // ---------- auth ----------
 
@@ -37,23 +42,144 @@ export interface DropboxSecrets {
   refreshToken: string;
 }
 
-export function dropboxSecrets(): DropboxSecrets {
-  const appKey = Deno.env.get("DROPBOX_APP_KEY");
-  const appSecret = Deno.env.get("DROPBOX_APP_SECRET");
-  const refreshToken = Deno.env.get("DROPBOX_REFRESH_TOKEN");
+export interface DropboxSecretsOptions {
+  dbPath?: string;
+  entry?: string;
+  home?: string;
+  ttyPath?: string;
+}
+
+function redactSecrets(text: string, secrets: DropboxSecrets): string {
+  let redacted = text;
+  for (const secret of [secrets.appKey, secrets.appSecret, secrets.refreshToken]) {
+    if (secret) {
+      redacted = redacted.replaceAll(secret, "[REDACTED]");
+    }
+  }
+  return redacted;
+}
+
+export function parseKeepassShowOutput(
+  stdout: string,
+  entry = DEFAULT_KEEPASS_ENTRY,
+): DropboxSecrets {
+  let userName = "";
+  let password = "";
+  const notesLines: string[] = [];
+  let inNotes = false;
+
+  const explicit: Partial<DropboxSecrets> = {};
+  const setExplicit = (rawKey: string, rawVal: string) => {
+    const key = rawKey.trim().replace(/^export\s+/i, "").replace(/^KPH:\s*/i, "").toUpperCase();
+    const val = rawVal.trim().replace(/^["']|["']$/g, "");
+    if (!val) return;
+    if (key === "DROPBOX_APP_KEY" || key === "APP_KEY" || key === "APPKEY") {
+      explicit.appKey = val;
+    } else if (key === "DROPBOX_APP_SECRET" || key === "APP_SECRET" || key === "APPSECRET") {
+      explicit.appSecret = val;
+    } else if (
+      key === "DROPBOX_REFRESH_TOKEN" || key === "REFRESH_TOKEN" || key === "REFRESHTOKEN"
+    ) {
+      explicit.refreshToken = val;
+    }
+  };
+
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const kphField = rawLine.match(/^KPH:\s*([A-Za-z0-9_-]+):\s*(.*)$/i);
+    if (kphField) {
+      inNotes = false;
+      setExplicit(kphField[1], kphField[2]);
+      continue;
+    }
+    const stdField = rawLine.match(/^(Title|UserName|Password|URL|Notes|Uuid|Tags):\s*(.*)$/);
+    if (stdField) {
+      const [, fieldName, fieldVal] = stdField;
+      inNotes = fieldName === "Notes";
+      if (fieldName === "UserName") userName = fieldVal.trim();
+      else if (fieldName === "Password") password = fieldVal.trim();
+      else if (fieldName === "Notes" && fieldVal.trim()) {
+        const trimmed = fieldVal.trim();
+        notesLines.push(trimmed);
+        const kv = trimmed.match(/^(?:export\s+)?([A-Za-z0-9_]+)\s*[:=]\s*(.+)$/);
+        if (kv) setExplicit(kv[1], kv[2]);
+      }
+      continue;
+    }
+    const kvMatch = rawLine.match(/^(?:export\s+)?([A-Za-z0-9_-]+)\s*[:=]\s*(.+)$/);
+    if (kvMatch) {
+      setExplicit(kvMatch[1], kvMatch[2]);
+    }
+    if (inNotes && rawLine.trim()) {
+      notesLines.push(rawLine.trim());
+    }
+  }
+
+  const appKey = explicit.appKey || userName;
+  const appSecret = explicit.appSecret || password;
+  const refreshToken = explicit.refreshToken ||
+    (notesLines.length === 1 && !notesLines[0].includes("=") ? notesLines[0] : "");
+
   if (!appKey || !appSecret || !refreshToken) {
     throw new Error(
-      "Missing Dropbox OAuth secrets: set DROPBOX_APP_KEY, DROPBOX_APP_SECRET, DROPBOX_REFRESH_TOKEN",
+      `Missing Dropbox OAuth secrets in KeePass entry "${entry}": expected app key, app secret, and refresh token`,
     );
   }
+
   return { appKey, appSecret, refreshToken };
 }
 
-// Exchange the stored refresh token for a short-lived access token. The
+export async function dropboxSecrets(
+  options: DropboxSecretsOptions = {},
+): Promise<DropboxSecrets> {
+  const home = options.home ?? Deno.env.get("HOME") ?? "";
+  const dbPath = options.dbPath ?? Deno.env.get("DROPBOX_KEEPASS_DB") ??
+    `${home}${DEFAULT_KEEPASS_DB_SUFFIX}`;
+  const entry = options.entry ?? Deno.env.get("DROPBOX_KEEPASS_ENTRY") ?? DEFAULT_KEEPASS_ENTRY;
+  const ttyPath = options.ttyPath ?? "/dev/tty";
+
+  // Open an independent terminal file descriptor (/dev/tty by default) for the
+  // KeePass master-password prompt so piped batch paths on Deno.stdin (consumed
+  // to EOF by readStdinPaths()) never starve keepassxc-cli of terminal input.
+  let ttyFd: number | null = null;
+  try {
+    ttyFd = fs.openSync(ttyPath, "r");
+  } catch (err) {
+    if (options.ttyPath) {
+      throw err;
+    }
+  }
+
+  try {
+    const command = new Deno.Command("keepassxc-cli", {
+      args: ["show", "--show-protected", "--all", dbPath, entry],
+      stdin: (ttyFd ?? "inherit") as "inherit",
+      stdout: "piped",
+      stderr: "inherit",
+    });
+    const { code, stdout } = await command.output();
+    if (code !== 0) {
+      throw new Error(
+        `keepassxc-cli failed to read KeePass entry "${entry}" from ${dbPath} (exit ${code})`,
+      );
+    }
+
+    const decoded = new TextDecoder().decode(stdout);
+    return parseKeepassShowOutput(decoded, entry);
+  } finally {
+    if (ttyFd !== null) {
+      fs.closeSync(ttyFd);
+    }
+  }
+}
+
+// Exchange the KeePass-stored refresh token for a short-lived access token. The
 // refresh token never expires (offline access), so this is the only network
 // step needed before every run.
-export async function refreshAccessToken(): Promise<string> {
-  const { appKey, appSecret, refreshToken } = dropboxSecrets();
+export async function refreshAccessToken(
+  options: DropboxSecretsOptions = {},
+): Promise<string> {
+  const secrets = await dropboxSecrets(options);
+  const { appKey, appSecret, refreshToken } = secrets;
   const resp = await fetch(TOKEN_URL, {
     method: "POST",
     headers: {
@@ -62,7 +188,10 @@ export async function refreshAccessToken(): Promise<string> {
     },
     body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken }),
   });
-  if (!resp.ok) throw new Error(`dropbox token refresh: ${resp.status} ${await resp.text()}`);
+  if (!resp.ok) {
+    const errText = redactSecrets(await resp.text(), secrets);
+    throw new Error(`dropbox token refresh: ${resp.status} ${errText}`);
+  }
   const body = (await resp.json()) as { access_token?: string };
   if (!body.access_token) throw new Error("dropbox token refresh returned no access_token");
   return body.access_token;
@@ -182,14 +311,17 @@ function printResult(r: LinkResult): void {
 // Batch entry point: resolves every path against one refreshed access token.
 // Returns 0 only if every path succeeded; a failure on one path doesn't stop
 // the rest (each is reported and the run still exits non-zero).
-export async function main(rawPaths: string[]): Promise<number> {
+export async function main(
+  rawPaths: string[],
+  options: DropboxSecretsOptions = {},
+): Promise<number> {
   if (rawPaths.length === 0) {
     console.error("[dropbox-link] no paths given; pass path args or pipe paths on stdin");
     return 1;
   }
   let accessToken: string;
   try {
-    accessToken = await refreshAccessToken();
+    accessToken = await refreshAccessToken(options);
   } catch (err) {
     console.error(`[dropbox-link] ${err instanceof Error ? err.message : String(err)}`);
     return 1;
@@ -208,17 +340,30 @@ export async function main(rawPaths: string[]): Promise<number> {
   return exitCode;
 }
 
-async function readStdinPaths(): Promise<string[]> {
-  if (Deno.stdin.isTerminal()) return [];
-  const text = await new Response(Deno.stdin.readable).text();
+export interface StdinReader {
+  isTerminal(): boolean;
+  readable: ReadableStream<Uint8Array>;
+}
+
+export async function readStdinPaths(stdin: StdinReader = Deno.stdin): Promise<string[]> {
+  if (stdin.isTerminal()) return [];
+  const text = await new Response(stdin.readable).text();
   return text.split("\n").map((l) => l.trim()).filter(Boolean);
 }
 
+export async function runCli(
+  args: string[] = Deno.args,
+  stdin: StdinReader = Deno.stdin,
+  options: DropboxSecretsOptions = {},
+): Promise<number> {
+  const argPaths = args.filter((a) => a !== "--");
+  const stdinPaths = await readStdinPaths(stdin);
+  return await main([...argPaths, ...stdinPaths], options);
+}
+
 if (import.meta.main) {
-  const argPaths = Deno.args.filter((a) => a !== "--");
-  const stdinPaths = await readStdinPaths();
   try {
-    Deno.exit(await main([...argPaths, ...stdinPaths]));
+    Deno.exit(await runCli());
   } catch (err) {
     console.error(err);
     Deno.exit(1);
