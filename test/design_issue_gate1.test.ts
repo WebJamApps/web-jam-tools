@@ -728,7 +728,7 @@ Deno.test("normalizeTopicSlug produces clean lowercase kebab-case slug", () => {
 Deno.test("extractTopicFromText extracts canonical topic slug from diverse titles and formats", () => {
   assertEquals(
     extractTopicFromText(
-      "skills/design-issue: automatically match existing feature design documents on Epics for Major Revisions",
+      "design-issue",
     ),
     "design-issue",
   );
@@ -964,7 +964,7 @@ Deno.test("runMatchDesignCli CLI prints match and returns 0 or 1 appropriately",
     const exitCode1 = await runMatchDesignCli(
       ["unknown-feature", "--dropbox-dir", tempDir],
     );
-    assertEquals(exitCode1, 1);
+    assertEquals(exitCode1, 2);
 
     // Missing query returns 1
     const exitCodeMissing = await runMatchDesignCli([]);
@@ -1000,7 +1000,7 @@ Deno.test("runCandidatesCli resolves Epic argument to existing canonical design 
     const exitCode = await runCandidatesCli(
       [
         "--epic",
-        "skills/design-issue: automatically match existing feature design documents on Epics for Major Revisions",
+        "design-issue",
         "--dropbox-dir",
         tempDir,
       ],
@@ -1148,7 +1148,7 @@ Deno.test("web-jam-tools#942 outcome 1: a topic with an existing canonical docum
   }
 });
 
-Deno.test("web-jam-tools#942 outcome 2: a topic with no existing document proceeds unchanged", async () => {
+Deno.test("web-jam-tools#942 outcome 2: an unmatched topic asks Josh rather than claiming no design exists", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "precondition-outcome-2-" });
   const themeDir = path.join(tempDir, "gig-outreach");
   await Deno.mkdir(themeDir, { recursive: true });
@@ -1163,7 +1163,7 @@ Deno.test("web-jam-tools#942 outcome 2: a topic with no existing document procee
       dropboxDir: tempDir,
     });
 
-    assertEquals(resolution.outcome, "no-document");
+    assertEquals(resolution.outcome, "could-not-tell");
     assertEquals(resolution.match, null);
     assertEquals(resolution.decisions.length, 0);
 
@@ -1172,10 +1172,10 @@ Deno.test("web-jam-tools#942 outcome 2: a topic with no existing document procee
       ["brand-new-feature", "--dropbox-dir", tempDir],
       { log: (msg) => logs.push(msg) },
     );
-    assertEquals(exitCode, 1);
+    assertEquals(exitCode, 2);
     assertStringIncludes(
       logs.join("\n"),
-      'No existing design document found for "brand-new-feature"',
+      "could not tell",
     );
   } finally {
     await Deno.remove(tempDir, { recursive: true });
@@ -1337,12 +1337,13 @@ Deno.test("web-jam-tools#942: the Gate 1 refusal on a redundant parallel documen
   await Deno.writeTextFile(redundantDocPath, MINIMAL_LINT_CLEAN_DOC);
 
   try {
-    // The precondition resolves the canonical document up front...
+    // The precondition lists both ambiguous matches up front...
     const resolution = await resolveCanonicalDesignDoc({
       topic: "book-gig",
       dropboxDir: tempDir,
     });
-    assertEquals(resolution.outcome, "existing-document");
+    assertEquals(resolution.outcome, "could-not-tell");
+    assertEquals(resolution.candidates?.length, 2);
 
     // ...and the late refusal still refuses the duplicate file independently.
     await assertRejects(
@@ -1717,16 +1718,15 @@ Deno.test("web-jam-tools#1098: theme folder with both theme-level and topic-leve
     assertEquals(venueMiningMatch?.source, "theme-fallback");
     assertEquals(venueMiningMatch?.theme, "gig-outreach");
 
-    // 3. resolveCanonicalDesignDoc for venue-mining resolves existing-document to gig-outreach-design-2026-09-18.md
+    // 3. Step zero lists shared words but never resolves an unrelated theme document.
     const resolution = await resolveCanonicalDesignDoc({
       topic: "venue-mining",
       theme: "gig-outreach",
       dropboxDir: tempDir,
     });
-    assertEquals(resolution.outcome, "existing-document");
-    assertEquals(resolution.match?.filename, "gig-outreach-design-2026-09-18.md");
-    assertEquals(resolution.decisions.length, 1);
-    assertEquals(resolution.decisions[0].id, "1");
+    assertEquals(resolution.outcome, "could-not-tell");
+    assertEquals(resolution.match, null);
+    assertEquals(resolution.decisions.length, 0);
 
     // 4. refuseRedundantDesignDoc throws when trying to create parallel document for venue-mining in gig-outreach
     await assertRejects(
@@ -1855,7 +1855,7 @@ Deno.test("web-jam-tools#1394: resolveCanonicalDesignDoc matches theme folder ig
       theme: "AI Misbehaves",
       dropboxDir: tempDir,
     });
-    assertEquals(res1.outcome, "no-document");
+    assertEquals(res1.outcome, "could-not-tell");
 
     // 2. "Access Controls" -> "Access_Controls" (resolves)
     const res2 = await resolveCanonicalDesignDoc({
@@ -1863,7 +1863,7 @@ Deno.test("web-jam-tools#1394: resolveCanonicalDesignDoc matches theme folder ig
       theme: "Access Controls",
       dropboxDir: tempDir,
     });
-    assertEquals(res2.outcome, "no-document");
+    assertEquals(res2.outcome, "could-not-tell");
 
     // 3. "token-savings" -> "Token_Savings" (resolves)
     const res3 = await resolveCanonicalDesignDoc({
@@ -1871,7 +1871,7 @@ Deno.test("web-jam-tools#1394: resolveCanonicalDesignDoc matches theme folder ig
       theme: "token-savings",
       dropboxDir: tempDir,
     });
-    assertEquals(res3.outcome, "no-document");
+    assertEquals(res3.outcome, "could-not-tell");
 
     // 4. "gig-outreach" -> "gig-outreach" (resolves)
     const res4 = await resolveCanonicalDesignDoc({
@@ -1879,7 +1879,7 @@ Deno.test("web-jam-tools#1394: resolveCanonicalDesignDoc matches theme folder ig
       theme: "gig-outreach",
       dropboxDir: tempDir,
     });
-    assertEquals(res4.outcome, "no-document");
+    assertEquals(res4.outcome, "could-not-tell");
 
     // 5. "AI_Misbehaves" -> "AI_Misbehaves" (resolves)
     const res5 = await resolveCanonicalDesignDoc({
@@ -1887,7 +1887,7 @@ Deno.test("web-jam-tools#1394: resolveCanonicalDesignDoc matches theme folder ig
       theme: "AI_Misbehaves",
       dropboxDir: tempDir,
     });
-    assertEquals(res5.outcome, "no-document");
+    assertEquals(res5.outcome, "could-not-tell");
 
     // Create "token-savings" alongside "Token_Savings"
     await Deno.mkdir(path.join(tempDir, "token-savings"), { recursive: true });
