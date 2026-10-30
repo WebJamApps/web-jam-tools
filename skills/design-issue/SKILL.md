@@ -485,6 +485,7 @@ Every other table is shown in the order the file holds it. A table whose order m
 - **Consolidation happens BEFORE Gate 1, never after.** During the conversation the document accretes as decisions are made. Before GATE 1 the skill rewrites it into design-first shape. Josh never reviews a working draft.
 - **Pre-Gate-1 test:** a reader who has never seen the conversation must not be able to tell, from the body, that the design ever said anything different, or that any approval workflow exists.
 - **Every design document carries a `## Both surfaces` section**, stating for each mechanism it designs how that mechanism works on each surface (Claude Code and agy/Antigravity). `deno task design:lint-doc` fails a document that omits it.
+- **A design document covers everything about its topic.** Additional information, such as a working agenda or an idea list, goes in an appendix rather than a separate working file. When the design uses outside documents or files, it carries a `## References` section with a link and a description for each one. Josh, 2026-10-30: "please add a rule that the design needs to cover everything and an appendix is a great place to put additional information OR if external docs/files are using then the design document needs to have a References section with links and descriptions to those docs/files".
 
 **Standard Document Shape:**
 1. What it is — one section, opening directly with what the thing is. No status block, no preamble of any kind.
@@ -495,7 +496,8 @@ Every other table is shown in the order the file holds it. A table whose order m
 6. Both surfaces — stating for each mechanism how it works on Claude Code and agy/Antigravity.
 7. Load-bearing premises — proving every premise the design depends on.
 8. Where things live; what stays out of scope.
-9. Appendices — rules absorbed, what Josh asked for verbatim, the decision record.
+9. References — a link and a description for each outside document or file the design uses.
+10. Appendices — rules absorbed, what Josh asked for verbatim, the decision record.
 
 ---
 
