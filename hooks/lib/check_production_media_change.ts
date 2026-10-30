@@ -185,6 +185,32 @@ export function isUnderTargetRoot(resolved: string, targetRoot: string): boolean
   return resolved === targetRoot || resolved.startsWith(targetRoot + "/");
 }
 
+function pathMentionsTarget(
+  raw: string,
+  home: string,
+  vars: Map<string, string>,
+): boolean {
+  const expanded = expandVariables(raw, home, vars);
+  return (
+    JOSHANDMARIAMUSIC_FOLDER_RE.test(expanded) ||
+    /joshandmariamusic/i.test(expanded) ||
+    /joshandmariamusic/i.test(raw)
+  );
+}
+
+function targetMayBeUnderRoot(
+  raw: string,
+  currentCwd: string,
+  targetRoot: string,
+  home: string,
+  vars: Map<string, string>,
+): boolean {
+  if (pathMentionsTarget(raw, home, vars)) return true;
+  if (!isUnderTargetRoot(currentCwd, targetRoot)) return false;
+  const expanded = expandVariables(raw, home, vars);
+  return !expanded.startsWith("/");
+}
+
 function expandVariables(
   raw: string,
   home: string,
@@ -702,10 +728,12 @@ export function checkShellCommand(
   }
 
   let currentCwd = cwd;
+  let previousCwd = cwd;
+  const dirStack: string[] = [];
   const vars = new Map<string, string>();
 
   for (const segment of splitResult.segments) {
-    // Check redirections on this segment (Check 1)
+    // Check redirections on this segment (Check 1 & Check 6)
     for (const redirWord of redirectTargets(segment)) {
       const resolved = resolveTargetPath(redirWord, currentCwd, home, vars);
       if (resolved && isUnderTargetRoot(resolved, targetRoot)) {
@@ -716,6 +744,15 @@ export function checkShellCommand(
             allowed: false,
             check: 1,
             reason: `redirection targets existing production media file '${redirWord}'`,
+          };
+        }
+      } else if (!resolved) {
+        if (targetMayBeUnderRoot(redirWord, currentCwd, targetRoot, home, vars)) {
+          return {
+            allowed: false,
+            check: 6,
+            reason:
+              `cannot resolve redirection target path '${redirWord}' in production media folder`,
           };
         }
       }
@@ -767,11 +804,85 @@ export function checkShellCommand(
     // Follow `cd`
     if (cmdName === "cd") {
       const dirArg = args.find((a) => !a.startsWith("-")) ?? home;
-      if (dirArg !== "-") {
-        const resolvedCd = resolveTargetPath(dirArg, currentCwd, home, vars);
-        if (resolvedCd) {
-          currentCwd = resolvedCd;
+      if (dirArg === "-") {
+        const nextCwd = previousCwd;
+        previousCwd = currentCwd;
+        currentCwd = nextCwd;
+        continue;
+      }
+      const resolvedCd = resolveTargetPath(dirArg, currentCwd, home, vars);
+      if (resolvedCd) {
+        previousCwd = currentCwd;
+        currentCwd = resolvedCd;
+      } else if (targetMayBeUnderRoot(dirArg, currentCwd, targetRoot, home, vars)) {
+        return {
+          allowed: false,
+          check: 6,
+          reason: `cannot resolve cd directory '${dirArg}' in production media folder`,
+        };
+      }
+      continue;
+    }
+
+    // Follow `pushd`
+    if (cmdName === "pushd") {
+      if (args.some((a) => a.startsWith("-") || a.startsWith("+"))) {
+        if (
+          isUnderTargetRoot(currentCwd, targetRoot) ||
+          dirStack.some((d) => isUnderTargetRoot(d, targetRoot)) ||
+          args.some((a) => targetMayBeUnderRoot(a, currentCwd, targetRoot, home, vars))
+        ) {
+          return {
+            allowed: false,
+            check: 6,
+            reason: "cannot resolve pushd/popd flags in production media folder",
+          };
         }
+        continue;
+      }
+      const dirArg = args.find((a) => !a.startsWith("-"));
+      if (dirArg) {
+        const resolvedPushd = resolveTargetPath(dirArg, currentCwd, home, vars);
+        if (resolvedPushd) {
+          dirStack.push(currentCwd);
+          previousCwd = currentCwd;
+          currentCwd = resolvedPushd;
+        } else if (targetMayBeUnderRoot(dirArg, currentCwd, targetRoot, home, vars)) {
+          return {
+            allowed: false,
+            check: 6,
+            reason: `cannot resolve pushd directory '${dirArg}' in production media folder`,
+          };
+        } else {
+          dirStack.push(currentCwd);
+        }
+      } else if (dirStack.length > 0) {
+        const top = dirStack.pop()!;
+        dirStack.push(currentCwd);
+        previousCwd = currentCwd;
+        currentCwd = top;
+      }
+      continue;
+    }
+
+    // Follow `popd`
+    if (cmdName === "popd") {
+      if (args.some((a) => a.startsWith("-") || a.startsWith("+"))) {
+        if (
+          isUnderTargetRoot(currentCwd, targetRoot) ||
+          dirStack.some((d) => isUnderTargetRoot(d, targetRoot))
+        ) {
+          return {
+            allowed: false,
+            check: 6,
+            reason: "cannot resolve pushd/popd flags in production media folder",
+          };
+        }
+        continue;
+      }
+      if (dirStack.length > 0) {
+        previousCwd = currentCwd;
+        currentCwd = dirStack.pop()!;
       }
       continue;
     }
@@ -844,7 +955,22 @@ export function checkShellCommand(
       }
 
       const resolved = resolveTargetPath(rawPath, currentCwd, home, vars);
-      if (!resolved || !isUnderTargetRoot(resolved, targetRoot)) continue;
+      if (!resolved) {
+        if (targetMayBeUnderRoot(rawPath, currentCwd, targetRoot, home, vars)) {
+          const isReadCmd = READ_COMMANDS.has(cmdName);
+          const isSafeFind = cmdName === "find" && !args.some((a) => FIND_DANGEROUS_FLAGS.has(a));
+          const isCopySrc = isAllowedCopySource(cmdName, args, i);
+          if (!isReadCmd && !isSafeFind && !isCopySrc) {
+            return {
+              allowed: false,
+              check: 6,
+              reason: `cannot resolve path '${rawPath}' in production media folder`,
+            };
+          }
+        }
+        continue;
+      }
+      if (!isUnderTargetRoot(resolved, targetRoot)) continue;
 
       const base = path.basename(resolved);
       const glob = hasWildcard(rawPath);

@@ -601,6 +601,153 @@ Deno.test("production-media guard: additional Check 4, Check 5, Check 6, and Agy
     const badPatch = checkApplyPatch("not a valid patch", REPO_ROOT, tmpHome);
     assertEquals(badPatch.allowed, false);
     if (!badPatch.allowed) assertEquals(badPatch.check, 6);
+
+    // Suggestion 1: Unresolvable variable/wildcard paths in target refuse under Check 6 unless read command or copy source
+    const unresolvableRm = checkShellCommand(
+      "rm ~/Dropbox/joshandmariamusic/photos/$f",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(unresolvableRm.allowed, false);
+    if (!unresolvableRm.allowed) {
+      assertEquals(unresolvableRm.check, 6);
+      assertStringIncludes(unresolvableRm.reason, "cannot resolve path");
+    }
+
+    const unresolvableMv = checkShellCommand(
+      "mv ~/Dropbox/joshandmariamusic/audio/$track /tmp/",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(unresolvableMv.allowed, false);
+    if (!unresolvableMv.allowed) assertEquals(unresolvableMv.check, 6);
+
+    const unresolvableCd = checkShellCommand(
+      "cd ~/Dropbox/joshandmariamusic/$DIR && rm Narthex.mp3",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(unresolvableCd.allowed, false);
+    if (!unresolvableCd.allowed) assertEquals(unresolvableCd.check, 6);
+
+    const unresolvableRelativeRm = checkShellCommand(
+      "cd ~/Dropbox/joshandmariamusic/photos && rm $f",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(unresolvableRelativeRm.allowed, false);
+    if (!unresolvableRelativeRm.allowed) assertEquals(unresolvableRelativeRm.check, 6);
+
+    const unresolvableRedir = checkShellCommand(
+      "echo foo > ~/Dropbox/joshandmariamusic/photos/$f",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(unresolvableRedir.allowed, false);
+    if (!unresolvableRedir.allowed) assertEquals(unresolvableRedir.check, 6);
+
+    const unresolvableCopyDest = checkShellCommand(
+      "cp /tmp/new.png ~/Dropbox/joshandmariamusic/photos/$f",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(unresolvableCopyDest.allowed, false);
+    if (!unresolvableCopyDest.allowed) assertEquals(unresolvableCopyDest.check, 6);
+
+    const unresolvableFindDelete = checkShellCommand(
+      "find ~/Dropbox/joshandmariamusic/$DIR -delete",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(unresolvableFindDelete.allowed, false);
+    if (!unresolvableFindDelete.allowed) assertEquals(unresolvableFindDelete.check, 6);
+
+    // Read commands and allowed copy sources with unresolvable variables are allowed
+    const unresolvableLs = checkShellCommand(
+      "ls ~/Dropbox/joshandmariamusic/photos/$f",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(unresolvableLs.allowed, true);
+
+    const unresolvableSafeFind = checkShellCommand(
+      "find ~/Dropbox/joshandmariamusic/$DIR",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(unresolvableSafeFind.allowed, true);
+
+    const unresolvableCopySrc = checkShellCommand(
+      "cp ~/Dropbox/joshandmariamusic/photos/$f /tmp/",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(unresolvableCopySrc.allowed, true);
+
+    // Unresolvable path completely outside target is allowed
+    const outsideUnresolvableRm = checkShellCommand(
+      "rm /tmp/$f",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(outsideUnresolvableRm.allowed, true);
+
+    // Suggestion 2: Following pushd and popd directory tracking
+    const pushdMediaRm = checkShellCommand(
+      "pushd ~/Dropbox/joshandmariamusic/photos && rm valhalla.png",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(pushdMediaRm.allowed, false);
+    if (!pushdMediaRm.allowed) assertEquals(pushdMediaRm.check, 1);
+
+    const pushdDocRm = checkShellCommand(
+      "pushd ~/Dropbox/joshandmariamusic/Mission && rm Narthex.docx",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(pushdDocRm.allowed, false);
+    if (!pushdDocRm.allowed) assertEquals(pushdDocRm.check, 3);
+
+    const pushdDirRm = checkShellCommand(
+      "pushd ~/Dropbox/joshandmariamusic && rm -rf audio",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(pushdDirRm.allowed, false);
+    if (!pushdDirRm.allowed) assertEquals(pushdDirRm.check, 2);
+
+    const pushdUnresolvableRm = checkShellCommand(
+      "pushd ~/Dropbox/joshandmariamusic/photos && rm $f",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(pushdUnresolvableRm.allowed, false);
+    if (!pushdUnresolvableRm.allowed) assertEquals(pushdUnresolvableRm.check, 6);
+
+    const pushdUnresolvableDir = checkShellCommand(
+      "pushd ~/Dropbox/joshandmariamusic/$DIR && rm test.png",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(pushdUnresolvableDir.allowed, false);
+    if (!pushdUnresolvableDir.allowed) assertEquals(pushdUnresolvableDir.check, 6);
+
+    const pushdFlags = checkShellCommand(
+      "pushd -n ~/Dropbox/joshandmariamusic/photos",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(pushdFlags.allowed, false);
+    if (!pushdFlags.allowed) assertEquals(pushdFlags.check, 6);
+
+    // pushd followed by read and popd is allowed
+    const pushdReadPopd = checkShellCommand(
+      "pushd ~/Dropbox/joshandmariamusic/photos && ls valhalla.png && popd",
+      REPO_ROOT,
+      tmpHome,
+    );
+    assertEquals(pushdReadPopd.allowed, true);
   } finally {
     await cleanupFixtureHome(tmpHome);
   }
