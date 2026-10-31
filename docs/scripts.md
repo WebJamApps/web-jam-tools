@@ -440,6 +440,26 @@ The `agents` command also runs it, right after `update-all.sh`, whenever it crea
 session (not when it only attaches). A failure prints a warning and the agents still start. Override
 the command with `AGENTS_UPDATE_SCRIPTS_CMD`.
 
+### `check-snap-updates` (run by the `agents` command)
+
+`deno task check-snap-updates` warns when a snap has had an update waiting for 3 days or more.
+Ubuntu's Software Updater does not update snaps, and snapd says nothing when its own refreshes stop
+working, so a stalled update otherwise goes unseen.
+
+The `agents` command runs it right after the GitHub token check, whenever it creates or restarts the
+session (not when it only attaches). A failure prints a warning and the agents still start. Override
+the command with `AGENTS_CHECK_SNAP_UPDATES_CMD`.
+
+- It reads `snap refresh --list` and records when each snap first showed there in
+  `~/.local/state/web-jam-tools/snap-updates.json`. An update waiting for less than 3 days is normal
+  and stays silent.
+- A stuck update prints a warning and sends a desktop notification that stays until dismissed,
+  because `agents` attaches to tmux straight afterwards and covers the terminal. To clear it, run
+  `sudo snap refresh`.
+- If the check itself cannot run, it says so the same way and exits 1.
+- On a machine without snap, it does nothing. If `notify-send` is missing, only the terminal warning
+  appears.
+
 ### `install-hooks.sh` — what actually gets symlinked
 
 `scripts/install-hooks.sh` symlinks `hooks/*.sh` only — `hooks/lib/` is never installed, so there is

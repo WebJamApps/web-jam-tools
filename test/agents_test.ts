@@ -29,11 +29,12 @@ async function run(
     args,
     stdout: "piped",
     stderr: "piped",
-    // Default the laptop-window step, agy-config check, and token-expiry check to stubs so tests stay isolated.
+    // Default the laptop-window step, agy-config check, token-expiry and snap-update checks to stubs so tests stay isolated.
     env: {
       ...Deno.env.toObject(),
       AGENTS_LAPTOP_WINDOW_CMD: "true",
       AGENTS_CHECK_TOKEN_EXPIRY_CMD: "true",
+      AGENTS_CHECK_SNAP_UPDATES_CMD: "true",
       AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
       ...(env ?? {}),
     },
@@ -603,6 +604,56 @@ Deno.test(
     });
   },
 );
+
+Deno.test(
+  "agents.sh runs the snap update check after the token check and before update-scripts when creating a new session, and not when it only attaches",
+  async () => {
+    await withThrowawayTmux(async (socketName, tmpDir) => {
+      const marker = `${tmpDir}/order.txt`;
+      const env = {
+        TMUX_TMPDIR: tmpDir,
+        AGENTS_CLAUDE_CMD: "sleep 60",
+        AGENTS_CODEX_CMD: "sleep 60",
+        AGENTS_AGY_CMD: "sleep 60",
+        AGENTS_UPDATE_CMD: "true",
+        AGENTS_CHECK_TOKEN_EXPIRY_CMD: `echo check-token-expiry >> "${marker}"`,
+        AGENTS_CHECK_SNAP_UPDATES_CMD: `echo check-snap-updates >> "${marker}"`,
+        AGENTS_UPDATE_SCRIPTS_CMD: `echo update-scripts >> "${marker}"`,
+      };
+      const expected = ["check-token-expiry", "check-snap-updates", "update-scripts"];
+      const res1 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+      assertEquals(res1.code, 0, res1.stderr);
+      assertEquals((await Deno.readTextFile(marker)).trim().split("\n"), expected);
+
+      const res2 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+      assertEquals(res2.code, 0, res2.stderr);
+      assertEquals((await Deno.readTextFile(marker)).trim().split("\n"), expected);
+    });
+  },
+);
+
+Deno.test("agents.sh starts the agents and exits 0 when the snap update check fails", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const res = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
+      AGENTS_CHECK_SNAP_UPDATES_CMD: "exit 1",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
+    });
+    assertEquals(res.code, 0, res.stderr);
+    assert(
+      res.stderr.includes("warning: snap update check failed; starting the agents anyway"),
+      `expected failure warning in: ${res.stderr}`,
+    );
+    const has = await run("tmux", ["-L", socketName, "has-session", "-t", "agents"], {
+      TMUX_TMPDIR: tmpDir,
+    });
+    assertEquals(has.code, 0);
+  });
+});
 
 // ---- Laptop window over SSH (web-jam-tools#1128) ----
 

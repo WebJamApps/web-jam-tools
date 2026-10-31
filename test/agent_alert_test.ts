@@ -829,6 +829,7 @@ Deno.test(
         AGENTS_CODEX_CMD: "sleep 60",
         AGENTS_AGY_CMD: "sleep 60",
         AGENTS_UPDATE_CMD: "true",
+        AGENTS_CHECK_SNAP_UPDATES_CMD: "true",
         AGENTS_LAPTOP_WINDOW_CMD: "true",
         HOME: tmpDir,
       });

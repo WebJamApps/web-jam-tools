@@ -28,6 +28,11 @@
 # and warns from 14 days before expiry. A failed check only warns and never stops the agents
 # from starting. Override the command with AGENTS_CHECK_TOKEN_EXPIRY_CMD.
 #
+# Straight after that, in the same situations, it warns about snap updates that have been
+# waiting for 3 days or more, in the terminal and as a desktop notification. A failed check only
+# warns and never stops the agents from starting. Override the command with
+# AGENTS_CHECK_SNAP_UPDATES_CMD.
+#
 # Right after that, in the same situations, it runs scripts/update-scripts.sh in the
 # foreground so the installed hooks and skills are current too. A failed run prints a
 # warning and the agents start anyway; it never changes the exit code. Override the
@@ -102,6 +107,7 @@ CODEX_CMD="${AGENTS_CODEX_CMD:-codex -c 'hooks.PermissionRequest=[{matcher=\".*\
 AGY_CMD="${AGENTS_AGY_CMD:-agy}"
 UPDATE_CMD="${AGENTS_UPDATE_CMD:-$REPO_DIR/scripts/update-all.sh}"
 CHECK_TOKEN_EXPIRY_CMD="${AGENTS_CHECK_TOKEN_EXPIRY_CMD:-deno task --config "$REPO_DIR/deno.json" check-token-expiry}"
+CHECK_SNAP_UPDATES_CMD="${AGENTS_CHECK_SNAP_UPDATES_CMD:-deno task --config "$REPO_DIR/deno.json" check-snap-updates}"
 UPDATE_SCRIPTS_CMD="${AGENTS_UPDATE_SCRIPTS_CMD:-$REPO_DIR/scripts/update-scripts.sh}"
 AGY_CONFIG_CMD="${AGENTS_AGY_CONFIG_CMD:-agy -p /config}"
 # agy skips the laptop's login keyring whenever any SSH_* variable is set, so a
@@ -265,6 +271,11 @@ fi
 # A failed check or warning must never stop the agents from starting.
 if ! bash -c "$CHECK_TOKEN_EXPIRY_CMD"; then
   echo "warning: GitHub token expiry check failed; starting the agents anyway" >&2
+fi
+
+# Warn about snap updates that have stopped arriving (same situations; never blocks startup).
+if ! bash -c "$CHECK_SNAP_UPDATES_CMD"; then
+  echo "warning: snap update check failed; starting the agents anyway" >&2
 fi
 
 # Update the installed hooks right after the agents (same situations; never blocks startup).
