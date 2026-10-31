@@ -61,7 +61,11 @@ export function parseFirstSeen(text: string): FirstSeen | null {
 
 /** Keeps the date of each snap still waiting, adds new ones as of now, drops the rest. */
 export function updateFirstSeen(pending: string[], previous: FirstSeen, now: Date): FirstSeen {
-  return Object.fromEntries(pending.map((name) => [name, previous[name] ?? now.toISOString()]));
+  return Object.fromEntries(
+    pending.map((
+      name,
+    ) => [name, Object.hasOwn(previous, name) ? previous[name] : now.toISOString()]),
+  );
 }
 
 /** The snaps that have been waiting for at least STUCK_AFTER_DAYS. */

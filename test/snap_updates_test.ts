@@ -90,6 +90,21 @@ Deno.test("updateFirstSeen keeps dates of waiting snaps, adds new ones and drops
   );
 });
 
+Deno.test("updateFirstSeen dates an accepted snap name that is also an Object.prototype property", () => {
+  const names = ["constructor", "toString", "valueOf"];
+  const seen = updateFirstSeen(names, {}, NOW);
+  assertEquals(seen, {
+    constructor: NOW.toISOString(),
+    toString: NOW.toISOString(),
+    valueOf: NOW.toISOString(),
+  });
+  assertEquals(findStuckSnaps(seen, new Date(NOW.getTime() + 4 * 24 * 60 * 60 * 1000)), [
+    "constructor",
+    "toString",
+    "valueOf",
+  ]);
+});
+
 Deno.test("findStuckSnaps uses the 3-day limit exactly", () => {
   assertEquals(
     findStuckSnaps({
