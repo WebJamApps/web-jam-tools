@@ -175,6 +175,11 @@ Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tool
     "financial",
     "health-wellness",
     "politics",
+    "Operations",
+    "Other-Projects",
+    "collegelutheran",
+    "songwriting",
+    "token-savings",
   ]);
   assertEquals(
     schema.milestoneTopics.find((t) => t.name === "gig-outreach")?.repos,
@@ -199,27 +204,26 @@ Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tool
     ["web-jam-tools"],
   );
   // web-jam-tools#300 follow-up decision: `timshermanmusic` IS canonical,
-  // scoped to the exact 3 repos where Josh created the milestone live.
+  // TimShermanMusic added per backlog-groom-design.md (web-jam-tools#1643).
   assertEquals(
     schema.milestoneTopics.find((t) => t.name === "timshermanmusic")?.repos,
-    ["web-jam-back", "JaMmusic", "WebJamSocketCluster"],
+    ["web-jam-back", "JaMmusic", "WebJamSocketCluster", "TimShermanMusic"],
   );
   // Josh's call, created live in web-jam-tools on 2026-07-31 (milestone #5).
-  // web-jam-tools only for now.
+  // JaMmusic added per backlog-groom-design.md (web-jam-tools#1643).
   assertEquals(
     schema.milestoneTopics.find((t) => t.name === "AI Misbehaves")?.repos,
-    ["web-jam-tools"],
+    ["web-jam-tools", "JaMmusic"],
   );
-  // web-jam-tools#287 "fix-labels skill expanded / corrected": six topics
-  // from Josh's list, created live as milestones on 2026-07-31 in exactly
-  // these four repos each (not `all`) — matching the convention already
-  // used for "Access Controls" and "AI Misbehaves" above. (venue-mining was
-  // dropped 2026-09-17)
+  // CollegeLutheran added to promote-gigs per backlog-groom-design.md (web-jam-tools#1643).
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "promote-gigs")?.repos,
+    ["JaMmusic", "web-jam-back", "WebJamSocketCluster", "web-jam-tools", "CollegeLutheran"],
+  );
   for (
     const name of [
       "song-recordings",
       "set-lists",
-      "promote-gigs",
       "financial",
       "health-wellness",
       "politics",
@@ -231,18 +235,45 @@ Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tool
       `expected "${name}" to be scoped to exactly the 4 booking-epic repos`,
     );
   }
-  // web-jam-tools#315 widened this union to all 8 active repos, since
-  // "Access Controls" is scoped to every one of them; "AI Misbehaves"
-  // and the 7 new booking-epic topics add no new repos since all 4 of their
-  // repos are already in the union.
+  // Canonical milestones registered per backlog-groom-design.md (web-jam-tools#1643).
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "Operations")?.repos,
+    [
+      "web-jam-tools",
+      "JaMmusic",
+      "web-jam-back",
+      "WebJamSocketCluster",
+      "CollegeLutheran",
+      "AppersonAuto",
+      "TimShermanMusic",
+      "HenricksonForSalem",
+    ],
+  );
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "Other-Projects")?.repos,
+    ["web-jam-tools", "JaMmusic", "web-jam-back", "AppersonAuto", "HenricksonForSalem"],
+  );
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "collegelutheran")?.repos,
+    ["web-jam-tools", "CollegeLutheran"],
+  );
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "songwriting")?.repos,
+    ["web-jam-tools"],
+  );
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "token-savings")?.repos,
+    ["web-jam-tools"],
+  );
+  // timshermanmusic now includes TimShermanMusic, placing it before CollegeLutheran in first-appearance order.
   assertEquals(milestoneTopicRepos(schema), [
     "JaMmusic",
     "web-jam-back",
     "web-jam-tools",
     "WebJamSocketCluster",
+    "TimShermanMusic",
     "CollegeLutheran",
     "AppersonAuto",
-    "TimShermanMusic",
     "HenricksonForSalem",
   ]);
 });

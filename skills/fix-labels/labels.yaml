@@ -187,15 +187,14 @@ milestoneTopics:
   # canonical topic, not an unrelated keeper. Milestone already created live
   # in all three repos below, with the 5 historical (closed) issues assigned
   # (web-jam-back#922, web-jam-back#897, JaMmusic#1182,
-  # WebJamSocketCluster#237, WebJamSocketCluster#94). This repo list must
-  # match those three repos exactly, or the milestone-drift check reports
-  # false drift. 0 open issues carry it as of this writing — mainly for
-  # future use.
+  # WebJamSocketCluster#237, WebJamSocketCluster#94). TimShermanMusic added
+  # per backlog-groom-design.md registration table (web-jam-tools#1643).
   - name: timshermanmusic
     repos:
       - web-jam-back
       - JaMmusic
       - WebJamSocketCluster
+      - TimShermanMusic
   # web-jam-tools#315 "Restrict Claude and Flash Dropbox access to
   # web-jam-llms and JoshMariaMusic only" — Josh's call, created live in all 8
   # active repos on 2026-07-30. Covers restricting what AI agents and
@@ -224,11 +223,11 @@ milestoneTopics:
   # deny rules, GitHub ruleset, HARD RULES)" and web-jam-tools#324 "No agent
   # connects a new account, credential, or MCP server without Josh's explicit
   # authorization — add the rule and audit where it can be mechanically
-  # enforced". web-jam-tools only for now — add repos here (and create the
-  # milestone live there) if the topic ever spans more.
+  # enforced". JaMmusic added per backlog-groom-design.md (web-jam-tools#1643).
   - name: AI Misbehaves
     repos:
       - web-jam-tools
+      - JaMmusic
 
   # Six topics from Josh's list on web-jam-tools#287 "fix-labels skill
   # expanded / corrected" — never created at the time that issue landed, and
@@ -236,7 +235,8 @@ milestoneTopics:
   # 2026-07-31 at his instruction. Registered here the same day so
   # `fix-labels:milestone-diff` stops reporting them as non-canonical drift.
   # (venue-mining was dropped 2026-09-17 at Josh's instruction; its work goes
-  # under `gig-outreach`)
+  # under `gig-outreach`). CollegeLutheran added to `promote-gigs` per
+  # backlog-groom-design.md registration table (web-jam-tools#1643).
   - name: song-recordings
     repos:
       - JaMmusic
@@ -255,6 +255,7 @@ milestoneTopics:
       - web-jam-back
       - WebJamSocketCluster
       - web-jam-tools
+      - CollegeLutheran
   - name: financial
     repos:
       - JaMmusic
@@ -272,6 +273,36 @@ milestoneTopics:
       - JaMmusic
       - web-jam-back
       - WebJamSocketCluster
+      - web-jam-tools
+
+  # Canonical milestones registered per backlog-groom-design.md
+  # "The milestone rules" (web-jam-tools#1643).
+  - name: Operations
+    repos:
+      - web-jam-tools
+      - JaMmusic
+      - web-jam-back
+      - WebJamSocketCluster
+      - CollegeLutheran
+      - AppersonAuto
+      - TimShermanMusic
+      - HenricksonForSalem
+  - name: Other-Projects
+    repos:
+      - web-jam-tools
+      - JaMmusic
+      - web-jam-back
+      - AppersonAuto
+      - HenricksonForSalem
+  - name: collegelutheran
+    repos:
+      - web-jam-tools
+      - CollegeLutheran
+  - name: songwriting
+    repos:
+      - web-jam-tools
+  - name: token-savings
+    repos:
       - web-jam-tools
 
 # DECISION (Josh, 2026-07-31): NEITHER a `Blocker` label NOR a `depends-on`

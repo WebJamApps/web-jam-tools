@@ -359,6 +359,11 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     "financial",
     "health-wellness",
     "politics",
+    "Operations",
+    "Other-Projects",
+    "collegelutheran",
+    "songwriting",
+    "token-savings",
   ]);
   const accessControlsTopic = schema.milestoneTopics.find(
     (t) => t.name === "Access Controls",
@@ -374,21 +379,28 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   const backupRestoreTopic = schema.milestoneTopics.find((t) => t.name === "backup-restore");
   assertEquals(backupRestoreTopic?.repos, ["web-jam-tools"]);
   const timShermanMusicTopic = schema.milestoneTopics.find((t) => t.name === "timshermanmusic");
-  assertEquals(timShermanMusicTopic?.repos, ["web-jam-back", "JaMmusic", "WebJamSocketCluster"]);
+  assertEquals(timShermanMusicTopic?.repos, [
+    "web-jam-back",
+    "JaMmusic",
+    "WebJamSocketCluster",
+    "TimShermanMusic",
+  ]);
   const aiMisbehavesTopic = schema.milestoneTopics.find(
     (t) => t.name === "AI Misbehaves",
   );
-  assertEquals(aiMisbehavesTopic?.repos, ["web-jam-tools"]);
+  assertEquals(aiMisbehavesTopic?.repos, ["web-jam-tools", "JaMmusic"]);
+  const promoteGigsTopic = schema.milestoneTopics.find((t) => t.name === "promote-gigs");
+  assertEquals(promoteGigsTopic?.repos, [
+    "JaMmusic",
+    "web-jam-back",
+    "WebJamSocketCluster",
+    "web-jam-tools",
+    "CollegeLutheran",
+  ]);
 
-  // web-jam-tools#287: the six new topics each carry exactly the same four
-  // repos (not `all`) — JaMmusic, web-jam-back, WebJamSocketCluster, and
-  // web-jam-tools — matching the convention already used for
-  // `Access Controls` and `AI Misbehaves` (each asserted its own repo
-  // scope above). (venue-mining was dropped 2026-09-17)
   const fourRepoTopicNames = [
     "song-recordings",
     "set-lists",
-    "promote-gigs",
     "financial",
     "health-wellness",
     "politics",
@@ -401,6 +413,36 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
       `expected "${name}" to be scoped to exactly the 4 booking-epic repos`,
     );
   }
+
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "Operations")?.repos,
+    [
+      "web-jam-tools",
+      "JaMmusic",
+      "web-jam-back",
+      "WebJamSocketCluster",
+      "CollegeLutheran",
+      "AppersonAuto",
+      "TimShermanMusic",
+      "HenricksonForSalem",
+    ],
+  );
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "Other-Projects")?.repos,
+    ["web-jam-tools", "JaMmusic", "web-jam-back", "AppersonAuto", "HenricksonForSalem"],
+  );
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "collegelutheran")?.repos,
+    ["web-jam-tools", "CollegeLutheran"],
+  );
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "songwriting")?.repos,
+    ["web-jam-tools"],
+  );
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "token-savings")?.repos,
+    ["web-jam-tools"],
+  );
 });
 
 Deno.test("Luna, Sol, Astra: missing labels are proposed with canonical values for every active repo", async () => {
