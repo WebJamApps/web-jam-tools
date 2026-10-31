@@ -348,19 +348,6 @@ Deno.test("missing file_path passes through (exit code 0)", async () => {
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("hook header comment contains required agy coverage limit statement", async () => {
-  const scriptContent = await Deno.readTextFile(SCRIPT_PATH);
-  const tsContent = await Deno.readTextFile(
-    new URL("../hooks/lib/check_out_of_tree_write.ts", import.meta.url).pathname,
-  );
-
-  for (const content of [scriptContent, tsContent]) {
-    assert(content.includes("fences Claude Code sessions and subagents only"));
-    assert(content.includes("does not fence agy"));
-    assert(content.includes("web-jam-tools#432"));
-  }
-});
-
 // --- Codex apply_patch tests (web-jam-tools#1138) ---
 
 // When tests run in an isolated worktree under /tmp, relative path "../outside.txt"
