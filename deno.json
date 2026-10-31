@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.58.1",
+  "version": "1.58.2",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
     "check-snap-updates": "deno run --allow-run=timeout,notify-send --allow-env=HOME,XDG_RUNTIME_DIR,DBUS_SESSION_BUS_ADDRESS --allow-read=$HOME/.local/state/web-jam-tools --allow-write=$HOME/.local/state/web-jam-tools src/snap-updates/check_updates.ts",
