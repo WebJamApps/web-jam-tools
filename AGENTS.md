@@ -506,3 +506,20 @@ Read the Deno Deploy CLI and runtime rules in [docs/uptime-monitoring.md](docs/u
   `proc.stdin = None` immediately after `proc.stdin.close()` so Python 3.12 runtimes in CI do not
   call `self.stdin.flush()` and fail with `ValueError: flush of closed file`, and ensure new test
   fixtures respect the exact permission flags documented in the issue and PR test plan.
+- **Non-Interactive Test Execution & Stdin Isolation Against Blocking Prompts**: When executing
+  local test suites or background commands, agents must never run test suites with open or piped
+  standard input that allows interactive `prompt()` calls (such as CLI confirmation prompts) to
+  block indefinitely waiting for terminal input. Always isolate test input by redirecting from
+  `/dev/null` (`deno task test < /dev/null`) and prioritize targeted test suites specified by the
+  issue during iterative development. Before pushing and opening a PR, always execute all six local
+  checks required by the "CI gate (web-jam-tools)" section (`deno task check`, `deno task lint`,
+  `deno task fmt:check`, `deno task test`, `deno task audit`, `deno task sast`) to ensure the
+  changes satisfy the repository's CircleCI gate without failures.
+- **Synchronized Input Contracts & Caller Guidance on Validator Requirements**: When updating a
+  task, ranking engine, or CLI tool with newly required inputs (such as requiring `levelFromTests`
+  for Epics without open child Priorities regardless of repository size), update all caller
+  touchpoints in sync: skill workflow instructions, CLI `--help` text, input documentation
+  (`docs/scripts.md`), and interface/type comments (`Judgment.levelFromTests`). Never leave caller
+  guidance or documentation stating that inputs are only required below a size floor or that certain
+  entities receive no proposal when the underlying validator now rejects missing inputs; keep
+  fail-closed validation and caller contracts fully reconciled.

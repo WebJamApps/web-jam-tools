@@ -43,13 +43,13 @@ export async function runCollectCli(
     });
     if (flags.help) {
       log(
-        "Usage: deno task backlog-groom:collect --output /tmp/backlog-groom/run/snapshot.json [--concurrency 6]\nRead-only GitHub collection; publishes only a complete validated snapshot. No approval is recorded.",
+        "Usage: deno task backlog-groom:collect --output /tmp/backlog-groom/run/snapshot.json [--concurrency 12]\nRead-only GitHub collection; publishes only a complete validated snapshot. No approval is recorded.",
       );
       return 0;
     }
     if (!flags.output || flags._.length) throw new Error("Provide --output; see --help");
     const output = snapshotPath(flags.output);
-    const concurrency = flags.concurrency === undefined ? 6 : Number(flags.concurrency);
+    const concurrency = flags.concurrency === undefined ? 12 : Number(flags.concurrency);
     if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) {
       throw new Error("Concurrency must be an integer from 1 to 16");
     }

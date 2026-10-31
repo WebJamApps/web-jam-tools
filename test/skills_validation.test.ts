@@ -2227,11 +2227,16 @@ export function assertBacklogGroomRules(text: string): void {
     "skills/backlog-groom/SKILL.md must state model gives reason in one line beside every move it proposes",
   );
 
-  // 11. Small-repo input contract and schema pointer
+  // 11. Small-repo input contract, Epic contract, and schema pointer
   assertStringIncludes(
     text,
     "levelFromTests",
     "skills/backlog-groom/SKILL.md must specify levelFromTests for repositories below the 20-issue floor",
+  );
+  assertStringIncludes(
+    text,
+    "Epic with no open child carrying a Priority",
+    "skills/backlog-groom/SKILL.md must specify levelFromTests for Epics with no open child carrying a Priority",
   );
   assertStringIncludes(
     text,
@@ -2364,12 +2369,21 @@ Deno.test(
       "must state model gives reason in one line beside every move it proposes",
     );
 
-    // 7. Fails when the skill loses the small-repo levelFromTests requirement
+    // 7. Fails when the skill loses the small-repo or Epic levelFromTests requirement
     const textWithoutSmallRepo = validText.replaceAll("levelFromTests", "ignoredField");
     assertThrows(
       () => assertBacklogGroomRules(textWithoutSmallRepo),
       Error,
       "must specify levelFromTests for repositories below the 20-issue floor",
+    );
+    const textWithoutEpic = validText.replaceAll(
+      "Epic with no open child carrying a Priority",
+      "ignoredField",
+    );
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutEpic),
+      Error,
+      "must specify levelFromTests for Epics with no open child carrying a Priority",
     );
   },
 );

@@ -87,12 +87,13 @@ reason per issue. Keys are issue numbers in that repository:
 }
 ```
 
-`levelFromTests` is required below 20 open non-Epics: the caller selects it using
-`skills/file-issue/SKILL.md`, so this module does not duplicate those level tests. Missing or
-invalid judgments, failed GitHub reads and malformed responses refuse the run rather than making up
-facts. Pull requests are excluded; legacy `parked` labels do not exclude issues. Epics inherit the highest existing native
-Priority of their open children and are excluded from shares. An Epic with no child
-Priority supplies no proposal.
+`levelFromTests` is required below 20 open non-Epics and for any Epic with no open child carrying a
+Priority (regardless of repository size): the caller selects it using `skills/file-issue/SKILL.md`,
+so this module does not duplicate those level tests. Missing or invalid judgments, failed GitHub reads
+and malformed responses refuse the run rather than making up facts. Pull requests are excluded;
+legacy `parked` labels do not exclude issues. Epics inherit the highest existing native Priority of
+their open children and are excluded from shares. An Epic with no open child carrying a Priority
+inherits its level from `levelFromTests`.
 
 Shares are rounded independently; the last band includes any rounding remainder. Overflow is
 measured from the current snapshot: more than three above a share proposes moving up to the excess
