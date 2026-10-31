@@ -29,12 +29,13 @@ async function run(
     args,
     stdout: "piped",
     stderr: "piped",
-    // Default the laptop-window step, agy-config check, token-expiry and snap-update checks to stubs so tests stay isolated.
+    // Default the laptop-window step, agy-config check, token-expiry, snap-update and health-report checks to stubs so tests stay isolated.
     env: {
       ...Deno.env.toObject(),
       AGENTS_LAPTOP_WINDOW_CMD: "true",
       AGENTS_CHECK_TOKEN_EXPIRY_CMD: "true",
       AGENTS_CHECK_SNAP_UPDATES_CMD: "true",
+      AGENTS_HEALTH_REPORT_CMD: "true",
       AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
       ...(env ?? {}),
     },
@@ -654,6 +655,67 @@ Deno.test("agents.sh starts the agents and exits 0 when the snap update check fa
     assertEquals(has.code, 0);
   });
 });
+
+Deno.test(
+  "agents.sh runs health-report first before anything else, and runs it again when attaching (web-jam-tools#1660)",
+  async () => {
+    await withThrowawayTmux(async (socketName, tmpDir) => {
+      const marker = `${tmpDir}/order.txt`;
+      const env = {
+        TMUX_TMPDIR: tmpDir,
+        AGENTS_CLAUDE_CMD: "sleep 60",
+        AGENTS_CODEX_CMD: "sleep 60",
+        AGENTS_AGY_CMD: "sleep 60",
+        AGENTS_HEALTH_REPORT_CMD: `echo health-report >> "${marker}"`,
+        AGENTS_UPDATE_CMD: `echo update-all >> "${marker}"`,
+        AGENTS_LAPTOP_WINDOW_CMD: "true",
+      };
+
+      // 1. Initial run creates session: health-report runs first, then update-all
+      const res1 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+      assertEquals(res1.code, 0, res1.stderr);
+      assertEquals((await Deno.readTextFile(marker)).trim().split("\n"), [
+        "health-report",
+        "update-all",
+      ]);
+
+      // 2. Second run attaches to existing session: health-report runs again (update-all does not)
+      const res2 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+      assertEquals(res2.code, 0, res2.stderr);
+      assertEquals((await Deno.readTextFile(marker)).trim().split("\n"), [
+        "health-report",
+        "update-all",
+        "health-report",
+      ]);
+    });
+  },
+);
+
+Deno.test(
+  "agents.sh warns and continues when health-report exits 1 (web-jam-tools#1660)",
+  async () => {
+    await withThrowawayTmux(async (socketName, tmpDir) => {
+      const res = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+        TMUX_TMPDIR: tmpDir,
+        AGENTS_CLAUDE_CMD: "sleep 60",
+        AGENTS_CODEX_CMD: "sleep 60",
+        AGENTS_AGY_CMD: "sleep 60",
+        AGENTS_HEALTH_REPORT_CMD: "exit 1",
+        AGENTS_UPDATE_CMD: "true",
+        AGENTS_LAPTOP_WINDOW_CMD: "true",
+      });
+      assertEquals(res.code, 0, res.stderr);
+      assert(
+        res.stderr.includes("warning: health-report failed; continuing anyway"),
+        `expected warning in stderr: ${res.stderr}`,
+      );
+      const has = await run("tmux", ["-L", socketName, "has-session", "-t", "agents"], {
+        TMUX_TMPDIR: tmpDir,
+      });
+      assertEquals(has.code, 0);
+    });
+  },
+);
 
 // ---- Laptop window over SSH (web-jam-tools#1128) ----
 
