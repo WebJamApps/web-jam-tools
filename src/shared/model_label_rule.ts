@@ -5,6 +5,9 @@ export const DEFAULT_MODEL_LABELS_PATH = new URL(
   import.meta.url,
 );
 
+/** Either label permits either model on the everyday coding lane. */
+export const EVERYDAY_MODEL_LABELS = ["Flash", "Terra"] as const;
+
 export function loadModelLabels(file: string | URL = DEFAULT_MODEL_LABELS_PATH): Set<string> {
   try {
     const data = JSON.parse(Deno.readTextFileSync(file));
