@@ -1,13 +1,9 @@
 /**
  * PreToolUse guard (Write|Edit|NotebookEdit) module (web-jam-tools#511).
  *
- * COVERAGE LIMIT:
- * This hook fences Claude Code sessions and subagents only. It does not fence agy.
- * agy internal file writes are not seen by Claude Code PreToolUse hooks.
- * Full coverage of agy is blocked on web-jam-tools#432 "agy hooks do not enforce — all 12 are inert on Flash, and a Stop/SessionStart entry kills the whole config; fix that, then give Antigravity Gmail MCP fenced by a working hook".
- *
  * Denies Write/Edit/NotebookEdit calls targeting paths outside the current repository working tree,
- * allowlisting /tmp and session scratchpad directories.
+ * allowlisting /tmp and session scratchpad directories. agy reaches this guard through the shim;
+ * its payload's artifactDirectoryPath also allows that conversation's own plan and task files.
  */
 
 import * as path from "jsr:@std/path@^1.0.0";
@@ -87,13 +83,25 @@ export function getRepoRoot(startDir: string): string | null {
   return null;
 }
 
-export function isInsideTree(targetPath: string, repoRoot: string | null, cwd?: string): boolean {
+export function isInsideTree(
+  targetPath: string,
+  repoRoot: string | null,
+  cwd?: string,
+  artifactDirectoryPath?: string,
+): boolean {
   const baseDir = cwd ? path.resolve(cwd) : Deno.cwd();
   const expanded = expandHome(targetPath);
   const resolvedTarget = path.resolve(baseDir, expanded);
 
   if (isAllowlisted(resolvedTarget)) {
     return true;
+  }
+
+  if (artifactDirectoryPath && path.isAbsolute(artifactDirectoryPath)) {
+    const artifactRoot = path.resolve(artifactDirectoryPath);
+    if (resolvedTarget === artifactRoot || resolvedTarget.startsWith(artifactRoot + "/")) {
+      return true;
+    }
   }
 
   if (!repoRoot) {
@@ -183,8 +191,12 @@ export function main(): void {
     return;
   }
 
+  const artifactDirectoryPath = typeof data.artifactDirectoryPath === "string"
+    ? data.artifactDirectoryPath
+    : undefined;
+
   for (const targetPath of targetPaths) {
-    if (!isInsideTree(targetPath, repoRoot, cwd)) {
+    if (!isInsideTree(targetPath, repoRoot, cwd, artifactDirectoryPath)) {
       const expanded = expandHome(targetPath);
       const resolvedTarget = path.resolve(cwd, expanded);
       const repoInfo = repoRoot ? `'${repoRoot}'` : "none (not inside a git repository)";

@@ -35,17 +35,13 @@
  *      has no `decision` field at all (verified by decoding the shipped agy
  *      binary — see `toAgyReply()` below and the issue that fixed this).
  *
- * HONESTY NOTE on field-name mapping: only `run_command` (agy's shell tool,
- * args `CommandLine`/`Cwd`) is independently verified against a live agy
- * probe (finding 3). agy is closed-source, so no other tool's arg names are
- * verifiable from source. hooks/lib/detect_human_only_credentials.ts already
- * carries best-effort fallback field names for an edit-like tool
- * (`TargetFile`, `CodeContent`, `ReplacementContent`, `ReplacementChunks`)
- * from earlier work (web-jam-tools#344) — this shim's `buildToolInput`
- * mirrors those same names so a hook reading either the Claude name or the
- * best-effort agy name finds the value either way. Anything not in that
- * short, documented set is passed through verbatim (identity), never
- * invented.
+ * Field-name evidence: `run_command` (`CommandLine`/`Cwd`) was verified by
+ * finding 3. The 2026-10-31 live probe recorded `edit_file`
+ * (`Path`/`Target`/`Replacement`) and `write_file` (`Path`/`Content`), as
+ * documented in the hooks design's "agy's file tools" section. Earlier
+ * `TargetFile`/`CodeContent`/`ReplacementContent`/`ReplacementChunks` names
+ * remain supported. Unmapped names and arguments pass through unchanged;
+ * recognition after a tool rename is separate work.
  */
 
 import {
@@ -173,8 +169,10 @@ export async function recordInvocation(
 // native file-edit and GitHub MCP issue-write tools.
 const TOOL_NAME_MAP: Record<string, string> = {
   run_command: "Bash",
+  edit_file: "Edit",
   replace_file_content: "Edit",
   multi_replace_file_content: "Edit",
+  write_file: "Write",
   write_to_file: "Write",
   issue_write: "mcp__github__issue_write",
   sub_issue_write: "mcp__github__sub_issue_write",
@@ -231,21 +229,21 @@ export function buildToolInput(args: Record<string, unknown>): Record<string, un
   if (out.cwd === undefined && args.Cwd !== undefined) {
     out.cwd = args.Cwd;
   }
-  if (out.file_path === undefined && args.TargetFile !== undefined) {
-    out.file_path = args.TargetFile;
+  const filePath = args.TargetFile ?? args.Path;
+  if (out.file_path === undefined && filePath !== undefined) {
+    out.file_path = filePath;
   }
-  if (out.old_string === undefined && args.TargetContent !== undefined) {
-    out.old_string = args.TargetContent;
+  const oldString = args.TargetContent ?? args.Target;
+  if (out.old_string === undefined && oldString !== undefined) {
+    out.old_string = oldString;
   }
-  if (out.new_string === undefined && args.ReplacementContent !== undefined) {
-    out.new_string = args.ReplacementContent;
+  const newString = args.ReplacementContent ?? args.Replacement;
+  if (out.new_string === undefined && newString !== undefined) {
+    out.new_string = newString;
   }
-  if (out.content === undefined) {
-    if (args.CodeContent !== undefined) {
-      out.content = args.CodeContent;
-    } else if (args.ReplacementContent !== undefined) {
-      out.content = args.ReplacementContent;
-    }
+  const content = args.CodeContent ?? args.Content ?? newString;
+  if (out.content === undefined && content !== undefined) {
+    out.content = content;
   }
   return out;
 }

@@ -52,6 +52,7 @@ async function runShim(
   matcher: string,
   targetHookName: string,
   payload: unknown,
+  env: Record<string, string> = {},
 ): Promise<ShimResult> {
   const matcherB64 = btoa(matcher);
   const targetHookPath = `${HOOKS_DIR}${targetHookName}`;
@@ -63,6 +64,7 @@ async function runShim(
     env: {
       ...Deno.env.toObject(),
       AGY_HOOK_RECORD_PATH: "off",
+      ...env,
     },
   });
   const child = cmd.spawn();
@@ -195,6 +197,83 @@ function agyCallMcpTool(
 }
 
 // --- Unit tests: hooks/lib/agy_hook_shim.ts pure functions ---
+
+Deno.test("known-name design calls preserve arguments and reach their existing matchers", () => {
+  const cases: {
+    name: string;
+    args: Record<string, unknown>;
+    tool: string;
+    aliases?: Record<string, unknown>;
+  }[] = [
+    {
+      name: "edit_file",
+      args: { Path: "/r/a.ts", Target: "x", Replacement: "y", ArtifactMetadata: {} },
+      tool: "Edit",
+      aliases: { file_path: "/r/a.ts", old_string: "x", new_string: "y", content: "y" },
+    },
+    {
+      name: "write_file",
+      args: { Path: "/r/a.ts", Content: "y", Append: true, Overwrite: false, ArtifactMetadata: {} },
+      tool: "Write",
+      aliases: { file_path: "/r/a.ts", content: "y" },
+    },
+    {
+      name: "replace_file_content",
+      args: { TargetFile: "/r/a.ts", TargetContent: "x", ReplacementContent: "y" },
+      tool: "Edit",
+      aliases: { file_path: "/r/a.ts", old_string: "x", new_string: "y", content: "y" },
+    },
+    {
+      name: "multi_replace_file_content",
+      args: { TargetFile: "/r/a.ts", ReplacementChunks: [] },
+      tool: "Edit",
+      aliases: { file_path: "/r/a.ts" },
+    },
+    {
+      name: "write_to_file",
+      args: { TargetFile: "/r/a.ts", CodeContent: "y" },
+      tool: "Write",
+      aliases: { file_path: "/r/a.ts", content: "y" },
+    },
+    {
+      name: "run_command",
+      args: { CommandLine: "/bin/true" },
+      tool: "Bash",
+      aliases: { command: "/bin/true" },
+    },
+    { name: "issue_write", args: { method: "create" }, tool: "mcp__github__issue_write" },
+    { name: "sub_issue_write", args: { method: "add" }, tool: "mcp__github__sub_issue_write" },
+  ];
+  for (const { name, args, tool, aliases } of cases) {
+    const { toolName, normalized } = normalize({ toolCall: { name, args } }, "PreToolUse");
+    assertEquals(toolName, tool, name);
+    assertEquals(normalized.tool_name, tool, name);
+    assert(matcherMatches(tool, toolName), name);
+    for (const [key, value] of Object.entries({ ...args, ...aliases })) {
+      assertEquals(normalized.tool_input[key], value, `${name}: ${key}`);
+    }
+  }
+});
+
+Deno.test("current file argument aliases preserve empty text and existing Claude fields", () => {
+  const edit = buildToolInput({ Path: "/r/a.ts", Target: "", Replacement: "" });
+  assertEquals(edit.file_path, "/r/a.ts");
+  assertEquals(edit.old_string, "");
+  assertEquals(edit.new_string, "");
+  assertEquals(edit.content, "");
+  assertEquals(buildToolInput({ Path: "/r/a.ts", Content: "" }).content, "");
+  const args = {
+    Path: "/r/a.ts",
+    Target: "x",
+    Replacement: "y",
+    Content: "z",
+    file_path: "/r/explicit.ts",
+    old_string: "old",
+    new_string: "new",
+    content: "explicit",
+  };
+  assertEquals(buildToolInput(args), args);
+});
 
 Deno.test("mapAgyToolName: maps agy shell, file-edit, and GitHub MCP tools; unknown names pass through", () => {
   assertEquals(mapAgyToolName("run_command"), "Bash");
@@ -622,10 +701,12 @@ Deno.test("matcher semantics: an unmapped/unknown agy tool name doesn't match a 
 
 async function withRepoOnBranch(
   branch: string,
-  fn: (repoDir: string, filePath: string) => Promise<void>,
+  fn: (repoDir: string, filePath: string, homeDir: string) => Promise<void>,
 ): Promise<void> {
-  const dir = await Deno.makeTempDir({ prefix: "shim-git-test-" });
+  const homeDir = await Deno.makeTempDir({ prefix: "shim-git-test-" });
+  const dir = `${homeDir}/repository`;
   try {
+    await Deno.mkdir(dir);
     const run = async (cmd: string, args: string[]) => {
       const command = new Deno.Command(cmd, { args, stdout: "piped", stderr: "piped" });
       const { code, stderr } = await command.output();
@@ -638,11 +719,138 @@ async function withRepoOnBranch(
     await Deno.writeTextFile(filePath, "// placeholder\n");
     await run("git", ["-C", dir, "add", "-A"]);
     await run("git", ["-C", dir, "commit", "-q", "-m", "init"]);
-    await fn(dir, filePath);
+    await fn(dir, filePath, homeDir);
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await Deno.remove(homeDir, { recursive: true });
   }
 }
+
+const FILE_GUARDS = [
+  "block-human-only-credentials.sh",
+  "feature-branch-guard.sh",
+  "block-out-of-tree-write.sh",
+  "opus-delegation-gate.sh",
+  "block-production-media-change.sh",
+];
+
+Deno.test("normal Flash work: every design case runs through every file guard without asking", async (t) => {
+  for (const branch of ["feature/test", "dev"]) {
+    await withRepoOnBranch(branch, async (repoDir, filePath, homeDir) => {
+      // Deliberately outside /tmp and the existing document allowances. These paths are only
+      // replayed as hook input; the tests never execute the proposed writes.
+      const artifacts = `/agy-test-artifacts/${homeDir.split("/").pop()}`;
+      const cases = branch === "dev"
+        ? [
+          {
+            label: "edit on dev from home",
+            name: "edit_file",
+            target: filePath,
+            workspace: homeDir,
+          },
+          {
+            label: "write on dev from repo",
+            name: "write_file",
+            target: filePath,
+            workspace: repoDir,
+          },
+        ]
+        : [
+          {
+            label: "edit on feature from home",
+            name: "edit_file",
+            target: filePath,
+            workspace: homeDir,
+          },
+          {
+            label: "write on feature from repo",
+            name: "write_file",
+            target: filePath,
+            workspace: repoDir,
+          },
+          {
+            label: "create in new folder from home",
+            name: "write_file",
+            target: `${repoDir}/new/folder/file.ts`,
+            workspace: homeDir,
+          },
+          {
+            label: "artifact write from home",
+            name: "write_file",
+            target: `${artifacts}/task.md`,
+            workspace: homeDir,
+          },
+          {
+            label: "artifact write from repo",
+            name: "write_file",
+            target: `${artifacts}/plan.md`,
+            workspace: repoDir,
+          },
+          {
+            label: "tmp write from repo",
+            name: "write_file",
+            target: `${homeDir}/scratch.md`,
+            workspace: repoDir,
+          },
+        ];
+      for (const item of cases) {
+        await t.step(item.label, async () => {
+          for (const guard of FILE_GUARDS) {
+            const args = item.name === "edit_file"
+              ? { Path: item.target, Target: "before", Replacement: "after" }
+              : { Path: item.target, Content: "after" };
+            const res = await runShim("PreToolUse", "Edit|Write|NotebookEdit", guard, {
+              toolCall: { name: item.name, args },
+              modelName: "gemini-3.8-flash-high",
+              workspacePaths: [item.workspace],
+              artifactDirectoryPath: artifacts,
+            }, { HOME: homeDir });
+            const refused = branch === "dev" && guard === "feature-branch-guard.sh";
+            assertEquals(res.code, 0, `${guard}: ${res.stderr}`);
+            assertEquals(res.decision, refused ? "deny" : "allow", `${guard}: ${res.stdout}`);
+            if (refused) {
+              assert(res.reason?.includes("protected branch 'dev'"), res.stdout);
+              assert(res.reason?.includes("Create a feature branch"), res.stdout);
+            }
+          }
+        });
+      }
+    });
+  }
+});
+
+Deno.test("artifact allowance is bounded to its absolute directory and absent on other surfaces", async () => {
+  await withRepoOnBranch("feature/test", async (repoDir, _filePath, homeDir) => {
+    const artifacts = `/agy-test-artifacts/${homeDir.split("/").pop()}`;
+    const cases: { target: string; artifact?: unknown; decision: string }[] = [
+      { target: `${artifacts}/nested/task.md`, artifact: artifacts, decision: "allow" },
+      { target: `${artifacts}/task.md`, artifact: artifacts + "/", decision: "allow" },
+      { target: `${artifacts}-sibling/task.md`, artifact: artifacts, decision: "deny" },
+      { target: `${artifacts}/../outside.md`, artifact: artifacts, decision: "deny" },
+      { target: `${artifacts}/task.md`, decision: "deny" },
+      { target: `${artifacts}/task.md`, artifact: "", decision: "deny" },
+      { target: `${artifacts}/task.md`, artifact: "relative/artifacts", decision: "deny" },
+      { target: `${artifacts}/task.md`, artifact: 123, decision: "deny" },
+    ];
+    for (const item of cases) {
+      const res = await runShim(
+        "PreToolUse",
+        "Edit|Write|NotebookEdit",
+        "block-out-of-tree-write.sh",
+        {
+          toolCall: { name: "write_file", args: { Path: item.target, Content: "plan" } },
+          workspacePaths: [repoDir],
+          artifactDirectoryPath: item.artifact,
+        },
+        { HOME: homeDir },
+      );
+      assertEquals(res.code, 0, res.stderr);
+      assertEquals(res.decision, item.decision, res.stdout);
+      if (item.decision === "deny") {
+        assert(res.reason?.includes("out-of-tree write guard"), res.stdout);
+      }
+    }
+  });
+});
 
 // --- Row 10 Replay: agy file-edit tools reach Edit|Write-registered guards (web-jam-tools#1057) ---
 
