@@ -1202,13 +1202,13 @@ async function readableDesignPath(file: string, root: string): Promise<string> {
     return parts.length === 2 && !EXCLUDED_DESIGN_FOLDERS.has(parts[0]) &&
       !parts[0].startsWith(".") && isDesignDocFilename(parts[1]);
   };
-  if (!eligible(file)) {
-    throw new DesignDocResolutionRefusal(file, "not a design document under the root");
-  }
   try {
     const canonical = await Deno.realPath(file);
+    if (!eligible(canonical)) {
+      throw new Error("not a design document under the root");
+    }
     const info = await Deno.stat(canonical);
-    if (!eligible(canonical) || !info.isFile || (info.mode !== null && (info.mode & 0o444) === 0)) {
+    if (!info.isFile || (info.mode !== null && (info.mode & 0o444) === 0)) {
       throw new Error("not a readable design document");
     }
     return canonical;

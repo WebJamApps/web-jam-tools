@@ -728,7 +728,7 @@ Deno.test("normalizeTopicSlug produces clean lowercase kebab-case slug", () => {
 Deno.test("extractTopicFromText extracts canonical topic slug from diverse titles and formats", () => {
   assertEquals(
     extractTopicFromText(
-      "design-issue",
+      "skills/design-issue: automatically match existing feature design documents on Epics for Major Revisions",
     ),
     "design-issue",
   );

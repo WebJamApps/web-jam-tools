@@ -384,8 +384,56 @@ interface LookupCase {
   theme?: string;
   missingRoot?: boolean;
   add?: string[];
+  symlinkRoot?: boolean;
+  escapingDocument?: boolean;
 }
 const LOOKUP_CASES: LookupCase[] = [
+  {
+    name: "direct path resolves through a symlinked root",
+    input: "<R>/" + HOOKS,
+    symlinkRoot: true,
+    code: 0,
+    docs: [HOOKS],
+  },
+  {
+    name: "issue body path resolves through a symlinked root",
+    input: "web-jam-tools#9001",
+    body: "<R>/" + HOOKS,
+    symlinkRoot: true,
+    code: 0,
+    docs: [HOOKS],
+  },
+  {
+    name: "exact topic resolves through a symlinked root",
+    input: "hooks",
+    symlinkRoot: true,
+    code: 0,
+    docs: [HOOKS],
+  },
+  {
+    name: "contiguous topic resolves through a symlinked root",
+    input: "model tier",
+    symlinkRoot: true,
+    code: 0,
+    docs: [MODEL],
+  },
+  {
+    name: "direct path refuses a document symlink escaping the root",
+    input: "<R>/Token_Savings/escape-design.md",
+    escapingDocument: true,
+    code: 2,
+    reason: "not a design document",
+  },
+  {
+    name: "issue body path refuses a document escaping a symlinked root",
+    input: "web-jam-tools#9001",
+    body: "<R>/Token_Savings/escape-design.md",
+    symlinkRoot: true,
+    escapingDocument: true,
+    code: 2,
+    docs: ["Token_Savings/escape-design.md"],
+    reason: "not a design document",
+  },
   {
     name: "an unreadable body path retains every named candidate",
     input: "web-jam-tools#9001",
@@ -565,19 +613,26 @@ const LOOKUP_CASES: LookupCase[] = [
 for (const row of LOOKUP_CASES) {
   Deno.test(`step-zero lookup: ${row.name}`, async () => {
     const home = await Deno.makeTempDir({ prefix: "step-zero-" });
-    const root = path.join(home, "Dropbox/web-jam-llms");
+    const physicalRoot = path.join(home, "Dropbox/web-jam-llms");
+    const root = row.symlinkRoot ? path.join(home, "design-docs-link") : physicalRoot;
     const prior = Deno.env.get("HOME");
     Deno.env.set("HOME", home);
     try {
       if (!row.missingRoot) {
         for (const name of [...LOOKUP_DOCS, ...(row.add ?? [])]) {
-          const file = path.join(root, name);
+          const file = path.join(physicalRoot, name);
           await Deno.mkdir(path.dirname(file), { recursive: true });
           await Deno.writeTextFile(
             file,
             "# Fixture\n\n## Appendix — Decisions Record\n\n| ID | Decision | Outcome |\n|---|---|---|\n| D-1 | Scope | Fixture approved |\n",
           );
         }
+      }
+      if (row.symlinkRoot) await Deno.symlink(physicalRoot, root);
+      if (row.escapingDocument) {
+        const outside = path.join(home, "outside-design.md");
+        await Deno.writeTextFile(outside, "# Outside the design-documents root\n");
+        await Deno.symlink(outside, path.join(physicalRoot, "Token_Savings/escape-design.md"));
       }
       const expand = (text: string) => text.replaceAll("<R>", root);
       for (const command of ["match-design", "candidates"] as const) {
@@ -621,10 +676,15 @@ for (const row of LOOKUP_CASES) {
         if (row.code === 2) assertStringIncludes(joined, "could not tell");
         if (row.code === 0) assertStringIncludes(joined, "D-1: Fixture approved");
         if (row.docs) {
-          const printed = output.filter((line) => line.startsWith("  " + root + "/")).map((line) =>
-            line.trim()
-          ).sort();
-          assertEquals(printed, row.docs.map((name) => path.join(root, name)).sort(), command);
+          const outputRoot = row.code === 0 ? physicalRoot : root;
+          const printed = output.filter((line) => line.startsWith("  " + outputRoot + "/")).map((
+            line,
+          ) => line.trim()).sort();
+          assertEquals(
+            printed,
+            row.docs.map((name) => path.join(outputRoot, name)).sort(),
+            command,
+          );
         }
         assertEquals(joined.includes("No existing design document found"), false);
         assertEquals(joined.includes("YYYY-MM-DD"), false);
