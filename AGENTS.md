@@ -523,3 +523,12 @@ Read the Deno Deploy CLI and runtime rules in [docs/uptime-monitoring.md](docs/u
   guidance or documentation stating that inputs are only required below a size floor or that certain
   entities receive no proposal when the underlying validator now rejects missing inputs; keep
   fail-closed validation and caller contracts fully reconciled.
+- **Preserve Diagnostics & Fail Closed on Verification Script Absence Checks**: In manual
+  verification runbooks, automated verification scripts, and status confirmation loops, never infer
+  absence or successful removal from an uninspected non-zero exit code (such as
+  `cmd 2>/dev/null || echo "not found / deleted"`). Silencing standard error and masking all
+  failures causes credential expiry, rate limits, network interruptions, or server errors to falsely
+  report success with exit code 0 without verifying anything. Always preserve standard error
+  diagnostics, perform authenticated queries (such as `gh label list`), verify the entity's actual
+  absence from positive response listings, and fail closed with a non-zero exit code if any resource
+  cannot be checked or if the entity remains present.
