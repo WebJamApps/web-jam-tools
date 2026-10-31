@@ -1,9 +1,10 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.57.7",
+  "version": "1.58.0",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
+    "check-snap-updates": "deno run --allow-run=timeout,notify-send --allow-env=HOME,XDG_RUNTIME_DIR,DBUS_SESSION_BUS_ADDRESS --allow-read=$HOME/.local/state/web-jam-tools --allow-write=$HOME/.local/state/web-jam-tools src/snap-updates/check_updates.ts",
     "check-token-expiry": "deno run --allow-run=gh --allow-env=HOME,PATH,GH_TOKEN,GITHUB_TOKEN,GITHUB_TOKEN_EXPIRY_TEST_HEADERS,GITHUB_TOKEN_EXPIRY_MOCK_FAILURE,GITHUB_TOKEN_EXPIRY_NOW src/github-token/check_expiry.ts",
     "github-token:check-expiry": "deno run --allow-run=gh --allow-env=HOME,PATH,GH_TOKEN,GITHUB_TOKEN,GITHUB_TOKEN_EXPIRY_TEST_HEADERS,GITHUB_TOKEN_EXPIRY_MOCK_FAILURE,GITHUB_TOKEN_EXPIRY_NOW src/github-token/check_expiry.ts",
     "whoami": "bash -c 'exec deno run --allow-env=CODEX_THREAD_ID,CODEX_HOME,HOME --allow-read=.,\"${CODEX_HOME:-$HOME/.codex}/sessions\" --allow-run=bash scripts/whoami.ts'",
