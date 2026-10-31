@@ -98,7 +98,11 @@ function validateJudgment(
     throw new Error(`Missing or invalid explicit judgment for issue ${issue.number}`);
   }
   if (small && !isPriority(judgment.levelFromTests)) {
-    throw new Error(`Issue ${issue.number} requires levelFromTests below the 20-issue floor`);
+    throw new Error(
+      issue.epic
+        ? `Epic ${issue.number} with no child Priority requires levelFromTests`
+        : `Issue ${issue.number} requires levelFromTests below the 20-issue floor`,
+    );
   }
   if (small && judgment.liveBroken && judgment.levelFromTests !== "Urgent") {
     throw new Error(`Live broken issue ${issue.number} must have an Urgent levelFromTests`);
@@ -204,16 +208,24 @@ export function rankIssues(
   }
   for (const epic of active.filter((issue) => issue.epic)) {
     const childLevels = epic.children.map((child) => child.priority).filter(isPriority);
-    if (!childLevels.length) continue;
-    const highest = childLevels.reduce((a, b) => levelIndex(a) <= levelIndex(b) ? a : b);
-    if (epic.priority !== highest) {
+    let target: Priority;
+    let reason: string;
+    if (childLevels.length) {
+      target = childLevels.reduce((a, b) => levelIndex(a) <= levelIndex(b) ? a : b);
+      reason = `Highest native open child Priority is ${target}`;
+    } else {
+      const judgment = validateJudgment(epic, judgments[String(epic.number)], true);
+      target = judgment.levelFromTests!;
+      reason = `Caller level tests give ${target}; ${judgment.reason}`;
+    }
+    if (epic.priority !== target) {
       moves.push({
         number: epic.number,
         title: epic.title,
         kind: "epic",
         from: epic.priority,
-        to: highest,
-        reason: `Highest native open child Priority is ${highest}`,
+        to: target,
+        reason,
       });
     }
   }
