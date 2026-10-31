@@ -506,3 +506,11 @@ Read the Deno Deploy CLI and runtime rules in [docs/uptime-monitoring.md](docs/u
   `proc.stdin = None` immediately after `proc.stdin.close()` so Python 3.12 runtimes in CI do not
   call `self.stdin.flush()` and fail with `ValueError: flush of closed file`, and ensure new test
   fixtures respect the exact permission flags documented in the issue and PR test plan.
+- **Non-Interactive Test Execution & Stdin Isolation Against Blocking Prompts**: When executing
+  local test suites or background commands, agents must never run test suites with open or piped
+  standard input that allows interactive `prompt()` calls (such as CLI confirmation prompts) to
+  block indefinitely waiting for terminal input. Always isolate test input by redirecting from
+  `/dev/null` (`deno task test < /dev/null`) and prioritize targeted test suites specified by the
+  issue over whole-repository test runs. Once local targeted tests and issue-mandated verification
+  steps are green, open the draft PR promptly so GitHub Actions CI can execute the complete build
+  matrix without agent stalls.
