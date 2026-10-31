@@ -21,7 +21,7 @@ export interface Judgment {
   liveBroken: boolean;
   costlyDefect: boolean;
   reason: string;
-  /** Caller applies file-issue's level tests; required only below the share floor. */
+  /** Caller applies file-issue's level tests; required below the share floor and for Epics with no child Priority. */
   levelFromTests?: Priority;
 }
 

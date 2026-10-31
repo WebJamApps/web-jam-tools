@@ -579,6 +579,7 @@ Deno.test("CLI help has no filesystem or GitHub side effects", async () => {
   };
   assertEquals(await runRankCli(["--help"], options), 0);
   assertStringIncludes(options.output[0], "deno task backlog-groom:rank");
+  assertStringIncludes(options.output[0], "Epics with no child Priority");
 });
 
 Deno.test("CLI refuses invalid input, unreadable judgment file, and failed reads without proposals", async () => {
