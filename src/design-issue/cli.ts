@@ -17,10 +17,10 @@ import { runFilePlanCli } from "./file_plan.ts";
 import {
   DesignDocResolutionRefusal,
   expandHome,
-  type FindDesignDocOptions,
   formatCanonicalDesignDocResolution,
   type Gate1Options,
   resolveCanonicalDesignDoc,
+  type ResolveCanonicalDesignDocOptions,
   runGate1,
 } from "./gate1.ts";
 import {
@@ -382,7 +382,7 @@ Options:
   }
 }
 
-export interface MatchDesignCliOptions extends FindDesignDocOptions {
+export interface MatchDesignCliOptions extends ResolveCanonicalDesignDocOptions {
   log?: (msg: string) => void;
   errorLog?: (msg: string) => void;
 }
@@ -406,39 +406,39 @@ export async function runMatchDesignCli(
   });
 
   if (flags.help) {
-    log(`Usage: deno task design:match-design <topic|epic|title> [options]
+    log(`Usage: deno task design:match-design <path|citation|topic> [options]
 
-Matches pre-existing canonical design document for a feature or Epic
-and prompts for a Major Revision.
+Finds a design document from a path, an issue's body or a whole topic.
+Uncertain results list candidates for Josh to choose from.
 
 This is the canonical-document precondition of a design run: it runs before any decision is
 put to Josh, whether or not the run will ever create a document.
 
 Options:
-  --topic <topic>       Match existing design document by topic slug
+  --topic <topic>       Look up a path, issue citation or whole topic
   --theme <theme>       Scope search to specific theme directory
   --dropbox-dir <path>  Override the design-documents root (also DESIGN_DOCS_ROOT)
   -h, --help            Show this help message
 
 Exit codes:
   0  A canonical design document was resolved; its path and decisions record are printed
-  1  No canonical design document exists for the topic (or no topic was given)
-  2  REFUSED — the check could not tell which of the two applies (missing/unreadable path)`);
+  1  Missing argument
+  2  could not tell — prints the reason and candidates, or the unreadable path`);
     return 0;
   }
 
-  const query = flags.topic || (flags._.length > 0 ? String(flags._[0]) : "");
+  const query = flags.topic || flags._.map(String).join(" ");
   if (!query) {
-    errorLog("Error: Missing required topic, epic, or title argument.");
-    errorLog("Usage: deno task design:match-design <topic|epic|title>");
+    errorLog("Error: Missing required path, citation or topic argument.");
+    errorLog("Usage: deno task design:match-design <path|citation|topic>");
     return 1;
   }
 
   let resolution;
   try {
     resolution = await resolveCanonicalDesignDoc({
-      topic: flags.topic,
       title: query,
+      runner: options?.runner,
       theme: flags.theme || options?.theme,
       dropboxDir: flags["dropbox-dir"] || options?.dropboxDir,
     });
@@ -447,15 +447,18 @@ Exit codes:
       errorLog(`[design:match-design] ${err.message}`);
       return 2;
     }
-    throw err;
+    errorLog(
+      `[design:match-design] could not tell: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 2;
   }
 
   for (const line of formatCanonicalDesignDocResolution(resolution, "[design:match-design]")) {
     log(line);
   }
 
-  if (resolution.outcome === "no-document" || !resolution.match) {
-    return 1;
+  if (resolution.outcome === "could-not-tell" || !resolution.match) {
+    return 2;
   }
 
   log(`[design:match-design] Suggested action: Major Revision to existing design document.`);
