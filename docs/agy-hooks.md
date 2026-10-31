@@ -36,10 +36,12 @@ under a control/test A/B, not by what the model said.
    enforces it against the normalized tool name (§3).
 3. **agy's tool names are not Claude's.** The shell tool is `run_command`, with the command in
    `args.CommandLine` and the working directory in `args.Cwd`. There is no `Bash`, `Edit`, or
-   `Write` tool name. Best-effort fallback field names for edit tools from earlier work
-   ([web-jam-tools#344](https://github.com/WebJamApps/web-jam-tools/issues/344)) were formalized and
+   `Write` tool name. The current native file tools are `edit_file` (`Path`, `Target`,
+   `Replacement`) and `write_file` (`Path`, `Content`), recorded by the 2026-10-31 live probe
+   in the hooks design's "agy's file tools" section. Earlier field names from
+   [web-jam-tools#344](https://github.com/WebJamApps/web-jam-tools/issues/344) were formalized and
    independently measured live on 2026-10-12 ([web-jam-tools#1055](https://github.com/WebJamApps/web-jam-tools/issues/1055)) —
-   see §9 for literal tool names and argument signatures.
+   see §9 for the earlier and current tool names and argument signatures.
 4. **The payload schema is camelCase, not Claude's.** agy sends `toolCall.name`, `toolCall.args`,
    `transcriptPath`, `conversationId`, `stepIdx`, `artifactDirectoryPath`, `workspacePaths`. None
    of Claude's `tool_input`, `transcript_path`, `hook_event_name` exist, so an unmodified hook's
@@ -90,9 +92,13 @@ twelve bilingual hooks. `scripts/install-hooks.sh` registers
 agy surface only. It:
 
 1. normalizes agy's payload into the Claude shape the hooks already parse (`toolCall.name` ->
-   `tool_name`, `toolCall.args` -> `tool_input` with `CommandLine`/`Cwd`/`TargetFile`/
-   `CodeContent` aliased to `command`/`cwd`/`file_path`/`content`, `transcriptPath` ->
-   `transcript_path`, and `run_command` -> `Bash`),
+   `tool_name`, `toolCall.args` -> `tool_input`, `transcriptPath` -> `transcript_path`).
+   `run_command` becomes `Bash`; `edit_file`, `replace_file_content` and
+   `multi_replace_file_content` become `Edit`; `write_file` and `write_to_file` become `Write`.
+   `CommandLine`/`Cwd` become `command`/`cwd`, `Path` or `TargetFile` becomes `file_path`, `Target`
+   or `TargetContent` becomes `old_string`, and `Replacement` or `ReplacementContent` becomes
+   `new_string` and `content`. `Content` and `CodeContent` also populate `content`. Original
+   arguments and already-present Claude fields are preserved,
 2. enforces the `matcher` itself (an anchored regex test against the mapped tool name) and exits
    with `{"decision":"allow"}` without running the target hook when it doesn't match,
 3. runs the target hook **unmodified**, piping it the normalized payload on stdin — for
@@ -258,6 +264,40 @@ hook" section for the same disclosure on a related agy-native hook):
 
 A live agy probe was conducted on 2026-10-12 to measure agy's native file-edit-shaped tool names,
 its GitHub MCP tool-calling structure, and whether `PreToolUse` hooks registered under `.*` fire for each.
+
+### Current file tools (2026-10-31)
+
+The hooks design's revision 2.17.0 records the current live names and arguments:
+
+| Native tool  | Arguments                                                    | Normalized tool |
+| ------------ | ------------------------------------------------------------ | --------------- |
+| `edit_file`  | `Path`, `Target`, `Replacement`, `ArtifactMetadata`          | `Edit`          |
+| `write_file` | `Path`, `Content`, `Append`, `Overwrite`, `ArtifactMetadata` | `Write`         |
+
+These reach the same file guards as the earlier names below. Mapping the current names ships
+together with the out-of-tree guard's allowance for `artifactDirectoryPath`: a target inside that
+absolute folder is allowed, so a repository workspace does not refuse agy's own plan or task files.
+Normalized paths must stay within the folder; a sibling sharing its prefix and a `..` escape are
+refused. A missing, empty, relative or non-string field grants no allowance. Claude Code and Codex
+send no such field and retain their existing behavior.
+
+The guards add no `ask` replies and do not change agy's own Tool Permission setting. Feature branch
+edits and writes, new folders, artifact files and `/tmp` scratch writes pass; edits to repositories
+on `dev`, `main` or `master` are refused with the feature-branch fix. A home-folder workspace has no
+repository fence of its own, but protected-branch checks still examine the target file's repository.
+
+`test/agy_hook_shim_hook.test.ts` replays all eight normal-work design cases against every
+PreToolUse file guard and checks artifact containment separately. It also checks each known name in
+the design table, retaining the shell and issue-write mappings. Recognition after a rename and the
+unknown-name alarm remain separate work in web-jam-tools#1653 "hooks/agy-hook-shim: catch a renamed
+file-changing call by what its arguments hold, and log the new name".
+
+No installer change is needed: the installed shim and guard already reach these modules. After
+merge, with the canonical clone on the merged commit, the one-shot Flash session in "What this does
+to normal Flash work" must confirm real edits, writes and artifact writes pass without a new prompt,
+and a `dev` edit is refused with the file unchanged. Post that result on web-jam-tools#1057
+"hooks/agy-hook-shim: run Edit, Write and issue-write guards on agy's own tool names" before
+closure; replay tests alone do not prove the live session's enforcement.
 
 ### File-Edit Tools
 
