@@ -13,7 +13,8 @@ import {
   stripHeredocs,
 } from "./normalize_command.ts";
 
-const UNREADABLE_WORDS = /\b(ps|pgrep|pstree|top|htop|docker|systemctl|declare|typeset)\b|\/proc\//;
+const UNREADABLE_WORDS =
+  /\b(ps|pgrep|pstree|top|htop|docker|systemctl|declare|typeset|printenv)\b|\/proc\//;
 const CREDENTIAL_NAME = /TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|AUTH/i;
 const PROC_DUMP = /^(?:\d*<)?\/proc\/[^\/]+(?:\/task\/[^\/]+)?\/(?:cmdline|environ)$/;
 const PS_COLUMNS = new Set([
@@ -193,6 +194,9 @@ function checkArgv(argv: string[], depth: number): string | undefined {
   const name = resolved.argv[i]?.split("/").pop();
   const args = resolved.argv.slice(i + 1);
 
+  if (name === "printenv" && args.some((arg) => CREDENTIAL_NAME.test(arg))) {
+    return "printenv with a credential-named variable can print credentials.";
+  }
   if (name === "ps" && !safePs(args)) {
     return "This ps form can print process arguments or environments.";
   }

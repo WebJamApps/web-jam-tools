@@ -635,6 +635,14 @@ const sideEffectCases: Array<[string, number]> = [
   ["typeset -x", 2],
   ["typeset -p", 2],
   ["declare -p GH_TOKEN", 2],
+  ["printenv GH_TOKEN", 2],
+  ["printenv GITHUB_TOKEN", 2],
+  ['printenv "GH_TOKEN"', 2],
+  ["printenv API_KEY", 2],
+  ["printenv MY_SECRET", 2],
+  ["printenv PATH GH_TOKEN", 2],
+  ["sh -c 'printenv GH_TOKEN'", 2],
+  ["printenv XAUTHORITY", 2],
   ['sh -c "ps aux"', 2],
   ["echo x | xargs ps -ef", 2],
   ["bash -c 'export -p'", 2],
@@ -651,6 +659,9 @@ const sideEffectCases: Array<[string, number]> = [
   ["export FOO=bar", 0],
   ["declare -a items", 0],
   ["declare -p PATH", 0],
+  ["printenv PATH", 0],
+  ["printenv HOME", 0],
+  ["printenv PATH HOME", 0],
   ["compgen -v", 0],
   ['gh issue create --title "x" --body "never run ps aux or read /proc/1/cmdline"', 0],
   ['git commit -m "document why ps aux is blocked"', 0],
@@ -740,6 +751,23 @@ const sideEffectRegressions: Array<[string, number]> = [
   ["docker container ls --no-trunc", 2],
   ["docker container ps --no-trunc", 2],
   ["docker container ls", 0],
+  ["printenv PROBE_FAKE_TOKEN", 2],
+  ["printenv db_password", 2],
+  ["printenv DB_PASSWD", 2],
+  ["printenv SERVICE_CREDENTIAL", 2],
+  ["printenv MY_APIKEY", 2],
+  ["printenv --null GH_TOKEN", 2],
+  ["printenv -- PATH GH_TOKEN", 2],
+  ["/usr/bin/printenv GH_TOKEN", 2],
+  ["env /usr/bin/printenv GH_TOKEN", 2],
+  ["echo x | xargs printenv GH_TOKEN", 2],
+  ["echo ready; printenv GH_TOKEN", 2],
+  ["bash <<'EOF'\nprintenv GH_TOKEN\nEOF", 2],
+  ["echo `printenv GH_TOKEN`", 2],
+  ["printenv PATH # GH_TOKEN is only a comment", 0],
+  ["echo printenv GH_TOKEN", 0],
+  ['git commit -m "never run printenv GH_TOKEN"', 0],
+  ["cat <<'EOF'\nprintenv GH_TOKEN\nEOF", 0],
 ];
 
 for (const [command, expected] of sideEffectRegressions) {
@@ -766,6 +794,7 @@ for (
     "systemctl",
     "declare",
     "typeset",
+    "printenv",
   ]
 ) {
   for (
@@ -795,6 +824,7 @@ for (
     JSON.stringify({ tool_input: { command: 'set "unclosed' } }),
     JSON.stringify({ tool_input: { command: 'export "unclosed' } }),
     JSON.stringify({ tool_input: { command: 'echo postscript desktop "unclosed' } }),
+    JSON.stringify({ tool_input: { command: 'echo reprintenvironment "unclosed' } }),
   ]
 ) {
   Deno.test(`unreadable unrelated payload stays allowed: ${payload}`, async () => {
