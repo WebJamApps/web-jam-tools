@@ -619,6 +619,9 @@ async function makeMockGh(
     issueTitle?: string;
     issueLabels?: string[];
     failLabelsFetch?: boolean;
+    parentInfo?: string;
+    failStatusMutation?: boolean;
+    statusReadbackValue?: string;
   } = {},
 ) {
   const dir = await Deno.makeTempDir({ prefix: "mock-gh-" });
@@ -645,6 +648,27 @@ LABELS_EOF
   }
     fi
   done
+fi
+if [ "$1" = "api" ]; then
+  if [[ "\${2:-}" == *"/parent"* ]]; then
+    ${options.parentInfo ? `echo -e "${options.parentInfo}"; exit 0` : "exit 1"}
+  elif [ "\${2:-}" = "graphql" ]; then
+    ${
+    options.failStatusMutation
+      ? 'echo "mutation failed" >&2; exit 1'
+      : 'echo \'{"data":{"updateIssueFieldValue":{"clientMutationId":null}}}\'; exit 0'
+  }
+  else
+    for arg in "$@"; do
+      if [ "$arg" = ".node_id" ]; then
+        echo "I_mock_node_id"
+        exit 0
+      elif [[ "$arg" == *".issue_field_values"* ]]; then
+        echo "${options.statusReadbackValue ?? "In review"}"
+        exit 0
+      fi
+    done
+  fi
 fi
 exit 0
 `;
@@ -1259,7 +1283,14 @@ Deno.test("opening a PR when current branch matches --base is refused", async ()
 // --- --base passed through to gh pr create/edit tests ---
 
 async function makeMockGhWithArgCapture(
-  options: { labelFailure?: boolean; initialLabels?: string[]; issueLabels?: string[] } = {},
+  options: {
+    labelFailure?: boolean;
+    initialLabels?: string[];
+    issueLabels?: string[];
+    parentInfo?: string;
+    failStatusMutation?: boolean;
+    statusReadbackValue?: string;
+  } = {},
 ) {
   const dir = await Deno.makeTempDir({ prefix: "mock-gh-args-" });
   const argsLogPath = `${dir}/gh-invocations.txt`;
@@ -1293,6 +1324,27 @@ if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
       exit 0
     fi
   done
+fi
+if [ "$1" = "api" ]; then
+  if [[ "\${2:-}" == *"/parent"* ]]; then
+    ${options.parentInfo ? `echo -e "${options.parentInfo}"; exit 0` : "exit 1"}
+  elif [ "\${2:-}" = "graphql" ]; then
+    ${
+    options.failStatusMutation
+      ? 'echo "mutation failed" >&2; exit 1'
+      : 'echo \'{"data":{"updateIssueFieldValue":{"clientMutationId":null}}}\'; exit 0'
+  }
+  else
+    for arg in "$@"; do
+      if [ "$arg" = ".node_id" ]; then
+        echo "I_mock_node_id"
+        exit 0
+      elif [[ "$arg" == *".issue_field_values"* ]]; then
+        echo "${options.statusReadbackValue ?? "In review"}"
+        exit 0
+      fi
+    done
+  fi
 fi
 if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
   touch "${dir}/pr-open"
@@ -1330,7 +1382,14 @@ async function withModelLabelFixture(
     env: Record<string, string>;
     invocations: () => Promise<string[][]>;
   }) => Promise<void>,
-  options: { labelFailure?: boolean; initialLabels?: string[]; issueLabels?: string[] } = {},
+  options: {
+    labelFailure?: boolean;
+    initialLabels?: string[];
+    issueLabels?: string[];
+    parentInfo?: string;
+    failStatusMutation?: boolean;
+    statusReadbackValue?: string;
+  } = {},
 ): Promise<void> {
   const repo = await makeFixtureRepo();
   const { dir, argsLogPath } = await makeMockGhWithArgCapture(options);
@@ -1710,3 +1769,174 @@ for (
     assertEquals(out.code, code, new TextDecoder().decode(out.stderr));
   });
 }
+
+// --- issue line table and Workflow Status tests (web-jam-tools#1614) ---
+
+Deno.test("issue line table: Row 1 - done once dev is pulled emits Closes #N", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "100"],
+    env,
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes #100/);
+  assertNotMatch(res.stdout, /Part of/);
+});
+
+Deno.test("issue line table: Row 2 - needs a local step emits Part of #N (local step after merge)", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "101", "--local-step"],
+    env,
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Part of #101 \(local step after merge\)/);
+  assertNotMatch(res.stdout, /Closes #101/);
+});
+
+Deno.test("issue line table: Row 3 - has more coding work emits Part of #N via --part-of", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "102", "--part-of"],
+    env,
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Part of #102/);
+  assertNotMatch(res.stdout, /local step after merge/);
+  assertNotMatch(res.stdout, /Closes/);
+});
+
+Deno.test("issue line table: Row 4 - Epic child emits Closes #N and Part of for Epic", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    parentInfo: "900\tWebJamApps/web-jam-tools",
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "103"],
+    env,
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes #103\s+Part of #900/);
+});
+
+Deno.test("issue line table: Row 4 cross-repo - Epic child emits Closes #N and Part of OWNER/REPO#<Epic>", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    parentInfo: "500\tWebJamApps/other-repo",
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "104"],
+    env,
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes #104\s+Part of WebJamApps\/other-repo#500/);
+});
+
+Deno.test("issue line table: Row 5 - no issue emits no issue line", async () => {
+  const res = await runScript(
+    await makeFixtureRepo(),
+    baseArgs(),
+  );
+  assertEquals(res.code, 0, res.stderr);
+  const composedBody =
+    res.stdout.split("=== COMPOSED BODY ===\n")[1]?.split("\n=== END DRY RUN ===")[0] ?? "";
+  assertNotMatch(composedBody, /Closes/);
+  assertNotMatch(composedBody, /Part of/);
+  assertNotMatch(composedBody, /Refs/);
+});
+
+Deno.test("--local-step without an issue is refused", async () => {
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--local-step"],
+  );
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /--local-step needs an issue/);
+});
+
+Deno.test("--local-step and --part-of together is refused", async () => {
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "105", "--local-step", "--part-of"],
+  );
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /pass --part-of or --local-step, not both/);
+});
+
+Deno.test("--local-step and --no-close together is refused", async () => {
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "106", "--local-step", "--no-close"],
+  );
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /pass --no-close or --local-step, not both/);
+});
+
+Deno.test("cross-repo --issue with --local-step produces Part of OWNER/REPO#N (local step after merge)", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "WebJamApps/JaMmusic#1250", "--local-step"],
+    env,
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Part of WebJamApps\/JaMmusic#1250 \(local step after merge\)/);
+});
+
+Deno.test("Workflow Status write: confirmed write and read-back proceeds to open draft PR", async () => {
+  await withModelLabelFixture(async ({ repo, env, invocations }) => {
+    const res = await runScriptWithoutDryRun(
+      repo,
+      [...baseArgs({ author: "agy — Gemini Flash" }), "--issue", "999"],
+      env,
+    );
+    assertEquals(res.code, 0, res.stderr);
+    assertMatch(res.stdout, /Setting Workflow Status to 'In review'/);
+    assertMatch(res.stdout, /Workflow Status: In review \(read-back verified\)/);
+    assertMatch(res.stdout, /Draft PR opened:/);
+    const calls = await invocations();
+    const hasGraphQL = calls.some((c) => c[0] === "api" && c[1] === "graphql");
+    assertEquals(hasGraphQL, true);
+  });
+});
+
+Deno.test("Workflow Status write: mutation failure makes script refuse and fail closed", async () => {
+  await withModelLabelFixture(async ({ repo, env, invocations }) => {
+    const res = await runScriptWithoutDryRun(
+      repo,
+      [...baseArgs({ author: "agy — Gemini Flash" }), "--issue", "999"],
+      env,
+    );
+    assertEquals(res.code, 1);
+    assertMatch(res.stderr, /GraphQL mutation failed to set Workflow Status/);
+    const calls = await invocations();
+    const hasPrCreate = calls.some((c) => c[0] === "pr" && c[1] === "create");
+    assertEquals(hasPrCreate, false);
+  }, { failStatusMutation: true });
+});
+
+Deno.test("Workflow Status write: read-back mismatch makes script refuse and fail closed", async () => {
+  await withModelLabelFixture(async ({ repo, env, invocations }) => {
+    const res = await runScriptWithoutDryRun(
+      repo,
+      [...baseArgs({ author: "agy — Gemini Flash" }), "--issue", "999"],
+      env,
+    );
+    assertEquals(res.code, 1);
+    assertMatch(res.stderr, /Workflow Status write unverified on #999/);
+    const calls = await invocations();
+    const hasPrCreate = calls.some((c) => c[0] === "pr" && c[1] === "create");
+    assertEquals(hasPrCreate, false);
+  }, { statusReadbackValue: "In progress" });
+});

@@ -1,7 +1,7 @@
-// hook_issue_pr_no_close_rule.test.ts — web-jam-tools#662
+// hook_issue_pr_no_close_rule.test.ts — web-jam-tools#662, web-jam-tools#1614
 //
-// Asserts that docs/cross-ai-rules.md and skills/draft-pr/SKILL.md define the standing rule
-// and carve-out that a PR for a hook issue never closes the issue on merge.
+// Asserts that docs/cross-ai-rules.md and skills/draft-pr/SKILL.md point to the canonical
+// design document for hook issue PR closing behavior and local-step requirements.
 
 import { assert, assertStringIncludes } from "@std/assert";
 
@@ -17,33 +17,24 @@ Deno.test("docs/cross-ai-rules.md exists and can be read", async () => {
   assert(content.length > 0, "docs/cross-ai-rules.md is empty");
 });
 
-Deno.test("docs/cross-ai-rules.md defines the hook issue PR no-close hard rule", async () => {
+Deno.test("docs/cross-ai-rules.md points to canonical design for hook issue PR closing behavior", async () => {
   const rawContent = await Deno.readTextFile(CROSS_AI_RULES_PATH);
   const normalized = normalizeWhitespace(rawContent);
 
   // Rule heading
   assertStringIncludes(rawContent, "**A PR FOR A HOOK ISSUE NEVER CLOSES THE ISSUE.**");
 
-  // Hook scope and prohibited closing keywords
+  // Pointer to design document and sections
   assertStringIncludes(
     normalized,
-    "When an issue adds or changes a hook — a git hook, a Claude Code hook, any hook installed onto a machine — the PR body carries no closing keyword (`Closes`, `Fixes`, `Resolves`) for it.",
+    "Replaced by the canonical design document `/home/joshua/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md`",
   );
-
-  // Requirement to use Part of instead
-  assertStringIncludes(rawContent, "Use `Part of <repo>#<number>` instead.");
-
-  // Post-merge confirmation requirement before manual close
   assertStringIncludes(
     normalized,
-    "After the PR merges, the hook is installed and confirmed to actually fire, and only then is the issue closed by hand.",
+    '"Manual Steps & Runbooks" and "How a pull request names its issue"',
   );
-
-  // Josh ruling reference
-  assertStringIncludes(
-    normalized,
-    "whenever we create an issue involving hooks, the PR should never close on merge, it should always remain open so we can install the hook and/or confirm the hook is working, then the issue gets closed manually",
-  );
+  assertStringIncludes(normalized, "--local-step");
+  assertStringIncludes(normalized, "Part of #N (local step after merge)");
 });
 
 Deno.test("skills/draft-pr/SKILL.md exists and can be read", async () => {
@@ -51,25 +42,11 @@ Deno.test("skills/draft-pr/SKILL.md exists and can be read", async () => {
   assert(content.length > 0, "skills/draft-pr/SKILL.md is empty");
 });
 
-Deno.test("skills/draft-pr/SKILL.md defines hook issue carve-out in frontmatter and body", async () => {
+Deno.test("skills/draft-pr/SKILL.md defines issue line cases and --local-step", async () => {
   const rawContent = await Deno.readTextFile(DRAFT_PR_SKILL_PATH);
   const normalized = normalizeWhitespace(rawContent);
 
-  // Frontmatter description mentions hook issues carve-out
-  assertStringIncludes(
-    rawContent,
-    "hook issues that must be confirmed firing before closing",
-  );
-
-  // Intro section mentions hook issue carve-out with pointer to docs/cross-ai-rules.md
-  assertStringIncludes(
-    normalized,
-    "hook issue that must remain open until installed and confirmed firing — see `docs/cross-ai-rules.md`",
-  );
-
-  // How to run it section mentions hook issue carve-out with pointer to docs/cross-ai-rules.md
-  assertStringIncludes(
-    normalized,
-    "hook PRs never close on merge because the hook must be installed and confirmed firing first — see `docs/cross-ai-rules.md`",
-  );
+  assertStringIncludes(rawContent, "--local-step");
+  assertStringIncludes(normalized, "Part of #N (local step after merge)");
+  assertStringIncludes(normalized, "Manual Steps & Runbooks");
 });

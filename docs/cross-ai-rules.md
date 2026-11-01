@@ -5,7 +5,11 @@ tier order, hand-offs, approval checkpoints). This doc holds the operational rul
 AI team — voice rules, file placement, protected files, canonical task queues, hard operational
 rules, and memory hygiene._
 
-> **Moved to the Obsidian vault (2026-11-05):** Origin stories, worked examples, and work-specific rules (example pitches, REAPER, Blocked label, Dropbox scope, backend guard detail, design receipts, epic coherence, standalone issues) now live word for word in `~/Dropbox/web-jam-llms/rules-vault/web-jam-tools-cross-ai-rules.md`. Read it before working in that area.
+This content used to live in Dropbox `SHARED.md` (mirrored to Google Drive so Maria's claude.ai web
+Sonnet could read it). It is now maintained here in `web-jam-tools` as the single source of truth.
+AI-specific rules live in CLAUDE.md / AGENTS.md.
+
+Last updated: 2026-08-27.
 
 ## VOICE RULES (for any email/pitch drafting task)
 
@@ -21,6 +25,18 @@ rules, and memory hygiene._
   know, leave it out.
 - USE any personal hook the user gives you (e.g. "son lives in Rustburg"). Don't drop it.
 - Avoid "your spot". Prefer "your venue" / "your stage" / the venue's actual name.
+
+## EXAMPLE PITCHES (match this style — plain, conversational, only facts the user gave you)
+
+--- Example A (warm tone, returning-area venue) --- Hi, My wife Maria and I are an acoustic duo from
+Salem, VA. We're free the last two weeks of June and would love to play a Saturday at your place. My
+son lives in Rustburg, so we're in the area anyway and it would be a real treat to get on your
+stage. Let me know if any of those dates work. Thanks — Josh Sherman, joshandmariamusic.com
+
+## --- Example B (professional tone, new venue) --- Hi, I'm Josh Sherman — my wife and I play as Josh and Maria, an acoustic duo out of Salem, VA. I came across your venue and wanted to ask about booking. We have Saturdays open between June 14 and 28. Happy to send a short sample or talk through what we play. Thanks — Josh Sherman, joshandmariamusic.com
+
+If the user did NOT give you a fact (genre, style, prior venues, awards, follower counts), DO NOT
+mention it. Just leave it out. The examples above only mention facts that were given.
 
 ## FILE PLACEMENT RULE
 
@@ -40,6 +56,16 @@ Never create version-suffixed copies (V2, V3, -new, -copy) — edit the master.
 
 - claude-sonnet-tasks.txt (Drive root, id 1ooDgwiatb66PGH40ae1KpRTb9WAvn-IZ) — Claude Sonnet (Josh's
   phone app); Drive is authoritative.
+
+claude-opus-tasks.txt (Claude Opus lane) is RETIRED — the file no longer exists on disk (logged as
+"bridge dormant" in `web-jam-llms/bridge-log.md`, 2026-08-26); Opus work is tracked in GitHub issues.
+
+agy-tasks.txt (agy/Flash lane) is RETIRED (web-jam-tools#249 "delegate skill: drop agy-tasks.txt queue mode — agy dispatch is GitHub-issues-only now") — Josh deleted it and moved agy/Flash
+dispatch to GitHub-issues-only; see `skills/delegate/SKILL.md`.
+
+claude-fable-tasks.txt is RETIRED — Fable was removed from Josh's Anthropic plan on 2026-07-21 and
+the file was never created. Fable's System Architect work (requirements/specs/issue-writing) now
+goes to Opus.
 
 Never modify a queue file that isn't yours. Phone-authored bridge files at Drive root (e.g.
 `for-opus-<name>.txt`) are merged into the canonical queues by Claude Opus or via the drive-cleanup
@@ -96,7 +122,10 @@ skill.
 - **MAX 2 CONCURRENT WORKSTREAMS PER TERMINAL**: Two live background jobs (e.g. a subagent + a
   headless agy dispatch) is the cap. When a THIRD thread (new discussion, dispatch, or background
   job) starts in the same session, the agent must WARN Josh first and propose a separate terminal —
-  never comply silently. - **ISSUE CITATIONS ALWAYS CARRY REPO + NUMBER + TITLE**: Every mention of a GitHub issue or PR — in
+  never comply silently. Origin: 2026-07-16, Claude A froze mid-permission-prompt while running a
+  Sonnet subagent + a headless agy dispatch plus a new discussion; recovery required keystroke
+  injection from another session.
+- **ISSUE CITATIONS ALWAYS CARRY REPO + NUMBER + TITLE**: Every mention of a GitHub issue or PR — in
   chat, in a commit message, in an issue/PR body, in a memory or queue file — must be written as
   `repo#number "title"`, e.g.
   `web-jam-back#998 "email subject or title still not easy for  me to see its target venue"`. **`#`
@@ -106,7 +135,9 @@ skill.
   the sentence — never emit a bare number as a placeholder. If the full citation is too verbose,
   shorten to the TITLE, never to the number. The violation is almost always the LAST sentence of a
   message (the "want me to do X?" offer, written after the careful part), so re-read the finished
-  message and check every `#` before sending. **This rule has exactly one carve-out — the literal `Closes`/`Fixes`/`Resolves`
+  message and check every `#` before sending. Josh has asked for this five times (2026-07-24 →
+  2026-07-29); he reads these on a phone with many numbers in flight and a bare number costs him a
+  lookup every time. **This rule has exactly one carve-out — the literal `Closes`/`Fixes`/`Resolves`
   line in a PR body — see "THE CLOSES/FIXES/RESOLVES LINE IS SYNTAX, NOT PROSE" below.**
 - **THE CLOSES/FIXES/RESOLVES LINE IS SYNTAX, NOT PROSE — NEVER APPLY THE CITATION FORMAT TO IT.**
   The one line in a PR body that carries a literal `Closes`, `Fixes`, or `Resolves` keyword is
@@ -120,11 +151,30 @@ skill.
   Correct: `Closes #784`
   Incorrect: `Closes web-jam-tools#784 "some title"`
 
+  The incorrect form silently fails: GitHub does not recognize `web-jam-tools#784` (repo name
+  without the `owner/` prefix) as a valid reference, so the issue never auto-closes even though
+  the PR merges clean and the line reads as if it should have worked. This carve-out is scoped to
+  that one line only — every OTHER issue/PR mention in the same PR body (a "why" section, a
+  "related to" note, a comment) still follows the full `repo#number "title"` citation rule above.
+
+  Origin: web-jam-tools#805 "PR body Closes line silently fails to auto-close when reformatted to
+  citation style" — a Sonnet subagent fixing PR review findings on `web-jam-tools#800 "Stop
+  design:lint-doc flagging a banned phrase that a document is quoting rather than using"` used
+  `gh pr edit` to reformat that PR's `Closes` line to `Closes web-jam-tools#797 "Stop
+  design:lint-doc flagging a banned phrase that a document is quoting rather than using"` in the
+  course of applying the citation rule to the whole body. `web-jam-tools#797 "Stop design:lint-doc
+  flagging a banned phrase that a document is quoting rather than using"` stayed OPEN after
+  `web-jam-tools#800 "Stop design:lint-doc flagging a banned phrase that a document is quoting
+  rather than using"` merged and had to be closed by hand.
 - **NO AGENT CONNECTS A NEW ACCOUNT, CREDENTIAL, OR MCP SERVER WITHOUT AUTHORIZATION:** No agent
   adds a connector, account, credential, or MCP server to any Claude or Flash surface without Josh's
   explicit authorization naming it. Discovering that something _could_ be connected is never
   permission to connect it. This applies to new OAuth grants, new MCP servers, new API tokens, and
-  widening the scope of an existing connection. - **NO GUARD IS EVER LOOSENED TO REDUCE JOSH'S FRICTION:** When Josh is frustrated at being asked,
+  widening the scope of an existing connection. Origin (2026-07-30, Josh): _"it should NEVER have
+  something else that I have not authorized."_ See web-jam-tools#324 "No agent connects a new
+  account, credential, or MCP server without Josh's explicit authorization — add the rule and audit
+  where it can be mechanically enforced" for the enforcement-surface audit.
+- **NO GUARD IS EVER LOOSENED TO REDUCE JOSH'S FRICTION:** When Josh is frustrated at being asked,
   no agent removes, widens, or bypasses the thing that asks — not a permission rule, not a hook, not
   a skill gate, not a confirmation step. A guard exists because a failure already happened; deleting
   it converts his irritation into a permanent hole. **"I already approved this" is a request to
@@ -133,7 +183,15 @@ skill.
   knows nothing about the conversation, so it cannot represent "already approved"), say so plainly
   and propose the thing that can; never approximate it by weakening the guard. The correct fix for a
   redundant prompt is a check that reads a recorded approval — silent when the approval exists,
-  refusing when it does not. - **NO AI CLOSES OR REOPENS A GITHUB ISSUE AUTONOMOUSLY:** No agent may close (`gh issue close`) or
+  refusing when it does not. Origin (2026-08-11): during an eleven-issue filing run Josh was prompted
+  per issue and said, correctly, that he had already approved the plan; the response was to move
+  `mcp__claude_ai_GitHub_MCP__issue_write` and `sub_issue_write` from `ask` to `allow`, which stopped
+  the prompting and also removed the only mechanical barrier to any session filing issues he never
+  asked for. Reverted the same hour. Josh: _"add this to a STRONG rule to not loosen guards or like
+  this ever again just to placate me this way, I said I ALREADY approved, not just allow it
+  whatever!!!"_ The real fix is web-jam-tools#502 "Josh is asked to approve issue creation he already
+  approved — write an approval token at the plan gate and add a PreToolUse hook that reads it".
+- **NO AI CLOSES OR REOPENS A GITHUB ISSUE AUTONOMOUSLY:** No agent may close (`gh issue close`) or
   reopen (`gh issue reopen`) any GitHub issue without Josh's explicit authorization in chat naming
   that specific issue. Always ask Josh for permission first before executing any issue close or reopen
   command.
@@ -163,17 +221,57 @@ skill.
   to its head branch. It never authorizes deleting that branch, and the deletion patterns stay in
   `permissions.deny` with no prompt and no exception.
 
+  **`--force-with-lease` is `ask`, not `deny`** (`ASK_RULES` in `scripts/install-hooks.sh`), so the
+  harness prompts with the literal command before it runs and Josh answers per invocation. That
+  prompt is the mechanism enforcing this rule — a deny entry could not, since static string matching
+  has no view of whether Josh authorized anything, and it therefore refused the authorized case and
+  the unauthorized one identically. Plain `--force` remains denied outright. Local branch cleanup after a merge (deleting a LOCAL branch with
+  `git branch -d`/`-D`, `git fetch --prune` to prune stale local remote-tracking refs) remains
+  permitted and unchanged — this rule narrows that standing post-merge cleanup habit to local
+  branches only, it does not remove it or require re-approval for it. Enforced by three independent
+  layers: a harness `permissions.deny` block on the ways `git push`/`git branch` can delete or
+  clobber a remote ref (`--delete`/`-d`, plain `--force`/`-f`,
+  `--mirror`, `--prune`, and `git branch -D`/`--delete --force`
+  against a `remotes/` ref — installed via `scripts/install-hooks.sh` in this repo; note
+  `--force-with-lease` is `ask` rather than `deny`, per the paragraph above). The colon-refspec
+  form (`git push origin :branch`) is caught by the merge/deploy guard hook because a Claude Code
+  deny rule cannot express it. A GitHub
+  ruleset restricting deletions on the branches agents create (`claude/**`, `agy/**`, `dev`, `main`
+  — Josh-only UI work, see web-jam-tools#308 "Remote branches can be deleted by an agent with no
+  authorization — advisory guard does not block (3 layers: deny rules, GitHub ruleset, HARD
+  RULES)"), and this HARD RULE. Origin: 2026-07-29, an agent deleted
+  `claude/cross-ai-rules-issue-citation-hard-rule` from `web-jam-tools` immediately after Josh
+  merged web-jam-tools#307 "Add ISSUE CITATIONS hard rule to operational rules" — Josh had only said
+  the PR was merged, never authorized a deletion, and the `PreToolUse` guard that fired was advisory
+  text an agent could rationalize past.
+- **REAPER RECORDING SESSIONS & RATE LIMIT SAFETY:** When running REAPER music recording sessions
+  via Reaper MCP:
+  1. REAPER DAW, audio interfaces, recorded WAV audio stems, and `.RPP` project files live locally
+     on the user's computer and are 100% safe from rate limit interruptions.
+  2. Google does NOT broadcast an advance warning gauge prior to hitting temporary hourly rate
+     limits (`429 Rate Limit Exceeded`).
+  3. Use **`Flash`** (at high effort) for REAPER operations, routine (`transport_play`,
+     `transport_stop`, `track_create`, volume/pan tweaks, clip splits) and complex (multi-track
+     creative mixing, sidechain routing, intricate composition passes) alike.
+  4. Always execute a project save (`project_save`) before running large multi-step automated
+     sequences.
+- **MAIN BRANCH PRs MUST ORIGINATE FROM DEV:** Across all 8 active WebJamApps repos, any PR
+  targeting `main` must originate from `dev` as its head branch (`dev` → `main`). Feature branches
+  (`gemini/*`, `claude/*`, `feat/*`, `fix/*`) must target `dev` as their base branch. Direct PRs
+  from feature branches to `main` are strictly forbidden and blocked by CI and script guardrails
+  (web-jam-tools#351 "all 8 active github repos - their main branch only accepts PR requests from
+  their dev branch").
 - **MULTI-REPO ISSUES STAY OPEN UNTIL ALL REPOS ARE COMPLETE:** When an issue explicitly covers
   multiple repositories (e.g. "all 8 active github repos"), no single PR in one repository may pass
   `--closes` or claim the issue is completed. PRs in individual repos must use `--part-of` so the
   tracking issue remains OPEN until the final repository's PR is merged.
-- **POST-MERGE MANUAL STEPS BECOME THEIR OWN `Josh` ISSUE:** A manual step Josh must perform — an
-  installer run, a session restart, a scheduled/cron cycle, a prod deploy, a third-party dashboard
-  change — never lives inside an agent's execution issue. It is filed as its own `Josh`-labeled
-  issue, paired with the agent's issue and natively blocked on it (via native GitHub `blocked_by`
-  dependency, without the `Blocked` label). The agent's PR then closes the agent's issue normally with `Closes #N`, because that
-  issue no longer contains anything the agent could not do from a branch. The pairing rules live in
-  the `/design-issue` skill, which owns how those two issues are written.
+- **POST-MERGE MANUAL STEPS BECOME THEIR OWN `Josh` ISSUE:** Replaced by the canonical design
+  document `/home/joshua/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md`
+  (revision 2.14.0) in the sections "Manual Steps & Runbooks" and "How a pull request names its issue".
+  A `Josh` issue and a runbook are for repeatable operations setup and extensive manual testing;
+  a simple or one-time local step after a merge is acceptance criteria on the agent's own issue
+  with a PR issue line `Part of #N (local step after merge)` (`--local-step`), and its Workflow Status
+  reads `Merged, needs local step` from the merge.
   - **Designed Issues with Paired Manual Steps Become Parent Epics:** When `/design-issue` resolves an
     existing issue into paired implementation and Josh manual verification tasks, convert the target
     designed issue into native type `Epic` (via GraphQL `updateIssue` with the repo's `Epic`
@@ -183,6 +281,29 @@ skill.
     `Blocked` label). The parent Epic body specifies
     `## What this builds`, milestone, design document pointer, and `## Acceptance criteria` ("Closes
     when all child sub-issues close") without duplicating a manual markdown checklist of sub-issues.
+  - **Manual Step Issue & Document Title Rule:** Never prefix issue titles or runbook document
+    titles with personal names (e.g. do NOT name an issue "Josh: ..."). Use professional,
+    action-oriented titles like `Manual verification: ...` or `Verification: ...`. Ownership and
+    responsibility are designated exclusively by the `Josh` label or assignees, never by embedding
+    a personal name in the issue or document title.
+  - **One action per step, one surface per step:** A numbered step in a runbook is a single physical
+    action in a single place. Never combine opening a session with asking that session something, and
+    never cover two surfaces in one step — two surfaces asking one question is four steps, not one.
+    State explicitly what happens to a session afterwards (leave it open, close it, move to the next
+    terminal). Where order matters, the numbering IS the instruction. Origin: web-jam-tools#510 "Josh:
+    verify live that agy and Claude Code read the rules through the pointer in a converted repo" —
+    its runbook listed both the `claude` and the `agy` launch commands under one step with the
+    question below them, and Josh opened two terminals, closed them, then reopened them one at a time
+    to work out the intended order. His verdict: "these should have been 4 steps".
+- **NATIVE GITHUB DEPENDENCIES ARE THE SINGLE SOURCE OF TRUTH FOR ISSUE BLOCKERS — THE `Blocked` LABEL IS RESERVED EXCLUSIVELY FOR NON-GITHUB PREREQUISITES.** Native GitHub issue dependencies (`blocked_by`) are the canonical, single source of truth for all issue-to-issue dependencies across the workspace. An issue whose blocker is another GitHub issue MUST link the dependency natively and MUST NOT carry the `Blocked` label. Because native dependencies unblock and clear automatically in GitHub API and UI views when the upstream issue/PR closes, adding the `Blocked` label to an issue with native dependencies creates redundant metadata and perpetual "Blocked drift" requiring manual cleanup. The `Blocked` label (capital B, hex `B60205`, `repos: all` in `skills/fix-labels/labels.yaml`) is reserved exclusively for issues blocked by non-GitHub-issue prerequisites that cannot be expressed as a native GitHub dependency (e.g. assets or decisions from Josh, third-party vendor delays, manual credential generation, physical actions). Origin: web-jam-tools#725 "Stop using the Blocked label where it is redundant and causes upkeep for no reason" (see also historical references web-jam-tools#300 "Update /fix-labels: prune retired labels, add Flash Low, regenerate model-labels.json sidecar" and web-jam-tools#329 "Restore the Blocked label as canonical in labels.yaml — it was pruned in a batch Josh never ratified, and he wants it alongside native dependencies").
+- **RESTRICTED LAPTOP DROPBOX SCOPE & SECURITY GUARDRAILS:** Access to `~/Dropbox` on the laptop is
+  restricted to three approved top-level folders: `joshandmariamusic`, `web-jam-llms`, and
+  `mark_henrickson`. All other top-level `~/Dropbox/*` folders — including `Dropbox/WebJamApps` —
+  are explicitly denied in `permissions.deny` via `install-hooks.sh` for file tools (`Read`, `Edit`,
+  `Write`) and Dropbox MCP mutation tools (`delete`, `move`). Note: Deny rules on file tools do not
+  constrain raw Bash commands (which use string-pattern matching for Bash permission rules), serving
+  as an operational guardrail rather than an absolute security boundary (web-jam-tools#321 "Add the
+  laptop Dropbox deny list, verify Flash confinement, and document the restricted scope").
 - **APPROVAL IS PER GATE.** Approval of a design is not approval to file the tracking issue.
   Approval of an issue is not approval to dispatch. Each gate needs its own imperative from Josh
   naming that step. An agent writes the issue body to a file (or shows it in chat) and waits; the
@@ -190,9 +311,42 @@ skill.
   equivalent). A dispatch (starting work on an issue by spawning a subagent or handing it to
   agy/Flash) follows only an explicit instruction to dispatch. Once Josh has said go on a piece of
   work, the session doing it may hand parts of that same work to a helper at the same level or
-  cheaper without a new go — that carries out an approved step, it does not open a new gate. A single "go" is ambiguous across gates and must never be read as
+  cheaper without a new go — that carries out an approved step, it does not open a new gate
+  (tier-order design `Token_Savings/model-tier-order-design-2026-10-02.md`, "As the subagent an agy
+  session hands execution to"). A single "go" is ambiguous across gates and must never be read as
   covering more than one — the expensive, hard-to-reverse half (issue noise, spawned tokens) is
-  always the later gate, so collapsing gates fails in the direction that costs the most. - **DESIGN WORK RUNS THROUGH `/design-issue`:** Design work — options, trade-offs, decisions worth
+  always the later gate, so collapsing gates fails in the direction that costs the most. Origin:
+  2026-08-07, during web-jam-tools#426 "/handle-gmails: add recognizers that propose the follow-up
+  work an email implies, plus a per-session PR that teaches the skill what it learned" design, an
+  agent treated Josh's single approval of a three-item plan as covering the design, the issue
+  filing, AND the dispatch — announcing "filing the tracking issue, then dispatching to Sonnet"
+  before either gate had its own go-ahead. Josh stopped it at the draft stage. See web-jam-tools#433
+  "gate issue creation and dispatch mechanically, and write the approval-is-per-gate rule" for the
+  mechanical half of this fix (ask-rules on `gh issue create` and MCP `issue_write` create,
+  installed via `scripts/install-hooks.sh`).
+- **ACCURATE TEST ASSERTIONS FOR NEWLY IMPLEMENTED FEATURES:** When writing unit tests for new
+  features or CLI flags (such as mode-modifying flags like `--update` or `--no-close`), test
+  assertions must explicitly verify the specific mode indicator or feature-specific output (e.g.
+  asserting `DRY RUN (UPDATE` or exact flag output) to prove the feature took effect, rather than
+  relying only on assertions shared with default paths.
+- **PRODUCTION BACKEND MUTATION GUARD & SKILL BOUNDARIES (web-jam-tools#1021 "hooks/backend-guard: guard production backend mutations and enforce venue-mining skill boundaries"):** HTTP mutations (`POST`,
+  `PATCH`, `PUT`, `DELETE`) against the production backend (`https://webjamsalem.herokuapp.com`)
+  are protected by a safety PreToolUse guard hook (`hooks/block-backend-mutation.sh`).
+  - **Explicit Approval Gate for Venue Writes:** Mutating backend records requires an active
+    session approval token file, minted by running `deno task backend-approval-token` (default
+    output path `~/.claude/state/backend-approval-token.json`, override with
+    `BACKEND_APPROVAL_TOKEN_PATH` or `VENUE_APPROVAL_TOKEN_PATH`), approved by Josh — replacing
+    ungated ad-hoc `curl` or `fetch` executions.
+  - **Strict Skill Boundary Enforcement:** Outreach endpoints (`/outreach/*`, including preview,
+    check-replies, and send operations) are unconditionally blocked whenever the active task or
+    context is within `skills/venue-mining/SKILL.md`, maintaining strict isolation between venue
+    discovery and gig booking (citing web-jam-tools#1021 "hooks/backend-guard: guard production
+    backend mutations and enforce venue-mining skill boundaries"). Outreach operations remain
+    exclusively gated in `skills/book-gig/SKILL.md`.
+  - **Safety Guard Defaults:** Authorized mutations with valid tokens proceed; unauthorized writes
+    are refused with structured explanation; indeterminate or unparseable commands/payloads refuse
+    (fail closed with exit 2 / permission deny). The guard never consults workflow off-switches.
+- **DESIGN WORK RUNS THROUGH `/design-issue`:** Design work — options, trade-offs, decisions worth
   recording — does not happen in plain chat. The moment a conversation turns into design, invoke
   `/design-issue` and work inside it.
 - **NO ISSUE IS FILED OR ATTACHED TO AN EPIC OUTSIDE `/design-issue`:** A new issue, and an existing
@@ -203,6 +357,8 @@ skill.
   follow-up) is reported to Josh with full details and options; the agent never files it, and never
   steers Josh toward filing it, as a shortcut around the design run. A plan that turns out to be
   missing a step after filing is a defect in the run, never a reason to file more issues outside it.
+  Origin: Josh, 2026-10-23: "you cannot just file and add issue to epics without running the
+  design-issue skill first, add this as a standing rule, no more churn on issues !"
 - **EVERY DECISION OR QUESTION PUT TO JOSH CARRIES FULL DETAILS AND A RECOMMENDATION:** In any
   context, not only design runs, every decision or question put to Josh carries: (1) the facts it
   turns on, checked first, with no "not verified" left that a cheap check can settle; (2) every
@@ -210,6 +366,8 @@ skill.
   recommendation, last, with its reason. A re-ask counts too: a decision raised again after a block,
   an interruption or any turn in between is laid out in full again, never as "see above". When
   several decisions are open, show a short index and then lay out each one in full, one at a time.
+  Origin: Josh, 2026-10-23: "i need full details for any decision/question and your recommendation
+  --- this should be a firm rule!"
 - **MAINTAINABILITY AND NON-DUPLICATION ARE FIRST-ORDER DESIGN CRITERIA — NOT AFTERTHOUGHTS.**
   Every design decision is judged on who has to keep the result in step and what happens when they
   don't. A design that is correct on the day it ships and rots quietly afterwards has failed. Five
@@ -225,6 +383,22 @@ skill.
      design is wrong: delete the copies. **The amount of machinery is itself the diagnostic** —
      needing five mechanisms to hold one block identical is proof the block should exist once.
 
+     **The test, and it is the whole of it: if the two copies disagree, is there a genuine question
+     about which one is correct?**
+     - **Yes → this rule applies.** Each copy is editable and each is treated as the source in its
+       own context. Eight `AGENTS.md` files, each read as authoritative by whatever agent opened
+       that repo, is the banned shape.
+     - **No → this rule does NOT apply, and never did.** Backups, mirrors, caches, generated
+       artifacts and build output are one-directional and derived: written from an original, never
+       edited in place, never consulted as the truth while the original exists. A stale backup is a
+       snapshot being old, not a conflict. `claude-backup/` and the pre-scrub repo mirror under
+       `backups/` in `~/Dropbox/web-jam-llms/` are legitimate and are not what this rule is about.
+       Neither is a cache, a lockfile, or a generated `dist/`.
+
+     **Better than either: make drift physically impossible.** `~/Dropbox/web-jam-llms/package.json`
+     is a symlink to `~/WebJamApps/package.json` — one file reachable by two paths, so the copies
+     cannot diverge and no machinery is needed to check that they haven't. Where a single artifact
+     genuinely must be reachable from two places, prefer that over any mechanism that compares.
   3. **NEVER write a precedence rule.** "Where X and Y disagree, X wins" does not resolve a
      conflict; it *licenses* one, declaring drift acceptable so long as everyone knows the winner.
      Not approved, in any artifact, ever. If a difference is found, repair it in EVERY place it
@@ -239,17 +413,147 @@ skill.
      letting the guard be mistaken for complete coverage. An inert guard believed to be live is
      worse than a known gap.**
 
-- **A PR FOR A HOOK ISSUE NEVER CLOSES THE ISSUE.** When an issue adds or changes a hook — a git
-  hook, a Claude Code hook, any hook installed onto a machine — the PR body carries no closing
-  keyword (`Closes`, `Fixes`, `Resolves`) for it. Use `Part of <repo>#<number>` instead. After the
-  PR merges, the hook is installed and confirmed to actually fire, and only then is the issue closed
-  by hand.
+  Origin: web-jam-tools#437 "Eliminate the 8-way AGENTS.md duplication — the cross-AI rules block is
+  committed to 8 repos and kept in step by a sync script, a drift check, a hook, a CI gate and two
+  tests". A ~189-line rules block was committed into `AGENTS.md` in eight repositories —
+  roughly 1,500 duplicated lines — and held in step by a generator, a `--check` drift mode, a
+  SessionStart hook, a CI gate and two tests. **The CI gate never could detect drift**: the
+  generator skips repositories absent from the machine, so in CI seven of eight were skipped and the
+  gate passed having compared one file against itself. Five mechanisms, and the one that ran
+  everywhere was structurally incapable of working. Compounding it on 2026-08-13: a child issue had
+  restated requirements that its own design section contradicted, an agent followed the issue rather
+  than the document, and wrote to a file outside every git repository to satisfy a criterion that
+  should never have existed.
+- **A PR FOR A HOOK ISSUE NEVER CLOSES THE ISSUE.** Replaced by the canonical design document
+  `/home/joshua/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md`
+  (revision 2.14.0) in the sections "Manual Steps & Runbooks" and "How a pull request names its issue".
+  Hooks, skills and scripts are links into the canonical clone and close on merge once dev is pulled,
+  unless an installer write or laptop step is required, in which case the PR passes `--local-step`
+  (`Part of #N (local step after merge)`).
 
-  Josh, 2026-08-19: _"whenever we create an issue involving hooks, the PR should never close on
-  merge, it should always remain open so we can install the hook and/or confirm the hook is working,
-  then the issue gets closed manually"_.
+## DESIGN CLAIMS MUST CARRY RECEIPTS (web-jam-tools#305 "cross-ai-rules.md: design claims must carry receipts, and a UI requirement can never be verified through an API")
+
+A settled design shipped an unverified claim as established fact, sitting unmarked right next to
+claims that HAD been verified with live commands. Josh had no way to tell an assertion from a
+receipt — they read as equally solid. These rules exist to prevent that class of failure.
+
+### Rule 1 — requirement-critical claims carry a receipt or a warning label
+
+Any statement in a design, spec, issue comment, or PR body that answers a stated requirement of
+Josh's must either:
+
+- carry its receipt inline — the exact command run and its actual output, or a screenshot; or
+- be explicitly tagged `ASSUMPTION — NOT VERIFIED`.
+
+A design may **not** be marked settled/approved while any requirement-critical claim is unmarked. If
+there is no command that could produce a receipt, that is itself the signal that the claim needs a
+different kind of verification — say so instead of asserting it.
+
+### Rule 2 — a UI requirement can never be verified through an API
+
+If the requirement is about what Josh can **see**, the only acceptable evidence is a screenshot, or
+Josh's own confirmation that he sees it. API calls, REST payloads, and CLI output do not count and
+never have. Marking a design settled on API-only evidence when the requirement is a UI requirement
+is a hard blocker, not a nit.
+
+Origin: web-jam-tools#287 "fix-labels skill expanded / corrected" — the design asserted "field
+values appear in the issue sidebar and in search" without a screenshot, Josh accepted the design on
+that basis, the org-wide migration in web-jam-tools#298 "Migrate existing issues to native
+Priority/Area fields, Type, and dependencies (org-wide)" was verified entirely through REST, and
+Josh then could not find the `Area` field in the browser at all.
+
+## EPIC AND SUB-ISSUE COHERENCE (web-jam-tools#326 "Implement the connector-authorization audit findings: state-changing commands must prompt, not just warn — wildcard gh allow rules make consent impossible")
+
+An epic was put in front of Josh for approval while it contradicted its own sub-issues. Two
+permission rules he had never approved sat as acceptance criteria on a sub-issue while the epic
+still listed them as awaiting his ruling; separately, a decision he HAD made was still recorded as
+"still open" in an epic comment written 24 minutes before he ruled. His approval gate was reviewing
+a different document than agents would have built from. These rules exist to prevent that class of
+failure.
+
+The root cause is structural, not carelessness. Sub-issues are deliberately written self-contained
+("everything needed is below — do not go looking for context on the parent epic") so a dispatched
+agent need not load the epic. That is correct for dispatch economics, and it is exactly what
+guarantees drift: every decision ends up written down in three places, and a ruling updates only the
+artifact the agent happened to be editing at the time.
+
+### Rule 1 — implementation detail may be duplicated; approval status may not
+
+A sub-issue may restate as much build detail as it needs in order to stay self-contained. It must
+**never** assert whether Josh approved something.
+
+- Approval status lives in exactly ONE artifact per epic: the epic body, or a single
+  decisions-ledger comment on it that is edited in place — never appended to, never superseded by a
+  later comment.
+- Where a sub-issue needs to refer to approval status, it links: "approval status: see the parent
+  epic". It does not restate the answer.
+- An unapproved item may still be written up as an acceptance criterion, but it carries
+  `NOT APPROVED — do not build` inline, and the epic remains the only place that records when that
+  changes.
+
+Rationale: duplicated build detail that drifts produces a wrong implementation, which tests and
+review catch. Duplicated approval status that drifts produces work Josh never sanctioned, which
+nothing catches — because the document he reviewed told him it was still his call.
+
+### Rule 2 — run a coherence check before asking Josh to review an epic
+
+Before telling Josh an epic is ready for review or approval, dispatch a cheap (Haiku) read-only
+check that loads the epic body, every comment on it, and every sub-issue, and reports:
+
+- any decision recorded as settled in one artifact and open in another;
+- any acceptance criterion whose approval status is unstated or contradicted;
+- any item marked "deferred to a follow-up" with no such issue actually filed;
+- any checkbox whose ticked state disagrees with the prose around it.
+
+Report the findings to Josh together with the review request — not silently fixed, not omitted. "I
+found nothing" is a valid and useful result.
+
+This is not optional polish. Josh's review is the only gate in the workflow; an epic that is
+internally inconsistent makes that gate meaningless.
+
+### Rule 3 — "deferred to a follow-up" requires the follow-up to exist
+
+An item deferred out of an epic is filed as a real issue before the epic closes, or it is not
+deferred and stays in the epic. "Deferred" with no issue behind it is deletion with extra steps —
+and it lands hardest on exactly the items that got deferred because they were hard.
+
+### Rule 4 — a ruling becomes a tracked issue in the same session
+
+A ruling becomes a tracked issue in the same session. When Josh decides something, the GitHub
+issue for it is filed before the session ends, through a `/design-issue` Gate 2 plan or because
+Josh explicitly tells the agent to create it (see "NO ISSUE IS FILED OR ATTACHED TO AN EPIC OUTSIDE
+`/design-issue`"). Writing it into a design document, a Dropbox record, or agent
+memory is not tracking the work — none of those carry a routing label, none can be dispatched, and
+none can be closed. A decision recorded only in a document surfaces again only if someone happens to
+re-read that document. This applies with particular force when the resulting work is Josh's own
+manual steps, which must never live only in a chat or a doc. Do not report a decision as "settled
+and recorded" when only a document was written. The document keeps the reasoning; the issue is the
+tracking surface; link them both ways.
+
+## STANDALONE EXECUTABLE ISSUES AND EPIC TYPES (web-jam-tools#342 "Document AND enforce the executable-issue rule: Epic type marks design surface, every other issue body must stand alone")
+
+Every actionable GitHub issue body (not typed `Epic`) must be fully self-contained and executable on
+its own. An issue body may not rely on unresolvable pointer phrases such as "see the comment", "see
+comment", "read the comment first", "read comment first", "as discussed above", "as discussed in",
+"per the discussion", "in the epic", or "see the epic".
+
+- **Author-in-sub-issues-first guidance**: When breaking down work or decomposing an Epic into
+  sub-issues, author the full requirements, acceptance criteria, and technical context directly in
+  each sub-issue body _first_. Do not write the requirements only in an Epic comment or discussion
+  thread and point sub-issues to it with pointer phrases.
+- **Sync requirements**: If requirements evolve or decisions are made during discussion in an Epic
+  or comment thread, update the sub-issue body itself so the sub-issue remains the single,
+  standalone source of truth for the assigned model or agent.
+- **Native `Epic` issue types**: Native issue type `Epic` (which is orthogonal to model labels like
+  `Sonnet` or `Opus`) is exempt from pointer-phrase blocking on edit operations (`gh issue edit` or
+  MCP `issue_write` update) to allow high-level tracking documents and comment-based discussions to
+  evolve.
 
 ## FE/BE COUPLING (web-jam-tools#240 "dispatching to sub-agents  -  part two improvements")
+
+A change with a back-end half and a front-end half can ship half-done — e.g. the "venue must have a
+physical address" BE rule shipped before the create-Gigs "new venue" FE flow collected an address,
+and broke prod. These rules exist to prevent that class of failure.
 
 ### Backward-compat / expand-contract rule
 
