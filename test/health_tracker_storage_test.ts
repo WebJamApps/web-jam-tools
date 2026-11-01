@@ -209,3 +209,103 @@ Deno.test("saves entry with 4-space indent and trailing newline", async () => {
     await Deno.remove(tmpDir, { recursive: true });
   }
 });
+
+Deno.test("checkReadiness handles malformed tracker JSON syntax", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "health-test-" });
+  try {
+    const trackerFile = path.join(tmpDir, "health-tracker.json");
+    const activitiesFile = path.join(tmpDir, "health-activities.json");
+    const progressSvgFile = path.join(tmpDir, "health-progress.svg");
+
+    await Deno.writeTextFile(trackerFile, "not valid json {{{");
+    await Deno.writeTextFile(activitiesFile, JSON.stringify(MOCK_ACTIVITIES));
+
+    let errOutput = "";
+    const code = await runHealthReport({
+      paths: { trackerFile, activitiesFile, progressSvgFile },
+      isTerminal: () => true,
+      printErr: (s) => errOutput += s,
+    });
+
+    assertEquals(code, 1);
+    assertStringIncludes(errOutput, "not a readable JSON array");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("checkReadiness handles unreadable tracker file with permission error", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "health-test-" });
+  try {
+    const trackerFile = path.join(tmpDir, "health-tracker.json");
+    const activitiesFile = path.join(tmpDir, "health-activities.json");
+    const progressSvgFile = path.join(tmpDir, "health-progress.svg");
+
+    await Deno.writeTextFile(trackerFile, "[]\n");
+    await Deno.writeTextFile(activitiesFile, JSON.stringify(MOCK_ACTIVITIES));
+    await Deno.chmod(trackerFile, 0o000);
+
+    let errOutput = "";
+    const code = await runHealthReport({
+      paths: { trackerFile, activitiesFile, progressSvgFile },
+      isTerminal: () => true,
+      printErr: (s) => errOutput += s,
+    });
+
+    assertEquals(code, 1);
+    assertStringIncludes(errOutput, "is not readable");
+  } finally {
+    try {
+      await Deno.chmod(path.join(tmpDir, "health-tracker.json"), 0o666);
+    } catch {
+      // ignore
+    }
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("checkReadiness handles non-object and malformed activities JSON", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "health-test-" });
+  try {
+    const trackerFile = path.join(tmpDir, "health-tracker.json");
+    const activitiesFile = path.join(tmpDir, "health-activities.json");
+    const progressSvgFile = path.join(tmpDir, "health-progress.svg");
+
+    await Deno.writeTextFile(trackerFile, "[]\n");
+
+    // Case 1: array instead of object
+    await Deno.writeTextFile(activitiesFile, '["yoga", "bike"]');
+    let errOutput = "";
+    let code = await runHealthReport({
+      paths: { trackerFile, activitiesFile, progressSvgFile },
+      isTerminal: () => true,
+      printErr: (s) => errOutput += s,
+    });
+    assertEquals(code, 1);
+    assertStringIncludes(errOutput, "missing or not readable");
+
+    // Case 2: null
+    await Deno.writeTextFile(activitiesFile, "null");
+    errOutput = "";
+    code = await runHealthReport({
+      paths: { trackerFile, activitiesFile, progressSvgFile },
+      isTerminal: () => true,
+      printErr: (s) => errOutput += s,
+    });
+    assertEquals(code, 1);
+    assertStringIncludes(errOutput, "missing or not readable");
+
+    // Case 3: syntax error
+    await Deno.writeTextFile(activitiesFile, "{{invalid");
+    errOutput = "";
+    code = await runHealthReport({
+      paths: { trackerFile, activitiesFile, progressSvgFile },
+      isTerminal: () => true,
+      printErr: (s) => errOutput += s,
+    });
+    assertEquals(code, 1);
+    assertStringIncludes(errOutput, "missing or not readable");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
