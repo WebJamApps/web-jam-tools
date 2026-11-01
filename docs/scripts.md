@@ -106,6 +106,23 @@ Create the input file under `/tmp/backlog-groom/`, outside every repository. Tha
 permitted input directory; no user home, network or write permissions are granted to Deno. The
 GitHub subprocess authenticates through the existing `gh` setup.
 
+### `block-issue` and `unblock-issue`
+
+Change one blocked-by link that Josh or an approved plan names on existing issues, in any
+repository. `--blocker` accepts an issue number in `--repo` or `owner/repo#number` for another
+repository. Removal accepts parent, ancestor and unrelated blockers alike.
+
+```sh
+deno task block-issue --repo WebJamApps/web-jam-tools --issue 10 --blocker 20 --dry-run
+deno task unblock-issue --repo WebJamApps/web-jam-tools --issue 10 --blocker OtherOrg/widgets#20 --dry-run
+```
+
+Drop `--dry-run` to apply the named change. Success prints both issue titles and the exact opposite
+command to undo it. Dry runs print the proposed change without writing. An already present link when
+adding, an absent link when removing, failed or unreadable lookups, and GitHub refusals all exit
+non-zero; GitHub's error message is retained. Both tasks run through the existing authenticated `gh`
+CLI and grant Deno only `--allow-run=gh`.
+
 ### `edit-issue.ts`
 
 Guarded edits to an existing issue. Ordinary `gh issue edit` flags pass through; native Priority
