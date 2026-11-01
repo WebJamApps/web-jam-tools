@@ -357,3 +357,159 @@ Deno.test("install-agy-config.sh refuses to install and leaves master config unt
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test("install-agy-config.sh --check: linked fixture exits 0 with ok message and touches no files", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt1558-check-linked-" });
+  const destPath = `${dir}/mcp_config.json`;
+  try {
+    await Deno.symlink(MASTER_CONFIG_PATH, destPath);
+
+    const cmd = new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--check", "--mcp-config-path", destPath],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stdout, stderr } = await cmd.output();
+    const stdoutStr = new TextDecoder().decode(stdout);
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 0, stderrStr);
+    assertStringIncludes(stdoutStr, "agy: mcp_config.json: ok (already linked)");
+
+    // Assert no backup files or writes occurred
+    const entries = [...Deno.readDirSync(dir)];
+    assertEquals(entries.length, 1);
+    assertEquals(entries[0].name, "mcp_config.json");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("install-agy-config.sh --check: missing fixture exits 1 with drift message naming installer command", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt1558-check-missing-" });
+  const destPath = `${dir}/mcp_config.json`;
+  try {
+    const cmd = new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--check", "--mcp-config-path", destPath],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(stderrStr, "drift: agy mcp_config.json is missing at");
+    assertStringIncludes(stderrStr, "scripts/install-agy-config.sh");
+
+    // Assert destination was NOT created
+    await assertRejects(() => Deno.stat(destPath), Deno.errors.NotFound);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("install-agy-config.sh --check: not-symlink fixture exits 1 with drift message naming installer command", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt1558-check-notsymlink-" });
+  const destPath = `${dir}/mcp_config.json`;
+  try {
+    await Deno.writeTextFile(destPath, '{"mcpServers":{}}');
+
+    const cmd = new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--check", "--mcp-config-path", destPath],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(stderrStr, "drift: agy mcp_config.json at");
+    assertStringIncludes(stderrStr, "is not a symlink");
+    assertStringIncludes(stderrStr, "scripts/install-agy-config.sh");
+
+    // Assert real file was NOT modified or backed up
+    const entries = [...Deno.readDirSync(dir)];
+    assertEquals(entries.length, 1);
+    assertEquals(entries[0].name, "mcp_config.json");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("install-agy-config.sh --check: pointing elsewhere fixture exits 1 with drift message naming installer command", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt1558-check-elsewhere-" });
+  const destPath = `${dir}/mcp_config.json`;
+  const otherPath = `${dir}/other.json`;
+  try {
+    await Deno.writeTextFile(otherPath, "{}");
+    await Deno.symlink(otherPath, destPath);
+
+    const cmd = new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--check", "--mcp-config-path", destPath],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(stderrStr, "drift: agy mcp_config.json at");
+    assertStringIncludes(stderrStr, "points to");
+    assertStringIncludes(stderrStr, "scripts/install-agy-config.sh");
+
+    // Destination symlink was untouched
+    const lstat = await Deno.lstat(destPath);
+    assertEquals(lstat.isSymlink, true);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("install-agy-config.sh --check: unreadable fixture exits 1 with error message", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt1558-check-unreadable-" });
+  const subDir = `${dir}/unreadable-dir`;
+  const destPath = `${subDir}/mcp_config.json`;
+  try {
+    await Deno.mkdir(subDir, { recursive: true });
+    await Deno.chmod(subDir, 0o000);
+
+    const cmd = new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--check", "--mcp-config-path", destPath],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(stderrStr, "error: cannot inspect agy mcp_config.json at");
+  } finally {
+    try {
+      await Deno.chmod(subDir, 0o755);
+    } catch {
+      // ignore
+    }
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("install-agy-config.sh --check: master config missing fixture exits 1 with error message", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt1558-check-nosrc-" });
+  const destPath = `${dir}/mcp_config.json`;
+  const nonExistentSrc = `${dir}/non-existent.json`;
+  try {
+    const cmd = new Deno.Command("bash", {
+      args: [
+        SCRIPT_PATH,
+        "--check",
+        "--mcp-src-path",
+        nonExistentSrc,
+        "--mcp-config-path",
+        destPath,
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(stderrStr, "error: cannot read master config at");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});

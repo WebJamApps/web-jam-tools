@@ -9,7 +9,8 @@
 # Refuses to install (and exits non-zero) if the mastered file contains any
 # credential-shaped literal, using hooks/lib/detect_credential_literal.ts.
 #
-# Usage: scripts/install-agy-config.sh [--mcp-config-path PATH]
+# Usage: scripts/install-agy-config.sh [--check] [--mcp-config-path PATH] [--mcp-src-path PATH]
+#   --check                  Check symlink without making changes (read-only)
 #   --mcp-config-path PATH   Install symlink at PATH instead of
 #                             $HOME/.gemini/config/mcp_config.json (also
 #                             settable via AGY_MCP_CONFIG_PATH). For testing
@@ -34,8 +35,14 @@ else
   DEST_CONFIG="$HOME/.gemini/config/mcp_config.json"
 fi
 
+CHECK_MODE=0
+
 while [ $# -gt 0 ]; do
   case "$1" in
+    --check)
+      CHECK_MODE=1
+      shift
+      ;;
     --mcp-config-path)
       DEST_CONFIG="$2"
       shift 2
@@ -50,6 +57,68 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "$CHECK_MODE" -eq 1 ]; then
+  deno eval '
+    import { resolve, dirname } from "jsr:@std/path@^1.0.0";
+    const srcPath = Deno.args[0];
+    const destPath = Deno.args[1];
+
+    // 1. Verify master config
+    let realSrc = "";
+    try {
+      const srcStat = Deno.statSync(srcPath);
+      if (!srcStat.isFile) {
+        console.error(`error: master config not found or not a regular file at ${srcPath}`);
+        Deno.exit(1);
+      }
+      realSrc = Deno.realPathSync(srcPath);
+    } catch (e) {
+      console.error(`error: cannot read master config at ${srcPath}: ${e instanceof Error ? e.message : e}`);
+      Deno.exit(1);
+    }
+
+    // 2. Check destination
+    let lstat: Deno.FileInfo;
+    try {
+      lstat = Deno.lstatSync(destPath);
+    } catch (e) {
+      if (e instanceof Deno.errors.NotFound) {
+        console.error(`drift: agy mcp_config.json is missing at ${destPath}; run scripts/install-agy-config.sh to fix`);
+        Deno.exit(1);
+      }
+      console.error(`error: cannot inspect agy mcp_config.json at ${destPath}: ${e instanceof Error ? e.message : e}`);
+      Deno.exit(1);
+    }
+
+    if (!lstat.isSymlink) {
+      console.error(`drift: agy mcp_config.json at ${destPath} is not a symlink; run scripts/install-agy-config.sh to fix`);
+      Deno.exit(1);
+    }
+
+    try {
+      const linkTarget = Deno.readLinkSync(destPath);
+      const canonicalTarget = resolve(dirname(destPath), linkTarget);
+      let realTarget = "";
+      try {
+        realTarget = Deno.realPathSync(destPath);
+      } catch {
+        // dangling symlink
+      }
+      if (canonicalTarget === resolve(srcPath) || (realTarget && realTarget === realSrc)) {
+        console.log(`agy: mcp_config.json: ok (already linked)`);
+        Deno.exit(0);
+      } else {
+        console.error(`drift: agy mcp_config.json at ${destPath} points to ${linkTarget}, not ${srcPath}; run scripts/install-agy-config.sh to fix`);
+        Deno.exit(1);
+      }
+    } catch (e) {
+      console.error(`error: cannot read symlink target at ${destPath}: ${e instanceof Error ? e.message : e}`);
+      Deno.exit(1);
+    }
+  ' "$SRC_CONFIG" "$DEST_CONFIG"
+  exit $?
+fi
 
 # Reconcile local-only entries and validate credential guard in-memory BEFORE touching disk
 deno eval '
