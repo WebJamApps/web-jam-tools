@@ -866,3 +866,147 @@ Second instance
   assertStringIncludes(mainContent, "<ul>\n  <li>Bullet 1</li>\n  <li>Bullet 2</li>\n</ul>");
   assertStringIncludes(mainContent, "<ol>\n  <li>Numbered 1</li>\n  <li>Numbered 2</li>\n</ol>");
 });
+
+async function countNearWhitePixels(pngBytes: Uint8Array): Promise<number> {
+  const view = new DataView(pngBytes.buffer, pngBytes.byteOffset, pngBytes.byteLength);
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let colorType = 0;
+  const idatChunks: Uint8Array[] = [];
+
+  while (offset < pngBytes.length) {
+    const length = view.getUint32(offset);
+    const type = new TextDecoder().decode(pngBytes.subarray(offset + 4, offset + 8));
+    if (type === "IHDR") {
+      width = view.getUint32(offset + 8);
+      height = view.getUint32(offset + 12);
+      colorType = pngBytes[offset + 17];
+    } else if (type === "IDAT") {
+      idatChunks.push(pngBytes.subarray(offset + 8, offset + 8 + length));
+    } else if (type === "IEND") {
+      break;
+    }
+    offset += 12 + length;
+  }
+
+  const totalIdatLength = idatChunks.reduce((acc, c) => acc + c.length, 0);
+  const combinedIdat = new Uint8Array(totalIdatLength);
+  let idatOffset = 0;
+  for (const chunk of idatChunks) {
+    combinedIdat.set(chunk, idatOffset);
+    idatOffset += chunk.length;
+  }
+
+  const ds = new DecompressionStream("deflate");
+  const response = new Response(new Blob([combinedIdat]).stream().pipeThrough(ds));
+  const decompressed = new Uint8Array(await response.arrayBuffer());
+
+  const bytesPerPixel = colorType === 6 ? 4 : colorType === 2 ? 3 : 4;
+  const stride = width * bytesPerPixel;
+  let count = 0;
+
+  const prevRow = new Uint8Array(stride);
+  const currRow = new Uint8Array(stride);
+  let srcPos = 0;
+
+  for (let y = 0; y < height; y++) {
+    const filter = decompressed[srcPos++];
+    for (let i = 0; i < stride; i++) {
+      const x = decompressed[srcPos++];
+      const a = i >= bytesPerPixel ? currRow[i - bytesPerPixel] : 0;
+      const b = prevRow[i];
+      const c = i >= bytesPerPixel ? prevRow[i - bytesPerPixel] : 0;
+      let val = x;
+      if (filter === 0) val = x;
+      else if (filter === 1) val = (x + a) & 0xff;
+      else if (filter === 2) val = (x + b) & 0xff;
+      else if (filter === 3) val = (x + Math.floor((a + b) / 2)) & 0xff;
+      else if (filter === 4) {
+        const p = a + b - c;
+        const pa = Math.abs(p - a);
+        const pb = Math.abs(p - b);
+        const pc = Math.abs(p - c);
+        const pr = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+        val = (x + pr) & 0xff;
+      }
+      currRow[i] = val;
+    }
+
+    for (let x = 0; x < width; x++) {
+      const idx = x * bytesPerPixel;
+      const r = currRow[idx];
+      const g = currRow[idx + 1];
+      const b = currRow[idx + 2];
+      if (r >= 230 && g >= 230 && b >= 230) {
+        count++;
+      }
+    }
+
+    prevRow.set(currRow);
+  }
+
+  return count;
+}
+
+Deno.test("renderDesignDoc: declares color-scheme: dark so scrollbars draw dark", () => {
+  const html = renderDesignDoc("# Title\n\nContent");
+  assertStringIncludes(html, "color-scheme: dark");
+});
+
+Deno.test("Rendered Chrome check at 1600 x 1000 finds no near-white pixel", async () => {
+  let chromeBin = "";
+  for (const bin of ["google-chrome", "chromium", "chromium-browser"]) {
+    try {
+      const cmd = new Deno.Command(bin, {
+        args: ["--version"],
+        stdout: "null",
+        stderr: "null",
+      });
+      if ((await cmd.output()).success) {
+        chromeBin = bin;
+        break;
+      }
+    } catch {
+      // not available
+    }
+  }
+
+  if (!chromeBin) {
+    return;
+  }
+
+  let md = "# Sample Design Document\n\n";
+  for (let i = 0; i < 40; i++) {
+    md +=
+      `## Section ${i}\n\nThis is paragraph ${i} with enough text to make the page scroll vertically in Chrome.\n\n`;
+  }
+
+  const html = renderDesignDoc(md);
+  const tempDir = await Deno.makeTempDir({ prefix: "render-chrome-check-" });
+  try {
+    const htmlPath = path.join(tempDir, "page.html");
+    const screenshotPath = path.join(tempDir, "screenshot.png");
+    await Deno.writeTextFile(htmlPath, html);
+
+    const cmd = new Deno.Command(chromeBin, {
+      args: [
+        "--headless=new",
+        `--user-data-dir=${tempDir}/profile`,
+        `--screenshot=${screenshotPath}`,
+        "--window-size=1600,1000",
+        `file://${htmlPath}`,
+      ],
+      stdout: "null",
+      stderr: "null",
+    });
+    const output = await cmd.output();
+    assertEquals(output.success, true, "Chrome screenshot command must succeed");
+
+    const pngBytes = await Deno.readFile(screenshotPath);
+    const nearWhiteCount = await countNearWhitePixels(pngBytes);
+    assertEquals(nearWhiteCount, 0, `Expected 0 near-white pixels, found ${nearWhiteCount}`);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
