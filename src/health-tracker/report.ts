@@ -26,7 +26,7 @@ export interface ReportRunnerOptions {
 
 export async function readLineWithDeadline(
   deadline: number,
-  reader: { read: (buf: Uint8Array) => Promise<number | null> } = Deno.stdin,
+  reader: { read: (buf: Uint8Array) => Promise<number | null>; close?: () => void } = Deno.stdin,
 ): Promise<string | null | "timeout"> {
   const remaining = deadline - Date.now();
   if (remaining <= 0) return "timeout";
@@ -40,23 +40,37 @@ export async function readLineWithDeadline(
     const decoder = new TextDecoder();
     let accumulated = "";
     const buf = new Uint8Array(1024);
-    while (true) {
-      const n = await reader.read(buf);
-      if (n === null) {
-        return accumulated.length > 0 ? accumulated : null;
+    try {
+      while (true) {
+        const n = await reader.read(buf);
+        if (n === null) {
+          return accumulated.length > 0 ? accumulated : null;
+        }
+        accumulated += decoder.decode(buf.subarray(0, n));
+        const nlIdx = accumulated.indexOf("\n");
+        if (nlIdx !== -1) {
+          let line = accumulated.slice(0, nlIdx);
+          if (line.endsWith("\r")) line = line.slice(0, -1);
+          return line;
+        }
       }
-      accumulated += decoder.decode(buf.subarray(0, n));
-      const nlIdx = accumulated.indexOf("\n");
-      if (nlIdx !== -1) {
-        let line = accumulated.slice(0, nlIdx);
-        if (line.endsWith("\r")) line = line.slice(0, -1);
-        return line;
-      }
+    } catch {
+      return null;
     }
   })();
 
   try {
-    return await Promise.race([readPromise, timeoutPromise]);
+    const outcome = await Promise.race([readPromise, timeoutPromise]);
+    if (outcome === "timeout") {
+      try {
+        if (typeof reader.close === "function") {
+          reader.close();
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return outcome;
   } finally {
     if (timerId !== undefined) {
       clearTimeout(timerId);

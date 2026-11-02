@@ -5,7 +5,5 @@ import { runHealthReport } from "./report.ts";
 
 if (import.meta.main) {
   const code = await runHealthReport();
-  if (code !== 0) {
-    Deno.exit(code);
-  }
+  Deno.exit(code);
 }

@@ -78,7 +78,15 @@ export function computeWeeklyMinutes(
   const weeks: WeeklyMinutes[] = [];
   // 8 weeks: week 0 is 7 weeks ago, week 7 is current week
   for (let i = 7; i >= 0; i--) {
-    const wStart = new Date(currentWeekStart.getTime() - i * 7 * 86400000);
+    const wStart = new Date(
+      currentWeekStart.getFullYear(),
+      currentWeekStart.getMonth(),
+      currentWeekStart.getDate() - i * 7,
+      0,
+      0,
+      0,
+      0,
+    );
     const label = `${wStart.getMonth() + 1}/${wStart.getDate()}`;
     weeks.push({
       weekStart: wStart,
@@ -96,8 +104,17 @@ export function computeWeeklyMinutes(
 
     // Check if this entry falls within any of our 8 weeks
     for (let w = 0; w < weeks.length; w++) {
-      const start = weeks[w].weekStart.getTime();
-      const end = start + 7 * 86400000;
+      const wStart = weeks[w].weekStart;
+      const start = wStart.getTime();
+      const end = new Date(
+        wStart.getFullYear(),
+        wStart.getMonth(),
+        wStart.getDate() + 7,
+        0,
+        0,
+        0,
+        0,
+      ).getTime();
       const t = d.getTime();
       if (t >= start && t < end) {
         // Sum matching minutes

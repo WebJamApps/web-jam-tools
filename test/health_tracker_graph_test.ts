@@ -274,3 +274,20 @@ Deno.test("rendered Chrome check at 800x1400 has zero near-white pixels", async 
   }
   assertEquals(nearWhiteCount, 0, "must have zero pixels with R, G, B all >= 230 at 800x1400");
 });
+
+Deno.test("computeWeeklyMinutes maintains Sunday dates across spring daylight-saving transition", () => {
+  // In America/New_York (and most US zones), DST begins on Sunday March 8, 2026.
+  // For a current week starting Sunday March 15, 2026, calendar arithmetic must
+  // yield 3/8 for the previous week rather than shifting to Saturday 3/7.
+  const dstWindow = new Date(2026, 2, 15, 12, 0, 0); // Sunday March 15, 2026
+  const weekly = computeWeeklyMinutes([], MOCK_ACTIVITIES, dstWindow);
+  assertEquals(weekly.length, 8);
+  const labels = weekly.map((w) => w.label);
+  // All 8 week labels must fall on Sundays:
+  // 1/25, 2/1, 2/8, 2/15, 2/22, 3/1, 3/8, 3/15
+  assertEquals(labels, ["1/25", "2/1", "2/8", "2/15", "2/22", "3/1", "3/8", "3/15"]);
+  for (const w of weekly) {
+    assertEquals(w.weekStart.getDay(), 0, `Week ${w.label} must start on Sunday`);
+    assertEquals(w.weekStart.getHours(), 0, `Week ${w.label} must start at midnight`);
+  }
+});

@@ -86,7 +86,6 @@ export async function openProgressSvgInChrome(svgPath: string): Promise<void> {
 
   const { display, xauthority } = await resolveDisplayEnv();
   const env: Record<string, string> = {
-    ...Deno.env.toObject(),
     DISPLAY: display,
   };
   if (xauthority) {

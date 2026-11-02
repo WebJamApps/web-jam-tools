@@ -274,7 +274,7 @@ Deno.test("checkReadiness handles non-object and malformed activities JSON", asy
     await Deno.writeTextFile(trackerFile, "[]\n");
 
     // Case 1: array instead of object
-    await Deno.writeTextFile(activitiesFile, '["yoga", "bike"]');
+    await Deno.writeTextFile(activitiesFile, '["orbitjump", "cosmicspin"]');
     let errOutput = "";
     let code = await runHealthReport({
       paths: { trackerFile, activitiesFile, progressSvgFile },
