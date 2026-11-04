@@ -372,7 +372,17 @@ except subprocess.TimeoutExpired:
 });
 
 Deno.test("health-report task executes cleanly under scoped permissions from deno.json", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "health-task-perm-" });
+  const tmpDir = await Deno.makeTempDir({ prefix: "health-task-perm-", dir: "/tmp" });
+  const binDir = path.join(tmpDir, "bin");
+  await Deno.mkdir(binDir, { recursive: true });
+  const chromeLogFile = path.join(tmpDir, "chrome-call.txt");
+  const stubChrome = path.join(binDir, "google-chrome");
+  await Deno.writeTextFile(
+    stubChrome,
+    `#!/bin/sh\nprintf '%s\\n' "$@" > "${chromeLogFile}"\n`,
+  );
+  await Deno.chmod(stubChrome, 0o755);
+
   const trackerFile = path.join(tmpDir, "health-tracker.json");
   const activitiesFile = path.join(tmpDir, "health-activities.json");
   const progressSvgFile = path.join(tmpDir, "health-progress.svg");
@@ -380,24 +390,27 @@ Deno.test("health-report task executes cleanly under scoped permissions from den
   await Deno.writeTextFile(trackerFile, "[]\n");
   await Deno.writeTextFile(activitiesFile, JSON.stringify({ orbitjump: "minutes" }));
 
+  const denoConfig = JSON.parse(await Deno.readTextFile("deno.json"));
+  const taskDef = denoConfig.tasks["health-report"] as string;
+  const allowFlags = taskDef
+    .split(/\s+/)
+    .filter((tok: string) => tok.startsWith("--allow-"));
+
   try {
     const cmd = new Deno.Command(Deno.execPath(), {
       args: [
         "run",
-        `--allow-read=.,${tmpDir}`,
-        `--allow-write=${tmpDir}`,
-        `--allow-env=HOME,HEALTH_TRACKER_FILE,HEALTH_ACTIVITIES_FILE,HEALTH_PROGRESS_SVG,HEALTH_REPORT_NOW,HEALTH_REPORT_TIMEOUT_MS,HEALTH_REPORT_CHROME_CMD,HEALTH_REPORT_SKIP_CHROME,HEALTH_REPORT_FORCE_TERMINAL,DISPLAY,XAUTHORITY,DBUS_SESSION_BUS_ADDRESS,XDG_RUNTIME_DIR`,
-        "--allow-run=google-chrome,systemctl",
+        ...allowFlags,
         "src/health-tracker/main.ts",
       ],
       env: {
+        PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
         HOME: tmpDir,
         HEALTH_TRACKER_FILE: trackerFile,
         HEALTH_ACTIVITIES_FILE: activitiesFile,
         HEALTH_PROGRESS_SVG: progressSvgFile,
         HEALTH_REPORT_FORCE_TERMINAL: "1",
-        HEALTH_REPORT_TIMEOUT_MS: "150",
-        HEALTH_REPORT_SKIP_CHROME: "1",
+        DISPLAY: ":0",
       },
       stdin: "piped",
       stdout: "piped",
@@ -405,8 +418,25 @@ Deno.test("health-report task executes cleanly under scoped permissions from den
     });
 
     const child = cmd.spawn();
+    const writer = child.stdin.getWriter();
+    await writer.write(new TextEncoder().encode("170.0 orbitjump 30\n"));
+    await writer.close();
+
     const out = await child.output();
+    const stderr = new TextDecoder().decode(out.stderr);
     assertEquals(out.code, 0);
+    assertEquals(
+      stderr.includes("Requires env access"),
+      false,
+      `stderr must not contain env permission errors: ${stderr}`,
+    );
+
+    const chromeLog = await Deno.readTextFile(chromeLogFile);
+    assertEquals(
+      chromeLog.trim(),
+      `file://${progressSvgFile}`,
+      "stub google-chrome must be invoked with file:// URL of progress SVG",
+    );
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
   }
