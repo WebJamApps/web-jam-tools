@@ -3,12 +3,7 @@
 
 import { parseArgs } from "@std/cli/parse-args";
 import { join } from "@std/path";
-import {
-  archiveDoneCheckpoints,
-  generateMemoryIndex,
-  isArchivable,
-  scanMemoryDirectory,
-} from "./generator.ts";
+import { generateMemoryIndex, scanMemoryDirectory } from "./generator.ts";
 
 function expandHome(path: string): string {
   if (path.startsWith("~/") || path === "~") {
@@ -35,14 +30,15 @@ export async function runCli(args: string[]): Promise<number> {
       "Usage: deno task memory-index [--check] [--quiet] [--dir <path>] [--protect <slug>]...",
     );
     console.log("Generates MEMORY.md for the target memory directory.");
-    console.log("--protect <slug> keeps that memory out of the done-checkpoint archive.");
+    console.log(
+      "--protect <slug> (deprecated / no-op) retained for compatibility with /memory-cleanup.",
+    );
     return 0;
   }
 
   const defaultDir = "~/.claude/projects/-home-joshua/memory";
   const targetDir = expandHome(flags.dir || defaultDir);
 
-  const protectedSlugs = new Set<string>(flags.protect);
   const { entries, skipped } = await scanMemoryDirectory(targetDir);
 
   if (!flags.quiet) {
@@ -52,9 +48,8 @@ export async function runCli(args: string[]): Promise<number> {
   }
 
   if (flags.check) {
-    // In check mode: do not modify disk. Simulate filtering out done checkpoints.
-    const activeEntries = entries.filter((e) => !isArchivable(e, protectedSlugs));
-    const expected = generateMemoryIndex(activeEntries);
+    // In check mode: do not modify disk.
+    const expected = generateMemoryIndex(entries);
     const expectedBytes = new TextEncoder().encode(expected).length;
 
     const memoryMdPath = join(targetDir, "MEMORY.md");
@@ -82,20 +77,13 @@ export async function runCli(args: string[]): Promise<number> {
   }
 
   // Write mode
-  const { remaining, archivedCount } = await archiveDoneCheckpoints(
-    targetDir,
-    entries,
-    protectedSlugs,
-  );
-  const newContent = generateMemoryIndex(remaining);
+  const newContent = generateMemoryIndex(entries);
   const memoryMdPath = join(targetDir, "MEMORY.md");
   await Deno.writeTextFile(memoryMdPath, newContent);
 
   const byteCount = new TextEncoder().encode(newContent).length;
   if (!flags.quiet) {
-    console.log(
-      `Wrote ${memoryMdPath} (${byteCount} bytes). Archived ${archivedCount} done checkpoints.`,
-    );
+    console.log(`Wrote ${memoryMdPath} (${byteCount} bytes).`);
   }
   return skipped.length > 0 ? 1 : 0;
 }

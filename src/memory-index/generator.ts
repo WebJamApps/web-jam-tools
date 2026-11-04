@@ -114,13 +114,17 @@ export async function scanMemoryDirectory(dirPath: string): Promise<MemoryDirect
 }
 
 /**
- * Done checkpoints are no longer archived by the index run (web-jam-tools#1608, Decision 34).
- * Checkpoint movement to ~/Dropbox/web-jam-llms/resume-records/ is handled by /memory-cleanup.
+ * @deprecated Done checkpoints are no longer archived by the index run (web-jam-tools#1608, Decision 34).
+ * Retained for backward compatibility until companion /memory-cleanup transitions complete.
  */
 export function isArchivable(_entry: MemoryEntry, _protectedSlugs?: ReadonlySet<string>): boolean {
   return false;
 }
 
+/**
+ * @deprecated Done checkpoints are no longer archived by the index run (web-jam-tools#1608, Decision 34).
+ * Retained for backward compatibility until companion /memory-cleanup transitions complete.
+ */
 export function archiveDoneCheckpoints(
   _dirPath: string,
   entries: MemoryEntry[],

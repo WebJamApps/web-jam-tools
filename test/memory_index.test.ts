@@ -437,3 +437,18 @@ Deno.test("memory-index retains done checkpoints in memory index as slug lines",
   assert(memoryMd.includes("session-checkpoint-kept · session-checkpoint-other"));
   assertEquals(await runCli(["--dir", dir, "--protect", "session-checkpoint-kept", "--check"]), 0);
 });
+
+Deno.test("runCli: --help displays truthful help text", async () => {
+  const originalLog = console.log;
+  const logged: string[] = [];
+  console.log = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const code = await runCli(["--help"]);
+    assertEquals(code, 0);
+    assert(logged.some((line) => line.includes("deprecated / no-op")));
+  } finally {
+    console.log = originalLog;
+  }
+});
