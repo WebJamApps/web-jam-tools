@@ -21,6 +21,7 @@ import {
   type Gate1Options,
   resolveCanonicalDesignDoc,
   type ResolveCanonicalDesignDocOptions,
+  resolveDesignDocsRoot,
   runGate1,
 } from "./gate1.ts";
 import {
@@ -477,7 +478,9 @@ export async function runCli(
   }
 
   if (firstArg === "lint-doc" || firstArg === "lint_doc") {
-    return await runLintDocCli(args.slice(1));
+    return await runLintDocCli(args.slice(1), {
+      dropboxDir: options?.dropboxDir ?? resolveDesignDocsRoot(),
+    });
   }
 
   if (firstArg === "verify-citations" || firstArg === "verify_citations") {
