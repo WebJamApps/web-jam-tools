@@ -109,6 +109,7 @@ UPDATE_CMD="${AGENTS_UPDATE_CMD:-$REPO_DIR/scripts/update-all.sh}"
 CHECK_TOKEN_EXPIRY_CMD="${AGENTS_CHECK_TOKEN_EXPIRY_CMD:-deno task --config "$REPO_DIR/deno.json" check-token-expiry}"
 CHECK_SNAP_UPDATES_CMD="${AGENTS_CHECK_SNAP_UPDATES_CMD:-deno task --config "$REPO_DIR/deno.json" check-snap-updates}"
 UPDATE_SCRIPTS_CMD="${AGENTS_UPDATE_SCRIPTS_CMD:-$REPO_DIR/scripts/update-scripts.sh}"
+HEALTH_REPORT_CMD="${AGENTS_HEALTH_REPORT_CMD:-deno task --config "$REPO_DIR/deno.json" health-report}"
 AGY_CONFIG_CMD="${AGENTS_AGY_CONFIG_CMD:-agy -p /config}"
 # agy skips the laptop's login keyring whenever any SSH_* variable is set, so a
 # session started over SSH (tablet or phone) made agy ask to log in again
@@ -207,6 +208,11 @@ attach_and_exit() {
   fi
   exit 0
 }
+
+# Ask for the daily health report before anything else (web-jam-tools#1660).
+if ! bash -c "$HEALTH_REPORT_CMD"; then
+  echo "warning: health-report failed; continuing anyway" >&2
+fi
 
 # If session already exists, attach to it unless --restart is requested.
 # If --restart is requested, end the existing session and fall through to create a fresh one.
