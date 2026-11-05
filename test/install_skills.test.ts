@@ -2,7 +2,13 @@
  * Unit tests for src/install-skills/lib.ts and scripts/install-skills.ts (web-jam-tools#668, web-jam-tools#669)
  */
 
-import { assertEquals, assertFalse, assertRejects, assertStringIncludes } from "@std/assert";
+import {
+  assertEquals,
+  assertFalse,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
 import { join } from "@std/path";
 import {
   checkSkills,
@@ -735,21 +741,107 @@ Deno.test("parseArgs parses --check and --tool options", () => {
   assertEquals(p2.check, true);
   assertEquals(p2.tool, "agy");
 
-  const p3 = parseArgs(["--claude-only"]);
+  const p3 = parseArgs(["--check", "--claude-only"]);
+  assertEquals(p3.check, true);
   assertEquals(p3.tool, "claude");
 
-  const p4 = parseArgs(["--agy-only"]);
+  const p4 = parseArgs(["--check", "--agy-only"]);
+  assertEquals(p4.check, true);
   assertEquals(p4.tool, "agy");
 
-  const p5 = parseArgs(["--tool", "all"]);
+  const p5 = parseArgs(["--check", "--tool", "all"]);
+  assertEquals(p5.check, true);
   assertEquals(p5.tool, "all");
 
   try {
-    parseArgs(["--tool", "invalid"]);
+    parseArgs(["--check", "--tool", "invalid"]);
     assertEquals(true, false, "Should throw for invalid tool");
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     assertStringIncludes(msg, "Invalid --tool value");
+  }
+
+  // Tool selectors without --check are rejected
+  for (
+    const flag of [["--claude-only"], ["--agy-only"], ["--tool", "claude"], ["--tool=agy"], [
+      "--tool",
+      "all",
+    ]]
+  ) {
+    assertThrows(
+      () => parseArgs(flag),
+      Error,
+      "Tool selectors (--tool, --claude-only, --agy-only) are supported only with --check",
+    );
+  }
+});
+
+Deno.test("installSkills rejects tool selector options on write invocations", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "reject-selector-" });
+  try {
+    await assertRejects(
+      () =>
+        installSkills({
+          tool: "claude",
+          repoDir: REPO_DIR,
+          claudeDest: join(tempDir, "claude"),
+          agyDest: join(tempDir, "agy"),
+          allowUnsafeForTesting: true,
+        }),
+      Error,
+      "Tool selectors (--tool, --claude-only, --agy-only) are supported only with --check",
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("CLI scripts/install-skills.ts: refuses tool selector on write invocation", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "cli-reject-tool-" });
+  try {
+    const repo = join(tempDir, "repo");
+    const srcDir = join(repo, "skills");
+    const claudeDest = join(tempDir, "claude");
+    const agyDest = join(tempDir, "agy");
+
+    await Deno.mkdir(join(srcDir, "skill-1"), { recursive: true });
+    await Deno.mkdir(claudeDest, { recursive: true });
+    await Deno.mkdir(agyDest, { recursive: true });
+
+    const cmd = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--allow-env",
+        "--allow-run",
+        "--allow-read",
+        "--allow-write",
+        SCRIPT_PATH,
+        "--claude-only",
+        "--repo-dir",
+        repo,
+        "--claude-dest",
+        claudeDest,
+        "--agy-dest",
+        agyDest,
+        "--allow-unsafe-for-testing",
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    });
+
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(
+      stderrStr,
+      "Tool selectors (--tool, --claude-only, --agy-only) are supported only with --check",
+    );
+
+    // agyDest must remain untouched (no skills installed)
+    const agyEntries = [...Deno.readDirSync(agyDest)];
+    assertEquals(agyEntries.length, 0);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
   }
 });
 
@@ -852,6 +944,96 @@ Deno.test("checkSkillsDest: unreadable fixture returns could-not-tell", async ()
     } catch {
       // ignore
     }
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("checkSkillsDest: unreadable symlink target fixture returns could-not-tell", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "check-skills-unreadable-target-" });
+  const restrictedDir = join(tempDir, "restricted");
+  try {
+    const srcDir = join(tempDir, "src-skills");
+    const destDir = join(tempDir, "dest-skills");
+    await Deno.mkdir(join(srcDir, "managed"), { recursive: true });
+    await Deno.mkdir(restrictedDir, { recursive: true });
+    await Deno.mkdir(destDir, { recursive: true });
+
+    // In restrictedDir, create an alias symlink pointing to the real src
+    const aliasPath = join(restrictedDir, "alias-managed");
+    await Deno.symlink(join(srcDir, "managed"), aliasPath);
+
+    // In destDir, create symlink pointing to aliasPath
+    await Deno.symlink(aliasPath, join(destDir, "managed"));
+
+    // Make restrictedDir unreadable so resolving aliasPath yields PermissionDenied
+    await Deno.chmod(restrictedDir, 0o000);
+
+    const res = await checkSkillsDest(srcDir, destDir, "Claude");
+    assertEquals(res.status, "could-not-tell");
+    assertEquals(res.items.length, 1);
+    assertEquals(res.items[0].status, "unreadable");
+    assertStringIncludes(res.messages[0], "error: cannot inspect symlink target at");
+  } finally {
+    try {
+      await Deno.chmod(restrictedDir, 0o755);
+    } catch {
+      // ignore
+    }
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("installSkills followed by checkSkills preserves unrelated local skill directory and live symlink", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "check-skills-preserved-" });
+  try {
+    const repo = join(tempDir, "repo");
+    const srcDir = join(repo, "skills");
+    const claudeDest = join(tempDir, "claude");
+    const agyDest = join(tempDir, "agy");
+    const outsideTarget = join(tempDir, "outside-skill");
+
+    await Deno.mkdir(join(srcDir, "managed"), { recursive: true });
+    await Deno.mkdir(outsideTarget, { recursive: true });
+    await Deno.mkdir(claudeDest, { recursive: true });
+    await Deno.mkdir(agyDest, { recursive: true });
+
+    // Pre-create unrelated local directory and live symlink in claudeDest
+    const localDir = join(claudeDest, "local-only");
+    await Deno.mkdir(localDir, { recursive: true });
+    await Deno.writeTextFile(join(localDir, "SKILL.md"), "# Local Only");
+
+    const liveSymlink = join(claudeDest, "unrelated-link");
+    await Deno.symlink(outsideTarget, liveSymlink);
+
+    // 1. Run installSkills
+    const installRes = await installSkills({
+      repoDir: repo,
+      claudeDest,
+      agyDest,
+      allowUnsafeForTesting: true,
+    });
+    assertEquals(installRes.success, true);
+
+    // Assert unrelated entries were preserved
+    const statLocal = await Deno.stat(localDir);
+    assertEquals(statLocal.isDirectory, true);
+    const lstatLink = await Deno.lstat(liveSymlink);
+    assertEquals(lstatLink.isSymlink, true);
+
+    // 2. Run checkSkills immediately
+    const checkRes = await checkSkills({
+      repoDir: repo,
+      claudeDest,
+      agyDest,
+      allowUnsafeForTesting: true,
+    });
+    assertEquals(checkRes.ok, true);
+    assertEquals(checkRes.status, "ok");
+    assertStringIncludes(checkRes.messages[0], "Claude: skill links in");
+    assertStringIncludes(checkRes.messages[0], ": ok");
+    assertStringIncludes(checkRes.messages[1], "agy: skill links in");
+    assertStringIncludes(checkRes.messages[1], ": ok");
+  } finally {
     await Deno.remove(tempDir, { recursive: true });
   }
 });

@@ -119,7 +119,9 @@ export function parseArgs(args: string[]): InstallSkillsOptions {
 
 Options:
   --check                     Check skill links without making changes (read-only)
-  --tool <claude|agy|all>     Target specific tool for check/install (default: all)
+  --tool <claude|agy|all>     Target specific tool for check mode (default: all; check mode only)
+  --claude-only               Check Claude skill links only (alias for --tool claude; check mode only)
+  --agy-only                  Check agy skill links only (alias for --tool agy; check mode only)
   --repo-dir <path>           Explicit repository root path
   --claude-dest <path>        Destination directory for Claude skills (~/.claude/skills)
   --agy-dest <path>           Destination directory for agy skills (~/.gemini/config/plugins/webjam-tasks/skills)
@@ -134,6 +136,11 @@ Options:
       Deno.exit(0);
     }
     i++;
+  }
+  if (!options.check && options.tool !== undefined) {
+    throw new Error(
+      "Tool selectors (--tool, --claude-only, --agy-only) are supported only with --check. The write installer installs skills for all tools.",
+    );
   }
   return options;
 }
@@ -408,8 +415,12 @@ export async function pruneFromDest(
       try {
         await Deno.stat(fullPath);
         targetExists = true;
-      } catch {
-        targetExists = false;
+      } catch (err) {
+        if (err instanceof Deno.errors.NotFound) {
+          targetExists = false;
+        } else {
+          continue;
+        }
       }
 
       if (!targetExists) {
@@ -528,6 +539,12 @@ export async function installSkills(
   options: InstallSkillsOptions = {},
   deps: ExecDeps = defaultExecDeps,
 ): Promise<{ success: boolean; messages: string[]; skillsCount: number }> {
+  if (options.tool !== undefined) {
+    throw new Error(
+      "Tool selectors (--tool, --claude-only, --agy-only) are supported only with --check. The write installer installs skills for all tools.",
+    );
+  }
+
   const home = Deno.env.get("HOME") || "";
   const defaultClaudeDest = Deno.env.get("CLAUDE_SKILLS_DEST") ||
     (home ? join(home, ".claude", "skills") : "");
@@ -740,7 +757,10 @@ export async function checkSkillsDest(
           if (realTarget === realSrc) {
             isMatch = true;
           }
-        } catch {
+        } catch (err) {
+          if (!(err instanceof Deno.errors.NotFound)) {
+            throw err;
+          }
           // unresolvable or dangling
         }
       }
@@ -761,17 +781,17 @@ export async function checkSkillsDest(
         );
       }
     } catch (err) {
-      if (err instanceof Deno.errors.PermissionDenied) {
-        hasError = true;
-        const msg = err instanceof Error ? err.message : String(err);
-        items.push({ name, status: "unreadable", destPath, expectedSrc: src, error: msg });
-        messages.push(`error: cannot read symlink target for ${destPath}: ${msg}`);
-      } else {
+      if (err instanceof Deno.errors.NotFound) {
         hasDrift = true;
         items.push({ name, status: "wrong-target", destPath, expectedSrc: src });
         messages.push(
           `drift: ${toolLabel}: ${name} at ${destPath} is a broken symlink; run deno task install-skills to fix`,
         );
+      } else {
+        hasError = true;
+        const msg = err instanceof Error ? err.message : String(err);
+        items.push({ name, status: "unreadable", destPath, expectedSrc: src, error: msg });
+        messages.push(`error: cannot inspect symlink target at ${destPath}: ${msg}`);
       }
     }
   }
@@ -787,30 +807,38 @@ export async function checkSkillsDest(
       continue;
     }
 
+    if (expectedSkills.includes(entryName)) {
+      continue;
+    }
+
     if (info.isSymlink) {
       let targetExists = false;
       try {
         await Deno.stat(full);
         targetExists = true;
-      } catch {
-        targetExists = false;
+      } catch (err) {
+        if (err instanceof Deno.errors.NotFound) {
+          targetExists = false;
+        } else {
+          hasError = true;
+          const msg = err instanceof Error ? err.message : String(err);
+          items.push({
+            name: entryName,
+            status: "unreadable",
+            destPath: full,
+            expectedSrc: "",
+            error: msg,
+          });
+          messages.push(`error: cannot inspect symlink target at ${full}: ${msg}`);
+          continue;
+        }
       }
       if (!targetExists) {
         hasDrift = true;
         messages.push(
           `drift: ${toolLabel}: ${entryName} at ${full} is a dangling symlink; run deno task install-skills to fix`,
         );
-      } else if (!expectedSkills.includes(entryName)) {
-        hasDrift = true;
-        messages.push(
-          `drift: ${toolLabel}: ${entryName} at ${full} is not in canonical skills; run deno task install-skills to fix`,
-        );
       }
-    } else if (!expectedSkills.includes(entryName)) {
-      hasDrift = true;
-      messages.push(
-        `drift: ${toolLabel}: unexpected entry ${entryName} at ${full}; run deno task install-skills to fix`,
-      );
     }
   }
 

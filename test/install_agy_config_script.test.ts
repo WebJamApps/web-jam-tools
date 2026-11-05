@@ -488,6 +488,37 @@ Deno.test("install-agy-config.sh --check: unreadable fixture exits 1 with error 
   }
 });
 
+Deno.test("install-agy-config.sh --check: unreadable symlink target fixture exits 1 with error message", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt1558-check-unreadable-target-" });
+  const restrictedDir = `${dir}/restricted`;
+  const destPath = `${dir}/mcp_config.json`;
+  const aliasPath = `${restrictedDir}/alias_mcp_config.json`;
+  try {
+    await Deno.mkdir(restrictedDir, { recursive: true });
+    await Deno.symlink(MASTER_CONFIG_PATH, aliasPath);
+    await Deno.symlink(aliasPath, destPath);
+
+    await Deno.chmod(restrictedDir, 0o000);
+
+    const cmd = new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--check", "--mcp-config-path", destPath],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(stderrStr, "error: cannot inspect symlink target at");
+  } finally {
+    try {
+      await Deno.chmod(restrictedDir, 0o755);
+    } catch {
+      // ignore
+    }
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 Deno.test("install-agy-config.sh --check: master config missing fixture exits 1 with error message", async () => {
   const dir = await Deno.makeTempDir({ prefix: "wjt1558-check-nosrc-" });
   const destPath = `${dir}/mcp_config.json`;

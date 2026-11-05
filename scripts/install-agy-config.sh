@@ -102,8 +102,11 @@ if [ "$CHECK_MODE" -eq 1 ]; then
       let realTarget = "";
       try {
         realTarget = Deno.realPathSync(destPath);
-      } catch {
-        // dangling symlink
+      } catch (e) {
+        if (!(e instanceof Deno.errors.NotFound)) {
+          console.error(`error: cannot inspect symlink target at ${destPath}: ${e instanceof Error ? e.message : e}`);
+          Deno.exit(1);
+        }
       }
       if (canonicalTarget === resolve(srcPath) || (realTarget && realTarget === realSrc)) {
         console.log(`agy: mcp_config.json: ok (already linked)`);
