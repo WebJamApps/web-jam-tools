@@ -562,3 +562,195 @@ Deno.test("a skipped skill is reported with the same message by --check and by a
     assertEquals(again.output, message);
   });
 });
+
+const GMAIL_APP = "apps.connector_2128aebfecb84f64a069897515042a44";
+const SEND_TOOLS = ["send_email", "send_draft", "forward_emails"];
+const GMAIL_DISABLED = SEND_TOOLS.map((tool) => `\n[${GMAIL_APP}.tools.${tool}]\nenabled = false\n`)
+  .join("");
+const OTHER_SEND_DISABLED = SEND_TOOLS.slice(1).map((tool) =>
+  `\n[${GMAIL_APP}.tools.${tool}]\nenabled = false\n`
+).join("");
+
+/** A fully installed temporary home, with only the Gmail policy removed for each case. */
+function gmailFixture(run: (home: string, repo: string, baseline: string) => void): void {
+  fixture((home, repo) => {
+    assertEquals(capture(() => installCodex({ home, repo })).code, 0);
+    const installed = Deno.readTextFileSync(join(home, ".codex/config.toml"));
+    assert(installed.endsWith(GMAIL_DISABLED));
+    run(home, repo, installed.slice(0, -GMAIL_DISABLED.length));
+  });
+}
+
+interface GmailSwitchCase {
+  name: string;
+  source: string;
+  expected?: string;
+  drift: string[];
+  topLevel?: boolean;
+}
+
+const GMAIL_CASES: GmailSwitchCase[] = [
+  { name: "no apps entry", source: "", expected: GMAIL_DISABLED, drift: SEND_TOOLS },
+  {
+    name: "all three explicit tables disabled",
+    source: GMAIL_DISABLED,
+    expected: GMAIL_DISABLED,
+    drift: [],
+  },
+  ...[
+    { name: "enabled true", value: "true", suffix: "" },
+    { name: "enabled true with a comment", value: "true", suffix: " # note" },
+    { name: "enabled has a string value", value: '"no"', suffix: "" },
+  ].map(({ name, value, suffix }) => ({
+    name,
+    source: `\n[${GMAIL_APP}.tools.send_email]\nenabled = ${value}${suffix}\n` +
+      OTHER_SEND_DISABLED,
+    expected: `\n[${GMAIL_APP}.tools.send_email]\nenabled = false${suffix}\n` +
+      OTHER_SEND_DISABLED,
+    drift: ["send_email"],
+  })),
+  {
+    name: "explicit table missing enabled",
+    source: `\n[${GMAIL_APP}.tools.send_email]\n# keep this note\napproval_mode = "prompt"\n` +
+      OTHER_SEND_DISABLED,
+    expected:
+      `\n[${GMAIL_APP}.tools.send_email]\nenabled = false\n# keep this note\napproval_mode = "prompt"\n` +
+      OTHER_SEND_DISABLED,
+    drift: ["send_email"],
+  },
+  {
+    name: "all three dotted keys disabled",
+    source: SEND_TOOLS.map((tool) => `${GMAIL_APP}.tools.${tool}.enabled = false\n`).join(""),
+    expected: SEND_TOOLS.map((tool) => `${GMAIL_APP}.tools.${tool}.enabled = false\n`).join(""),
+    drift: [],
+    topLevel: true,
+  },
+  {
+    name: "dotted key enabled is refused",
+    source: `${GMAIL_APP}.tools.send_email.enabled = true\n`,
+    drift: ["send_email"],
+    topLevel: true,
+  },
+  {
+    name: "inline apps table is refused",
+    source: "apps = { }\n",
+    drift: SEND_TOOLS,
+    topLevel: true,
+  },
+  ...[
+    {
+      name: "disabled read tool is preserved",
+      table: `${GMAIL_APP}.tools.read_email`,
+      value: false,
+    },
+    {
+      name: "ineffective gmail-prefixed key is preserved",
+      table: `${GMAIL_APP}.tools.gmail_send_email`,
+      value: false,
+    },
+    {
+      name: "another connector is preserved",
+      table: "apps.connector_0000.tools.send_email",
+      value: true,
+    },
+  ].map(({ name, table, value }) => ({
+    name,
+    source: `\n[${table}]\nenabled = ${value}\n`,
+    expected: `\n[${table}]\nenabled = ${value}\n` + GMAIL_DISABLED,
+    drift: SEND_TOOLS,
+  })),
+];
+
+for (const example of GMAIL_CASES) {
+  Deno.test(`Gmail switch case: ${example.name}`, () => {
+    gmailFixture((home, repo, baseline) => {
+      const source = example.topLevel ? example.source + baseline : baseline + example.source;
+      const path = putConfig(home, source);
+      const before = snapshot(home);
+      const checked = capture(() => installCodex({ home, repo, check: true }));
+      assertEquals(checked.code, example.drift.length ? 1 : 0);
+      for (const tool of example.drift) {
+        assertStringIncludes(checked.output, `${GMAIL_APP}.tools.${tool}.enabled`);
+      }
+      assertEquals(snapshot(home), before, "check mode must never write");
+      const installed = capture(() => installCodex({ home, repo }));
+      if (example.expected === undefined) {
+        assertEquals(installed.code, 1);
+        assertStringIncludes(installed.output, "REFUSED:");
+        assertStringIncludes(installed.output, "by hand");
+        assertEquals(snapshot(home), before, "a refusal must not write any file");
+        return;
+      }
+      assertEquals(installed.code, 0, installed.output);
+      const expected = example.topLevel ? example.expected + baseline : baseline + example.expected;
+      assertEquals(Deno.readTextFileSync(path), expected, "all unmanaged bytes must survive");
+      const connector =
+        (parse(expected).apps as Record<string, { tools: Record<string, unknown> }>)[
+          GMAIL_APP.slice("apps.".length)
+        ];
+      for (const tool of SEND_TOOLS) {
+        assertEquals((connector.tools[tool] as Record<string, unknown>).enabled, false);
+      }
+      const current = snapshot(home);
+      assertEquals(capture(() => installCodex({ home, repo })).code, 0);
+      assertEquals(capture(() => installCodex({ home, repo, check: true })).code, 0);
+      assertEquals(snapshot(home), current, "repeat installation must be byte-identical");
+    });
+  });
+}
+
+Deno.test("Gmail switches preserve quoted keys, hash characters, CRLF and unrelated apps", () => {
+  gmailFixture((home, repo, baseline) => {
+    const source = baseline + OTHER_SEND_DISABLED +
+      `\n["apps" . '${GMAIL_APP.slice(5)}' . tools . "send_email"]\r\n` +
+      `  'enabled'  =  "no # quoted"  # retained note\r\n` +
+      'description = "untouched"';
+    const expected = source.replace('"no # quoted"', "false");
+    const path = putConfig(home, source);
+    const result = capture(() => installCodex({ home, repo }));
+    assertEquals(result.code, 0, result.output);
+    assertEquals(Deno.readTextFileSync(path), expected);
+    assertEquals(capture(() => installCodex({ home, repo, check: true })).code, 0);
+  });
+});
+
+Deno.test("Gmail table and enabled text inside multiline strings are not edited", () => {
+  gmailFixture((home, repo, baseline) => {
+    const decoy = `example = '''\n[${GMAIL_APP}.tools.send_email]\nenabled = true\n'''\n`;
+    const source = decoy + baseline + OTHER_SEND_DISABLED +
+      `\n[${GMAIL_APP}.tools.send_email]\nenabled = true # real\n`;
+    const expected = decoy + baseline + OTHER_SEND_DISABLED +
+      `\n[${GMAIL_APP}.tools.send_email]\nenabled = false # real\n`;
+    const path = putConfig(home, source);
+    const result = capture(() => installCodex({ home, repo }));
+    assertEquals(result.code, 0, result.output);
+    assertEquals(Deno.readTextFileSync(path), expected);
+  });
+});
+
+Deno.test("Gmail switches refuse non-table ancestors and unsafe nested representations without writes", () => {
+  for (
+    const source of [
+      "apps = []\n",
+      `[apps]\n${GMAIL_APP.slice(5)} = false\n`,
+      `[${GMAIL_APP}]\ntools = "no"\n`,
+      `[${GMAIL_APP}.tools]\nsend_email = false\n`,
+      `[apps]\n${GMAIL_APP.slice(5)} = {}\n`,
+      `[${GMAIL_APP}]\ntools = {}\n`,
+      `[${GMAIL_APP}.tools]\nsend_email = { enabled = true }\n`,
+      `[${GMAIL_APP}.tools.send_email]\nenabled = """\nno\n"""\n`,
+    ]
+  ) {
+    fixture((home, repo) => {
+      putConfig(home, source);
+      const before = snapshot(home);
+      for (const check of [false, true]) {
+        const result = capture(() => installCodex({ home, repo, check }));
+        assertEquals(result.code, 1, source);
+        assertStringIncludes(result.output, `${GMAIL_APP}.tools.send_email.enabled`);
+        assertStringIncludes(result.output, "by hand");
+        assertEquals(snapshot(home), before);
+      }
+    });
+  }
+});
