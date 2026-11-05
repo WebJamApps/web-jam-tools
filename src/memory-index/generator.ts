@@ -28,8 +28,8 @@ export interface MemoryDirectoryScanResult {
 }
 
 /**
- * Derived budget function (Design 1C):
- *   bytes(MEMORY.md) ≈ Σ len(slug) + group markup + live-checkpoint lines
+ * Derived budget function (Design 1C / Decision 34):
+ *   bytes(MEMORY.md) ≈ Σ len(slug) + group markup
  * Evaluates to ~6.2KB currently; the budget is the `memoryIndex` entry in
  * src/session-load/limits.json.
  */
@@ -113,34 +113,24 @@ export async function scanMemoryDirectory(dirPath: string): Promise<MemoryDirect
   return { entries, skipped };
 }
 
-/** A completed checkpoint is archived by the index run unless it is a guard rule. */
-export function isArchivable(entry: MemoryEntry, protectedSlugs?: ReadonlySet<string>): boolean {
-  return entry.isCheckpoint && entry.status === "done" && !entry.guard &&
-    !protectedSlugs?.has(entry.slug);
+/**
+ * @deprecated Done checkpoints are no longer archived by the index run (web-jam-tools#1608, Decision 34).
+ * Retained for backward compatibility until companion /memory-cleanup transitions complete.
+ */
+export function isArchivable(_entry: MemoryEntry, _protectedSlugs?: ReadonlySet<string>): boolean {
+  return false;
 }
 
-export async function archiveDoneCheckpoints(
-  dirPath: string,
+/**
+ * @deprecated Done checkpoints are no longer archived by the index run (web-jam-tools#1608, Decision 34).
+ * Retained for backward compatibility until companion /memory-cleanup transitions complete.
+ */
+export function archiveDoneCheckpoints(
+  _dirPath: string,
   entries: MemoryEntry[],
-  protectedSlugs?: ReadonlySet<string>,
+  _protectedSlugs?: ReadonlySet<string>,
 ): Promise<{ remaining: MemoryEntry[]; archivedCount: number }> {
-  const remaining: MemoryEntry[] = [];
-  let archivedCount = 0;
-  const archiveDir = join(dirPath, "archive");
-
-  for (const entry of entries) {
-    if (isArchivable(entry, protectedSlugs)) {
-      await Deno.mkdir(archiveDir, { recursive: true });
-      const oldPath = join(dirPath, entry.filename);
-      const newPath = join(archiveDir, entry.filename);
-      await Deno.rename(oldPath, newPath);
-      archivedCount++;
-    } else {
-      remaining.push(entry);
-    }
-  }
-
-  return { remaining, archivedCount };
+  return Promise.resolve({ remaining: [...entries], archivedCount: 0 });
 }
 
 export function generateMemoryIndex(entries: MemoryEntry[]): string {
@@ -163,43 +153,25 @@ export function generateMemoryIndex(entries: MemoryEntry[]): string {
 
     output += `## ${type.charAt(0).toUpperCase() + type.slice(1)}\n\n`;
 
-    const regularEntries = groupEntries.filter((e) => !e.isCheckpoint);
-    const checkpointEntries = groupEntries.filter((e) => e.isCheckpoint);
+    // Render slugs alphabetically, wrapped at <= 80 chars per line (Decision 34)
+    groupEntries.sort((a, b) => a.slug.localeCompare(b.slug));
+    const slugs = groupEntries.map((e) => e.slug);
 
-    // Render regular slugs alphabetically, wrapped at <= 80 chars per line
-    if (regularEntries.length > 0) {
-      regularEntries.sort((a, b) => a.slug.localeCompare(b.slug));
-      const slugs = regularEntries.map((e) => e.slug);
-
-      let currentLine = "";
-      for (const slug of slugs) {
-        if (!currentLine) {
-          currentLine = slug;
-        } else if (currentLine.length + 3 + slug.length <= 80) {
-          currentLine += " · " + slug;
-        } else {
-          output += currentLine + "\n";
-          currentLine = slug;
-        }
-      }
-      if (currentLine) {
+    let currentLine = "";
+    for (const slug of slugs) {
+      if (!currentLine) {
+        currentLine = slug;
+      } else if (currentLine.length + 3 + slug.length <= 80) {
+        currentLine += " · " + slug;
+      } else {
         output += currentLine + "\n";
+        currentLine = slug;
       }
-      output += "\n";
     }
-
-    // Render live checkpoints
-    if (checkpointEntries.length > 0) {
-      checkpointEntries.sort((a, b) => a.slug.localeCompare(b.slug));
-      for (const c of checkpointEntries) {
-        let stateNote = c.description.split("\n")[0].trim();
-        if (stateNote.length > 75) {
-          stateNote = stateNote.slice(0, 72) + "...";
-        }
-        output += `- [${c.slug}](${c.filename}) — ${stateNote}\n`;
-      }
-      output += "\n";
+    if (currentLine) {
+      output += currentLine + "\n";
     }
+    output += "\n";
   }
 
   return output;

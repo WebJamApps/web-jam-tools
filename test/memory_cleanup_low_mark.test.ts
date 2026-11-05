@@ -251,7 +251,7 @@ Deno.test("unparseable frontmatter fails closed: never marked, merged, moved or 
   assertEquals(await Deno.readTextFile(join(dir, "bad.md")), broken);
 });
 
-Deno.test("index regeneration: a guarded done checkpoint stays, an unguarded one is reported", async () => {
+Deno.test("index regeneration: guarded and unguarded done checkpoints stay in memory index", async () => {
   const checkpoint = (slug: string, extra: string) =>
     `---\nname: ${slug}\ndescription: d\nmetadata:\n  type: project\n  status: done\n${extra}---\n\nBody.\n`;
   const { dir, home } = await sandbox({
@@ -263,15 +263,12 @@ Deno.test("index regeneration: a guarded done checkpoint stays, an unguarded one
   const result = await run(dir, home, { merges: [{ keep: "keeper", absorb: ["dupe"] }] });
 
   assert(await exists(join(dir, "session-checkpoint-guard.md")));
-  assertStringIncludes(await Deno.readTextFile(join(dir, "MEMORY.md")), "session-checkpoint-guard");
-  assert(await exists(join(dir, "archive", "session-checkpoint-plain.md")));
-  assert(
-    result.rows.some((r) =>
-      r.status === "archived" && r.slug === "session-checkpoint-plain" &&
-      /memory index run/.test(r.detail)
-    ),
-  );
+  assert(await exists(join(dir, "session-checkpoint-plain.md")));
+  const memoryMd = await Deno.readTextFile(join(dir, "MEMORY.md"));
+  assertStringIncludes(memoryMd, "session-checkpoint-guard");
+  assertStringIncludes(memoryMd, "session-checkpoint-plain");
   assert(!result.rows.some((r) => r.slug === "session-checkpoint-guard"));
+  assert(!result.rows.some((r) => r.slug === "session-checkpoint-plain"));
 });
 
 Deno.test("part sizes: each installed skill description is listed with its own size, below and above its limit", async () => {
