@@ -88,7 +88,10 @@ export function parseArgs(args: string[]): InstallSkillsOptions {
       if (!isNaN(days)) options.retentionMs = days * 24 * 60 * 60 * 1000;
     } else if (arg === "--check" || arg === "-c") {
       options.check = true;
-    } else if (arg === "--tool" && i + 1 < args.length) {
+    } else if (arg === "--tool") {
+      if (i + 1 >= args.length) {
+        throw new Error("Missing value for --tool (expected 'claude', 'agy', or 'all')");
+      }
       const val = args[++i];
       if (val !== "claude" && val !== "agy" && val !== "all") {
         throw new Error(`Invalid --tool value: '${val}' (expected 'claude', 'agy', or 'all')`);
@@ -96,6 +99,9 @@ export function parseArgs(args: string[]): InstallSkillsOptions {
       options.tool = val;
     } else if (arg.startsWith("--tool=")) {
       const val = arg.slice("--tool=".length);
+      if (!val) {
+        throw new Error("Missing value for --tool (expected 'claude', 'agy', or 'all')");
+      }
       if (val !== "claude" && val !== "agy" && val !== "all") {
         throw new Error(`Invalid --tool value: '${val}' (expected 'claude', 'agy', or 'all')`);
       }

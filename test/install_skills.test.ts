@@ -761,6 +761,22 @@ Deno.test("parseArgs parses --check and --tool options", () => {
     assertStringIncludes(msg, "Invalid --tool value");
   }
 
+  assertThrows(
+    () => parseArgs(["--check", "--tool"]),
+    Error,
+    "Missing value for --tool",
+  );
+  assertThrows(
+    () => parseArgs(["--tool"]),
+    Error,
+    "Missing value for --tool",
+  );
+  assertThrows(
+    () => parseArgs(["--check", "--tool="]),
+    Error,
+    "Missing value for --tool",
+  );
+
   // Tool selectors without --check are rejected
   for (
     const flag of [["--claude-only"], ["--agy-only"], ["--tool", "claude"], ["--tool=agy"], [
@@ -838,6 +854,57 @@ Deno.test("CLI scripts/install-skills.ts: refuses tool selector on write invocat
     );
 
     // agyDest must remain untouched (no skills installed)
+    const agyEntries = [...Deno.readDirSync(agyDest)];
+    assertEquals(agyEntries.length, 0);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("CLI scripts/install-skills.ts: refuses trailing --tool with missing value on write invocation", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "cli-reject-trailing-tool-" });
+  try {
+    const repo = join(tempDir, "repo");
+    const srcDir = join(repo, "skills");
+    const claudeDest = join(tempDir, "claude");
+    const agyDest = join(tempDir, "agy");
+
+    await Deno.mkdir(join(srcDir, "skill-1"), { recursive: true });
+    await Deno.mkdir(claudeDest, { recursive: true });
+    await Deno.mkdir(agyDest, { recursive: true });
+
+    const cmd = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--allow-env",
+        "--allow-run",
+        "--allow-read",
+        "--allow-write",
+        SCRIPT_PATH,
+        "--repo-dir",
+        repo,
+        "--claude-dest",
+        claudeDest,
+        "--agy-dest",
+        agyDest,
+        "--allow-unsafe-for-testing",
+        "--tool",
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    });
+
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(
+      stderrStr,
+      "Missing value for --tool",
+    );
+
+    // claudeDest and agyDest must remain untouched (no skills installed)
+    const claudeEntries = [...Deno.readDirSync(claudeDest)];
+    assertEquals(claudeEntries.length, 0);
     const agyEntries = [...Deno.readDirSync(agyDest)];
     assertEquals(agyEntries.length, 0);
   } finally {
