@@ -2,9 +2,17 @@
  * Unit tests for src/install-skills/lib.ts and scripts/install-skills.ts (web-jam-tools#668, web-jam-tools#669)
  */
 
-import { assertEquals, assertFalse, assertRejects, assertStringIncludes } from "@std/assert";
+import {
+  assertEquals,
+  assertFalse,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
 import { join } from "@std/path";
 import {
+  checkSkills,
+  checkSkillsDest,
   DEFAULT_RETENTION_MS,
   defaultExecDeps,
   ExecDeps,
@@ -721,5 +729,557 @@ Deno.test("CLI scripts/install-skills.ts allows non-canonical checkout with over
 
     const { code } = await cmd.output();
     assertEquals(code, 0, `Failed for flag ${flag}`);
+  }
+});
+
+Deno.test("parseArgs parses --check and --tool options", () => {
+  const p1 = parseArgs(["--check", "--tool", "claude"]);
+  assertEquals(p1.check, true);
+  assertEquals(p1.tool, "claude");
+
+  const p2 = parseArgs(["-c", "--tool=agy"]);
+  assertEquals(p2.check, true);
+  assertEquals(p2.tool, "agy");
+
+  const p3 = parseArgs(["--check", "--claude-only"]);
+  assertEquals(p3.check, true);
+  assertEquals(p3.tool, "claude");
+
+  const p4 = parseArgs(["--check", "--agy-only"]);
+  assertEquals(p4.check, true);
+  assertEquals(p4.tool, "agy");
+
+  const p5 = parseArgs(["--check", "--tool", "all"]);
+  assertEquals(p5.check, true);
+  assertEquals(p5.tool, "all");
+
+  try {
+    parseArgs(["--check", "--tool", "invalid"]);
+    assertEquals(true, false, "Should throw for invalid tool");
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    assertStringIncludes(msg, "Invalid --tool value");
+  }
+
+  assertThrows(
+    () => parseArgs(["--check", "--tool"]),
+    Error,
+    "Missing value for --tool",
+  );
+  assertThrows(
+    () => parseArgs(["--tool"]),
+    Error,
+    "Missing value for --tool",
+  );
+  assertThrows(
+    () => parseArgs(["--check", "--tool="]),
+    Error,
+    "Missing value for --tool",
+  );
+
+  // Tool selectors without --check are rejected
+  for (
+    const flag of [["--claude-only"], ["--agy-only"], ["--tool", "claude"], ["--tool=agy"], [
+      "--tool",
+      "all",
+    ]]
+  ) {
+    assertThrows(
+      () => parseArgs(flag),
+      Error,
+      "Tool selectors (--tool, --claude-only, --agy-only) are supported only with --check",
+    );
+  }
+});
+
+Deno.test("installSkills rejects tool selector options on write invocations", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "reject-selector-" });
+  try {
+    await assertRejects(
+      () =>
+        installSkills({
+          tool: "claude",
+          repoDir: REPO_DIR,
+          claudeDest: join(tempDir, "claude"),
+          agyDest: join(tempDir, "agy"),
+          allowUnsafeForTesting: true,
+        }),
+      Error,
+      "Tool selectors (--tool, --claude-only, --agy-only) are supported only with --check",
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("CLI scripts/install-skills.ts: refuses tool selector on write invocation", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "cli-reject-tool-" });
+  try {
+    const repo = join(tempDir, "repo");
+    const srcDir = join(repo, "skills");
+    const claudeDest = join(tempDir, "claude");
+    const agyDest = join(tempDir, "agy");
+
+    await Deno.mkdir(join(srcDir, "skill-1"), { recursive: true });
+    await Deno.mkdir(claudeDest, { recursive: true });
+    await Deno.mkdir(agyDest, { recursive: true });
+
+    const cmd = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--allow-env",
+        "--allow-run",
+        "--allow-read",
+        "--allow-write",
+        SCRIPT_PATH,
+        "--claude-only",
+        "--repo-dir",
+        repo,
+        "--claude-dest",
+        claudeDest,
+        "--agy-dest",
+        agyDest,
+        "--allow-unsafe-for-testing",
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    });
+
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(
+      stderrStr,
+      "Tool selectors (--tool, --claude-only, --agy-only) are supported only with --check",
+    );
+
+    // agyDest must remain untouched (no skills installed)
+    const agyEntries = [...Deno.readDirSync(agyDest)];
+    assertEquals(agyEntries.length, 0);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("CLI scripts/install-skills.ts: refuses trailing --tool with missing value on write invocation", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "cli-reject-trailing-tool-" });
+  try {
+    const repo = join(tempDir, "repo");
+    const srcDir = join(repo, "skills");
+    const claudeDest = join(tempDir, "claude");
+    const agyDest = join(tempDir, "agy");
+
+    await Deno.mkdir(join(srcDir, "skill-1"), { recursive: true });
+    await Deno.mkdir(claudeDest, { recursive: true });
+    await Deno.mkdir(agyDest, { recursive: true });
+
+    const cmd = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--allow-env",
+        "--allow-run",
+        "--allow-read",
+        "--allow-write",
+        SCRIPT_PATH,
+        "--repo-dir",
+        repo,
+        "--claude-dest",
+        claudeDest,
+        "--agy-dest",
+        agyDest,
+        "--allow-unsafe-for-testing",
+        "--tool",
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    });
+
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(
+      stderrStr,
+      "Missing value for --tool",
+    );
+
+    // claudeDest and agyDest must remain untouched (no skills installed)
+    const claudeEntries = [...Deno.readDirSync(claudeDest)];
+    assertEquals(claudeEntries.length, 0);
+    const agyEntries = [...Deno.readDirSync(agyDest)];
+    assertEquals(agyEntries.length, 0);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("checkSkillsDest: linked fixture returns ok and leaves files untouched", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "check-skills-linked-" });
+  try {
+    const srcDir = join(tempDir, "src-skills");
+    const destDir = join(tempDir, "dest-skills");
+    await Deno.mkdir(join(srcDir, "skill-a"), { recursive: true });
+    await Deno.mkdir(join(srcDir, "skill-b"), { recursive: true });
+    await Deno.mkdir(destDir, { recursive: true });
+    await Deno.symlink(join(srcDir, "skill-a"), join(destDir, "skill-a"));
+    await Deno.symlink(join(srcDir, "skill-b"), join(destDir, "skill-b"));
+
+    const res = await checkSkillsDest(srcDir, destDir, "Claude");
+    assertEquals(res.status, "ok");
+    assertEquals(res.items.length, 2);
+    assertEquals(res.items.every((it) => it.status === "ok"), true);
+    assertStringIncludes(res.messages[0], "Claude: skill links in");
+    assertStringIncludes(res.messages[0], ": ok");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("checkSkillsDest: missing fixture returns drifted naming installer command", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "check-skills-missing-" });
+  try {
+    const srcDir = join(tempDir, "src-skills");
+    const destDir = join(tempDir, "dest-skills");
+    await Deno.mkdir(join(srcDir, "skill-a"), { recursive: true });
+    await Deno.mkdir(join(srcDir, "skill-b"), { recursive: true });
+    await Deno.mkdir(destDir, { recursive: true });
+    await Deno.symlink(join(srcDir, "skill-a"), join(destDir, "skill-a"));
+    // skill-b is missing in destDir
+
+    const res = await checkSkillsDest(srcDir, destDir, "agy");
+    assertEquals(res.status, "drifted");
+    assertStringIncludes(res.messages[0], "drift: agy: skill skill-b is missing at");
+    assertStringIncludes(res.messages[0], "deno task install-skills");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("checkSkillsDest: not-symlink fixture returns drifted naming installer command", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "check-skills-notsymlink-" });
+  try {
+    const srcDir = join(tempDir, "src-skills");
+    const destDir = join(tempDir, "dest-skills");
+    await Deno.mkdir(join(srcDir, "skill-a"), { recursive: true });
+    await Deno.mkdir(join(destDir, "skill-a"), { recursive: true }); // Real directory instead of symlink
+
+    const res = await checkSkillsDest(srcDir, destDir, "Claude");
+    assertEquals(res.status, "drifted");
+    assertStringIncludes(res.messages[0], "drift: Claude: skill-a at");
+    assertStringIncludes(res.messages[0], "is not a symlink");
+    assertStringIncludes(res.messages[0], "deno task install-skills");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("checkSkillsDest: pointing elsewhere fixture returns drifted naming installer command", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "check-skills-elsewhere-" });
+  try {
+    const srcDir = join(tempDir, "src-skills");
+    const destDir = join(tempDir, "dest-skills");
+    const otherDir = join(tempDir, "other-skills");
+    await Deno.mkdir(join(srcDir, "skill-a"), { recursive: true });
+    await Deno.mkdir(join(otherDir, "skill-a"), { recursive: true });
+    await Deno.mkdir(destDir, { recursive: true });
+    await Deno.symlink(join(otherDir, "skill-a"), join(destDir, "skill-a")); // Points to otherDir
+
+    const res = await checkSkillsDest(srcDir, destDir, "agy");
+    assertEquals(res.status, "drifted");
+    assertStringIncludes(res.messages[0], "drift: agy: skill-a at");
+    assertStringIncludes(res.messages[0], "points to");
+    assertStringIncludes(res.messages[0], "deno task install-skills");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("checkSkillsDest: unreadable fixture returns could-not-tell", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "check-skills-unreadable-" });
+  const subDir = join(tempDir, "unreadable-dest");
+  try {
+    const srcDir = join(tempDir, "src-skills");
+    await Deno.mkdir(srcDir, { recursive: true });
+    await Deno.mkdir(subDir, { recursive: true });
+    await Deno.chmod(subDir, 0o000);
+
+    const res = await checkSkillsDest(srcDir, subDir, "Claude");
+    assertEquals(res.status, "could-not-tell");
+    assertStringIncludes(res.messages[0], "error: cannot inspect Claude skills directory at");
+  } finally {
+    try {
+      await Deno.chmod(subDir, 0o755);
+    } catch {
+      // ignore
+    }
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("checkSkillsDest: unreadable symlink target fixture returns could-not-tell", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "check-skills-unreadable-target-" });
+  const restrictedDir = join(tempDir, "restricted");
+  try {
+    const srcDir = join(tempDir, "src-skills");
+    const destDir = join(tempDir, "dest-skills");
+    await Deno.mkdir(join(srcDir, "managed"), { recursive: true });
+    await Deno.mkdir(restrictedDir, { recursive: true });
+    await Deno.mkdir(destDir, { recursive: true });
+
+    // In restrictedDir, create an alias symlink pointing to the real src
+    const aliasPath = join(restrictedDir, "alias-managed");
+    await Deno.symlink(join(srcDir, "managed"), aliasPath);
+
+    // In destDir, create symlink pointing to aliasPath
+    await Deno.symlink(aliasPath, join(destDir, "managed"));
+
+    // Make restrictedDir unreadable so resolving aliasPath yields PermissionDenied
+    await Deno.chmod(restrictedDir, 0o000);
+
+    const res = await checkSkillsDest(srcDir, destDir, "Claude");
+    assertEquals(res.status, "could-not-tell");
+    assertEquals(res.items.length, 1);
+    assertEquals(res.items[0].status, "unreadable");
+    assertStringIncludes(res.messages[0], "error: cannot inspect symlink target at");
+  } finally {
+    try {
+      await Deno.chmod(restrictedDir, 0o755);
+    } catch {
+      // ignore
+    }
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("installSkills followed by checkSkills preserves unrelated local skill directory and live symlink", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "check-skills-preserved-" });
+  try {
+    const repo = join(tempDir, "repo");
+    const srcDir = join(repo, "skills");
+    const claudeDest = join(tempDir, "claude");
+    const agyDest = join(tempDir, "agy");
+    const outsideTarget = join(tempDir, "outside-skill");
+
+    await Deno.mkdir(join(srcDir, "managed"), { recursive: true });
+    await Deno.mkdir(outsideTarget, { recursive: true });
+    await Deno.mkdir(claudeDest, { recursive: true });
+    await Deno.mkdir(agyDest, { recursive: true });
+
+    // Pre-create unrelated local directory and live symlink in claudeDest
+    const localDir = join(claudeDest, "local-only");
+    await Deno.mkdir(localDir, { recursive: true });
+    await Deno.writeTextFile(join(localDir, "SKILL.md"), "# Local Only");
+
+    const liveSymlink = join(claudeDest, "unrelated-link");
+    await Deno.symlink(outsideTarget, liveSymlink);
+
+    // 1. Run installSkills
+    const installRes = await installSkills({
+      repoDir: repo,
+      claudeDest,
+      agyDest,
+      allowUnsafeForTesting: true,
+    });
+    assertEquals(installRes.success, true);
+
+    // Assert unrelated entries were preserved
+    const statLocal = await Deno.stat(localDir);
+    assertEquals(statLocal.isDirectory, true);
+    const lstatLink = await Deno.lstat(liveSymlink);
+    assertEquals(lstatLink.isSymlink, true);
+
+    // 2. Run checkSkills immediately
+    const checkRes = await checkSkills({
+      repoDir: repo,
+      claudeDest,
+      agyDest,
+      allowUnsafeForTesting: true,
+    });
+    assertEquals(checkRes.ok, true);
+    assertEquals(checkRes.status, "ok");
+    assertStringIncludes(checkRes.messages[0], "Claude: skill links in");
+    assertStringIncludes(checkRes.messages[0], ": ok");
+    assertStringIncludes(checkRes.messages[1], "agy: skill links in");
+    assertStringIncludes(checkRes.messages[1], ": ok");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("checkSkillsDest: dangling symlink or legacy backup fixture returns drifted", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "check-skills-dangling-" });
+  try {
+    const srcDir = join(tempDir, "src-skills");
+    const destDir = join(tempDir, "dest-skills");
+    await Deno.mkdir(join(srcDir, "skill-a"), { recursive: true });
+    await Deno.mkdir(destDir, { recursive: true });
+    await Deno.symlink(join(srcDir, "skill-a"), join(destDir, "skill-a"));
+    await Deno.symlink(join(tempDir, "non-existent-target"), join(destDir, "dangling-link"));
+
+    const res = await checkSkillsDest(srcDir, destDir, "Claude");
+    assertEquals(res.status, "drifted");
+    assertStringIncludes(res.messages[0], "drift: Claude: dangling-link at");
+    assertStringIncludes(res.messages[0], "is a dangling symlink");
+
+    // Legacy backup in dest
+    await Deno.remove(join(destDir, "dangling-link"));
+    await Deno.mkdir(join(destDir, "old-skill.bak-20261025"), { recursive: true });
+
+    const res2 = await checkSkillsDest(srcDir, destDir, "Claude");
+    assertEquals(res2.status, "drifted");
+    assertStringIncludes(res2.messages[0], "legacy backup inside skills directory");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("checkSkills end-to-end with --tool flag", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "check-skills-e2e-" });
+  try {
+    const repo = join(tempDir, "repo");
+    const srcDir = join(repo, "skills");
+    const claudeDest = join(tempDir, "claude");
+    const agyDest = join(tempDir, "agy");
+
+    await Deno.mkdir(join(srcDir, "skill-1"), { recursive: true });
+    await Deno.mkdir(claudeDest, { recursive: true });
+    await Deno.mkdir(agyDest, { recursive: true });
+
+    await Deno.symlink(join(srcDir, "skill-1"), join(claudeDest, "skill-1"));
+    // agyDest is missing skill-1
+
+    // Check claude only -> ok
+    const reportClaude = await checkSkills({
+      repoDir: repo,
+      claudeDest,
+      agyDest,
+      tool: "claude",
+      allowUnsafeForTesting: true,
+    });
+    assertEquals(reportClaude.ok, true);
+    assertEquals(reportClaude.status, "ok");
+    assertEquals(reportClaude.results.length, 1);
+    assertEquals(reportClaude.results[0].tool, "Claude");
+
+    // Check agy only -> drifted
+    const reportAgy = await checkSkills({
+      repoDir: repo,
+      claudeDest,
+      agyDest,
+      tool: "agy",
+      allowUnsafeForTesting: true,
+    });
+    assertEquals(reportAgy.ok, false);
+    assertEquals(reportAgy.status, "drifted");
+    assertEquals(reportAgy.results.length, 1);
+    assertEquals(reportAgy.results[0].tool, "agy");
+
+    // Check all -> drifted
+    const reportAll = await checkSkills({
+      repoDir: repo,
+      claudeDest,
+      agyDest,
+      tool: "all",
+      allowUnsafeForTesting: true,
+    });
+    assertEquals(reportAll.ok, false);
+    assertEquals(reportAll.status, "drifted");
+    assertEquals(reportAll.results.length, 2);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("CLI scripts/install-skills.ts --check: linked fixture exits 0 and writes nothing", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "cli-check-skills-linked-" });
+  try {
+    const repo = join(tempDir, "repo");
+    const srcDir = join(repo, "skills");
+    const claudeDest = join(tempDir, "claude");
+    const agyDest = join(tempDir, "agy");
+
+    await Deno.mkdir(join(srcDir, "skill-1"), { recursive: true });
+    await Deno.mkdir(claudeDest, { recursive: true });
+    await Deno.mkdir(agyDest, { recursive: true });
+
+    await Deno.symlink(join(srcDir, "skill-1"), join(claudeDest, "skill-1"));
+    await Deno.symlink(join(srcDir, "skill-1"), join(agyDest, "skill-1"));
+
+    const cmd = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--allow-env",
+        "--allow-run",
+        "--allow-read",
+        "--allow-write",
+        SCRIPT_PATH,
+        "--check",
+        "--repo-dir",
+        repo,
+        "--claude-dest",
+        claudeDest,
+        "--agy-dest",
+        agyDest,
+        "--allow-unsafe-for-testing",
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    });
+
+    const { code, stdout, stderr } = await cmd.output();
+    const stdoutStr = new TextDecoder().decode(stdout);
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 0, stderrStr);
+    assertStringIncludes(stdoutStr, "Claude: skill links in");
+    assertStringIncludes(stdoutStr, ": ok");
+    assertStringIncludes(stdoutStr, "agy: skill links in");
+    assertStringIncludes(stdoutStr, ": ok");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("CLI scripts/install-skills.ts --check: missing fixture exits 1 with drift output", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "cli-check-skills-missing-" });
+  try {
+    const repo = join(tempDir, "repo");
+    const srcDir = join(repo, "skills");
+    const claudeDest = join(tempDir, "claude");
+    const agyDest = join(tempDir, "agy");
+
+    await Deno.mkdir(join(srcDir, "skill-1"), { recursive: true });
+    await Deno.mkdir(claudeDest, { recursive: true });
+    await Deno.mkdir(agyDest, { recursive: true });
+
+    // Missing skill-1 in both
+
+    const cmd = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--allow-env",
+        "--allow-run",
+        "--allow-read",
+        "--allow-write",
+        SCRIPT_PATH,
+        "--check",
+        "--repo-dir",
+        repo,
+        "--claude-dest",
+        claudeDest,
+        "--agy-dest",
+        agyDest,
+        "--allow-unsafe-for-testing",
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    });
+
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(stderrStr, "drift: Claude: skill skill-1 is missing at");
+    assertStringIncludes(stderrStr, "drift: agy: skill skill-1 is missing at");
+    assertStringIncludes(stderrStr, "deno task install-skills");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
   }
 });
