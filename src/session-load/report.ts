@@ -27,7 +27,7 @@ export interface SessionLoadLimits {
   mainRules: PartLimit;
   crossAiRules: PartLimit;
   jammusicRules: PartLimit;
-  otherRepoRules: PartLimit;
+  otherRepoRules: PartLimit & { lowMarks?: Record<string, number> };
   safetyRules: PartLimit;
   skillDescription: SkillDescriptionLimit;
   bundledSkills: BundledSkillsLimit;

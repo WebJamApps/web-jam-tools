@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.60.0",
+  "version": "1.61.0",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
     "health-report": "deno run --allow-read=.,$HOME/Dropbox/web-jam-llms,/tmp --allow-write=$HOME/Dropbox/web-jam-llms,/tmp --allow-env=HOME,HEALTH_TRACKER_FILE,HEALTH_ACTIVITIES_FILE,HEALTH_PROGRESS_SVG,HEALTH_REPORT_NOW,HEALTH_REPORT_TIMEOUT_MS,HEALTH_REPORT_CHROME_CMD,HEALTH_REPORT_SKIP_CHROME,HEALTH_REPORT_FORCE_TERMINAL,DISPLAY,XAUTHORITY,DBUS_SESSION_BUS_ADDRESS,XDG_RUNTIME_DIR --allow-run=google-chrome,systemctl src/health-tracker/main.ts",

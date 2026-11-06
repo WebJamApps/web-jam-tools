@@ -20,6 +20,7 @@
     "overMark": 14000
   },
   "otherRepoRules": {
+    "lowMarks": {},
     "overMark": 10000
   },
   "safetyRules": {
