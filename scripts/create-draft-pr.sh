@@ -520,10 +520,10 @@ else
   if [ "$LOCAL_STEP" -eq 0 ] && [ "$PART_OF" -eq 0 ] && [ "$NO_CLOSE" -eq 0 ]; then
     PARENT_REPO_ARG="${TARGET_OWNER_REPO:-$CURRENT_REPO}"
     if [ -n "$PARENT_REPO_ARG" ]; then
-      PARENT_LINE="$(gh api "repos/$PARENT_REPO_ARG/issues/$ISSUE_NUM/parent" --jq '[.number, .repository.full_name // ""] | @tsv' 2>/dev/null || true)"
-      if [ -n "$PARENT_LINE" ]; then
-        PARENT_NUM="${PARENT_LINE%%	*}"
-        PARENT_REPO="${PARENT_LINE#*	}"
+      PARENT_ERR=$(mktemp)
+      if PARENT_LINE="$(gh api "repos/$PARENT_REPO_ARG/issues/$ISSUE_NUM/parent" --jq '[.number // "", .repository.full_name // ""] | @tsv' 2>"$PARENT_ERR")"; then
+        rm -f "$PARENT_ERR"
+        IFS=$'\t' read -r PARENT_NUM PARENT_REPO <<< "$PARENT_LINE"
         if [[ "$PARENT_NUM" =~ ^[0-9]+$ ]]; then
           PARENT_REPO_LOWER="$(printf '%s' "$PARENT_REPO" | tr '[:upper:]' '[:lower:]')"
           if [ -n "$PARENT_REPO" ] && [ -n "$CURRENT_LOWER" ] && [ "$PARENT_REPO_LOWER" != "$CURRENT_LOWER" ]; then
@@ -531,6 +531,18 @@ else
           else
             PARENT_EPIC_REF="#$PARENT_NUM"
           fi
+        else
+          echo "ERROR: malformed parent issue response for $FORMATTED_ISSUE (number not found): $PARENT_LINE" >&2
+          exit 1
+        fi
+      else
+        PARENT_FETCH_ERR=$(cat "$PARENT_ERR")
+        rm -f "$PARENT_ERR"
+        if [[ "$PARENT_FETCH_ERR" == *"No parent issue found"* ]] || [[ "$PARENT_FETCH_ERR" == *"404"* ]]; then
+          PARENT_EPIC_REF=""
+        else
+          echo "ERROR: could not lookup parent issue for $FORMATTED_ISSUE (via gh): $PARENT_FETCH_ERR" >&2
+          exit 1
         fi
       fi
     fi
@@ -852,25 +864,26 @@ set_issue_status_in_review() {
   echo "Setting Workflow Status to 'In review' for issue $formatted..."
   local node_id
   node_id="$(gh api "repos/$repo_arg/issues/$issue_num" --jq .node_id 2>/dev/null || true)"
-  if [ -z "$node_id" ] || [[ ! "$node_id" =~ ^I_[A-Za-z0-9_-]+$ ]]; then
+  if [ -z "$node_id" ] || [ "$node_id" = "null" ]; then
     echo "ERROR: could not resolve issue node_id for $formatted." >&2
     exit 1
   fi
 
-  local mutation_query
-  mutation_query="mutation {
-    updateIssueFieldValue(input: {
-      issueId: \"$node_id\",
-      issueField: {
-        fieldId: \"$WORKFLOW_STATUS_FIELD_NODE_ID\",
-        singleSelectOptionId: \"$WORKFLOW_STATUS_IN_REVIEW_OPTION_NODE_ID\"
+  if ! gh api graphql \
+    -F issueId="$node_id" \
+    -F fieldId="$WORKFLOW_STATUS_FIELD_NODE_ID" \
+    -F optionId="$WORKFLOW_STATUS_IN_REVIEW_OPTION_NODE_ID" \
+    -f query='mutation($issueId: ID!, $fieldId: ID!, $optionId: ID!) {
+      updateIssueFieldValue(input: {
+        issueId: $issueId,
+        issueField: {
+          fieldId: $fieldId,
+          singleSelectOptionId: $optionId
+        }
+      }) {
+        clientMutationId
       }
-    }) {
-      clientMutationId
-    }
-  }"
-
-  if ! gh api graphql -f query="$mutation_query" >/dev/null 2>&1; then
+    }' >/dev/null 2>&1; then
     echo "ERROR: GraphQL mutation failed to set Workflow Status on $formatted." >&2
     exit 1
   fi

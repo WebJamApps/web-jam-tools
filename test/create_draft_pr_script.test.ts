@@ -620,8 +620,10 @@ async function makeMockGh(
     issueLabels?: string[];
     failLabelsFetch?: boolean;
     parentInfo?: string;
+    parentFailure?: string;
     failStatusMutation?: boolean;
     statusReadbackValue?: string;
+    nodeId?: string;
   } = {},
 ) {
   const dir = await Deno.makeTempDir({ prefix: "mock-gh-" });
@@ -651,7 +653,13 @@ LABELS_EOF
 fi
 if [ "$1" = "api" ]; then
   if [[ "\${2:-}" == *"/parent"* ]]; then
-    ${options.parentInfo ? `echo -e "${options.parentInfo}"; exit 0` : "exit 1"}
+    ${
+    options.parentInfo
+      ? `echo -e "${options.parentInfo}"; exit 0`
+      : options.parentFailure
+      ? `echo "${options.parentFailure}" >&2; exit 1`
+      : 'echo "gh: No parent issue found (HTTP 404)" >&2; exit 1'
+  }
   elif [ "\${2:-}" = "graphql" ]; then
     ${
     options.failStatusMutation
@@ -661,8 +669,11 @@ if [ "$1" = "api" ]; then
   else
     for arg in "$@"; do
       if [ "$arg" = ".node_id" ]; then
-        echo "I_mock_node_id"
-        exit 0
+        ${
+    options.nodeId !== undefined
+      ? `echo "${options.nodeId}"; exit 0`
+      : 'echo "I_mock_node_id"; exit 0'
+  }
       elif [[ "$arg" == *".issue_field_values"* ]]; then
         echo "${options.statusReadbackValue ?? "In review"}"
         exit 0
@@ -1288,8 +1299,10 @@ async function makeMockGhWithArgCapture(
     initialLabels?: string[];
     issueLabels?: string[];
     parentInfo?: string;
+    parentFailure?: string;
     failStatusMutation?: boolean;
     statusReadbackValue?: string;
+    nodeId?: string;
   } = {},
 ) {
   const dir = await Deno.makeTempDir({ prefix: "mock-gh-args-" });
@@ -1327,7 +1340,13 @@ if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
 fi
 if [ "$1" = "api" ]; then
   if [[ "\${2:-}" == *"/parent"* ]]; then
-    ${options.parentInfo ? `echo -e "${options.parentInfo}"; exit 0` : "exit 1"}
+    ${
+    options.parentInfo
+      ? `echo -e "${options.parentInfo}"; exit 0`
+      : options.parentFailure
+      ? `echo "${options.parentFailure}" >&2; exit 1`
+      : 'echo "gh: No parent issue found (HTTP 404)" >&2; exit 1'
+  }
   elif [ "\${2:-}" = "graphql" ]; then
     ${
     options.failStatusMutation
@@ -1337,8 +1356,11 @@ if [ "$1" = "api" ]; then
   else
     for arg in "$@"; do
       if [ "$arg" = ".node_id" ]; then
-        echo "I_mock_node_id"
-        exit 0
+        ${
+    options.nodeId !== undefined
+      ? `echo "${options.nodeId}"; exit 0`
+      : 'echo "I_mock_node_id"; exit 0'
+  }
       elif [[ "$arg" == *".issue_field_values"* ]]; then
         echo "${options.statusReadbackValue ?? "In review"}"
         exit 0
@@ -1387,8 +1409,10 @@ async function withModelLabelFixture(
     initialLabels?: string[];
     issueLabels?: string[];
     parentInfo?: string;
+    parentFailure?: string;
     failStatusMutation?: boolean;
     statusReadbackValue?: string;
+    nodeId?: string;
   } = {},
 ): Promise<void> {
   const repo = await makeFixtureRepo();
@@ -1939,4 +1963,73 @@ Deno.test("Workflow Status write: read-back mismatch makes script refuse and fai
     const hasPrCreate = calls.some((c) => c[0] === "pr" && c[1] === "create");
     assertEquals(hasPrCreate, false);
   }, { statusReadbackValue: "In progress" });
+});
+
+Deno.test("Workflow Status write: legacy base64 node ID succeeds and passes issueId to mutation", async () => {
+  await withModelLabelFixture(async ({ repo, env, invocations }) => {
+    const res = await runScriptWithoutDryRun(
+      repo,
+      [...baseArgs({ author: "agy — Gemini Flash" }), "--issue", "999"],
+      env,
+    );
+    assertEquals(res.code, 0, res.stderr);
+    assertMatch(res.stdout, /Setting Workflow Status to 'In review'/);
+    assertMatch(res.stdout, /Workflow Status: In review \(read-back verified\)/);
+    assertMatch(res.stdout, /Draft PR opened:/);
+    const calls = await invocations();
+    const graphQLCall = calls.find((c) => c[0] === "api" && c[1] === "graphql");
+    assertEquals(Boolean(graphQLCall), true);
+    assertEquals(graphQLCall?.includes("issueId=MDU6SXNzdWU0NjU3NDY2NTU="), true);
+  }, { nodeId: "MDU6SXNzdWU0NjU3NDY2NTU=" });
+});
+
+Deno.test("Workflow Status write: missing or null node ID causes script to fail closed", async () => {
+  await withModelLabelFixture(async ({ repo, env, invocations }) => {
+    const res = await runScriptWithoutDryRun(
+      repo,
+      [...baseArgs({ author: "agy — Gemini Flash" }), "--issue", "999"],
+      env,
+    );
+    assertEquals(res.code, 1);
+    assertMatch(res.stderr, /could not resolve issue node_id for #999/);
+    const calls = await invocations();
+    const hasPrCreate = calls.some((c) => c[0] === "pr" && c[1] === "create");
+    assertEquals(hasPrCreate, false);
+  }, { nodeId: "null" });
+});
+
+Deno.test("issue line table: Row 4 - parent API failure (rate limit / 500) fails closed", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    parentFailure: "gh: API rate limit exceeded (HTTP 403)",
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "100"],
+    env,
+  );
+  assertEquals(res.code, 1);
+  assertMatch(
+    res.stderr,
+    /could not lookup parent issue for #100 \(via gh\): gh: API rate limit exceeded \(HTTP 403\)/,
+  );
+});
+
+Deno.test("issue line table: Row 4 - malformed parent response fails closed", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    parentInfo: "not-a-number\tWebJamApps/web-jam-tools",
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "100"],
+    env,
+  );
+  assertEquals(res.code, 1);
+  assertMatch(
+    res.stderr,
+    /malformed parent issue response for #100 \(number not found\)/,
+  );
 });
