@@ -538,7 +538,7 @@ else
       else
         PARENT_FETCH_ERR=$(cat "$PARENT_ERR")
         rm -f "$PARENT_ERR"
-        if [[ "$PARENT_FETCH_ERR" == *"No parent issue found"* ]] || [[ "$PARENT_FETCH_ERR" == *"404"* ]]; then
+        if [[ "$PARENT_FETCH_ERR" == *"No parent issue found"* ]] || [[ "$PARENT_FETCH_ERR" == *"(HTTP 404)"* ]] || [[ "$PARENT_FETCH_ERR" =~ HTTP/[0-9.]+[[:space:]]+404 ]]; then
           PARENT_EPIC_REF=""
         else
           echo "ERROR: could not lookup parent issue for $FORMATTED_ISSUE (via gh): $PARENT_FETCH_ERR" >&2

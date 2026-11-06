@@ -2016,6 +2016,44 @@ Deno.test("issue line table: Row 4 - parent API failure (rate limit / 500) fails
   );
 });
 
+Deno.test("issue line table: Row 4 - transport failure with 404 in URL fails closed", async () => {
+  for (const issueNum of ["404", "1404"]) {
+    const transportErr =
+      `gh api: Get "https://api.github.com/repos/WebJamApps/web-jam-tools/issues/${issueNum}/parent": dial tcp: lookup api.github.com: no such host`;
+    const mockGhDir = await makeMockGh({
+      ownerRepo: "WebJamApps/web-jam-tools",
+      parentFailure: transportErr,
+    });
+    const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+    const res = await runScript(
+      await makeFixtureRepo(),
+      [...baseArgs(), "--issue", issueNum],
+      env,
+    );
+    assertEquals(res.code, 1, `Expected failure for issue ${issueNum}, but got ${res.code}`);
+    assertMatch(
+      res.stderr,
+      new RegExp(`could not lookup parent issue for #${issueNum} \\(via gh\\)`),
+    );
+  }
+});
+
+Deno.test("issue line table: Row 1 - legitimate no-parent HTTP 404 on issue 1404 proceeds", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    parentFailure: "gh: No parent issue found (HTTP 404)",
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "1404"],
+    env,
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes #1404/);
+  assertNotMatch(res.stdout, /Part of/);
+});
+
 Deno.test("issue line table: Row 4 - malformed parent response fails closed", async () => {
   const mockGhDir = await makeMockGh({
     ownerRepo: "WebJamApps/web-jam-tools",
