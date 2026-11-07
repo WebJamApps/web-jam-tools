@@ -1204,6 +1204,44 @@ function preserveNewlinesAsSpaces(match: string): string {
   return match.replace(/[^\n]/g, " ");
 }
 
+const HTML_BLOCK_TAGS =
+  "address|article|aside|blockquote|body|center|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|html|iframe|li|main|nav|ol|p|pre|section|summary|table|tbody|td|tfoot|th|thead|tr|ul";
+const HTML_BLOCK_OPEN = new RegExp(`^ {0,3}<(${HTML_BLOCK_TAGS})(?=[\\s/>]|$)`, "i");
+
+/** The line a block-level HTML element closes on, or null when its tag is never closed. */
+function htmlBlockEnd(lines: string[], start: number, tag: string): number | null {
+  const opens = new RegExp(`<${tag}(?=[\\s/>])[^>]*?(/?)>`, "gi");
+  const closes = new RegExp(`</${tag}\\s*>`, "gi");
+  let depth = 0;
+  for (let i = start; i < lines.length; i++) {
+    for (const open of lines[i].matchAll(opens)) if (open[1] !== "/") depth++;
+    depth -= [...lines[i].matchAll(closes)].length;
+    if (depth <= 0) return i;
+  }
+  return null;
+}
+
+/**
+ * Blanks every complete block-level HTML element, from its opening line to its closing line, so
+ * the text inside it is not compared. An element that is never closed ends at the next blank line.
+ * Line positions are kept.
+ */
+function blankHtmlBlocks(lines: string[]): string[] {
+  const kept = [...lines];
+  for (let i = 0; i < kept.length; i++) {
+    const open = kept[i].match(HTML_BLOCK_OPEN);
+    if (!open) continue;
+    let end = htmlBlockEnd(kept, i, open[1]);
+    if (end === null) {
+      end = i;
+      while (end + 1 < kept.length && kept[end + 1].trim() !== "") end++;
+    }
+    for (let j = i; j <= end; j++) kept[j] = "";
+    i = end;
+  }
+  return kept;
+}
+
 /**
  * Extracts normalized consecutive words from a design document's body for "One document owns each
  * rule". Leaves out captured rule blocks, fenced code blocks, anything in backticks or double
@@ -1214,17 +1252,25 @@ function preserveNewlinesAsSpaces(match: string): string {
 function extractDesignBodyWords(content: string): BodyWord[] {
   const { lines } = blankCapturedRuleBlocks(content.split(/\r?\n/));
   const keptLines: string[] = [];
-  let inCodeBlock = false;
+  // The opening fence's character and length: only a fence of the same character, at least as
+  // long and with nothing after it closes the block, so a shorter fence inside it is plain text.
+  let openFence: { char: string; length: number } | null = null;
   let excludedSectionLevel: number | null = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (/^\s*```/.test(line) || /^\s*~~~/.test(line)) {
-      inCodeBlock = !inCodeBlock;
+    const fence = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
+    if (openFence) {
+      if (
+        fence && fence[1][0] === openFence.char && fence[1].length >= openFence.length &&
+        fence[2].trim() === ""
+      ) openFence = null;
       keptLines.push("");
       continue;
     }
-    if (inCodeBlock) {
+    // A backtick fence's info string holds no backtick, so a line like ```code``` is inline code.
+    if (fence && !(fence[1][0] === "`" && fence[2].includes("`"))) {
+      openFence = { char: fence[1][0], length: fence[1].length };
       keptLines.push("");
       continue;
     }
@@ -1251,7 +1297,7 @@ function extractDesignBodyWords(content: string): BodyWord[] {
     keptLines.push(line);
   }
 
-  let bodyText = keptLines.join("\n");
+  let bodyText = blankHtmlBlocks(keptLines).join("\n");
   // Strip raw HTML comments, multi-line SVG/style blocks, and HTML tags while preserving line count
   bodyText = bodyText.replace(/<!--[\s\S]*?-->/g, preserveNewlinesAsSpaces);
   bodyText = bodyText.replace(/<svg\b[\s\S]*?<\/svg>/gi, preserveNewlinesAsSpaces);
@@ -1260,9 +1306,9 @@ function extractDesignBodyWords(content: string): BodyWord[] {
 
   // Strip inline backtick spans and double-quoted spans (straight and curly)
   bodyText = bodyText.replace(/(`+)(?:[^`\n]|\n(?!\s*\n))*?\1/g, preserveNewlinesAsSpaces);
-  bodyText = bodyText.replace(/"(?:\\.|[^"\\\n|]|\n(?!\s*\n))*"/g, preserveNewlinesAsSpaces);
+  bodyText = bodyText.replace(/"(?:\\.|[^"\\\n]|\n(?!\s*\n))*"/g, preserveNewlinesAsSpaces);
   bodyText = bodyText.replace(
-    /\u201c(?:[^\u201d\n|]|\n(?!\s*\n))*\u201d/g,
+    /\u201c(?:[^\u201d\n]|\n(?!\s*\n))*\u201d/g,
     preserveNewlinesAsSpaces,
   );
 

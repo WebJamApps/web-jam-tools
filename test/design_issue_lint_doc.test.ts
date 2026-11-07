@@ -1042,3 +1042,64 @@ Deno.test(
     );
   },
 );
+
+// --- Exclusions the copied-text check must honour exactly (review of the first head) ---
+
+function passesAgainstOtherDoc(bodySection: string, valid: boolean): Promise<void> {
+  return withTempDesignRoot((root) => {
+    const result = lintDesignDoc(buildCompliantDesignDoc(bodySection), "checked-design.md", {
+      dropboxDir: root,
+    });
+    // Only the copied-text rule is judged: other rules track fences their own way.
+    assertEquals(
+      result.violations.some((v) => v.rule === "no-copied-text"),
+      !valid,
+      JSON.stringify(result.violations),
+    );
+  });
+}
+
+Deno.test(
+  "Copied text between design documents: the same line inside a multi-line <div> -> pass — raw HTML is left out",
+  async () => {
+    await passesAgainstOtherDoc(`<div>\n${COPIED_LINE}\n</div>`, true);
+    await passesAgainstOtherDoc(
+      `<details>\n<summary>More</summary>\n${COPIED_LINE}\n</details>`,
+      true,
+    );
+    await passesAgainstOtherDoc(`<div><div>inner</div>\n${COPIED_LINE}\n</div>`, true);
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: the same line after a closed <div> and after an unclosed <div>'s blank line -> fail",
+  async () => {
+    await passesAgainstOtherDoc(`<div>\nOther words.\n</div>\n\n${COPIED_LINE}`, false);
+    await passesAgainstOtherDoc(`<div>\nOther words.\n\n${COPIED_LINE}`, false);
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: the same line in double quotes that hold a pipe -> pass",
+  async () => {
+    await passesAgainstOtherDoc(`"${COPIED_LINE} | Section title"`, true);
+    await passesAgainstOtherDoc(`“${COPIED_LINE} | Section title”`, true);
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: a four-backtick fence holding a three-backtick line -> the contents stay left out until the real close",
+  async () => {
+    const nested = "````md\n```\n" + COPIED_LINE + "\n````";
+    await passesAgainstOtherDoc(nested, true);
+    await passesAgainstOtherDoc(`${nested}\n\n${COPIED_LINE}`, false);
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: a tilde line inside a backtick fence does not close it, and the next prose is still compared",
+  async () => {
+    await passesAgainstOtherDoc("```text\n~~~\n" + COPIED_LINE + "\n```", true);
+    await passesAgainstOtherDoc("```text\nCode.\n```\n\n" + COPIED_LINE, false);
+  },
+);
