@@ -783,3 +783,323 @@ Parity.
   const violation = result.violations.find((v) => v.rule === "no-revision-narration");
   assertEquals(Boolean(violation), true);
 });
+
+// --- Copied text between design documents ("One document owns each rule", web-jam-tools#1636) ---
+
+const COPIED_LINE =
+  "The lookup debounces typing and asks the backend with a key only the server holds and returns the exact position";
+
+function buildCompliantDesignDoc(
+  bodySection: string,
+  extraOptions: { premisesProse?: string; appendixSection?: string } = {},
+): string {
+  const premisesProse = extraOptions.premisesProse ? `${extraOptions.premisesProse}\n\n` : "";
+  const appendixSection = extraOptions.appendixSection ? `\n${extraOptions.appendixSection}\n` : "";
+  return `# Test Feature Design
+
+## What it is
+${bodySection}
+
+## Both surfaces
+| Mechanism | Claude Code | agy | Codex |
+|---|---|---|---|
+| Runner | deno task | identical | identical |
+
+## Load-bearing Premises
+${premisesProse}| Premise | Proof | Proved |
+|---|---|---|
+| Local filesystem is readable | Verified via Deno.readDirSync in unit test | ${TODAY} |
+${appendixSection}`;
+}
+
+async function withTempDesignRoot(
+  fn: (root: string, otherDocPath: string) => Promise<void> | void,
+  options: { inAppendixOnly?: boolean; underResumeRecords?: boolean } = {},
+): Promise<void> {
+  const root = await Deno.makeTempDir({ prefix: "lint-doc-copied-text-" });
+  try {
+    const folder = options.underResumeRecords ? "resume-records" : "Token_Savings";
+    const dir = path.join(root, folder);
+    await Deno.mkdir(dir, { recursive: true });
+    const otherDocPath = path.join(dir, "other-design-2026-08-23.md");
+    const otherContent = options.inAppendixOnly
+      ? buildCompliantDesignDoc("Distinct body text that shares nothing.", {
+        appendixSection: `## Appendix B — What Josh Asked For, Verbatim\n\n${COPIED_LINE}`,
+      })
+      : buildCompliantDesignDoc(COPIED_LINE);
+    await Deno.writeTextFile(otherDocPath, otherContent);
+    await fn(root, otherDocPath);
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
+}
+
+Deno.test(
+  "Copied text between design documents: the same line, in its body -> fail, naming the other document and the words",
+  async () => {
+    await withTempDesignRoot(async (root, otherDocPath) => {
+      const checkedPath = path.join(root, "Token_Savings", "checked-design-2026-08-23.md");
+      const doc = buildCompliantDesignDoc(COPIED_LINE);
+      await Deno.writeTextFile(checkedPath, doc);
+
+      const result = lintDesignDoc(doc, checkedPath, { dropboxDir: root });
+      assertEquals(result.valid, false);
+      const violation = result.violations.find((v) => v.rule === "no-copied-text");
+      assertEquals(Boolean(violation), true);
+      assertStringIncludes(violation!.message, otherDocPath);
+      assertStringIncludes(violation!.message, checkedPath);
+      assertStringIncludes(violation!.message, COPIED_LINE);
+
+      const prevRoot = Deno.env.get("DESIGN_DOCS_ROOT");
+      Deno.env.set("DESIGN_DOCS_ROOT", root);
+      try {
+        const exitCode = await runCli(["lint-doc", checkedPath]);
+        assertEquals(exitCode, 1);
+      } finally {
+        if (prevRoot === undefined) Deno.env.delete("DESIGN_DOCS_ROOT");
+        else Deno.env.set("DESIGN_DOCS_ROOT", prevRoot);
+      }
+    });
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: the first 11 words of that line, in its body -> pass",
+  async () => {
+    await withTempDesignRoot((root) => {
+      const first11Words = COPIED_LINE.split(" ").slice(0, 11).join(" ");
+      const doc = buildCompliantDesignDoc(first11Words);
+      const result = lintDesignDoc(doc, "checked-design.md", { dropboxDir: root });
+      assertEquals(result.valid, true);
+      assertEquals(result.violations.length, 0);
+    });
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: the same line with the case changed and a comma added -> fail — case and punctuation are ignored",
+  async () => {
+    await withTempDesignRoot((root, otherDocPath) => {
+      const alteredLine =
+        "THE LOOKUP DEBOUNCES TYPING, and asks the backend with a key, only the server holds and returns the exact position.";
+      const doc = buildCompliantDesignDoc(alteredLine);
+      const result = lintDesignDoc(doc, "checked-design.md", { dropboxDir: root });
+      assertEquals(result.valid, false);
+      const violation = result.violations.find((v) => v.rule === "no-copied-text");
+      assertEquals(Boolean(violation), true);
+      assertStringIncludes(violation!.message, otherDocPath);
+      assertStringIncludes(
+        violation!.message.toLowerCase(),
+        "the lookup debounces typing",
+      );
+    });
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: the same line in a > quote -> pass",
+  async () => {
+    await withTempDesignRoot((root) => {
+      const doc = buildCompliantDesignDoc(`> ${COPIED_LINE}`);
+      const result = lintDesignDoc(doc, "checked-design.md", { dropboxDir: root });
+      assertEquals(result.valid, true);
+    });
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: the same line inside a fenced code block -> pass",
+  async () => {
+    await withTempDesignRoot((root) => {
+      const doc = buildCompliantDesignDoc(`\`\`\`text\n${COPIED_LINE}\n\`\`\``);
+      const result = lintDesignDoc(doc, "checked-design.md", { dropboxDir: root });
+      assertEquals(result.valid, true);
+    });
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: the same line in double quotes -> pass",
+  async () => {
+    await withTempDesignRoot((root) => {
+      const doc = buildCompliantDesignDoc(`"${COPIED_LINE}"`);
+      const result = lintDesignDoc(doc, "checked-design.md", { dropboxDir: root });
+      assertEquals(result.valid, true);
+    });
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: the same line under ## Load-bearing Premises -> pass",
+  async () => {
+    await withTempDesignRoot((root) => {
+      const doc = buildCompliantDesignDoc("Distinct body content.", {
+        premisesProse: COPIED_LINE,
+        appendixSection:
+          `## Where Things Live\n\n${COPIED_LINE}\n\n## Decision Record\n\n${COPIED_LINE}`,
+      });
+      const result = lintDesignDoc(doc, "checked-design.md", { dropboxDir: root });
+      assertEquals(result.valid, true);
+    });
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: the same line under ## Appendix B — What Josh Asked For, Verbatim -> pass",
+  async () => {
+    await withTempDesignRoot((root) => {
+      const doc = buildCompliantDesignDoc(
+        `Distinct body content.\n\n<svg><text>${COPIED_LINE}</text></svg>`,
+        {
+          appendixSection:
+            `## Appendix B — What Josh Asked For, Verbatim\n\n### Context\n\n${COPIED_LINE}`,
+        },
+      );
+      const result = lintDesignDoc(doc, "checked-design.md", { dropboxDir: root });
+      assertEquals(result.valid, true);
+    });
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: a pointer naming the other document's path in backticks and its section in double quotes -> pass",
+  async () => {
+    await withTempDesignRoot((root, otherDocPath) => {
+      const pointerLine = `See \`${otherDocPath}\` ("${COPIED_LINE}") for the rule.`;
+      const doc = buildCompliantDesignDoc(pointerLine);
+      const result = lintDesignDoc(doc, "checked-design.md", { dropboxDir: root });
+      assertEquals(result.valid, true);
+    });
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: the same line where the other design holds it only in its appendix -> pass",
+  async () => {
+    await withTempDesignRoot(
+      (root) => {
+        const doc = buildCompliantDesignDoc(COPIED_LINE);
+        const result = lintDesignDoc(doc, "checked-design.md", { dropboxDir: root });
+        assertEquals(result.valid, true);
+      },
+      { inAppendixOnly: true },
+    );
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: the checked document is the other design itself -> pass — a document is not compared with itself",
+  async () => {
+    await withTempDesignRoot(async (root, otherDocPath) => {
+      const content = await Deno.readTextFile(otherDocPath);
+      const result = lintDesignDoc(content, otherDocPath, { dropboxDir: root });
+      assertEquals(result.valid, true);
+    });
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: another design cannot be read -> refuse, naming it",
+  async () => {
+    await withTempDesignRoot(async (root, otherDocPath) => {
+      const checkedPath = path.join(root, "Token_Savings", "checked-design-2026-08-23.md");
+      await Deno.writeTextFile(checkedPath, buildCompliantDesignDoc("Distinct body content."));
+      await Deno.chmod(otherDocPath, 0o000);
+      try {
+        await assertRejects(
+          () => lintDesignDocFile(checkedPath, { dropboxDir: root }),
+          Error,
+          otherDocPath,
+        );
+
+        const errors: string[] = [];
+        const origError = console.error;
+        console.error = (...args: unknown[]) => errors.push(args.join(" "));
+        try {
+          const exitCode = await runCli(["lint-doc", checkedPath], { dropboxDir: root });
+          assertEquals(exitCode, 1);
+        } finally {
+          console.error = origError;
+        }
+        assertStringIncludes(errors.join("\n"), otherDocPath);
+      } finally {
+        await Deno.chmod(otherDocPath, 0o644);
+      }
+    });
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: a file under resume-records/ holds the line -> pass — not a design document",
+  async () => {
+    await withTempDesignRoot(
+      (root) => {
+        const doc = buildCompliantDesignDoc(COPIED_LINE);
+        const result = lintDesignDoc(doc, "checked-design.md", { dropboxDir: root });
+        assertEquals(result.valid, true);
+      },
+      { underResumeRecords: true },
+    );
+  },
+);
+
+// --- Exclusions the copied-text check must honour exactly (review of the first head) ---
+
+function passesAgainstOtherDoc(bodySection: string, valid: boolean): Promise<void> {
+  return withTempDesignRoot((root) => {
+    const result = lintDesignDoc(buildCompliantDesignDoc(bodySection), "checked-design.md", {
+      dropboxDir: root,
+    });
+    // Only the copied-text rule is judged: other rules track fences their own way.
+    assertEquals(
+      result.violations.some((v) => v.rule === "no-copied-text"),
+      !valid,
+      JSON.stringify(result.violations),
+    );
+  });
+}
+
+Deno.test(
+  "Copied text between design documents: the same line inside a multi-line <div> -> pass — raw HTML is left out",
+  async () => {
+    await passesAgainstOtherDoc(`<div>\n${COPIED_LINE}\n</div>`, true);
+    await passesAgainstOtherDoc(
+      `<details>\n<summary>More</summary>\n${COPIED_LINE}\n</details>`,
+      true,
+    );
+    await passesAgainstOtherDoc(`<div><div>inner</div>\n${COPIED_LINE}\n</div>`, true);
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: the same line after a closed <div> and after an unclosed <div>'s blank line -> fail",
+  async () => {
+    await passesAgainstOtherDoc(`<div>\nOther words.\n</div>\n\n${COPIED_LINE}`, false);
+    await passesAgainstOtherDoc(`<div>\nOther words.\n\n${COPIED_LINE}`, false);
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: the same line in double quotes that hold a pipe -> pass",
+  async () => {
+    await passesAgainstOtherDoc(`"${COPIED_LINE} | Section title"`, true);
+    await passesAgainstOtherDoc(`“${COPIED_LINE} | Section title”`, true);
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: a four-backtick fence holding a three-backtick line -> the contents stay left out until the real close",
+  async () => {
+    const nested = "````md\n```\n" + COPIED_LINE + "\n````";
+    await passesAgainstOtherDoc(nested, true);
+    await passesAgainstOtherDoc(`${nested}\n\n${COPIED_LINE}`, false);
+  },
+);
+
+Deno.test(
+  "Copied text between design documents: a tilde line inside a backtick fence does not close it, and the next prose is still compared",
+  async () => {
+    await passesAgainstOtherDoc("```text\n~~~\n" + COPIED_LINE + "\n```", true);
+    await passesAgainstOtherDoc("```text\nCode.\n```\n\n" + COPIED_LINE, false);
+  },
+);
