@@ -119,8 +119,8 @@ what makes headless dispatch reliable, not the one-shot call.
 
 ## 2. Per-tier subagent prompt templates (Haiku / Sonnet / Opus)
 
-On Claude Code, dispatch these via the `Agent` tool (`model: "haiku"` / omit for session default /
-`model: "opus"`). A fresh subagent has none of this session's context, so the
+On Claude Code, dispatch these via the `Agent` tool (`model: "haiku"` or `model: "sonnet"` — never `opus`,
+and the model is never omitted). A fresh subagent has none of this session's context, so the
 prompt must be self-contained: repo path, branch, commit format, the version-bump
 rule, and an explicit report-back list. Fill in the placeholders; don't paste them
 literally.
