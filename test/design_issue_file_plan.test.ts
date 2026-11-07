@@ -3,6 +3,41 @@
 
 import { assertEquals, assertRejects, assertStringIncludes, assertThrows } from "@std/assert";
 import * as path from "@std/path";
+import { DESIGN_BODY_CASES } from "./support/design_body_cases.ts";
+
+for (const row of DESIGN_BODY_CASES) {
+  Deno.test(`file-plan one design: ${row.name}`, async () => {
+    const dir = await Deno.makeTempDir();
+    try {
+      const fixture = JSON.parse(
+        await Deno.readTextFile("test/fixtures/design-issue/fixture-plan.json"),
+      );
+      // A later child must be rejected before the epic can be filed.
+      fixture.children[1].body += `\n${row.body}`;
+      const planPath = path.join(dir, "plan.json");
+      await Deno.writeTextFile(planPath, JSON.stringify(fixture));
+      const calls: string[][] = [];
+      const execute = () =>
+        filePlan({
+          planPath,
+          dryRun: !row.refused,
+          approvalCheck: APPROVE_ALL,
+          deps: {
+            readFileText: (p) => Deno.readTextFile(p),
+            runCmd: (cmd) => {
+              calls.push(cmd);
+              throw new Error("Unexpected gh call");
+            },
+          },
+        });
+      if (row.refused) await assertRejects(execute, Error, "more than one design document");
+      else await execute();
+      assertEquals(calls, []);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+}
 import { TEST_AUTHOR, withPassingProbe } from "./authored_by_test_helpers.ts";
 import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
 import {

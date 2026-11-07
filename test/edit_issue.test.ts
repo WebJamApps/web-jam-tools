@@ -9,14 +9,60 @@ import {
 import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
 import { type Deps, findBodyFlags, run } from "../scripts/edit-issue.ts";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
+import { DESIGN_EDIT_CASES } from "./support/design_body_cases.ts";
+
+for (
+  const row of [...DESIGN_EDIT_CASES, {
+    name: "unreadable current body",
+    old: null,
+    body: "replacement",
+    refused: true,
+  }]
+) {
+  Deno.test(`edit-issue one design: ${row.name}`, async () => {
+    const calls: string[][] = [];
+    const deps: Deps = {
+      signing: { env: () => undefined },
+      readFileText: () => Promise.resolve(row.body),
+      probeScriptPath: "/fake/probe",
+      sleep: () => Promise.resolve(),
+      runCmd: (cmd) => {
+        calls.push(cmd);
+        if (cmd[0] === "/fake/probe") return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+        if (cmd[2] === "view") {
+          return Promise.resolve({
+            code: row.old === null ? 1 : 0,
+            stdout: JSON.stringify({ body: row.old }),
+            stderr: "unreadable",
+          });
+        }
+        return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      },
+    };
+    assertEquals(
+      await run([...BASE, "--author", "Claude Code — Opus", "--body-file", "/body.md"], deps),
+      row.refused ? 1 : 0,
+    );
+    assertEquals(calls.filter((cmd) => cmd[2] === "edit").length, row.refused ? 0 : 1);
+    assertEquals(calls.some((cmd) => cmd[2] === "view"), true);
+  });
+}
 
 function fakeDeps(overrides: Partial<Deps> = {}): Deps {
+  const inner = overrides.runCmd ?? (() => Promise.resolve({ code: 0, stdout: "", stderr: "" }));
   return {
     signing: { env: () => undefined },
     readFileText: () => Promise.resolve("some body text"),
-    runCmd: () => Promise.resolve({ code: 0, stdout: "", stderr: "" }),
     sleep: () => Promise.resolve(),
     ...overrides,
+    runCmd: (cmd) =>
+      cmd[0] === "gh" && cmd[2] === "view"
+        ? Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({ body: "Existing body" }),
+          stderr: "",
+        })
+        : inner(cmd),
   };
 }
 

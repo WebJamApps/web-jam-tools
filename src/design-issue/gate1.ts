@@ -3,6 +3,8 @@
 // and opens the HTML in Chrome on the active display (web-jam-tools#741).
 
 import * as path from "@std/path";
+import { designPathsInBody, isDesignDocFilename } from "../shared/design_body.ts";
+export { isDesignDocFilename } from "../shared/design_body.ts";
 import type { CommandRunner } from "../shared/repos.ts";
 import { renderDesignDoc } from "../../scripts/render_design_doc.ts";
 import { lintDesignDoc, presentingDay, stripCellDecoration, toLocalIsoDate } from "./lint_doc.ts";
@@ -462,14 +464,6 @@ export function extractTopicFromText(text: string): string {
   }
 
   return "";
-}
-
-/**
- * Checks if a filename is a candidate design document markdown file.
- * Excludes runbooks, walkthroughs, test logs, backups, and non-markdown files.
- */
-export function isDesignDocFilename(filename: string): boolean {
-  return /-design(?:-\d{4}-\d{2}-\d{2})?\.md$/i.test(filename);
 }
 
 /**
@@ -1047,15 +1041,7 @@ export async function resolveCanonicalDesignDoc(
     milestone = normalizeTopicSlug(issue.milestone?.title ?? "");
     const files = new Set<string>();
     const unreadable: string[] = [];
-    const home = expandHome("~");
-    const quotedPaths = [...issue.body.matchAll(/[`"'<]((?:~\/|\/)[^`"'<>\r\n]+\.md)[`"'>]/g)]
-      .map((match) => match[1]);
-    const unquotedPaths = [...issue.body.matchAll(/(?:~\/|\/)[^\s`<>"'|)\]]+/g)]
-      .map((match) => match[0].replace(/[.,;:!?]+$/, ""));
-    for (const raw of [...quotedPaths, ...unquotedPaths]) {
-      if (!raw.startsWith("~/") && !raw.startsWith(home + "/")) continue;
-      if (!isDesignDocFilename(path.basename(raw))) continue;
-      const expanded = path.resolve(expandHome(raw));
+    for (const expanded of designPathsInBody(issue.body)) {
       try {
         files.add(await readableDesignPath(expanded, physicalRoot));
       } catch (error) {
