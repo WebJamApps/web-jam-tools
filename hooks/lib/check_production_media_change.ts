@@ -10,7 +10,7 @@
  */
 
 import * as path from "node:path";
-import { buildFolderPattern } from "./check_private_folder_read.ts";
+import { buildFolderPattern, unreadableScriptMessage } from "./check_private_folder_read.ts";
 import {
   ASSIGN_RE,
   findHeredocMarker,
@@ -912,13 +912,11 @@ export function checkShellCommand(
         let scriptText: string;
         try {
           scriptText = Deno.readTextFileSync(resolvedScript);
-        } catch (err) {
+        } catch {
           return {
             allowed: false,
             check: 4,
-            reason: `cannot read script file '${resolvedScript}': ${
-              err instanceof Error ? err.message : String(err)
-            }`,
+            reason: unreadableScriptMessage(resolvedScript),
           };
         }
         const fileDecision = checkScriptContents(
@@ -1401,11 +1399,15 @@ export async function main(): Promise<void> {
   const decision = evaluatePayload(rawInput);
   if (!decision.allowed) {
     console.error(
-      `BLOCKED (production-media guard — check ${decision.check}): ${decision.reason}.`,
+      `BLOCKED (production-media guard — check ${decision.check}): ${decision.reason}${
+        decision.reason.endsWith(".") ? "" : "."
+      }`,
     );
-    console.error(
-      "Existing audio, video, and image files in ~/Dropbox/joshandmariamusic may not be changed, moved, or deleted, and lead-sheet documents there may not be removed or moved.",
-    );
+    if (!decision.reason.startsWith("Cannot read the script ")) {
+      console.error(
+        "Existing audio, video, and image files in ~/Dropbox/joshandmariamusic may not be changed, moved, or deleted, and lead-sheet documents there may not be removed or moved.",
+      );
+    }
     console.error("(rule: web-jam-tools#1580 — production-media guard)");
     Deno.exit(2);
   }

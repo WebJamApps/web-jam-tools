@@ -171,18 +171,44 @@ interface InspectionContext {
   folders: string[];
   variables: Map<string, string>;
   scripts: Set<string>;
+  scriptText?: boolean;
+}
+
+export function unreadableScriptMessage(filename: string): string {
+  return `Cannot read the script ${filename} yet, so it cannot be checked. Write the script in an earlier command, then run it.`;
+}
+
+class UnreadableScript extends Error {
+  constructor(filename: string) {
+    super(unreadableScriptMessage(filename));
+  }
+}
+
+function withoutWebAddresses(text: string): string {
+  return text.replace(/https?:\/\/[^\s"'`<>]+/g, "").replaceAll("file://", "");
+}
+
+function namedSocket(text: string): boolean {
+  return /\.dropbox\/(?:command_socket|iface_socket)(?=$|[\s"'`),;\/])/m.test(text);
 }
 
 /** Resolve existing ancestors too, so a new file cannot conceal a symlink traversal. */
 function expandedPath(value: string, context: InspectionContext): string {
-  const expanded = value.replace(/^~(?=\/|$)/, context.home).replace(
-    /\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g,
-    (_, name: string) => {
-      const replacement = name === "HOME" ? context.home : context.variables.get(name);
-      if (replacement === undefined) throw new Error("unresolved path variable");
-      return replacement;
-    },
-  );
+  const resolveVariables = (text: string, seen = new Set<string>()): string =>
+    text.replace(
+      /\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g,
+      (_, name: string) => {
+        if (seen.has(name)) throw new Error("cyclic path variable");
+        const replacement = name === "HOME"
+          ? context.home
+          : context.variables.has(name)
+          ? context.variables.get(name)
+          : Deno.env.get(name) || undefined;
+        if (replacement === undefined) throw new Error("unresolved path variable");
+        return resolveVariables(replacement, new Set(seen).add(name));
+      },
+    );
+  const expanded = resolveVariables(value.replace(/^~(?=\/|$)/, context.home));
   if (expanded.includes("$") || expanded.includes("`")) throw new Error("unresolved path");
   // Keep '..' until realPath has followed symlinks: normalizing it first can
   // hide an escape through an allowed-folder symlink followed by '/..'.
@@ -203,9 +229,16 @@ function resolvedPath(value: string, context: InspectionContext): string {
       continue;
     }
     const candidate = path.join(current, part);
+    if (candidate === "/proc" || candidate.startsWith("/proc/")) {
+      throw new Error("cannot resolve a /proc path");
+    }
     try {
       current = Deno.realPathSync(candidate);
     } catch (err) {
+      if (candidate === "/dev" || candidate.startsWith("/dev/")) {
+        current = candidate;
+        continue;
+      }
       if (!(err instanceof Deno.errors.NotFound)) throw err;
       try {
         // An existing dangling symlink is indeterminate, not a new output path.
@@ -216,11 +249,23 @@ function resolvedPath(value: string, context: InspectionContext): string {
       }
       current = candidate;
     }
+    if (current === "/proc" || current.startsWith("/proc/")) {
+      throw new Error("cannot resolve a /proc path");
+    }
   }
   return current;
 }
 
 function privatePath(value: string, context: InspectionContext, allowRoot = false): string | null {
+  // Unknown values inside script text are not paths we can establish. Explicit
+  // Dropbox prefixes are checked separately before any such value is skipped.
+  if (context.scriptText) {
+    try {
+      expandedPath(value, context);
+    } catch {
+      return null;
+    }
+  }
   const targets = [expandedPath(value, context), resolvedPath(value, context)];
   const roots = [path.join(context.home, "Dropbox"), "/home/joshua/Dropbox"].flatMap((root) => [
     root,
@@ -270,12 +315,18 @@ function sweepCommand(argv: string[], context: InspectionContext): boolean {
     !(["grep", "cp", "ls"].includes(name) && recursive)
   ) return false;
   const homes = [context.home, "/home/joshua"].map((home) => resolvedPath(home, context));
-  const operands = argv.slice(1).filter((arg) => !arg.startsWith("-"));
-  const implicit = (["rg", "grep"].includes(name) && operands.length <= 1) ||
+  const operands = pathOperands(argv, context);
+  const implicit = (name === "rg" && operands.length <= 1) ||
+    (name === "grep" && operands.length === 0) ||
     (["find", "du", "ls"].includes(name) && operands.length === 0);
   return (implicit && homes.includes(resolvedPath(".", context))) || operands.some((arg) => {
     if (!/^(?:~|\$|\/|\.)/.test(arg)) return false;
-    return homes.includes(resolvedPath(arg, context));
+    try {
+      return homes.includes(resolvedPath(arg, context));
+    } catch (error) {
+      if (context.scriptText) return false;
+      throw error;
+    }
   });
 }
 
@@ -286,9 +337,15 @@ function inspectScript(
   shell = false,
 ): string | null {
   if (depth > MAX_WRAPPER_RECURSION_DEPTH) throw new Error("script nesting limit");
-  const text = source.replace(/^\s*(?:#|\/\/).*$/gm, "");
+  context = { ...context, scriptText: true };
+  const text = withoutWebAddresses(source.replace(/^\s*(?:#|\/\/).*$/gm, ""));
+  if (namedSocket(text)) return "Dropbox desktop socket";
   const named = checkCommandForPrivateFolder(text, context.folders);
   if (named) return named;
+  // A visible Dropbox prefix remains protected even when the rest is dynamic.
+  for (const match of text.matchAll(/Dropbox\/([^\s/"'`;)]+)/g)) {
+    if (!ALLOWED_FOLDERS.has(match[1])) return match[1];
+  }
   for (const candidate of literalPaths(text)) {
     const denied = privatePath(candidate, context);
     if (denied) return denied;
@@ -364,16 +421,148 @@ function checkUnresolvedShellCommand(tokens: string[]): void {
   }
 }
 
+/** grep patterns are data; sed patterns may name files or unresolved values. */
+function pathOperands(argv: string[], context: InspectionContext): string[] {
+  const name = path.basename(argv[0] ?? "");
+  if (name !== "grep" && name !== "sed") return argv.slice(1).filter((arg) => !arg.startsWith("-"));
+  const operands: string[] = [];
+  let patternSeen = false;
+  let options = true;
+  for (let i = 1; i < argv.length; i++) {
+    const arg = argv[i];
+    if (options && arg === "--") {
+      options = false;
+      continue;
+    }
+    if (options && ["-f", "--file"].includes(arg)) {
+      operands.push(argv[++i] ?? "");
+      patternSeen = true;
+      continue;
+    }
+    if (options && (arg.startsWith("--file=") || /^-f./.test(arg))) {
+      operands.push(arg.startsWith("--file=") ? arg.slice(7) : arg.slice(2));
+      patternSeen = true;
+      continue;
+    }
+    let pattern: string | undefined;
+    if (options && ["-e", "--regexp", "--expression"].includes(arg)) pattern = argv[++i] ?? "";
+    else if (options && arg.startsWith("-")) continue;
+    else if (!patternSeen) pattern = arg;
+    else {
+      operands.push(arg);
+      continue;
+    }
+    patternSeen = true;
+    if (name === "sed" && !context.scriptText && /`|\$\(|\$\d|\$\{[^}]*[:/]/.test(pattern)) {
+      throw new Error("unresolved sed pattern");
+    }
+    if (name === "sed" && /\$(?:[A-Za-z_{(0-9])|`/.test(pattern)) {
+      // Only an unresolved variable is unsafe; an end-of-line regex anchor is literal.
+      try {
+        pattern = pattern.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (_, name: string) => {
+          const value = name === "HOME"
+            ? context.home
+            : context.variables.get(name) ?? Deno.env.get(name);
+          if (!value) throw new Error("unresolved sed pattern variable");
+          return value;
+        });
+      } catch (error) {
+        if (!context.scriptText) throw error;
+      }
+    }
+    // Patterns can still name a Dropbox path (including sed's r/w commands).
+    // Regex addresses beginning with '/' are not file operands.
+    operands.push(
+      ...literalPaths(pattern).filter((value) => !value.includes("$") && !/^\/\^/.test(value)),
+    );
+    if (name === "sed") {
+      for (const file of pattern.matchAll(/(?:^|[;\n0-9/])\s*[rw]\s+([^\s;]+)/g)) {
+        operands.push(file[1]);
+      }
+    }
+  }
+  return operands;
+}
+
+function inspectFile(
+  filename: string,
+  context: InspectionContext,
+  depth: number,
+  shell: boolean,
+  ownPath: boolean,
+): string | null {
+  if (context.scripts.has(filename)) throw new Error("recursive script reference");
+  let source: string;
+  try {
+    const file = Deno.openSync(filename, { read: true });
+    try {
+      const prefix = new Uint8Array(4096);
+      const size = file.readSync(prefix) ?? 0;
+      const magic = new DataView(prefix.buffer).getUint32(0, false);
+      const compiled = size >= 4 && (
+        magic === 0x7f454c46 || (prefix[0] === 0x4d && prefix[1] === 0x5a) ||
+        [0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe, 0xcafebabe].includes(magic)
+      );
+      if (ownPath && compiled) return null;
+      const stat = file.statSync();
+      if (!stat.isFile || stat.size > MAX_SCRIPT_BYTES) throw new Error("unreadable script file");
+    } finally {
+      file.close();
+    }
+    source = Deno.readTextFileSync(filename);
+  } catch {
+    throw new UnreadableScript(filename);
+  }
+  return inspectScript(
+    source,
+    { ...context, scripts: new Set(context.scripts).add(filename) },
+    depth + 1,
+    shell,
+  );
+}
+
+function inspectLiteralLoop(
+  text: string,
+  context: InspectionContext,
+  depth: number,
+): { found: boolean; denied: string | null } {
+  const loop =
+    /\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([^;\n]+)[;\n]\s*do\b([\s\S]*?)[;\n]\s*done\b/.exec(
+      text,
+    );
+  if (!loop) return { found: false, denied: null };
+  const prefix = inspectShell(text.slice(0, loop.index), context, depth + 1);
+  if (prefix) return { found: true, denied: prefix };
+  if (/[$`*?[\]]/.test(loop[2])) {
+    if (!context.scriptText) throw new Error("cannot resolve loop words");
+    const denied = inspectShell(loop[3], context, depth + 1);
+    if (denied) return { found: true, denied };
+  } else {
+    for (const word of splitShellTokens(loop[2])) {
+      const variables = new Map(context.variables).set(loop[1], word);
+      const denied = inspectShell(loop[3], { ...context, variables }, depth + 1);
+      if (denied) return { found: true, denied };
+    }
+  }
+  return {
+    found: true,
+    denied: inspectShell(text.slice(loop.index + loop[0].length), context, depth + 1),
+  };
+}
+
 function inspectShell(
   command: string,
   context: InspectionContext,
   depth: number,
 ): string | null {
   if (depth > MAX_WRAPPER_RECURSION_DEPTH) throw new Error("script/wrapper nesting limit");
-  const text = stripHeredocs(command).replace(
+  if (namedSocket(command)) return "Dropbox desktop socket";
+  const text = withoutWebAddresses(stripHeredocs(command.replace(/\\\r?\n/g, ""))).replace(
     /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
     (_, name) => `$${name}`,
   );
+  const loop = inspectLiteralLoop(text, context, depth);
+  if (loop.found) return loop.denied;
   if (splitOnOperators(text).unterminated) throw new Error("unparseable shell command");
   // Data bodies have already been stripped. Retained bodies execute as scripts.
   const lines = text.split("\n");
@@ -412,7 +601,10 @@ function inspectShell(
     // Prefix assignments populate the child's environment after shell argument
     // expansion. They cannot establish a variable used in this command's argv.
     if (assignments < tokens.length) context.variables = new Map(parentContext.variables);
-    for (const token of tokens) {
+    const patternCommand = ["grep", "sed"].includes(path.basename(tokens[assignments] ?? ""));
+    for (
+      const token of patternCommand ? pathOperands(tokens.slice(assignments), context) : tokens
+    ) {
       for (const candidate of literalPaths(token)) {
         const denied = privatePath(candidate, context);
         if (denied) return denied;
@@ -427,7 +619,7 @@ function inspectShell(
     while (invocation.length && (ASSIGN_RE.test(invocation[0]) || invocation[0] === "exec")) {
       invocation.shift();
     }
-    checkUnresolvedShellCommand(invocation);
+    if (!context.scriptText) checkUnresolvedShellCommand(invocation);
     const resolved = resolveThroughWrappers(invocation);
     if (resolved.kind === "cap-exceeded") throw new Error("wrapper nesting limit");
     if (resolved.kind === "nested") {
@@ -448,29 +640,46 @@ function inspectShell(
         (shell && /^-[a-z]*c[a-z]*$/.test(arg)) || (name === "deno" && arg === "eval")
       );
       if (inline >= 0 && argv[inline + 1]) {
-        const denied = inspectScript(argv[inline + 1], { ...context }, depth + 1, shell);
+        const denied = shell
+          ? inspectShell(argv[inline + 1], { ...context }, depth + 1)
+          : inspectScript(argv[inline + 1], { ...context }, depth + 1);
         if (denied) return denied;
         context = parentContext;
         continue;
       }
     }
-    if (name === "pushd" || name === "popd") {
+    if (!context.scriptText && (name === "pushd" || name === "popd")) {
       throw new Error("cannot resolve shell directory stack");
     }
-    if (name === "builtin" || name === "eval" || name === "source" || name === ".") {
+    if (
+      !context.scriptText &&
+      (name === "builtin" || name === "eval" || name === "source" || name === ".")
+    ) {
       throw new Error(`cannot resolve ${name} execution`);
     }
     if (name === "cd") {
       const destinations = argv.slice(1);
       if (destinations[0] === "--") destinations.shift();
       const destination = destinations[0] ?? context.home;
+      if (context.scriptText) {
+        try {
+          expandedPath(destination, context);
+        } catch {
+          continue;
+        }
+      }
       if (
         destinations.length > 1 || destination.startsWith("-") ||
         /^~(?!\/|$)/.test(destination) || /[*?[\]{}]/.test(expandedPath(destination, context))
       ) {
         throw new Error("cannot resolve cd target");
       }
-      parentContext.cwd = resolvedPath(destination, context);
+      try {
+        parentContext.cwd = resolvedPath(destination, context);
+      } catch (error) {
+        if (context.scriptText) continue;
+        throw error;
+      }
       context = parentContext;
       continue;
     }
@@ -479,7 +688,7 @@ function inspectShell(
       ["ls", "rg", "find", "du", "cat", "head", "tail", "grep", "sed", "cp", "rsync", "tar"]
         .includes(name)
     ) {
-      for (const arg of argv.slice(1).filter((word) => !word.startsWith("-"))) {
+      for (const arg of pathOperands(argv, context)) {
         const denied = privatePath(arg, context);
         if (denied) return denied;
       }
@@ -488,21 +697,26 @@ function inspectShell(
         if (denied) return denied;
       }
     }
-    const file = scriptArgument(argv);
+    const ownPath = !INTERPRETERS.has(name) && (argv[0] ?? "").includes("/") &&
+      (!context.scriptText || !/[()"'`;&|]/.test(argv[0]));
+    const file = scriptArgument(argv) ?? (ownPath ? argv[0] : undefined);
     if (file !== undefined) {
       if (path.basename(file) === "dropbox") return "Dropbox desktop command";
       const privateScript = privatePath(file, context);
       if (privateScript) return privateScript;
-      const filename = resolvedPath(file, context);
-      if (context.scripts.has(filename)) throw new Error("recursive script reference");
-      const stat = Deno.statSync(filename);
-      if (!stat.isFile || stat.size > MAX_SCRIPT_BYTES) throw new Error("unreadable script file");
-      const scripts = new Set(context.scripts).add(filename);
-      const denied = inspectScript(
-        Deno.readTextFileSync(filename),
-        { ...context, scripts },
-        depth + 1,
-        name === "bash" || name === "sh",
+      let filename: string;
+      try {
+        filename = resolvedPath(file, context);
+      } catch (error) {
+        if (context.scriptText) continue;
+        throw error;
+      }
+      const denied = inspectFile(
+        filename,
+        context,
+        depth,
+        ownPath || name === "bash" || name === "sh",
+        ownPath,
       );
       if (denied) return denied;
     }
@@ -523,7 +737,8 @@ export function checkPrivateFolderCommand(
       { cwd, home, folders, variables: new Map(), scripts: new Set() },
       0,
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof UnreadableScript) return error.message;
     return "cannot resolve command paths or inspect script — refusing";
   }
 }
@@ -625,6 +840,10 @@ export async function main(): Promise<void> {
 
   const matchedFolder = checkPrivateFolderCommand(command, folderResult.folders, cwd);
   if (matchedFolder) {
+    if (matchedFolder.startsWith("Cannot read the script ")) {
+      console.error(`BLOCKED (private-folder read guard): ${matchedFolder}`);
+      Deno.exit(2);
+    }
     console.error(
       `BLOCKED (private-folder read guard): protected Dropbox location or operation '${matchedFolder}'.`,
     );
