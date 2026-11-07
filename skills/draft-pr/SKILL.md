@@ -65,11 +65,28 @@ deno task --config ~/WebJamApps/web-jam-tools/deno.json push --repo-dir "$PWD"
 ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
   --author "Claude Code — Opus 4.8" \
   --summary "What changed and why, in 2–4 sentences." \
-  --test-plan "Exact commands to run + expected result." \
-  --screenshots "Only for UI-visible changes; omit the flag otherwise." \
-  --local-step # include if the issue needs a local step after merge (emits Part of #N (local step after merge))
-  --part-of   # include ONLY if the issue must stay open (partial PR / run-log / epic)
+  --test-plan "Exact commands to run + expected result."
 ```
+
+If the issue has post-merge local installer or laptop steps (e.g. running an installer, confirming local configuration), add `--local-step`:
+```sh
+~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
+  --author "Claude Code — Opus 4.8" \
+  --summary "What changed and why, in 2–4 sentences." \
+  --test-plan "Exact commands to run + expected result." \
+  --local-step
+```
+
+If the PR delivers only part of the issue's work or for a standing run-log/epic where the issue must stay open, add `--part-of`:
+```sh
+~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
+  --author "Claude Code — Opus 4.8" \
+  --summary "What changed and why, in 2–4 sentences." \
+  --test-plan "Exact commands to run + expected result." \
+  --part-of
+```
+
+For UI-visible changes, pass `--screenshots "..."` (omit the flag otherwise).
 
 - `--author` is **required** and must name a model on the script's roster
   (web-jam-tools#190) — off-roster names (e.g. a confabulated checkpoint) are
@@ -230,4 +247,4 @@ gate complains.
 
 ## Description Detail & Triggers
 
-Open a pull request the WebJamApps way — always draft, always based on dev, closing the issue on merge (Closes #N by default; Part of #N with --part-of for partial PRs, standing run-log/epic issues, and hook issues that must be confirmed firing before closing). Use this to finish ANY coding task in a WebJamApps repo across Claude Code, agy, or Codex instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you've completed a coding task on a feature branch.
+Open a pull request the WebJamApps way — always draft, always based on dev, closing the issue on merge (`Closes #N` by default; `Part of #N (local step after merge)` with `--local-step` for post-merge local installer or laptop steps; `Part of #N` with `--part-of` for partial PRs or standing run-log/epic issues). Use this to finish ANY coding task in a WebJamApps repo across Claude Code, agy, or Codex instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you've completed a coding task on a feature branch.

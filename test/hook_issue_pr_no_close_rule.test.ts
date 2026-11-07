@@ -3,7 +3,7 @@
 // Asserts that docs/cross-ai-rules.md and skills/draft-pr/SKILL.md point to the canonical
 // design document for hook issue PR closing behavior and local-step requirements.
 
-import { assert, assertStringIncludes } from "@std/assert";
+import { assert, assertFalse, assertStringIncludes } from "@std/assert";
 
 const CROSS_AI_RULES_PATH = new URL("../docs/cross-ai-rules.md", import.meta.url).pathname;
 const DRAFT_PR_SKILL_PATH = new URL("../skills/draft-pr/SKILL.md", import.meta.url).pathname;
@@ -49,4 +49,20 @@ Deno.test("skills/draft-pr/SKILL.md defines issue line cases and --local-step", 
   assertStringIncludes(rawContent, "--local-step");
   assertStringIncludes(normalized, "Part of #N (local step after merge)");
   assertStringIncludes(normalized, "Manual Steps & Runbooks");
+});
+
+Deno.test("skills/draft-pr/SKILL.md does not contain the retired unconditional hook carve-out", async () => {
+  const rawContent = await Deno.readTextFile(DRAFT_PR_SKILL_PATH);
+  assertFalse(
+    rawContent.includes("hook issues that must be confirmed firing before closing"),
+    "skills/draft-pr/SKILL.md still contains retired unconditional hook carve-out",
+  );
+  assertFalse(
+    rawContent.includes("hook PRs never close on merge"),
+    "skills/draft-pr/SKILL.md still contains retired hook PRs never close on merge",
+  );
+  assertFalse(
+    rawContent.includes("hook issue that must remain open until installed and confirmed firing"),
+    "skills/draft-pr/SKILL.md still contains retired hook issue must remain open instruction",
+  );
 });
