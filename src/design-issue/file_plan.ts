@@ -438,9 +438,18 @@ export async function filePlan(
   // Validate every body, including epics and manual steps, before any issue is filed.
   for (const { item } of allItems) {
     const bodyPath = item.bodyFile || item.body_file || item.bodyPath;
-    const body = bodyPath
-      ? await deps.readFileText(path.resolve(expandHome(bodyPath)))
-      : item.body ?? "";
+    let body = item.body ?? "";
+    if (bodyPath) {
+      try {
+        body = await deps.readFileText(path.resolve(expandHome(bodyPath)));
+      } catch (err) {
+        throw new Error(
+          `Refused to file plan — cannot read body file "${bodyPath}" for issue "${item.title}": ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
     await checkDesignBody(body);
   }
 

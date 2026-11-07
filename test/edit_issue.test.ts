@@ -21,30 +21,53 @@ for (
 ) {
   Deno.test(`edit-issue one design: ${row.name}`, async () => {
     const calls: string[][] = [];
-    const deps: Deps = {
-      signing: { env: () => undefined },
-      readFileText: () => Promise.resolve(row.body),
-      probeScriptPath: "/fake/probe",
-      sleep: () => Promise.resolve(),
-      runCmd: (cmd) => {
-        calls.push(cmd);
-        if (cmd[0] === "/fake/probe") return Promise.resolve({ code: 0, stdout: "", stderr: "" });
-        if (cmd[2] === "view") {
-          return Promise.resolve({
-            code: row.old === null ? 1 : 0,
-            stdout: JSON.stringify({ body: row.old }),
-            stderr: "unreadable",
-          });
+    const errors: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args.map(String).join(" "));
+    try {
+      const deps: Deps = {
+        signing: { env: () => undefined },
+        readFileText: () => Promise.resolve(row.body),
+        probeScriptPath: "/fake/probe",
+        sleep: () => Promise.resolve(),
+        runCmd: (cmd) => {
+          calls.push(cmd);
+          if (cmd[0] === "/fake/probe") return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+          if (cmd[2] === "view") {
+            return Promise.resolve({
+              code: row.old === null ? 1 : 0,
+              stdout: JSON.stringify({ body: row.old }),
+              stderr: "unreadable",
+            });
+          }
+          return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+        },
+      };
+      assertEquals(
+        await run([...BASE, "--author", "Claude Code — Opus", "--body-file", "/body.md"], deps),
+        row.refused ? 1 : 0,
+      );
+      assertEquals(calls.filter((cmd) => cmd[2] === "edit").length, row.refused ? 0 : 1);
+      assertEquals(calls.some((cmd) => cmd[2] === "view"), true);
+
+      if (row.refused) {
+        const errorText = errors.join("\n");
+        if (row.name === "unreadable current body") {
+          assertStringIncludes(errorText, "could not read the current issue body");
+        } else if (row.name === "two to three") {
+          assertStringIncludes(errorText, "more than one design document");
+          assertStringIncludes(errorText, "promote-gigs-design");
+          assertStringIncludes(errorText, "nodejs-deno-upgrades-design");
+          assertStringIncludes(errorText, "hooks-design");
+        } else if (row.name === "one to two") {
+          assertStringIncludes(errorText, "more than one design document");
+          assertStringIncludes(errorText, "promote-gigs-design");
+          assertStringIncludes(errorText, "nodejs-deno-upgrades-design");
         }
-        return Promise.resolve({ code: 0, stdout: "", stderr: "" });
-      },
-    };
-    assertEquals(
-      await run([...BASE, "--author", "Claude Code — Opus", "--body-file", "/body.md"], deps),
-      row.refused ? 1 : 0,
-    );
-    assertEquals(calls.filter((cmd) => cmd[2] === "edit").length, row.refused ? 0 : 1);
-    assertEquals(calls.some((cmd) => cmd[2] === "view"), true);
+      }
+    } finally {
+      console.error = origError;
+    }
   });
 }
 
