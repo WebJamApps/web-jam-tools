@@ -15,17 +15,15 @@ the full invocation under "How to run it" — `--summary` and `--test-plan` are
 **required**; `--test-evidence` is optional and normally omitted).
 
 It **always** produces a draft PR based on `dev` (or another branch with `--base`) and an attribution footer — the
-draft state and footer cannot be overridden. By default the PR **closes the issue on merge** (`Closes #N`); pass
-`--part-of` only when the issue must stay open (a partial PR, a standing run-log/epic
-issue like a venue-mining run log, or a hook issue that must remain open until installed
-and confirmed firing — see `docs/cross-ai-rules.md`). Use `--base <parent-branch>` for stacked PRs where the
+draft state and footer cannot be overridden. The PR writes the issue line according to the case table in
+"How a pull request names its issue" (`Closes #N`, `Part of #N (local step after merge)`, `Part of #N`, an Epic child's `Closes #N` with `Part of #<Epic>`, or no line), and sets the issue's Workflow Status to `In review` when opened. Use `--base <parent-branch>` for stacked PRs where the
 head branch is based on another PR's branch instead of dev.
 
-Post-merge manual steps are governed by the POST-MERGE MANUAL STEPS rule in
-`docs/cross-ai-rules.md` — read it there rather than relying on a summary here.
-In short: the step becomes its own `Josh` issue, so the agent's PR closes its own
-issue normally, and `--no-close` is reserved for a criterion that genuinely cannot
-be split out.
+Post-merge manual steps are governed by the "Manual Steps & Runbooks" section of the canonical design
+document at `/home/joshua/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md`.
+A `Josh` issue and a runbook are for repeatable operations setup and extensive manual testing; a simple or
+one-time local step after merge is acceptance criteria on the agent's issue, passing `--local-step` so the PR
+names it `Part of #N (local step after merge)` and sets Workflow Status to `Merged, needs local step` on merge.
 
 It **refuses to open a PR with an empty or placeholder description** (web-jam-tools#77).
 Josh alone reviews and flips draft → ready on GitHub.
@@ -67,10 +65,28 @@ deno task --config ~/WebJamApps/web-jam-tools/deno.json push --repo-dir "$PWD"
 ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
   --author "Claude Code — Opus 4.8" \
   --summary "What changed and why, in 2–4 sentences." \
-  --test-plan "Exact commands to run + expected result." \
-  --screenshots "Only for UI-visible changes; omit the flag otherwise." \
-  --part-of   # include ONLY if the issue must stay open (partial PR / run-log / epic)
+  --test-plan "Exact commands to run + expected result."
 ```
+
+If the issue has post-merge local installer or laptop steps (e.g. running an installer, confirming local configuration), add `--local-step`:
+```sh
+~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
+  --author "Claude Code — Opus 4.8" \
+  --summary "What changed and why, in 2–4 sentences." \
+  --test-plan "Exact commands to run + expected result." \
+  --local-step
+```
+
+If the PR delivers only part of the issue's work or for a standing run-log/epic where the issue must stay open, add `--part-of`:
+```sh
+~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
+  --author "Claude Code — Opus 4.8" \
+  --summary "What changed and why, in 2–4 sentences." \
+  --test-plan "Exact commands to run + expected result." \
+  --part-of
+```
+
+For UI-visible changes, pass `--screenshots "..."` (omit the flag otherwise).
 
 - `--author` is **required** and must name a model on the script's roster
   (web-jam-tools#190) — off-roster names (e.g. a confabulated checkpoint) are
@@ -99,14 +115,16 @@ deno task --config ~/WebJamApps/web-jam-tools/deno.json push --repo-dir "$PWD"
   an issue number from the branch name (`<lane>/<issue#>-<slug>`) first, then from
   `--issue N`. If neither yields a number, the PR simply opens with no `Closes` line
   and takes its title from the last commit subject. That is a supported, normal PR.
-  An issue becomes **mandatory only** when you pass `--part-of` or `--no-close`,
-  because both flags write a line naming an issue (`Part of #N`, `Refs #N`) and
+  An issue becomes **mandatory only** when you pass `--part-of`, `--local-step`, or `--no-close`,
+  because both flags write a line naming an issue (`Part of #N`, `Part of #N (local step after merge)`, `Refs #N`) and
   cannot be written without one.
-- Closing is the default: the body reads `Closes #N`, so the issue auto-closes when
-  Josh merges the PR into dev. Pass `--part-of` (body reads `Part of #N`) when the issue
-  must stay open: a partial PR, a standing run-log/epic issue, or a hook issue (hook PRs
-  never close on merge because the hook must be installed and confirmed firing first —
-  see `docs/cross-ai-rules.md`). **Issues labeled `Josh` are manual human steps / verification runs and must never be auto-closed by an agent PR (`create-draft-pr.sh` refuses `Closes #N` on `Josh`-labeled issues and requires `--part-of` or `--no-close`, web-jam-tools#848; the label inspection fails closed if `gh` queries fail).** Pass `--no-close` (and optional `--no-close-reason` /
+- **How a pull request names its issue:** The script writes the issue line for the case the issue is in:
+  - **Done once `dev` is pulled:** `Closes #N` (the default). The issue auto-closes when merged.
+  - **Needs a local step:** `Part of #N (local step after merge)`. Pass `--local-step` when the issue has post-merge local installer or laptop steps Josh runs before closing the issue by hand.
+  - **Has more coding work:** `Part of #N`. Pass `--part-of` when the PR delivers only part of the issue's code work or for a standing run-log/epic.
+  - **An Epic's child:** `Closes #N` for the child it finishes, with `Part of #<Epic>` for the parent Epic (automatically resolved from GitHub parent links).
+  - **No issue:** No issue line (dependency updates, cleanup cuts).
+  **Issues labeled `Josh` are manual human steps / verification runs and must never be auto-closed by an agent PR (`create-draft-pr.sh` refuses `Closes #N` on `Josh`-labeled issues and requires `--part-of`, `--local-step`, or `--no-close`, web-jam-tools#848; the label inspection fails closed if `gh` queries fail).** Pass `--no-close` (and optional `--no-close-reason` /
   `--no-close-reason-file`) when the PR must not close the issue on merge per the rule
   in `docs/cross-ai-rules.md`. (`--closes` is a deprecated no-op, still accepted.)
 - `--screenshots` is for UI-visible changes only; omit the flag to omit the section.
@@ -229,4 +247,4 @@ gate complains.
 
 ## Description Detail & Triggers
 
-Open a pull request the WebJamApps way — always draft, always based on dev, closing the issue on merge (Closes #N by default; Part of #N with --part-of for partial PRs, standing run-log/epic issues, and hook issues that must be confirmed firing before closing). Use this to finish ANY coding task in a WebJamApps repo across Claude Code, agy, or Codex instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you've completed a coding task on a feature branch.
+Open a pull request the WebJamApps way — always draft, always based on dev, closing the issue on merge (`Closes #N` by default; `Part of #N (local step after merge)` with `--local-step` for post-merge local installer or laptop steps; `Part of #N` with `--part-of` for partial PRs or standing run-log/epic issues). Use this to finish ANY coding task in a WebJamApps repo across Claude Code, agy, or Codex instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you've completed a coding task on a feature branch.

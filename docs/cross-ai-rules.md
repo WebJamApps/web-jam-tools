@@ -167,13 +167,13 @@ skill.
   multiple repositories (e.g. "all 8 active github repos"), no single PR in one repository may pass
   `--closes` or claim the issue is completed. PRs in individual repos must use `--part-of` so the
   tracking issue remains OPEN until the final repository's PR is merged.
-- **POST-MERGE MANUAL STEPS BECOME THEIR OWN `Josh` ISSUE:** A manual step Josh must perform — an
-  installer run, a session restart, a scheduled/cron cycle, a prod deploy, a third-party dashboard
-  change — never lives inside an agent's execution issue. It is filed as its own `Josh`-labeled
-  issue, paired with the agent's issue and natively blocked on it (via native GitHub `blocked_by`
-  dependency, without the `Blocked` label). The agent's PR then closes the agent's issue normally with `Closes #N`, because that
-  issue no longer contains anything the agent could not do from a branch. The pairing rules live in
-  the `/design-issue` skill, which owns how those two issues are written.
+- **POST-MERGE MANUAL STEPS BECOME THEIR OWN `Josh` ISSUE:** Replaced by the canonical design
+  document `/home/joshua/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md`
+  (revision 2.14.0) in the sections "Manual Steps & Runbooks" and "How a pull request names its issue".
+  A `Josh` issue and a runbook are for repeatable operations setup and extensive manual testing;
+  a simple or one-time local step after a merge is acceptance criteria on the agent's own issue
+  with a PR issue line `Part of #N (local step after merge)` (`--local-step`), and its Workflow Status
+  reads `Merged, needs local step` from the merge.
   - **Designed Issues with Paired Manual Steps Become Parent Epics:** When `/design-issue` resolves an
     existing issue into paired implementation and Josh manual verification tasks, convert the target
     designed issue into native type `Epic` (via GraphQL `updateIssue` with the repo's `Epic`
@@ -239,15 +239,12 @@ skill.
      letting the guard be mistaken for complete coverage. An inert guard believed to be live is
      worse than a known gap.**
 
-- **A PR FOR A HOOK ISSUE NEVER CLOSES THE ISSUE.** When an issue adds or changes a hook — a git
-  hook, a Claude Code hook, any hook installed onto a machine — the PR body carries no closing
-  keyword (`Closes`, `Fixes`, `Resolves`) for it. Use `Part of <repo>#<number>` instead. After the
-  PR merges, the hook is installed and confirmed to actually fire, and only then is the issue closed
-  by hand.
-
-  Josh, 2026-08-19: _"whenever we create an issue involving hooks, the PR should never close on
-  merge, it should always remain open so we can install the hook and/or confirm the hook is working,
-  then the issue gets closed manually"_.
+- **A PR FOR A HOOK ISSUE NEVER CLOSES THE ISSUE.** Replaced by the canonical design document
+  `/home/joshua/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md`
+  (revision 2.14.0) in the sections "Manual Steps & Runbooks" and "How a pull request names its issue".
+  Hooks, skills and scripts are links into the canonical clone and close on merge once dev is pulled,
+  unless an installer write or laptop step is required, in which case the PR passes `--local-step`
+  (`Part of #N (local step after merge)`).
 
 ## FE/BE COUPLING (web-jam-tools#240 "dispatching to sub-agents  -  part two improvements")
 

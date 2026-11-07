@@ -11,14 +11,16 @@
 #   * the PR is ALWAYS based on a branch (defaulting to `dev` when --base is omitted);
 #   * the body ALWAYS ends with an attribution footer naming the tool + model.
 # When an issue is resolved (from the branch name or --issue), the PR CLOSES it on
-# merge (`Closes #N`); pass --part-of for a partial PR or a standing run-log/epic
-# issue that must stay open (`Part of #N`). An issue is OPTIONAL: with none, the PR
-# simply has no issue reference — do NOT create an issue just to satisfy this
-# script (Josh, 2026-07-03: issue-per-PR is bureaucracy for small standalone fixes).
+# merge (`Closes #N`), or for an Epic child closes the child with Part of for the Epic
+# (`Closes #N` + `Part of #<Epic>`); pass --local-step for an issue needing a local step
+# after merge (`Part of #N (local step after merge)`); pass --part-of for a partial PR
+# or standing run-log/epic issue that must stay open (`Part of #N`). An issue is OPTIONAL:
+# with none, the PR simply has no issue reference — do NOT create an issue just to satisfy
+# this script (Josh, 2026-07-03: issue-per-PR is bureaucracy for small standalone fixes).
 # Josh alone reviews and flips draft -> ready on GitHub.
 #
 # Usage:
-#   create-draft-pr.sh --author "<tool> — <model>" [--base BRANCH] [--issue N] [--title TEXT] [--part-of] [--no-close] [--dry-run] \
+#   create-draft-pr.sh --author "<tool> — <model>" [--base BRANCH] [--issue N] [--title TEXT] [--local-step] [--part-of] [--no-close] [--dry-run] \
 #       [--update] \
 #       [--no-close-reason TEXT | --no-close-reason-file PATH] \
 #       [--summary TEXT | --summary-file PATH] \
@@ -49,6 +51,10 @@
 #   --no-close-reason TEXT / --no-close-reason-file PATH  Stated reason why the PR does not
 #                   close the issue on merge. If omitted with --no-close, defaults to
 #                   pointing at post-merge acceptance criteria verification.
+#   --local-step    Opt-in flag: issue needs a local step after merge
+#                   (emits `Part of #N (local step after merge)`).
+#                   Use when an issue has post-merge local setup/installer
+#                   steps that Josh runs on the machine before closing the issue by hand.
 #   --part-of       Opt-in flag: DON'T close the issue on merge (emits `Part of #N`).
 #                   Use only for a partial PR or a standing run-log/epic issue.
 #   --closes        Deprecated no-op (closing is now the default); still accepted.
@@ -251,6 +257,7 @@ HAS_TEST_EVIDENCE=0
 SUMMARY_FILE=""
 TEST_PLAN_FILE=""
 TEST_EVIDENCE_FILE=""
+LOCAL_STEP=0
 PART_OF=0
 NO_CLOSE=0
 NO_CLOSE_REASON=""
@@ -261,6 +268,9 @@ UPDATE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --local-step)
+      LOCAL_STEP=1
+      shift 1 ;;
     --part-of)
       PART_OF=1
       shift 1 ;;
@@ -389,6 +399,14 @@ if [ "$NO_CLOSE" -eq 1 ] && [ "$PART_OF" -eq 1 ]; then
   echo "ERROR: pass --no-close or --part-of, not both." >&2
   exit 1
 fi
+if [ "$LOCAL_STEP" -eq 1 ] && [ "$PART_OF" -eq 1 ]; then
+  echo "ERROR: pass --part-of or --local-step, not both." >&2
+  exit 1
+fi
+if [ "$LOCAL_STEP" -eq 1 ] && [ "$NO_CLOSE" -eq 1 ]; then
+  echo "ERROR: pass --no-close or --local-step, not both." >&2
+  exit 1
+fi
 if [ "$NO_CLOSE" -eq 0 ] && { [ "$HAS_NO_CLOSE_REASON" -eq 1 ] || [ -n "$NO_CLOSE_REASON_FILE" ]; }; then
   echo "ERROR: --no-close-reason / --no-close-reason-file requires --no-close." >&2
   exit 1
@@ -401,6 +419,10 @@ FORMATTED_ISSUE=""
 if [ -z "$ISSUE" ]; then
   if [ "$PART_OF" -eq 1 ]; then
     echo "ERROR: --part-of needs an issue — name the branch <lane>/<issue#>-<slug> or pass --issue N." >&2
+    exit 1
+  fi
+  if [ "$LOCAL_STEP" -eq 1 ]; then
+    echo "ERROR: --local-step needs an issue — name the branch <lane>/<issue#>-<slug> or pass --issue N." >&2
     exit 1
   fi
   if [ "$NO_CLOSE" -eq 1 ]; then
@@ -487,10 +509,43 @@ else
       break
     fi
   done
-  if [ "$HAS_JOSH_LABEL" -eq 1 ] && [ "$PART_OF" -ne 1 ] && [ "$NO_CLOSE" -ne 1 ]; then
+  if [ "$HAS_JOSH_LABEL" -eq 1 ] && [ "$PART_OF" -ne 1 ] && [ "$NO_CLOSE" -ne 1 ] && [ "$LOCAL_STEP" -ne 1 ]; then
     echo "ERROR: issue $FORMATTED_ISSUE carries the 'Josh' label (manual human task) and cannot be closed by an agent PR (web-jam-tools#848)." >&2
     echo "       Pass --part-of to link your work as a contribution without auto-closing the issue." >&2
     exit 1
+  fi
+
+  # --- query parent Epic if this issue is closing ---
+  PARENT_EPIC_REF=""
+  if [ "$LOCAL_STEP" -eq 0 ] && [ "$PART_OF" -eq 0 ] && [ "$NO_CLOSE" -eq 0 ]; then
+    PARENT_REPO_ARG="${TARGET_OWNER_REPO:-$CURRENT_REPO}"
+    if [ -n "$PARENT_REPO_ARG" ]; then
+      PARENT_ERR=$(mktemp)
+      if PARENT_LINE="$(gh api "repos/$PARENT_REPO_ARG/issues/$ISSUE_NUM/parent" --jq '[.number // "", .repository.full_name // ""] | @tsv' 2>"$PARENT_ERR")"; then
+        rm -f "$PARENT_ERR"
+        IFS=$'\t' read -r PARENT_NUM PARENT_REPO <<< "$PARENT_LINE"
+        if [[ "$PARENT_NUM" =~ ^[0-9]+$ ]]; then
+          PARENT_REPO_LOWER="$(printf '%s' "$PARENT_REPO" | tr '[:upper:]' '[:lower:]')"
+          if [ -n "$PARENT_REPO" ] && [ -n "$CURRENT_LOWER" ] && [ "$PARENT_REPO_LOWER" != "$CURRENT_LOWER" ]; then
+            PARENT_EPIC_REF="$PARENT_REPO#$PARENT_NUM"
+          else
+            PARENT_EPIC_REF="#$PARENT_NUM"
+          fi
+        else
+          echo "ERROR: malformed parent issue response for $FORMATTED_ISSUE (number not found): $PARENT_LINE" >&2
+          exit 1
+        fi
+      else
+        PARENT_FETCH_ERR=$(cat "$PARENT_ERR")
+        rm -f "$PARENT_ERR"
+        if [[ "$PARENT_FETCH_ERR" == *"No parent issue found"* ]] || [[ "$PARENT_FETCH_ERR" == *"(HTTP 404)"* ]] || [[ "$PARENT_FETCH_ERR" =~ HTTP/[0-9.]+[[:space:]]+404 ]]; then
+          PARENT_EPIC_REF=""
+        else
+          echo "ERROR: could not lookup parent issue for $FORMATTED_ISSUE (via gh): $PARENT_FETCH_ERR" >&2
+          exit 1
+        fi
+      fi
+    fi
   fi
 
   if [ -n "$TITLE" ]; then
@@ -742,8 +797,13 @@ if [ -z "$ISSUE" ]; then
 elif [ "$NO_CLOSE" -eq 1 ]; then
   REASON="${NO_CLOSE_REASON:-post-merge acceptance criteria must be verified after merge.}"
   ISSUE_REF="Refs $FORMATTED_ISSUE — $REASON"
+elif [ "$LOCAL_STEP" -eq 1 ]; then
+  ISSUE_REF="Part of $FORMATTED_ISSUE (local step after merge)"
 elif [ "$PART_OF" -eq 1 ]; then
   ISSUE_REF="Part of $FORMATTED_ISSUE"
+elif [ -n "$PARENT_EPIC_REF" ]; then
+  ISSUE_REF="Closes $FORMATTED_ISSUE
+Part of $PARENT_EPIC_REF"
 else
   ISSUE_REF="Closes $FORMATTED_ISSUE"
 fi
@@ -795,6 +855,48 @@ EOF
   exit 0
 fi
 
+# --- Status field management (web-jam-tools#1614) ---
+WORKFLOW_STATUS_FIELD_NODE_ID="IFSS_kgDOAvCHiQ"
+WORKFLOW_STATUS_IN_REVIEW_OPTION_NODE_ID="IFSSO_kgDOBSWASw"
+
+set_issue_status_in_review() {
+  local repo_arg="$1" issue_num="$2" formatted="$3"
+  echo "Setting Workflow Status to 'In review' for issue $formatted..."
+  local node_id
+  node_id="$(gh api "repos/$repo_arg/issues/$issue_num" --jq .node_id 2>/dev/null || true)"
+  if [ -z "$node_id" ] || [ "$node_id" = "null" ]; then
+    echo "ERROR: could not resolve issue node_id for $formatted." >&2
+    exit 1
+  fi
+
+  if ! gh api graphql \
+    -F issueId="$node_id" \
+    -F fieldId="$WORKFLOW_STATUS_FIELD_NODE_ID" \
+    -F optionId="$WORKFLOW_STATUS_IN_REVIEW_OPTION_NODE_ID" \
+    -f query='mutation($issueId: ID!, $fieldId: ID!, $optionId: ID!) {
+      updateIssueFieldValue(input: {
+        issueId: $issueId,
+        issueField: {
+          fieldId: $fieldId,
+          singleSelectOptionId: $optionId
+        }
+      }) {
+        clientMutationId
+      }
+    }' >/dev/null 2>&1; then
+    echo "ERROR: GraphQL mutation failed to set Workflow Status on $formatted." >&2
+    exit 1
+  fi
+
+  local readback
+  readback="$(gh api "repos/$repo_arg/issues/$issue_num" --jq '.issue_field_values[]? | select(.issue_field_id == 49317769 or .issue_field_name == "Workflow Status" or .issue_field_name == "Status") | .single_select_option.name' 2>/dev/null || true)"
+  if [ "$readback" != "In review" ]; then
+    echo "ERROR: Workflow Status write unverified on $formatted: expected 'In review', read-back got '${readback:-none}'." >&2
+    exit 1
+  fi
+  echo "  Workflow Status: In review (read-back verified)"
+}
+
 # --- push, then either open a new draft PR or update the existing one (web-jam-tools#236) ---
 echo "Pushing branch '$BRANCH' to origin..."
 git push -u origin HEAD
@@ -805,6 +907,10 @@ if [ "$UPDATE" -eq 1 ]; then
     echo "ERROR: --update passed but branch '$BRANCH' has no existing PR (via gh pr view)." >&2
     echo "       Open one first (omit --update) — --update only edits an existing PR's body." >&2
     exit 1
+  fi
+
+  if [ -n "$ISSUE" ]; then
+    set_issue_status_in_review "${TARGET_OWNER_REPO:-$CURRENT_REPO}" "$ISSUE_NUM" "$FORMATTED_ISSUE"
   fi
 
   echo "Updating draft PR #$PR_NUMBER body..."
@@ -822,13 +928,21 @@ if [ "$UPDATE" -eq 1 ]; then
     echo "  base: $PR_BASE | state: draft | no issue | by: $AUTHOR"
   elif [ "$NO_CLOSE" -eq 1 ]; then
     echo "  base: $PR_BASE | state: draft | refs: $FORMATTED_ISSUE | by: $AUTHOR"
+  elif [ "$LOCAL_STEP" -eq 1 ]; then
+    echo "  base: $PR_BASE | state: draft | part of (local step): $FORMATTED_ISSUE | by: $AUTHOR"
   elif [ "$PART_OF" -eq 1 ]; then
     echo "  base: $PR_BASE | state: draft | part of: $FORMATTED_ISSUE | by: $AUTHOR"
+  elif [ -n "$PARENT_EPIC_REF" ]; then
+    echo "  base: $PR_BASE | state: draft | closes: $FORMATTED_ISSUE (part of $PARENT_EPIC_REF) | by: $AUTHOR"
   else
     echo "  base: $PR_BASE | state: draft | closes: $FORMATTED_ISSUE | by: $AUTHOR"
   fi
   echo "Josh reviews the diff and flips draft -> ready on GitHub."
 else
+  if [ -n "$ISSUE" ]; then
+    set_issue_status_in_review "${TARGET_OWNER_REPO:-$CURRENT_REPO}" "$ISSUE_NUM" "$FORMATTED_ISSUE"
+  fi
+
   echo "Opening draft PR (base $BASE)${ISSUE:+ for issue #$ISSUE}..."
   PR_URL="$(gh pr create --draft --base "$BASE" --title "$PR_TITLE" --body "$BODY")"
 
@@ -838,8 +952,12 @@ else
     echo "  base: $BASE | state: draft | no issue | by: $AUTHOR"
   elif [ "$NO_CLOSE" -eq 1 ]; then
     echo "  base: $BASE | state: draft | refs: $FORMATTED_ISSUE | by: $AUTHOR"
+  elif [ "$LOCAL_STEP" -eq 1 ]; then
+    echo "  base: $BASE | state: draft | part of (local step): $FORMATTED_ISSUE | by: $AUTHOR"
   elif [ "$PART_OF" -eq 1 ]; then
     echo "  base: $BASE | state: draft | part of: $FORMATTED_ISSUE | by: $AUTHOR"
+  elif [ -n "$PARENT_EPIC_REF" ]; then
+    echo "  base: $BASE | state: draft | closes: $FORMATTED_ISSUE (part of $PARENT_EPIC_REF) | by: $AUTHOR"
   else
     echo "  base: $BASE | state: draft | closes: $FORMATTED_ISSUE | by: $AUTHOR"
   fi
