@@ -5,10 +5,21 @@
 // plan file; this script does the file work and the checks.
 
 import { parseArgs } from "@std/cli/parse-args";
-import { dirname, isAbsolute, join, resolve } from "@std/path";
+import { basename, dirname, isAbsolute, join, resolve } from "@std/path";
 import { parse as parseYaml, stringify as stringifyYaml } from "@std/yaml";
 import { isValidSlug } from "../../scripts/consume_memory_rules.ts";
 import { runCli as regenerateMemoryIndex } from "../memory-index/cli.ts";
+import { type IndexProjection, projectIndex, repointLinks } from "./index_projection.ts";
+import { GUARD_KINDS, type LowMarkPlan, readLowMarkPlan } from "./plan.ts";
+export { GUARD_KINDS } from "./plan.ts";
+export type {
+  GuardJudgment,
+  GuardKind,
+  LowMarkPlan,
+  MergeJudgment,
+  MoveJudgment,
+  RemovalJudgment,
+} from "./plan.ts";
 import {
   computeSessionLoadReport,
   inspectBundledSkills,
@@ -19,45 +30,15 @@ import {
 } from "../session-load/report.ts";
 import { ACTIVE_REPOS } from "../shared/repos.ts";
 
-export const GUARD_KINDS = [
-  "approval-gate",
-  "deletion-guard",
-  "credential-rule",
-  "spending-rule",
-] as const;
-export type GuardKind = typeof GUARD_KINDS[number];
-
-export interface MergeJudgment {
-  keep: string;
-  absorb: string[];
-}
-
-export interface MoveJudgment {
-  slug: string;
-  target_skill: string;
-}
-
-export interface RemovalJudgment {
-  slug: string;
-  reason: "hook-enforced" | "already-said";
-  evidence: string;
-}
-
-export interface GuardJudgment {
-  slug: string;
-  kind: GuardKind;
-}
-
-/** The judgments the agent writes to a file; relative paths resolve against that file. */
-export interface LowMarkPlan {
-  skills_dir?: string;
-  merges?: MergeJudgment[];
-  moves?: MoveJudgment[];
-  removals?: RemovalJudgment[];
-  guards?: GuardJudgment[];
-}
-
-export type RowStatus = "merged" | "moved" | "archived" | "waiting" | "marked" | "refused";
+export type RowStatus =
+  | "merged"
+  | "moved"
+  | "archived"
+  | "waiting"
+  | "marked"
+  | "refused"
+  | "checkpoint"
+  | "guard-link";
 
 export interface Row {
   status: RowStatus;
@@ -69,6 +50,8 @@ export interface LowMarkOptions {
   dir: string;
   plan: LowMarkPlan;
   skillsDir: string;
+  /** Defaults to Dropbox/resume-records under the report's home (or HOME). */
+  resumeDir?: string;
   /** Slugs Josh said yes to, row by row, for ask-first removals. */
   approved?: string[];
   dryRun?: boolean;
@@ -80,6 +63,7 @@ export interface LowMarkResult {
   partLines: string[];
   text: string;
   changed: boolean;
+  indexReport: IndexProjection;
 }
 
 interface Memory {
@@ -163,15 +147,16 @@ export function markGuardRaw(raw: string): string {
 
 function appendMerged(keeperRaw: string, absorbSlug: string, absorbed: Memory): string {
   const description = absorbed.description ? `${absorbed.description}\n\n` : "";
-  return `${keeperRaw.trimEnd()}\n\n## Merged from [[${absorbSlug}]]\n\n${description}${absorbed.body.trim()}\n`;
+  return `${keeperRaw.trimEnd()}\n\n## Merged from ${absorbSlug}\n\n${description}${absorbed.body.trim()}\n`;
 }
 
 async function exists(path: string): Promise<boolean> {
   try {
-    await Deno.stat(path);
+    await Deno.lstat(path);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
   }
 }
 
@@ -182,6 +167,17 @@ async function archiveMemory(dir: string, slug: string, dryRun: boolean): Promis
   if (dryRun) return;
   await Deno.mkdir(archiveDir, { recursive: true });
   await Deno.rename(join(dir, `${slug}.md`), dest);
+}
+
+/** Resolve existing ancestors before comparing even a not-yet-created resume folder. */
+async function physicalPath(path: string): Promise<string> {
+  try {
+    return await Deno.realPath(path);
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+    if (await exists(path)) throw new Error(`Cannot resolve destination: ${path}`);
+    return join(await physicalPath(dirname(path)), basename(path));
+  }
 }
 
 async function memoryFiles(dir: string): Promise<string[]> {
@@ -302,6 +298,8 @@ const HEADINGS: [RowStatus, string][] = [
   ["waiting", "Waiting for Josh's yes"],
   ["marked", "Newly marked as guard rules"],
   ["refused", "Refused"],
+  ["checkpoint", "Moved to resume records"],
+  ["guard-link", "Unchanged guard links"],
 ];
 
 function formatResult(rows: Row[], sizes: string[], dryRun: boolean): string {
@@ -316,13 +314,35 @@ function formatResult(rows: Row[], sizes: string[], dryRun: boolean): string {
 }
 
 export async function runLowMark(options: LowMarkOptions): Promise<LowMarkResult> {
-  const { dir, plan, skillsDir } = options;
+  const { dir, skillsDir } = options;
+  const plan = readLowMarkPlan(options.plan);
   const dryRun = options.dryRun ?? false;
   const approved = new Set(options.approved ?? []);
+  for (const value of approved) {
+    if (!plan.removals?.some((row) => row.slug === value)) {
+      throw new Error(`Approval has no removal row: ${value}`);
+    }
+  }
+  const limits = await loadLimits(options.report?.limitsPath);
+  const lowMark = limits.memoryIndex.lowMark;
+  if (typeof lowMark !== "number" || !Number.isSafeInteger(lowMark) || lowMark <= 0) {
+    throw new Error("Memory index low mark must be a positive integer");
+  }
+  const home = options.report?.homeDir ?? Deno.env.get("HOME") ?? "/home/joshua";
+  const resumeDir = resolve(
+    options.resumeDir ?? plan.resume_dir ?? join(home, "Dropbox/web-jam-llms/resume-records"),
+  );
+  const memoryRoot = await Deno.realPath(dir);
+  const resumeRoot = await physicalPath(resumeDir);
+  if (resumeRoot === memoryRoot || resumeRoot.startsWith(`${memoryRoot}/`)) {
+    throw new Error("Resume records must be outside the memory folder");
+  }
   const rows: Row[] = [];
   const claimed = new Set<string>();
   const guards = new Set<string>();
   let changed = false;
+  const departed = new Set<string>();
+  const redirects = new Map<string, string>();
 
   const refuse = (slug: string, detail: string) => rows.push({ status: "refused", slug, detail });
 
@@ -373,6 +393,28 @@ export async function runLowMark(options: LowMarkOptions): Promise<LowMarkResult
     rows.push({ status: "marked", slug, detail: kind });
   }
 
+  for (const file of (await memoryFiles(dir)).sort()) {
+    const slug = file.slice(0, -3);
+    if (!slug.startsWith("session-checkpoint-")) continue;
+    const memory = await claim(slug);
+    if (!memory) continue;
+    const fm = readFrontmatter(memory.raw);
+    const metadata = fm?.metadata as Record<string, unknown> | undefined;
+    const dest = join(resumeDir, metadata?.status === "done" ? "done" : "", file);
+    try {
+      if (await exists(dest)) throw new Error(`resume record already exists: ${dest}`);
+      if (!dryRun) {
+        await Deno.mkdir(dirname(dest), { recursive: true });
+        await Deno.rename(memory.path, dest);
+      }
+      departed.add(slug);
+      changed = true;
+      rows.push({ status: "checkpoint", slug, detail: dest });
+    } catch (error) {
+      refuse(slug, (error as Error).message);
+    }
+  }
+
   for (const { keep, absorb } of plan.merges ?? []) {
     const keeper = await claim(keep);
     if (!keeper) continue;
@@ -395,6 +437,10 @@ export async function runLowMark(options: LowMarkOptions): Promise<LowMarkResult
         for (const slug of taken) await archiveMemory(dir, slug, false);
       }
       changed = true;
+      for (const slug of taken) {
+        departed.add(slug);
+        redirects.set(slug, keep);
+      }
       rows.push({ status: "merged", slug: keep, detail: `absorbed ${taken.join(", ")}` });
     } catch (error) {
       refuse(keep, (error as Error).message);
@@ -422,6 +468,8 @@ export async function runLowMark(options: LowMarkOptions): Promise<LowMarkResult
     try {
       await archiveMemory(dir, slug, dryRun);
       changed = true;
+      departed.add(slug);
+      redirects.set(slug, target_skill);
       rows.push({ status: "moved", slug, detail: `now in skill ${target_skill}` });
     } catch (error) {
       refuse(slug, (error as Error).message);
@@ -431,9 +479,13 @@ export async function runLowMark(options: LowMarkOptions): Promise<LowMarkResult
   for (const { slug, reason, evidence } of plan.removals ?? []) {
     const memory = await claim(slug);
     if (!memory) continue;
-    const detail = `${
-      reason === "hook-enforced" ? "a hook enforces it" : "already said elsewhere"
-    }: ${evidence}`;
+    const detail = `${reason}: ${evidence}`;
+    try {
+      await archiveMemory(dir, slug, true);
+    } catch (error) {
+      refuse(slug, (error as Error).message);
+      continue;
+    }
     if (!approved.has(slug)) {
       rows.push({ status: "waiting", slug, detail });
       continue;
@@ -441,36 +493,48 @@ export async function runLowMark(options: LowMarkOptions): Promise<LowMarkResult
     try {
       await archiveMemory(dir, slug, dryRun);
       changed = true;
+      departed.add(slug);
       rows.push({ status: "archived", slug, detail });
     } catch (error) {
       refuse(slug, (error as Error).message);
     }
   }
 
-  if (changed && !dryRun) {
-    const before = await memoryFiles(dir);
-    // Every classified guard is kept out of the index run's archive, marked on disk or not.
-    await regenerateMemoryIndex([
-      "--dir",
-      dir,
-      ...[...guards].flatMap((slug) => ["--protect", slug]),
-    ]);
-    // The index run archives other completed checkpoints itself; name each one.
-    const after = new Set(await memoryFiles(dir));
-    for (const file of before) {
-      if (after.has(file)) continue;
-      const slug = file.replace(/\.md$/, "");
-      if (rows.some((row) => row.slug === slug && row.status !== "refused")) continue;
+  for (const file of await memoryFiles(dir)) {
+    const slug = file.slice(0, -3);
+    if (departed.has(slug)) continue;
+    const memory = await readMemory(dir, slug);
+    if (!memory) continue;
+    const updated = repointLinks(memory.raw, redirects);
+    if (updated === memory.raw) continue;
+    if (memory.guard || guards.has(slug)) {
       rows.push({
-        status: "archived",
+        status: "guard-link",
         slug,
-        detail: "completed checkpoint, archived by the memory index run",
+        detail: "links to a merged or moved memory; guard file left byte-identical",
       });
+    } else if (memory.unreadable) {
+      refuse(slug, "cannot repoint links in unparseable frontmatter");
+    } else if (!dryRun) {
+      await Deno.writeTextFile(memory.path, updated);
     }
   }
 
+  if (changed && !dryRun) await regenerateMemoryIndex(["--dir", dir]);
+  const projection = await projectIndex(
+    dir,
+    departed,
+    rows.filter((row) => row.status === "waiting").map((row) => row.slug),
+    lowMark,
+  );
   const sizes = await partLines(dir, options.report ?? {});
-  return { rows, partLines: sizes, text: formatResult(rows, sizes, dryRun), changed };
+  return {
+    rows,
+    partLines: sizes,
+    indexReport: projection.report,
+    text: `${formatResult(rows, sizes, dryRun)}\n\n${projection.text}`,
+    changed,
+  };
 }
 
 function expandHome(path: string): string {
@@ -483,17 +547,21 @@ function expandHome(path: string): string {
 export async function runCli(args: string[]): Promise<number> {
   const flags = parseArgs(args, {
     boolean: ["dry-run", "help"],
-    string: ["dir", "plan", "skills-dir", "approve"],
+    string: ["dir", "plan", "skills-dir", "resume-dir", "approve"],
     collect: ["approve"],
   });
 
   if (flags.help) {
     console.log(
       "Usage: deno task memory-cleanup:run [--dry-run] [--dir <memory dir>] [--plan <file>] " +
-        "[--skills-dir <dir>] [--approve <slug>]...",
+        "[--skills-dir <dir>] [--resume-dir <dir>] [--approve <slug>]...",
     );
     console.log("Applies the agent's judgments (the plan file) to the memory folder.");
     console.log("--dry-run writes nothing. --approve <slug> is Josh's yes for one removal row.");
+    console.log(
+      "Removal reasons: hook-enforced, already-said, obsolete, work-state (with evidence).",
+    );
+    console.log("Checkpoints move word for word to resume records, completed ones to done/.");
     return 0;
   }
 
@@ -501,13 +569,13 @@ export async function runCli(args: string[]): Promise<number> {
   const planPath = resolve(expandHome(flags.plan || join(dir, "low-mark-plan.json")));
   let plan: LowMarkPlan;
   try {
-    plan = JSON.parse(await Deno.readTextFile(planPath));
+    plan = readLowMarkPlan(JSON.parse(await Deno.readTextFile(planPath)));
   } catch (error) {
     console.error(`Cannot read the plan file ${planPath}: ${(error as Error).message}`);
     return 1;
   }
 
-  const planSkills = plan.skills_dir && !isAbsolute(plan.skills_dir)
+  const planSkills = plan.skills_dir && !isAbsolute(expandHome(plan.skills_dir))
     ? join(dirname(planPath), plan.skills_dir)
     : plan.skills_dir;
   const skillsDir = resolve(
@@ -516,15 +584,28 @@ export async function runCli(args: string[]): Promise<number> {
     ),
   );
 
-  const result = await runLowMark({
-    dir,
-    plan,
-    skillsDir,
-    dryRun: flags["dry-run"],
-    approved: flags.approve.flatMap((value) => value.split(",")).filter(Boolean),
-  });
-  console.log(result.text);
-  return 0;
+  const planResume = plan.resume_dir && !isAbsolute(expandHome(plan.resume_dir))
+    ? join(dirname(planPath), plan.resume_dir)
+    : plan.resume_dir;
+  try {
+    const result = await runLowMark({
+      dir,
+      plan,
+      skillsDir,
+      resumeDir: flags["resume-dir"] || planResume
+        ? resolve(expandHome(flags["resume-dir"] || planResume!))
+        : undefined,
+      dryRun: flags["dry-run"],
+      approved: flags.approve.flatMap((value) => value.split(",")).filter(Boolean),
+    });
+    console.log(result.text);
+    return result.rows.some((row) => row.status === "refused") || !result.indexReport.reachable
+      ? 1
+      : 0;
+  } catch (error) {
+    console.error(`Cannot run cleanup: ${(error as Error).message}`);
+    return 1;
+  }
 }
 
 if (import.meta.main) {
