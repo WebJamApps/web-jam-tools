@@ -86,13 +86,16 @@ rules and do not reconstruct them from memory or from this file.
       used at Gate 1 (`c._id && c.email && !c.isExcluded`) must strictly match the predicate
       enforced at Gate 2 and dispatch, so that recorded approvals never diverge from dispatchable
       sets.
-26. **Folding `/learn` AGENTS.md Updates into the Same Feature Branch & PR:** When instructed to run
-    `/learn` and push up `AGENTS.md` (or when folding lessons learned into rules during task work or
-    PR reviews), the resulting updates to `AGENTS.md` must be committed directly onto the active
-    feature branch and included in the same PR (e.g. `chore: fold /learn updates into AGENTS.md`)
-    and pushed up together with the work. Never open a separate PR, never defer updating `AGENTS.md`
-    to a follow-up step, and never leave `AGENTS.md` unpushed or waiting for a post-merge step on
-    `dev`.
+26. **Folding `/learn` Rule Updates into Area Rules Files and the Same Feature Branch & PR:** When
+    instructed to run `/learn` (or when folding lessons learned into rules during task work or PR
+    reviews), run `/learn` if available. When `/learn` writes lessons into the repository's rules
+    file, move each lesson that applies to one area, word for word, into that area's rules file
+    (`docs/rules/<area>.md`), creating the file and its pointer line when the area has none; a
+    lesson that applies everywhere stays in the rules file (`AGENTS.md`). The resulting updates must
+    be committed directly onto the active feature branch and included in the same PR (e.g. `chore:
+    fold /learn updates into rules`) and pushed up together with the work. Never open a separate PR,
+    never defer updating rules to a follow-up step, and never leave rule updates unpushed or waiting
+    for a post-merge step on `dev`.
 ## Opening pull requests (all WebJamApps repos)
 
 Open every PR through the `draft-pr` skill (`skills/draft-pr/SKILL.md`), never `gh pr create`
