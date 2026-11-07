@@ -7,6 +7,7 @@
 // (`createIssueAndVerify`).
 
 import { parseArgs } from "@std/cli/parse-args";
+import { checkDesignBody } from "../shared/design_body.ts";
 import { checkAuthorOnRoster, withFooter } from "../../hooks/lib/authored_by_footer.ts";
 import { isCodexSession, resolveSigningAuthor } from "../shared/codex_running_model.ts";
 import * as path from "@std/path";
@@ -432,6 +433,24 @@ export async function filePlan(
   }
   for (const child of plan.children) {
     allItems.push({ item: child, isEpic: false });
+  }
+
+  // Validate every body, including epics and manual steps, before any issue is filed.
+  for (const { item } of allItems) {
+    const bodyPath = item.bodyFile || item.body_file || item.bodyPath;
+    let body = item.body ?? "";
+    if (bodyPath) {
+      try {
+        body = await deps.readFileText(path.resolve(expandHome(bodyPath)));
+      } catch (err) {
+        throw new Error(
+          `Refused to file plan — cannot read body file "${bodyPath}" for issue "${item.title}": ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+    await checkDesignBody(body);
   }
 
   // Pre-validate titles, Gate 2 approval tokens, and ensure explicit IDs do not collide

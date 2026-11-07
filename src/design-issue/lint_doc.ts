@@ -1208,14 +1208,20 @@ const HTML_BLOCK_TAGS =
   "address|article|aside|blockquote|body|center|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|html|iframe|li|main|nav|ol|p|pre|section|summary|table|tbody|td|tfoot|th|thead|tr|ul";
 const HTML_BLOCK_OPEN = new RegExp(`^ {0,3}<(${HTML_BLOCK_TAGS})(?=[\\s/>]|$)`, "i");
 
+const HTML_OPEN_TAG = /<([a-z0-9]+)(?=[\s/>])[^>]*?(\/?)>/gi;
+const HTML_CLOSE_TAG = /<\/([a-z0-9]+)\s*>/gi;
+
 /** The line a block-level HTML element closes on, or null when its tag is never closed. */
 function htmlBlockEnd(lines: string[], start: number, tag: string): number | null {
-  const opens = new RegExp(`<${tag}(?=[\\s/>])[^>]*?(/?)>`, "gi");
-  const closes = new RegExp(`</${tag}\\s*>`, "gi");
+  const targetTag = tag.toLowerCase();
   let depth = 0;
   for (let i = start; i < lines.length; i++) {
-    for (const open of lines[i].matchAll(opens)) if (open[1] !== "/") depth++;
-    depth -= [...lines[i].matchAll(closes)].length;
+    for (const open of lines[i].matchAll(HTML_OPEN_TAG)) {
+      if (open[1].toLowerCase() === targetTag && open[2] !== "/") depth++;
+    }
+    for (const close of lines[i].matchAll(HTML_CLOSE_TAG)) {
+      if (close[1].toLowerCase() === targetTag) depth--;
+    }
     if (depth <= 0) return i;
   }
   return null;

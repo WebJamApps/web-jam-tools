@@ -3,6 +3,46 @@
 
 import { assertEquals, assertRejects, assertStringIncludes, assertThrows } from "@std/assert";
 import * as path from "@std/path";
+import { DESIGN_BODY_CASES } from "./support/design_body_cases.ts";
+
+for (const row of DESIGN_BODY_CASES) {
+  Deno.test(`file-plan one design: ${row.name}`, async () => {
+    const dir = await Deno.makeTempDir();
+    try {
+      const fixture = JSON.parse(
+        await Deno.readTextFile("test/fixtures/design-issue/fixture-plan.json"),
+      );
+      // A later child must be rejected before the epic can be filed.
+      fixture.children[1].body += `\n${row.body}`;
+      const planPath = path.join(dir, "plan.json");
+      await Deno.writeTextFile(planPath, JSON.stringify(fixture));
+      const calls: string[][] = [];
+      const execute = () =>
+        filePlan({
+          planPath,
+          dryRun: !row.refused,
+          approvalCheck: APPROVE_ALL,
+          deps: {
+            readFileText: (p) => Deno.readTextFile(p),
+            runCmd: (cmd) => {
+              calls.push(cmd);
+              throw new Error("Unexpected gh call");
+            },
+          },
+        });
+      if (row.refused) {
+        const error = await assertRejects(execute, Error, "more than one design document");
+        assertStringIncludes(error.message, "promote-gigs-design");
+        assertStringIncludes(error.message, "nodejs-deno-upgrades-design");
+      } else {
+        await execute();
+      }
+      assertEquals(calls, []);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+}
 import { TEST_AUTHOR, withPassingProbe } from "./authored_by_test_helpers.ts";
 import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
 import {
@@ -25,6 +65,39 @@ import {
 } from "../src/create-issue/lib.ts";
 
 const APPROVE_ALL: (repoFull: string, title: string) => ApprovalCheckResult = () => ({ ok: true });
+
+Deno.test("file-plan: unreadable body file refuses before filing, naming file and issue", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const fixture = JSON.parse(
+      await Deno.readTextFile("test/fixtures/design-issue/fixture-plan.json"),
+    );
+    fixture.children[0].bodyFile = "/nonexistent/missing-body.md";
+    const planPath = path.join(dir, "plan.json");
+    await Deno.writeTextFile(planPath, JSON.stringify(fixture));
+    const execute = () =>
+      realFilePlan({
+        planPath,
+        dryRun: true,
+        approvalCheck: APPROVE_ALL,
+        deps: {
+          readFileText: (p) => Deno.readTextFile(p),
+          runCmd: () => {
+            throw new Error("Unexpected gh call");
+          },
+        },
+      });
+    const error = await assertRejects(
+      execute,
+      Error,
+      "Refused to file plan — cannot read body file",
+    );
+    assertStringIncludes(error.message, "/nonexistent/missing-body.md");
+    assertStringIncludes(error.message, fixture.children[0].title);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
 
 Deno.test("signing plan m: every dry-run body has the looked-up Luna footer", () =>
   withSigningFixture(async (signing) => {

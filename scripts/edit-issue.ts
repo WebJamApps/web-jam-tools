@@ -22,6 +22,7 @@
  * native-field mutation, then reads the level back before reporting success.
  */
 import { checkAuthorOnRoster, withFooter } from "../hooks/lib/authored_by_footer.ts";
+import { checkDesignBody } from "../src/shared/design_body.ts";
 import { PRIORITY_FIELD_ID, PRIORITY_MAP, priorityMutation } from "../src/create-issue/lib.ts";
 import {
   resolveSigningAuthor,
@@ -237,6 +238,30 @@ export async function run(args: string[], deps: Deps): Promise<number> {
   if (!credResult.ok) {
     console.error(credResult.error);
     return 1;
+  }
+
+  if (bodyText !== undefined) {
+    try {
+      const current = await runWithRetry(deps.runCmd, [
+        "gh",
+        "issue",
+        "view",
+        String(opts.issue),
+        "--repo",
+        opts.repo,
+        "--json",
+        "body",
+      ], { sleep: deps.sleep });
+      if (current.code !== 0) throw new Error("could not read the current issue body");
+      const parsed = JSON.parse(current.stdout);
+      if (typeof parsed?.body !== "string") {
+        throw new Error("could not read the current issue body");
+      }
+      await checkDesignBody(bodyText, parsed.body);
+    } catch (error) {
+      console.error(`refusing to edit: ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
   }
 
   const ghArgs = ["gh", "issue", "edit", String(opts.issue), "--repo", opts.repo, ...opts.rest];
