@@ -667,6 +667,22 @@ const SHELL_SYNTAX_CASES: Array<{
     source: "x=$(( $(cat /home/joshua/Dropbox/financial/n.txt) / 2 ))",
     deny: true,
   },
+  { command: String.raw`echo a\ #; cat /home/joshua/Dropbox/financial/a.txt`, deny: true },
+  { command: String.raw`echo a\;#; cat /home/joshua/Dropbox/financial/a.txt`, deny: true },
+  { command: String.raw`echo a\ #$(cat /home/joshua/Dropbox/financial/a.txt)`, deny: true },
+  { command: String.raw`echo a\\ #; cat /home/joshua/Dropbox/financial/a.txt`, deny: false },
+  { command: '[[ "$X" =~ ^[[:digit:]]+/x ]] && echo y', deny: false },
+  { command: '[[ "$X" =~ ^[[:digit:]]+$ ]] && echo y', deny: false },
+  { command: '[[ "$X" =~ ^([[:digit:]]+)/([0-9]+)$ ]] && echo y', deny: false },
+  { command: '[[ "$X" =~ ^[[:alpha:]]+/x ]] && echo y', deny: false },
+  { command: '[[ "$X" =~ ^[[:space:]]+/x ]] && echo y', deny: false },
+  { command: '[[ "$X" =~ ^[]a]+/x ]] && echo y', deny: false },
+  { command: '[[ "$X" == "]]" ]] && echo y', deny: false },
+  { command: '[[ "$X" == [ ]] && echo y', deny: false },
+  {
+    command: '[[ "$X" =~ ^[[:digit:]]+/x ]] && cat /home/joshua/Dropbox/financial/a.txt',
+    deny: true,
+  },
 ];
 
 for (const [index, entry] of SHELL_SYNTAX_CASES.entries()) {

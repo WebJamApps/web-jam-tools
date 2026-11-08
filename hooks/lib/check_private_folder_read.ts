@@ -622,7 +622,7 @@ function shellSubstitutions(text: string): { text: string; commands: string[] } 
     if (quote) {
       if (ch === quote) quote = "";
     } else if (ch === "'" || ch === '"') quote = ch;
-    else if (ch === "#" && (i === 0 || /[\s;&|()]/.test(text[i - 1]))) {
+    else if (ch === "#" && startsShellComment(text, i)) {
       const end = text.indexOf("\n", i);
       if (end < 0) return { text: result + text.slice(i + 1), commands };
       result += text.slice(i + 1, end);
@@ -630,6 +630,56 @@ function shellSubstitutions(text: string): { text: string; commands: string[] } 
     }
   }
   return { text: result, commands };
+}
+
+function startsShellComment(text: string, index: number): boolean {
+  if (index === 0) return true;
+  if (!/[\s;&|()]/.test(text[index - 1])) return false;
+  let escapes = 0;
+  for (let i = index - 2; i >= 0 && text[i] === "\\"; i--) escapes++;
+  return escapes % 2 === 0;
+}
+
+/** Find the reserved closing word, keeping quoted text and bracket patterns intact. */
+function closingConditional(text: string, start: number): number {
+  let quote = "";
+  let bracketStart = -1;
+  for (let i = start + 2; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "\\" && quote !== "'") {
+      i++;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    // An unquoted reserved word ends the test even when a pattern contains a
+    // literal unmatched '['. Bracket expressions cannot span unquoted words.
+    if (
+      text.startsWith("]]", i) && /\s/.test(text[i - 1]) &&
+      (i + 2 === text.length || /[\s;&|()<>]/.test(text[i + 2]))
+    ) return i;
+    if (bracketStart >= 0) {
+      // POSIX classes, collating symbols and equivalence classes have their own
+      // closing pair inside the enclosing bracket expression.
+      if (ch === "[" && /[:.=]/.test(text[i + 1] ?? "")) {
+        const end = text.indexOf(text[i + 1] + "]", i + 2);
+        if (end < 0) throw new Error("unterminated bracket expression");
+        i = end + 1;
+      } else if (
+        ch === "]" && i !== bracketStart + 1 &&
+        !(i === bracketStart + 2 && /[!^]/.test(text[bracketStart + 1]))
+      ) bracketStart = -1;
+      continue;
+    }
+    if (ch === "[") bracketStart = i;
+  }
+  throw new Error("unterminated conditional test");
 }
 
 /** Keep non-command syntax out of the shared position-based command splitter. */
@@ -687,7 +737,7 @@ function shellSyntax(text: string): { text: string; patterns: string[]; redirect
       result += ch;
       continue;
     }
-    if (ch === "#" && (i === 0 || /[\s;&|()]/.test(text[i - 1]))) {
+    if (ch === "#" && startsShellComment(text, i)) {
       const end = text.indexOf("\n", i);
       if (end < 0) break;
       i = end - 1;
@@ -715,8 +765,7 @@ function shellSyntax(text: string): { text: string; patterns: string[]; redirect
       continue;
     }
     if (text.startsWith("[[", i) && (i === 0 || /[\s;&|()]/.test(text[i - 1]))) {
-      const end = text.indexOf("]]", i + 2);
-      if (end < 0) throw new Error("unterminated conditional test");
+      const end = closingConditional(text, i);
       result += keepPattern(text.slice(i, end + 2));
       i = end + 1;
       continue;
