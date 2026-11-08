@@ -62,6 +62,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   "agy-skill-run-hook.sh",
   "backlog-groom-reminder.sh",
   "backup-refusal-reminder.sh",
+  // SessionStart reminder (web-jam-tools#1690) — reminds of Web Jam LLC
+  // deadlines due within 30 days.
+  "business-deadline-reminder.sh",
   // Unconditional send/delete fence for Gmail on the agy surface
   // (web-jam-tools#432 scope item 3) — agy-only.
   "block-agy-gmail-send-delete.sh",
