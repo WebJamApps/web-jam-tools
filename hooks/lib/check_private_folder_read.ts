@@ -185,9 +185,10 @@ class UnreadableScript extends Error {
 }
 
 function withoutWebAddresses(text: string): string {
-  // A command substitution executes locally even when embedded in a URL.
-  // Leave it (and backtick substitutions) visible to the command/path checks.
-  return text.replace(/https?:\/\/(?:(?!\$\()[^\s"'`<>])+/g, "").replaceAll("file://", "");
+  // Command substitutions, backtick substitutions, and unspaced shell operators
+  // (; | &) execute locally even when embedded in or directly adjacent to a URL.
+  // Leave them visible to the command/path checks.
+  return text.replace(/https?:\/\/(?:(?!\$\()[^\s"'`<>;&|])+/g, "").replaceAll("file://", "");
 }
 
 function namedSocket(text: string): boolean {
@@ -439,7 +440,9 @@ function pathOperands(argv: string[], context: InspectionContext): string[] {
     // Only flags without arguments may precede e/f in a short-option cluster.
     // In particular, sed's -i suffix is not another sequence of options.
     const shortOption = options
-      ? (name === "grep" ? /^-[EFGPivwxobncHhLlrRqsaIUuZz]*([ef])(.*)$/ : /^-[nEzrusb]*([ef])(.*)$/)
+      ? (name === "grep"
+        ? /^-[EFGPivwxobncHhLlrRqsaIUuZzTyV]*([ef])(.*)$/
+        : /^-[nEzrusb]*([ef])(.*)$/)
         .exec(arg)
       : null;
     if (options && (arg === "--file" || arg.startsWith("--file=") || shortOption?.[1] === "f")) {
