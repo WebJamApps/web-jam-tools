@@ -20,15 +20,27 @@ const SCRIPT_PATH = new URL("../hooks/block-secret-dumps.sh", import.meta.url).p
 interface RunResult {
   code: number;
   stderr: string;
+  stdout: string;
 }
 
 async function runHook(command: string): Promise<RunResult> {
   return await runPayloadHook(JSON.stringify({ tool_input: { command } }));
 }
 
-async function runPayloadHook(input: string): Promise<RunResult> {
+async function runPayloadHook(
+  input: string,
+  surface: "claude" | "agy" | "codex" = "claude",
+): Promise<RunResult> {
   const cmd = new Deno.Command("bash", {
-    args: [SCRIPT_PATH],
+    args: surface === "agy"
+      ? [
+        new URL("../hooks/agy-hook-shim.sh", import.meta.url).pathname,
+        "PreToolUse",
+        btoa("Bash"),
+        SCRIPT_PATH,
+      ]
+      : [SCRIPT_PATH],
+    env: { WJT_SURFACE: surface === "claude" ? "claude-code" : surface },
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -37,8 +49,100 @@ async function runPayloadHook(input: string): Promise<RunResult> {
   const writer = child.stdin.getWriter();
   await writer.write(new TextEncoder().encode(input));
   await writer.close();
-  const { code, stderr } = await child.output();
-  return { code, stderr: new TextDecoder().decode(stderr) };
+  const { code, stderr, stdout } = await child.output();
+  return {
+    code,
+    stderr: new TextDecoder().decode(stderr),
+    stdout: new TextDecoder().decode(stdout),
+  };
+}
+
+// Every literal row in "Credential files and environment one-liners".
+// These are hook input strings, never commands executed by the tests.
+const credentialFileAndOneLinerCases: Array<[string, number]> = [
+  ["cat .env", 2],
+  ["cat ./.env", 2],
+  ["cat app/.env.local", 2],
+  ["cat .env.test", 2],
+  ["source .env", 2],
+  ["grep KEY .env", 2],
+  ["echo $(cat .env)", 2],
+  [`printf '%s' "$(< .env)"`, 2],
+  ["ls -la .env.example", 2],
+  [`deno eval 'console.log(Deno.env.get("GH_TOKEN"))'`, 2],
+  [`node -e 'console.log(process.env.GH_TOKEN)'`, 2],
+  [`node -p 'process.env["API_KEY"]'`, 2],
+  [`python3 -c 'import os; print(os.environ["GH_TOKEN"])'`, 2],
+  [`python3 -c 'import os; print(os.environ.get("API_KEY"))'`, 2],
+  [`python3 -c 'import os; print(os.getenv("MY_SECRET"))'`, 2],
+  [`grep -n 'Deno.env.get' scripts/circleci-settings.ts`, 0],
+  [`grep -rn 'Deno.env.get("CIRCLECI_TOKEN")' src`, 0],
+  ["grep -n process.env src/a.ts", 0],
+  [`jq -nc --arg c "grep -n 'Deno.env.get' x.ts" '{c:$c}' > /tmp/p.json`, 0],
+  [`deno eval 'console.log(Deno.env.get("HOME"))'`, 0],
+  [`node -e 'console.log(process.env.HOME)'`, 0],
+  ["cat .environment", 0],
+  ["deno run --allow-env scripts/circleci-settings.ts --check", 0],
+  ["deno task ci:rerun web-jam-tools 1678", 0],
+];
+
+for (const surface of ["claude", "agy", "codex"] as const) {
+  for (const [command, expected] of credentialFileAndOneLinerCases) {
+    Deno.test(`credential file and one-liner design row (${surface}): ${command}`, async () => {
+      const payload = surface === "agy"
+        ? { toolCall: { name: "run_command", args: { CommandLine: command } } }
+        : { tool_name: "Bash", tool_input: { command } };
+      const result = await runPayloadHook(JSON.stringify(payload), surface);
+      if (surface === "agy") {
+        assertEquals(result.code, 0, result.stderr);
+        const verdict = JSON.parse(result.stdout);
+        assertEquals(verdict.decision, expected === 2 ? "deny" : "allow", command);
+        if (expected === 2) assertBlocked(verdict.reason);
+      } else {
+        assertEquals(result.code, expected, result.stderr);
+        if (expected === 2) assertBlocked(result.stderr);
+      }
+    });
+  }
+}
+
+const credentialBoundaryRegressions: Array<[string, number]> = [
+  [`cat '.env'`, 2],
+  [`cat ".env.local"`, 2],
+  ["cat <.env", 2],
+  ["FILE=.env cat", 2],
+  ["cat service.env", 0],
+  ["cat .env_backup", 0],
+  ["cat .env-backup", 0],
+  [`grep -n 'os.environ.get("API_KEY")' src`, 0],
+  [`python -c 'import os; print(os.getenv("db_password"))'`, 2],
+  [`python3 -c 'import os; print(os.environ["PATH"])'`, 0],
+  [`python3 -c 'import os; print(os.environ.get("HOME"))'`, 0],
+  [`python3 -c 'import os; print(os.getenv("PATH"))'`, 0],
+  [`node -p 'process.env["HOME"]'`, 0],
+  [`node -e 'console.log(process.env.SERVICE_CREDENTIAL)'`, 2],
+  [`deno eval 'console.log(Deno.env.get("MY_APIKEY"))'`, 2],
+  [`node --eval='console.log(process.env.DB_PASSWD)'`, 2],
+  [`node -p'process.env.AUTH'`, 2],
+  [`python3 -c'import os; print(os.getenv("MY_SECRET"))'`, 2],
+  [`python3 -W ignore -c 'import os; print(os.getenv("MY_SECRET"))'`, 2],
+  [`node --require ./setup.js -p 'process.env.GH_TOKEN'`, 2],
+  [`env /usr/bin/python3 -c 'import os; print(os.getenv("GH_TOKEN"))'`, 2],
+  [`bash -c 'node -p "process.env.GH_TOKEN"'`, 2],
+  [`deno eval --no-check 'console.log(Deno.env.get("GH_TOKEN"))'`, 2],
+  [`node script.js -e 'process.env.GH_TOKEN'`, 0],
+  [`python3 script.py -c 'os.getenv("GH_TOKEN")'`, 0],
+  [`python3 -m module -c 'os.getenv("GH_TOKEN")'`, 0],
+  [`deno run script.ts 'Deno.env.get("GH_TOKEN")'`, 0],
+  [`echo node -p 'process.env.GH_TOKEN'`, 0],
+];
+
+for (const [command, expected] of credentialBoundaryRegressions) {
+  Deno.test(`credential file and one-liner regression: ${command}`, async () => {
+    const result = await runHook(command);
+    assertEquals(result.code, expected, result.stderr);
+    if (expected === 2) assertBlocked(result.stderr);
+  });
 }
 
 // --- newly allowed: cp ---

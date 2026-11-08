@@ -16,6 +16,37 @@ import {
 const UNREADABLE_WORDS =
   /\b(ps|pgrep|pstree|top|htop|docker|systemctl|declare|typeset|printenv)\b|\/proc\//;
 const CREDENTIAL_NAME = /TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|AUTH/i;
+// Literal environment reads inside interpreter one-liners only. Source searches
+// and saved scripts must not be mistaken for programs dumping their environment.
+const ENV_CALL =
+  /\b(?:Deno\s*\.\s*env\s*\.\s*get\s*\(|process\s*\.\s*env\s*\[|os\s*\.\s*(?:environ\s*(?:\[|\.\s*get\s*\()|getenv\s*\())\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1/g;
+const ENV_PROPERTY = /\bprocess\s*\.\s*env\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)/g;
+
+function inlineProgram(name: string | undefined, args: string[]): string | undefined {
+  if (name === "deno") {
+    if (args[0] !== "eval") return undefined;
+    return args.slice(1).find((arg) => !arg.startsWith("-"));
+  }
+  const flags = name === "node"
+    ? ["-e", "-p", "--eval", "--print"]
+    : name === "python" || name === "python3"
+    ? ["-c"]
+    : [];
+  if (!flags.length) return undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (flags.includes(arg)) return args[i + 1];
+    for (const flag of flags) {
+      if (flag.startsWith("--") && arg.startsWith(`${flag}=`)) return arg.slice(flag.length + 1);
+      if (!flag.startsWith("--") && arg.startsWith(flag) && arg.length > flag.length) {
+        return arg.slice(flag.length);
+      }
+    }
+    if (!arg.startsWith("-") || arg === "--" || arg === "-m") break;
+    if (["-r", "--require", "--import", "--env-file", "-W", "-X"].includes(arg)) i++;
+  }
+  return undefined;
+}
 const PROC_DUMP = /^(?:\d*<)?\/proc\/[^\/]+(?:\/task\/[^\/]+)?\/(?:cmdline|environ)$/;
 const PS_COLUMNS = new Set([
   "pid",
@@ -194,6 +225,14 @@ function checkArgv(argv: string[], depth: number): string | undefined {
   const name = resolved.argv[i]?.split("/").pop();
   const args = resolved.argv.slice(i + 1);
 
+  const program = inlineProgram(name, args);
+  if (
+    program !== undefined &&
+    ([...program.matchAll(ENV_CALL)].some((match) => CREDENTIAL_NAME.test(match[2])) ||
+      [...program.matchAll(ENV_PROPERTY)].some((match) => CREDENTIAL_NAME.test(match[1])))
+  ) {
+    return "An interpreter one-liner reads a credential-named environment variable and can print credentials.";
+  }
   if (name === "printenv" && args.some((arg) => CREDENTIAL_NAME.test(arg))) {
     return "printenv with a credential-named variable can print credentials.";
   }

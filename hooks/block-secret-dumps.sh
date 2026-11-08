@@ -144,7 +144,7 @@ fi
 
 # reading known credential/secret files
 #
-# The .env boundary (web-jam-tools#257 review fix) matches a literal `.`
+# The .env right boundary (web-jam-tools#257 review fix) matches a literal `.`
 # (so .env.test/.env.local/.env.production are recognized too), any
 # non-identifier character (space, /, ), quote, pipe, redirect, backtick,
 # $, etc.), or end-of-string. The old `( |$|/)` boundary missed both: (a)
@@ -158,7 +158,10 @@ fi
 # agy's settings.json all hold live credentials and were NOT on this list — that
 # is how a Dropbox refresh token (tail -15 ~/.bashrc) and a Google API key
 # (agy settings.json) reached transcripts on 2026-07-25.
-SECRET_FILE_RE='(rclone\.conf|\.circleci-token|gcp-oauth\.keys\.json|oauth_creds|credentials\.json|client_secret|/token\.json|google-drive-mcp/|\.bashrc|\.bash_profile|\.zshrc|\.zprofile|/\.profile|\.netrc|\.npmrc|\.config/gh/hosts\.yml|antigravity-cli/settings\.json|\.env(\.|[^A-Za-z0-9_-]|$))'
+# The left boundary reads .env as a file name, not a property in Deno.env.get
+# or process.env. Quotes and expression/read delimiters can start a file name.
+ENV_FILE_RE="(^|[[:space:]/'\"=(<])\\.env(\\.|[^A-Za-z0-9_-]|$)"
+SECRET_FILE_RE='(rclone\.conf|\.circleci-token|gcp-oauth\.keys\.json|oauth_creds|credentials\.json|client_secret|/token\.json|google-drive-mcp/|\.bashrc|\.bash_profile|\.zshrc|\.zprofile|/\.profile|\.netrc|\.npmrc|\.config/gh/hosts\.yml|antigravity-cli/settings\.json|'"$ENV_FILE_RE"')'
 if printf '%s' "$c" | grep -Eiq "$SECRET_FILE_RE"; then
   # WRITE-ONLY exception (web-jam-tools#272): appending to ~/.bashrc is normal,
   # safe work — the guard must block READING these files, not writing to them.
