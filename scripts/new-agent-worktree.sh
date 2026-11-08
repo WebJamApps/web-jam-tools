@@ -12,8 +12,8 @@
 # Usage: scripts/new-agent-worktree.sh <Repo> <branch> [base]
 #   Repo   - sibling directory name under the WebJamApps workspace root
 #            (e.g. WebJamSocketCluster), must already be a git clone
-#   branch - branch name to create for the new worktree
-#   base   - base ref to branch from (default: dev)
+#   branch - branch to use, tracking origin when present; never reset
+#   base   - base for a new branch (default: dev); ignored for existing branches
 #
 # Env:
 #   WEBJAMAPPS_ROOT - workspace root containing the sibling repo clones
@@ -44,11 +44,36 @@ if [ -e "$WORKTREE_DIR" ]; then
   exit 1
 fi
 
-echo "Fetching origin/$BASE in $MAIN_CLONE..." >&2
-git -C "$MAIN_CLONE" fetch origin "$BASE"
+git check-ref-format --branch "$BRANCH" >/dev/null
+echo "Fetching origin in $MAIN_CLONE..." >&2
+git -C "$MAIN_CLONE" fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
 
-echo "Adding worktree $WORKTREE_DIR on branch $BRANCH (from origin/$BASE)..." >&2
-git -C "$MAIN_CLONE" worktree add -B "$BRANCH" "$WORKTREE_DIR" "origin/$BASE"
+REMOTE_REF="refs/remotes/origin/$BRANCH"
+LOCAL_REF="refs/heads/$BRANCH"
+if git -C "$MAIN_CLONE" show-ref --verify --quiet "$REMOTE_REF"; then
+  REMOTE_COMMIT="$(git -C "$MAIN_CLONE" rev-parse "$REMOTE_REF")"
+  if git -C "$MAIN_CLONE" show-ref --verify --quiet "$LOCAL_REF"; then
+    LOCAL_COMMIT="$(git -C "$MAIN_CLONE" rev-parse "$LOCAL_REF")"
+    if [ "$LOCAL_COMMIT" != "$REMOTE_COMMIT" ]; then
+      echo "error: branch $BRANCH differs locally and on origin; refusing to move either branch" >&2
+      echo "local $BRANCH: $LOCAL_COMMIT" >&2
+      echo "origin/$BRANCH: $REMOTE_COMMIT" >&2
+      exit 1
+    fi
+    echo "Case: branch on origin, matching local branch; base '$BASE' ignored." >&2
+    git -C "$MAIN_CLONE" worktree add "$WORKTREE_DIR" "$BRANCH"
+    git -C "$MAIN_CLONE" branch --set-upstream-to="origin/$BRANCH" "$BRANCH"
+  else
+    echo "Case: branch on origin, creating tracking local branch; base '$BASE' ignored." >&2
+    git -C "$MAIN_CLONE" worktree add --track -b "$BRANCH" "$WORKTREE_DIR" "origin/$BRANCH"
+  fi
+elif git -C "$MAIN_CLONE" show-ref --verify --quiet "$LOCAL_REF"; then
+  echo "Case: local-only branch, using its existing commits; base '$BASE' ignored." >&2
+  git -C "$MAIN_CLONE" worktree add "$WORKTREE_DIR" "$BRANCH"
+else
+  echo "Case: new branch, starting from origin/$BASE." >&2
+  git -C "$MAIN_CLONE" worktree add -b "$BRANCH" "$WORKTREE_DIR" "origin/$BASE"
+fi
 
 for f in .env .env.test; do
   if test -f "$MAIN_CLONE/$f"; then

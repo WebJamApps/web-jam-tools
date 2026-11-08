@@ -238,8 +238,16 @@ scripts/new-agent-worktree.sh <Repo> <branch> [base]
 
 - `Repo` — sibling directory name under the workspace root (e.g. `WebJamSocketCluster`), must
   already be a git clone
-- `branch` — branch name to create for the new worktree
-- `base` — base ref to branch from (default: `dev`)
+- `branch` — branch to use for the new worktree; existing branches are never reset
+- `base` — starting ref for a new branch (default: `dev`); ignored for existing branches
+
+After fetching `origin`, the script uses the branch's existing commits when it exists remotely or
+locally. A remote branch gets a local tracking branch; an existing local branch of the same name
+must point at the same commit. If the two differ, the script refuses, prints both commits, and makes
+no worktree or local branch change. A local-only branch is used as it stands. When neither exists, a
+new branch starts from `origin/<base>`. Standard error names the case taken and says when `base` was
+ignored. An existing worktree folder is always refused; successful cases all seed the environment
+files described above.
 
 The worktree is created at `<Repo>/.claude/worktrees/<branch>` (`/` in the branch name is flattened
 to `-`). Set `WEBJAMAPPS_ROOT` to override the default workspace root (`/home/joshua/WebJamApps`).
