@@ -22,29 +22,95 @@ const ENV_CALL =
   /\b(?:Deno\s*\.\s*env\s*\.\s*get\s*\(|process\s*\.\s*env\s*\[|os\s*\.\s*(?:environ\s*(?:\[|\.\s*get\s*\()|getenv\s*\())\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1/g;
 const ENV_PROPERTY = /\bprocess\s*\.\s*env\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)/g;
 
+const NODE_VALUE_FLAGS = new Set([
+  "-r",
+  "--require",
+  "--import",
+  "--loader",
+  "--env-file",
+  "--input-type",
+  "-C",
+  "--conditions",
+  "--openssl-config",
+  "--tls-cipher-list",
+  "--diagnostic-dir",
+  "--heap-prof-dir",
+  "--cpu-prof-dir",
+  "--redirect-warnings",
+  "--title",
+  "--inspect-port",
+  "-W",
+  "-X",
+]);
+
+const PYTHON_VALUE_FLAGS = new Set([
+  "-W",
+  "-X",
+  "--check-hash-based-pycs",
+]);
+
+const DENO_EVAL_VALUE_FLAGS = new Set([
+  "--ext",
+  "--env-file",
+  "-c",
+  "--config",
+  "--import-map",
+  "--cert",
+  "--lock",
+  "--preload",
+  "--require",
+  "--conditions",
+  "--location",
+  "--seed",
+  "--node-modules-linker",
+]);
+
 function inlineProgram(name: string | undefined, args: string[]): string | undefined {
   if (name === "deno") {
     if (args[0] !== "eval") return undefined;
-    return args.slice(1).find((arg) => !arg.startsWith("-"));
-  }
-  const flags = name === "node"
-    ? ["-e", "-p", "--eval", "--print"]
-    : name === "python" || name === "python3"
-    ? ["-c"]
-    : [];
-  if (!flags.length) return undefined;
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (flags.includes(arg)) return args[i + 1];
-    for (const flag of flags) {
-      if (flag.startsWith("--") && arg.startsWith(`${flag}=`)) return arg.slice(flag.length + 1);
-      if (!flag.startsWith("--") && arg.startsWith(flag) && arg.length > flag.length) {
-        return arg.slice(flag.length);
+    for (let i = 1; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === "--") return args[i + 1];
+      if (DENO_EVAL_VALUE_FLAGS.has(arg)) {
+        i++;
+        continue;
+      }
+      if (!arg.startsWith("-")) {
+        return arg;
       }
     }
-    if (!arg.startsWith("-") || arg === "--" || arg === "-m") break;
-    if (["-r", "--require", "--import", "--env-file", "-W", "-X"].includes(arg)) i++;
+    return undefined;
   }
+
+  if (name === "node") {
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === "--eval" || arg === "--print") return args[i + 1];
+      if (arg.startsWith("--eval=")) return arg.slice(7);
+      if (arg.startsWith("--print=")) return arg.slice(8);
+      const nodeCluster = arg.match(/^-([ic]*)(pe|ep|e|p)([\s\S]*)$/);
+      if (nodeCluster) {
+        return nodeCluster[3] ? nodeCluster[3] : args[i + 1];
+      }
+      if (!arg.startsWith("-") || arg === "--") break;
+      if (NODE_VALUE_FLAGS.has(arg)) i++;
+    }
+    return undefined;
+  }
+
+  if (name === "python" || name === "python3") {
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      const pyMatch = arg.match(/^-([bBdEhiIOqsSuvVx]*c)([\s\S]*)$/);
+      if (pyMatch) {
+        return pyMatch[2] ? pyMatch[2] : args[i + 1];
+      }
+      if (!arg.startsWith("-") || arg === "--" || arg === "-m") break;
+      if (PYTHON_VALUE_FLAGS.has(arg)) i++;
+    }
+    return undefined;
+  }
+
   return undefined;
 }
 const PROC_DUMP = /^(?:\d*<)?\/proc\/[^\/]+(?:\/task\/[^\/]+)?\/(?:cmdline|environ)$/;
