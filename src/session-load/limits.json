@@ -20,7 +20,9 @@
     "overMark": 14000
   },
   "otherRepoRules": {
-    "lowMarks": {},
+    "lowMarks": {
+      "CollegeLutheran": 10752
+    },
     "overMark": 10000
   },
   "safetyRules": {
