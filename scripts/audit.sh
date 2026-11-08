@@ -14,7 +14,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TRIVY_IMAGE="aquasec/trivy:0.71.0"
+TRIVY_IMAGE="aquasec/trivy:latest"
 
 # trivy_fs <host-path> <trivy fs flags...>
 trivy_fs() {

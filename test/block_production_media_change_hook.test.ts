@@ -16,6 +16,41 @@ const HOOK_SCRIPT = path.join(REPO_ROOT, "hooks", "block-production-media-change
 const INSTALL_HOOKS_SCRIPT = path.join(REPO_ROOT, "scripts", "install-hooks.sh");
 const INSTALL_CODEX_SCRIPT = path.join(REPO_ROOT, "scripts", "install-codex.ts");
 
+for (const sameCommandWritesScript of [false, true]) {
+  Deno.test(`production-media unreadable script wording: ${sameCommandWritesScript ? "not written yet" : "missing"}`, async () => {
+    const home = await createFixtureHome();
+    try {
+      const filename = path.join(home, "not-written.py");
+      const command =
+        (sameCommandWritesScript ? `cat > ${filename} <<'EOF'\nprint('hello')\nEOF\n` : "") +
+        `python3 ${filename}`;
+      for (const surface of ["claude", "agy", "codex"]) {
+        const result = await runHookLauncher(
+          JSON.stringify({ tool_name: "Bash", tool_input: { command } }),
+          home,
+          { WJT_SURFACE: surface },
+        );
+        assertEquals(result.code, 2, result.stderr);
+        assertStringIncludes(
+          result.stderr,
+          `Cannot read the script ${filename} yet, so it cannot be checked. Write the script in an earlier command, then run it.`,
+        );
+        assert(!result.stderr.includes("Existing audio, video, and image files"));
+      }
+    } finally {
+      await cleanupFixtureHome(home);
+    }
+  });
+}
+
+Deno.test("production-media design row: ci:rerun is not a media mutation", () => {
+  assertEquals(
+    checkShellCommand("deno task ci:rerun web-jam-tools 1678", REPO_ROOT, "/tmp/guard-home")
+      .allowed,
+    true,
+  );
+});
+
 async function runBash(script: string, env?: Record<string, string>): Promise<{
   code: number;
   stdout: string;
