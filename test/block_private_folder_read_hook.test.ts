@@ -525,6 +525,231 @@ Deno.test("install-hooks.sh sandboxed run merges hook into Claude settings and a
   }
 });
 
+// Revision 2.25.0: each row is replayed as data through all three actual entry points.
+const SHELL_SYNTAX_CASES: Array<{
+  command: string;
+  deny: boolean;
+  source?: string;
+  cwd?: string;
+  scriptWording?: boolean;
+}> = [
+  { command: "bash scripts/create-draft-pr.sh --help", deny: false },
+  {
+    command: "~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --help",
+    cwd: "/tmp",
+    deny: false,
+  },
+  {
+    command: "bash /tmp/s.sh",
+    source: String
+      .raw`if [[ "$ISSUE" =~ ^https?://github\.com/([^/]+)/([^/]+)/issues/([0-9]+)(/.*)?$ ]]; then echo y; fi`,
+    deny: false,
+  },
+  {
+    command: "bash /tmp/s.sh",
+    source: String.raw`if [[ "$ISSUE" =~ ^([^/#]+)/([^/#]+)#([0-9]+)$ ]]; then echo y; fi`,
+    deny: false,
+  },
+  {
+    command: "bash /tmp/s.sh",
+    source:
+      'if [ -z "$ISSUE" ] && [[ "$BRANCH" =~ ^[^/]+/([0-9]+)(-|$) ]]; then ISSUE="${BASH_REMATCH[1]}"; fi',
+    deny: false,
+  },
+  {
+    command: "bash /tmp/s.sh",
+    source: String
+      .raw`CURRENT_REPO="$(git remote get-url origin 2>/dev/null | sed -E 's/.*[:/]([^/]+\/[^/]+?)(\.git)?$/\1/' || true)"`,
+    deny: false,
+  },
+  { command: "[[ a/b =~ ^([^/]+)/ ]] && echo y", deny: false },
+  { command: "bash /tmp/s.sh", source: '[[ "$X" =~ ^(feat|[^/]+/bar)$ ]]', deny: false },
+  { command: "bash /tmp/s.sh", source: '[[ "$X" =~ ^(a/b)$ ]]', deny: false },
+  { command: "bash /tmp/s.sh", source: '[[ "$X" =~ a|/usr/bin/env ]]', deny: false },
+  { command: "[[ $HOME == @(a/*|b/*) ]] && echo y", deny: false },
+  {
+    command: "bash /tmp/s.sh",
+    source: '[[ "$B" != @(feat|fix)/* ]] && echo n',
+    deny: false,
+  },
+  {
+    command: "bash /tmp/s.sh",
+    source: '[[ "$X" =~ ^/home/joshua/Dropbox/financial/(.*)$ ]]',
+    deny: true,
+  },
+  { command: "[[ $HOME == /home/joshua/Dropbox/financial/* ]] && echo y", deny: true },
+  { command: "[[ a =~ ^(a)$ ]] && /home/joshua/Dropbox/financial/run.sh", deny: true },
+  { command: "[[ a/b =~ ^([^/]+)/ ]] || cat /home/joshua/Dropbox/financial/a.txt", deny: true },
+  {
+    command: "bash /tmp/s.sh",
+    source: '[[ "$X" =~ ^(foo)$ ]] && (/tmp/zz-missing-script.sh)',
+    deny: true,
+    scriptWording: true,
+  },
+  {
+    command: "[[ $(/tmp/zz-missing-script.sh) =~ ^(a)$ ]] && echo y",
+    deny: true,
+    scriptWording: true,
+  },
+  {
+    command: "bash /tmp/s.sh",
+    source: Array(7).fill("for i in a b; do echo $i; done").join("\n"),
+    deny: false,
+  },
+  {
+    command: "bash /tmp/s.sh",
+    source: Array(7).fill("for i in a b; do echo $i; done").join("\n") +
+      "\ncat /home/joshua/Dropbox/financial/a.txt",
+    deny: true,
+  },
+  {
+    command: "bash /tmp/s.sh",
+    source:
+      "for a in 1; do for b in 1; do for c in 1; do for d in 1; do for e in 1; do for f in 1; do for g in 1; do echo x; done; done; done; done; done; done; done",
+    deny: false,
+  },
+  { command: "bash scripts/handle-agy-tasks.sh", deny: false },
+  { command: "bash scripts/ubuntu-health.sh", deny: false },
+  { command: "(echo hi) >/dev/null", deny: false },
+  { command: "(echo hi) 2>/dev/null", deny: false },
+  { command: "(echo hi) &>/dev/null", deny: false },
+  { command: "{ echo hi; } >/dev/null", deny: false },
+  { command: "exec </dev/null", deny: false },
+  { command: "exec </dev/null >/dev/null 2>&1", deny: false },
+  { command: "(cd /tmp && ls) </dev/null >/dev/null 2>&1 &", deny: false },
+  { command: "(echo hi) >/tmp/out.txt", deny: false },
+  { command: ">/tmp/out.txt echo hi", deny: false },
+  { command: "2>/dev/null ls /tmp", deny: false },
+  { command: "exec >/tmp/zz-missing-script.sh", deny: false },
+  { command: "(echo hi) >/home/joshua/Dropbox/financial/a.txt", deny: true },
+  { command: "exec </home/joshua/Dropbox/financial/a.txt", deny: true },
+  { command: "echo hi >/home/joshua/Dropbox/financial/a.txt", deny: true },
+  { command: "echo hi>>/home/joshua/Dropbox/financial/a.txt", deny: true },
+  { command: "echo hi 2>/home/joshua/Dropbox/financial/err.txt", deny: true },
+  { command: "echo hi &>/home/joshua/Dropbox/financial/a.txt", deny: true },
+  { command: "echo hi >~/Dropbox/financial/a.txt", deny: true },
+  { command: "echo hi > /home/joshua/Dropbox/financial/a.txt", deny: true },
+  { command: "cat </home/joshua/Dropbox/financial/a.txt", deny: true },
+  { command: "cat <~/Dropbox/financial/a.txt", deny: true },
+  { command: "cat < /home/joshua/Dropbox/financial/a.txt", deny: true },
+  {
+    command: "bash /tmp/s.sh",
+    source: "cat </home/joshua/Dropbox/financial/a.txt",
+    deny: true,
+  },
+  { command: "case a/b in x/*|a/*) echo y ;; esac", deny: false },
+  { command: 'case "$HOME" in feat/*) echo f ;; fix/*|chore/*) echo c ;; esac', deny: false },
+  { command: "case a/b in (a/*|b/*) echo y ;; esac", deny: false },
+  { command: "bash /tmp/s.sh", source: 'case "$B" in */[0-9]*) echo ok ;; esac', deny: false },
+  { command: "case a in a/*|/home/joshua/Dropbox/financial/*) echo y ;; esac", deny: true },
+  { command: "case a in a) /home/joshua/Dropbox/financial/run.sh ;; esac", deny: true },
+  {
+    command: "case a in a) /tmp/zz-missing-script.sh ;; esac",
+    deny: true,
+    scriptWording: true,
+  },
+  {
+    command: "bash /tmp/s.sh",
+    source: "mtime=0\nage_days=$(( ( $(date +%s) - mtime ) / 86400 ))",
+    deny: false,
+  },
+  { command: "bash /tmp/s.sh", source: "(( n = 10 / 2 ))", deny: false },
+  { command: "(( n = 10 / 2 ))", deny: false },
+  { command: "echo $(( 10 / 2 ))", deny: false },
+  {
+    command: "bash /tmp/s.sh",
+    source: "x=$(( $(/tmp/zz-missing-script.sh) / 2 ))",
+    deny: true,
+    scriptWording: true,
+  },
+  {
+    command: "bash /tmp/s.sh",
+    source: "x=$(( $(cat /home/joshua/Dropbox/financial/n.txt) / 2 ))",
+    deny: true,
+  },
+];
+
+for (const [index, entry] of SHELL_SYNTAX_CASES.entries()) {
+  Deno.test(`private-folder shell syntax case ${index + 1}: ${entry.command}`, async () => {
+    const repo = path.resolve(new URL("..", import.meta.url).pathname);
+    const filename = path.join(FIXTURE_DIR, `shell-syntax-${index}.sh`);
+    const missing = path.join(FIXTURE_DIR, `missing-shell-${index}.sh`);
+    const command = entry.command
+      .replace("~/WebJamApps/web-jam-tools", repo)
+      .replace("/tmp/s.sh", filename)
+      .replace("/tmp/zz-missing-script.sh", missing);
+    if (entry.source) {
+      writeFixture(filename, entry.source.replaceAll("/tmp/zz-missing-script.sh", missing));
+    }
+    for (const surface of ["claude", "agy", "codex"]) {
+      const cwd = entry.cwd ?? repo;
+      const payload = surface === "agy"
+        ? { toolCall: { name: "run_command", args: { CommandLine: command, Cwd: cwd } } }
+        : { tool_name: "Bash", cwd, tool_input: { command } };
+      const child = new Deno.Command("bash", {
+        args: surface === "agy"
+          ? [
+            new URL("../hooks/agy-hook-shim.sh", import.meta.url).pathname,
+            "PreToolUse",
+            btoa("Bash"),
+            SCRIPT_PATH,
+          ]
+          : [SCRIPT_PATH],
+        env: { CLAUDE_SETTINGS_PATH: FIXTURE_SETTINGS_PATH, WJT_SURFACE: surface },
+        stdin: "piped",
+        stdout: "piped",
+        stderr: "piped",
+      }).spawn();
+      const writer = child.stdin.getWriter();
+      await writer.write(new TextEncoder().encode(JSON.stringify(payload)));
+      await writer.close();
+      const output = await child.output();
+      const stderr = new TextDecoder().decode(output.stderr);
+      const stdout = new TextDecoder().decode(output.stdout);
+      const reason = surface === "agy" ? JSON.parse(stdout).reason ?? "" : stderr;
+      assertEquals(
+        output.code,
+        surface === "agy" ? 0 : entry.deny ? 2 : 0,
+        `${surface}: ${stderr}`,
+      );
+      if (surface === "agy") {
+        assertEquals(JSON.parse(stdout).decision, entry.deny ? "deny" : "allow", reason);
+      } else assertEquals(stdout, "");
+      if (entry.scriptWording) {
+        assertStringIncludes(reason, `Cannot read the script ${missing} yet`);
+      } else if (entry.deny) assertStringIncludes(reason, "financial");
+    }
+  });
+}
+
+Deno.test("shell syntax retains path context, commands in expansions, and quoted case arms", () => {
+  const cases: Array<[string, boolean]> = [
+    ['BASE=/tmp; echo hi >"$BASE/out.txt"', false],
+    ["cd /tmp; echo hi >out.txt", false],
+    ['case a in "a/*"|b/*) echo y ;; esac', false],
+    ["case a in a) case b in b/*|c/*) echo y ;; esac ;; esac", false],
+    ["case a in a) cat /home/joshua/Dropbox/financial/a.txt ;& b) echo y ;; esac", true],
+    ["[[ a == `cat /home/joshua/Dropbox/financial/a.txt` ]]", true],
+    ["echo $(( `cat /home/joshua/Dropbox/financial/n.txt` / 2 ))", true],
+    ["cat < <(cat /home/joshua/Dropbox/financial/a.txt)", true],
+    ["echo hi >&/home/joshua/Dropbox/financial/out.txt", true],
+    ["cat <<< /home/joshua/Dropbox/financial/a.txt", true],
+    ["cd ~/Dropbox/web-jam-llms; echo $(cat ../financial/a.txt)", true],
+    ["cd ~/Dropbox/web-jam-llms; echo hi >../financial/out.txt", true],
+    ["cd ~/Dropbox/web-jam-llms; [[ x == $(cat ../financial/a.txt) ]]", true],
+    ["cd ~/Dropbox/web-jam-llms; echo $(( $(cat ../financial/n.txt) / 2 ))", true],
+    ["[[ a =~ unterminated", true],
+    ["echo $(( 10 / 2 )", true],
+    ["case a in a/*|b/*", true],
+    ["echo hi >", true],
+    ["echo ok # $(/tmp/zz-missing-script.sh)", false],
+    ["echo '$(/tmp/zz-missing-script.sh)'", false],
+  ];
+  for (const [command, deny] of cases) {
+    assertEquals(checkPrivateFolderCommand(command, EXPECTED_16_FOLDERS) !== null, deny, command);
+  }
+});
+
 // Every row of the private-folder design's literal command table. The two
 // /tmp/s.py fixtures live in this suite's unique temp directory, never shared /tmp/s.py.
 const DESIGN_CASES: Array<{ command: string; deny: boolean; source?: string }> = [

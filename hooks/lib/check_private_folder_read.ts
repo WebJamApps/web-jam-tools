@@ -540,7 +540,7 @@ function inspectLiteralLoop(
       text,
     );
   if (!loop) return { found: false, denied: null };
-  const prefix = inspectShell(text.slice(0, loop.index), context, depth + 1);
+  const prefix = inspectShell(text.slice(0, loop.index), context, depth);
   if (prefix) return { found: true, denied: prefix };
   if (/[$`*?[\]]/.test(loop[2])) {
     if (!context.scriptText) throw new Error("cannot resolve loop words");
@@ -555,8 +555,213 @@ function inspectLiteralLoop(
   }
   return {
     found: true,
-    denied: inspectShell(text.slice(loop.index + loop[0].length), context, depth + 1),
+    denied: inspectShell(text.slice(loop.index + loop[0].length), context, depth),
   };
+}
+
+/** Find a balanced shell group without evaluating its contents. */
+function closingParenthesis(text: string, start: number): number {
+  let nesting = 0;
+  let quote = "";
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "\\" && quote !== "'") {
+      i++;
+    } else if (quote) {
+      if (ch === quote) quote = "";
+    } else if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+    } else if (ch === "(") {
+      nesting++;
+    } else if (ch === ")" && --nesting === 0) {
+      return i;
+    }
+  }
+  throw new Error("unterminated shell group");
+}
+
+/** Substitutions execute even in patterns, arithmetic and double-quoted words. */
+function shellSubstitutions(text: string): { text: string; commands: string[] } {
+  let result = "";
+  let quote = "";
+  const commands: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "\\" && quote !== "'") {
+      result += text.slice(i, i + 2);
+      i++;
+      continue;
+    }
+    const processSubstitution = !quote && (ch === "<" || ch === ">") && text[i + 1] === "(";
+    if (
+      processSubstitution ||
+      (quote !== "'" && text.startsWith("$(", i) && !text.startsWith("$((", i))
+    ) {
+      const end = closingParenthesis(text, i + 1);
+      commands.push(text.slice(i + 2, end));
+      // The marker keeps the expansion in its original command position. $? is
+      // deliberately unresolved by the path reader; no constructed value is guessed.
+      result += (processSubstitution ? "/dev/fd/" : "$?") +
+        `__WJT_SUBSTITUTION_${commands.length - 1}__`;
+      i = end;
+      continue;
+    }
+    if (quote !== "'" && ch === "`") {
+      let end = i + 1;
+      for (; end < text.length; end++) {
+        if (text[end] === "\\") end++;
+        else if (text[end] === "`") break;
+      }
+      if (end === text.length) throw new Error("unterminated backtick");
+      commands.push(text.slice(i + 1, end));
+      result += `$?__WJT_SUBSTITUTION_${commands.length - 1}__`;
+      i = end;
+      continue;
+    }
+    result += ch;
+    if (quote) {
+      if (ch === quote) quote = "";
+    } else if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === "#" && (i === 0 || /[\s;&|()]/.test(text[i - 1]))) {
+      const end = text.indexOf("\n", i);
+      if (end < 0) return { text: result + text.slice(i + 1), commands };
+      result += text.slice(i + 1, end);
+      i = end - 1;
+    }
+  }
+  return { text: result, commands };
+}
+
+/** Keep non-command syntax out of the shared position-based command splitter. */
+function shellSyntax(text: string): { text: string; patterns: string[]; redirects: string[] } {
+  let result = "";
+  let quote = "";
+  const patterns: string[] = [];
+  const redirects: string[] = [];
+  const cases: Array<"pattern" | "body"> = [];
+  const keepPattern = (pattern: string, replacement = " ") => {
+    patterns.push(pattern);
+    return replacement + " " + [...pattern.matchAll(/__WJT_SUBSTITUTION_\d+__/g)]
+      .map((match) => match[0]).join(" ") +
+      " ";
+  };
+  const wordAt = (i: number, word: string) =>
+    text.startsWith(word, i) && (i === 0 || /[\s;()]/.test(text[i - 1])) &&
+    (i + word.length === text.length || /[\s;()]/.test(text[i + word.length]));
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (!quote && cases.at(-1) === "pattern" && !/\s/.test(ch) && !wordAt(i, "esac")) {
+      const start = i;
+      if (ch === "(") i++; // optional opening parenthesis of a case arm
+      let nesting = 0;
+      let patternQuote = "";
+      for (; i < text.length; i++) {
+        const c = text[i];
+        if (c === "\\" && patternQuote !== "'") i++;
+        else if (patternQuote) {
+          if (c === patternQuote) patternQuote = "";
+        } else if (c === "'" || c === '"') patternQuote = c;
+        else if (c === "(") nesting++;
+        else if (c === ")") {
+          if (nesting === 0) break;
+          nesting--;
+        }
+      }
+      if (i === text.length) throw new Error("unterminated case pattern");
+      result += keepPattern(text.slice(start, i));
+      cases[cases.length - 1] = "body";
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      result += text.slice(i, i + 2);
+      i++;
+      continue;
+    }
+    if (quote) {
+      result += ch;
+      if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      result += ch;
+      continue;
+    }
+    if (ch === "#" && (i === 0 || /[\s;&|()]/.test(text[i - 1]))) {
+      const end = text.indexOf("\n", i);
+      if (end < 0) break;
+      i = end - 1;
+      continue;
+    }
+    if (wordAt(i, "esac") && cases.length) {
+      cases.pop();
+      result += " ";
+      i += 3;
+      continue;
+    }
+    if (wordAt(i, "case")) {
+      const header = /^case\s+(?:"[^"\n]*"|'[^'\n]*'|[^\s]+)\s+in\b/.exec(text.slice(i));
+      if (header) {
+        result += keepPattern(header[0]);
+        cases.push("pattern");
+        i += header[0].length - 1;
+        continue;
+      }
+    }
+    if (cases.at(-1) === "body" && (text.startsWith(";;", i) || text.startsWith(";&", i))) {
+      cases[cases.length - 1] = "pattern";
+      i += text.startsWith(";;&", i) ? 2 : 1;
+      result += "; ";
+      continue;
+    }
+    if (text.startsWith("[[", i) && (i === 0 || /[\s;&|()]/.test(text[i - 1]))) {
+      const end = text.indexOf("]]", i + 2);
+      if (end < 0) throw new Error("unterminated conditional test");
+      result += keepPattern(text.slice(i, end + 2));
+      i = end + 1;
+      continue;
+    }
+    if (text.startsWith("$((", i) || text.startsWith("((", i)) {
+      const start = ch === "$" ? i + 1 : i;
+      const end = closingParenthesis(text, start);
+      result += keepPattern(text.slice(i, end + 1), ch === "$" ? "0" : " ");
+      i = end;
+      continue;
+    }
+    const redirect = /^(?:&>>?|<<<|<<-?|<>|>>|[<>]&|>\||[<>])/.exec(text.slice(i));
+    if (redirect && text[i + redirect[0].length] !== "(") {
+      // A numeric descriptor belongs to the operator, never to the command argv.
+      result = result.replace(/(?:^|(?<=\s))\d+$/, "");
+      i += redirect[0].length;
+      while (i < text.length && /[ \t]/.test(text[i])) i++;
+      const start = i;
+      let targetQuote = "";
+      for (; i < text.length; i++) {
+        const c = text[i];
+        if (c === "\\" && targetQuote !== "'") i++;
+        else if (targetQuote) {
+          if (c === targetQuote) targetQuote = "";
+        } else if (c === "'" || c === '"') targetQuote = c;
+        else if (/[\s;&|()<>]/.test(c)) break;
+      }
+      if (targetQuote || start === i) throw new Error("unreadable redirection target");
+      const target = splitShellTokens(text.slice(start, i))[0];
+      // Here-strings are data; >&file still opens a path, whereas >&1 copies a descriptor.
+      if (redirect[0] === "<<<") result += keepPattern(text.slice(start, i));
+      else if (
+        !redirect[0].startsWith("<<") &&
+        !(redirect[0].endsWith("&") && /^(?:\d+-?|-)$/.test(target))
+      ) {
+        redirects.push(target);
+        result += ` __WJT_REDIRECT_${redirects.length - 1}__ `;
+      }
+      result += " ";
+      i--;
+      continue;
+    }
+    result += ch;
+  }
+  return { text: result, patterns, redirects };
 }
 
 function inspectShell(
@@ -572,7 +777,6 @@ function inspectShell(
   );
   const loop = inspectLiteralLoop(text, context, depth);
   if (loop.found) return loop.denied;
-  if (splitOnOperators(text).unterminated) throw new Error("unparseable shell command");
   // Data bodies have already been stripped. Retained bodies execute as scripts.
   const lines = text.split("\n");
   const shellLines: string[] = [];
@@ -592,7 +796,18 @@ function inspectShell(
     const denied = inspectScript(body.join("\n"), { ...context }, depth + 1, shell);
     if (denied) return denied;
   }
-  const parsed = splitOnOperators(shellLines.join("\n"));
+  const substitutions = shellSubstitutions(shellLines.join("\n"));
+  const syntax = shellSyntax(substitutions.text);
+  for (const pattern of syntax.patterns) {
+    const named = checkCommandForPrivateFolder(pattern, context.folders);
+    if (named) return named;
+    for (const match of pattern.matchAll(/Dropbox\/([^\s/"'`;)]+)/g)) {
+      if (!ALLOWED_FOLDERS.has(match[1])) return match[1];
+    }
+    if (/Dropbox\/(?=$|[\s"'])/.test(pattern)) return "Dropbox root";
+  }
+  const parsed = splitOnOperators(syntax.text);
+  if (parsed.unterminated) throw new Error("unparseable shell command");
   const cwdDenied = privatePath(context.cwd, context, true);
   if (cwdDenied) return cwdDenied;
   for (const segment of parsed.segments) {
@@ -600,7 +815,9 @@ function inspectShell(
     context = { ...parentContext, variables: new Map(parentContext.variables) };
     const named = checkCommandForPrivateFolder(segment, context.folders);
     if (named) return named;
-    const tokens = splitShellTokens(segment);
+    const rawTokens = splitShellTokens(segment);
+    const tokens = rawTokens.map((token) => token.replaceAll(/__WJT_SUBSTITUTION_\d+__/g, ""))
+      .filter((token) => token && !/^__WJT_REDIRECT_\d+__$/.test(token));
     let assignments = 0;
     while (assignments < tokens.length && ASSIGN_RE.test(tokens[assignments])) {
       const token = tokens[assignments++];
@@ -610,6 +827,27 @@ function inspectShell(
     // Prefix assignments populate the child's environment after shell argument
     // expansion. They cannot establish a variable used in this command's argv.
     if (assignments < tokens.length) context.variables = new Map(parentContext.variables);
+    const redirected = rawTokens.flatMap((token) => {
+      const match = /^__WJT_REDIRECT_(\d+)__$/.exec(token);
+      return match ? [syntax.redirects[Number(match[1])]] : [];
+    });
+    const expansions = [
+      ...(segment + " " + redirected.join(" ")).matchAll(/__WJT_SUBSTITUTION_(\d+)__/g),
+    ];
+    for (const index of new Set(expansions.map((match) => Number(match[1])))) {
+      const denied = inspectShell(substitutions.commands[index], { ...context }, depth + 1);
+      if (denied) return denied;
+    }
+    for (const token of rawTokens) {
+      const redirect = /^__WJT_REDIRECT_(\d+)__$/.exec(token);
+      if (!redirect) continue;
+      const target = syntax.redirects[Number(redirect[1])].replaceAll(
+        /__WJT_SUBSTITUTION_\d+__/g,
+        "",
+      );
+      const denied = privatePath(target, context);
+      if (denied) return denied;
+    }
     const patternCommand = ["grep", "sed"].includes(path.basename(tokens[assignments] ?? ""));
     for (
       const token of patternCommand ? pathOperands(tokens.slice(assignments), context) : tokens
