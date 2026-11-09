@@ -15,6 +15,8 @@ import {
   ASSIGN_RE,
   findHeredocMarker,
   MAX_WRAPPER_RECURSION_DEPTH,
+  readInterpreterHeredocs,
+  readInterpreterScript,
   resolveThroughWrappers,
   splitOnOperators,
   splitShellTokens,
@@ -122,33 +124,6 @@ const RSYNC_VALUE_FLAGS = new Set([
   "--port",
   "--chmod",
   "--chown",
-]);
-
-const PYTHON_VALUE_FLAGS = new Set(["-W", "-X", "--check-hash-based-pycs"]);
-const NODE_VALUE_FLAGS = new Set([
-  "-r",
-  "--require",
-  "--import",
-  "--loader",
-  "--experimental-loader",
-  "--input-type",
-  "--conditions",
-  "-C",
-]);
-const DENO_RUN_VALUE_FLAGS = new Set([
-  "--config",
-  "-c",
-  "--import-map",
-  "--lock",
-  "--ext",
-  "--inspect",
-  "--inspect-brk",
-  "--inspect-wait",
-  "--location",
-  "--seed",
-  "--v8-flags",
-  "--cert",
-  "--unsafely-ignore-certificate-errors",
 ]);
 
 const SHELL_INTERPRETERS = new Set(["bash", "sh", "zsh", "ksh", "dash"]);
@@ -471,7 +446,13 @@ function extractHeredocs(command: string): { body: string; line: string }[] {
       if (probe.replace(/\r$/, "") === word) break;
       body.push(lines[j]);
     }
-    out.push({ body: body.join("\n"), line });
+    // A heredoc supplied beside an explicit script is data, not its script.
+    const selected = readInterpreterHeredocs(line);
+    const words = splitShellTokens(line.replace(/[|;&()]/g, " "));
+    const supported = words.some((word) =>
+      ["python3", "python", "node", "deno"].includes(path.basename(word))
+    );
+    if (!supported || selected.length) out.push({ body: body.join("\n"), line });
     i = j;
   }
   return out;
@@ -571,84 +552,34 @@ function checkScriptContents(
 function findScriptArgument(
   cmdName: string,
   args: string[],
-): { kind: "file"; path: string } | { kind: "inline"; code: string } | null {
-  if (cmdName === "python3" || cmdName === "python" || /^python\d+(?:\.\d+)*$/.test(cmdName)) {
-    for (let i = 0; i < args.length; i++) {
-      const a = args[i];
-      if (a === "-c") {
-        return { kind: "inline", code: args[i + 1] ?? "" };
-      }
-      if (a === "-m") return null;
-      if (a === "--") {
-        return args[i + 1] ? { kind: "file", path: args[i + 1] } : null;
-      }
-      if (a.startsWith("-") && a !== "-") {
-        if (PYTHON_VALUE_FLAGS.has(a)) i++;
-        continue;
-      }
-      if (a !== "-") return { kind: "file", path: a };
-    }
-    return null;
+): Array<{ kind: "file"; path: string } | { kind: "inline"; code: string }> {
+  // Preserve existing aliases without adding another set of interpreter flags.
+  const canonical = cmdName === "nodejs"
+    ? "node"
+    : /^python\d+(?:\.\d+)*$/.test(cmdName)
+    ? "python3"
+    : cmdName;
+  const invocation = readInterpreterScript([canonical, ...args]);
+  if (invocation) {
+    return [
+      ...invocation.preloads.map((path) => ({ kind: "file" as const, path })),
+      ...(invocation.script && invocation.script.kind !== "heredoc" ? [invocation.script] : []),
+    ];
   }
-
-  if (cmdName === "node" || cmdName === "nodejs") {
-    for (let i = 0; i < args.length; i++) {
-      const a = args[i];
-      if (a === "-e" || a === "--eval" || a === "-p" || a === "--print") {
-        return { kind: "inline", code: args[i + 1] ?? "" };
-      }
-      if (a === "--") {
-        return args[i + 1] ? { kind: "file", path: args[i + 1] } : null;
-      }
-      if (a.startsWith("-") && a !== "-") {
-        if (NODE_VALUE_FLAGS.has(a)) i++;
-        continue;
-      }
-      if (a !== "-") return { kind: "file", path: a };
-    }
-    return null;
-  }
-
-  if (cmdName === "deno") {
-    if (args[0] === "eval") {
-      const codeArgs = args.slice(1).filter((a) => !a.startsWith("-"));
-      return { kind: "inline", code: codeArgs.join(" ") };
-    }
-    if (args[0] !== "run") return null;
-    for (let i = 1; i < args.length; i++) {
-      const a = args[i];
-      if (a === "--") {
-        return args[i + 1] ? { kind: "file", path: args[i + 1] } : null;
-      }
-      if (a.startsWith("-") && a !== "-") {
-        if (DENO_RUN_VALUE_FLAGS.has(a)) i++;
-        continue;
-      }
-      if (a !== "-") return { kind: "file", path: a };
-    }
-    return null;
-  }
-
   if (SHELL_INTERPRETERS.has(cmdName)) {
     for (let i = 0; i < args.length; i++) {
       const a = args[i];
-      if (a === "-c") {
-        return { kind: "inline", code: args[i + 1] ?? "" };
-      }
-      if (a === "--") {
-        return args[i + 1] ? { kind: "file", path: args[i + 1] } : null;
-      }
+      if (a === "-c") return [{ kind: "inline", code: args[i + 1] ?? "" }];
+      if (a === "--") return args[i + 1] ? [{ kind: "file", path: args[i + 1] }] : [];
       if ((a === "-o" || a === "+o") && i + 1 < args.length) {
         i++;
         continue;
       }
       if (a.startsWith("-") || a.startsWith("+")) continue;
-      return { kind: "file", path: a };
+      return [{ kind: "file", path: a }];
     }
-    return null;
   }
-
-  return null;
+  return [];
 }
 
 function hasTrailingUnescapedBackslash(text: string): boolean {
@@ -888,8 +819,7 @@ export function checkShellCommand(
     }
 
     // Check 4: script file or inline code given to python3, python, deno run, node, bash or sh
-    const scriptTarget = findScriptArgument(cmdName, args);
-    if (scriptTarget) {
+    for (const scriptTarget of findScriptArgument(cmdName, args)) {
       if (scriptTarget.kind === "inline") {
         const inlineDecision = checkScriptContents(
           scriptTarget.code,

@@ -15,6 +15,30 @@ const CWD = "/repo";
 const HOME = "/home/j";
 const targets = (command: string) => bashWriteTargets(command, { cwd: CWD, home: HOME });
 
+Deno.test("shared script selection: only executed inline and stdin code names write targets", () => {
+  assertEquals(targets(`python3 -W ignore -c "open('out', 'w')"`), ["/repo/out"]);
+  assertEquals(targets(`node --title fixture --eval="fs.writeFileSync('out', 'x')"`), [
+    "/repo/out",
+  ]);
+  assertEquals(targets(`deno eval --ext ts "Deno.writeTextFileSync('out', 'x')" data`), [
+    "/repo/out",
+  ]);
+  for (
+    const command of [
+      `python3 main.py -c "open('data', 'w')"`,
+      `node main.js -e "fs.writeFileSync('data','x')"`,
+      `deno run --config deno.json main.ts -e "Deno.writeTextFileSync('data','x')"`,
+      `python3 --help <<'PY'\nopen('data','w')\nPY`,
+      `python3 main.py <<'PY'\nopen('data','w')\nPY`,
+      `node -e 'console.log(1)' <<'JS'\nfs.writeFileSync('data','x')\nJS`,
+    ]
+  ) assertEquals(targets(command), [], command);
+  assertEquals(targets(`python3 - data.md <<'PY'\nopen('out','w')\nPY`), ["/repo/out"]);
+  assertEquals(targets(`node --input-type=module <<'JS'\nfs.writeFileSync('out','x')\nJS`), [
+    "/repo/out",
+  ]);
+});
+
 Deno.test("resolvePath: relative, absolute, ~, $HOME, dot segments, and unknown variables", () => {
   assertEquals(resolvePath("src/a.ts", CWD, HOME), "/repo/src/a.ts");
   assertEquals(resolvePath("/tmp/x", CWD, HOME), "/tmp/x");

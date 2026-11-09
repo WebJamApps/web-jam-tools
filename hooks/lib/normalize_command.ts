@@ -827,6 +827,173 @@ export function resolveWrapperLayer(argv: string[]): WrapperLayer | null {
 // guards.
 export const MAX_WRAPPER_ITERATIONS = 25;
 
+export type InterpreterScript =
+  | { kind: "file"; path: string }
+  | { kind: "inline"; code: string }
+  | { kind: "heredoc" };
+
+export interface InterpreterInvocation {
+  language: "python" | "javascript" | "typescript";
+  script: InterpreterScript | null;
+  preloads: string[];
+  args: string[];
+}
+
+const PYTHON_SCRIPT_VALUE_FLAGS = new Set(["-W", "-X", "--check-hash-based-pycs"]);
+const NODE_SCRIPT_VALUE_FLAGS = new Set([
+  "-r",
+  "--require",
+  "--import",
+  "--loader",
+  "--experimental-loader",
+  "-C",
+  "--conditions",
+  "--env-file",
+  "--env-file-if-exists",
+  "--input-type",
+  "--title",
+  "--redirect-warnings",
+  "--cpu-prof-dir",
+  "--heapsnapshot-signal",
+  "--watch-path",
+  "--test-name-pattern",
+]);
+const DENO_SCRIPT_VALUE_FLAGS = new Set([
+  "-c",
+  "--config",
+  "--ext",
+  "--import-map",
+  "--node-modules-linker",
+  "--lock",
+  "--cert",
+  "--min-dep-age",
+  "--inspect-publish-uid",
+  "--location",
+  "--seed",
+  "--preload",
+  "--require",
+  "--conditions",
+]);
+
+/**
+ * Select an interpreter's script without reading or executing it. Only flags
+ * before the script are options; everything after it belongs to the script.
+ * Redirections should already be removed; heredoc markers on a header line are
+ * also accepted, so its delimiter cannot be mistaken for a filename.
+ * Unsupported programs/subcommands return null. A supported invocation with no
+ * script returns a result with script:null (help, version, or a Python module).
+ */
+export function readInterpreterScript(
+  argv: string[],
+  hasHeredoc = false,
+): InterpreterInvocation | null {
+  let start = 0;
+  while (start < argv.length && ASSIGN_RE.test(argv[start])) start++;
+  argv = argv.slice(start);
+  const name = (argv[0] ?? "").split("/").pop();
+  const python = name === "python3" || name === "python";
+  const node = name === "node";
+  const deno = name === "deno";
+  if (!python && !node && !deno) return null;
+  if (deno && argv[1] !== "run" && argv[1] !== "eval") return null;
+  const language = python ? "python" : node ? "javascript" : "typescript";
+  const result: InterpreterInvocation = { language, script: null, preloads: [], args: [] };
+  const words = argv.slice(deno ? 2 : 1);
+  // Headers retain <<EOF or << EOF; their bodies are handled by the caller.
+  const args: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    if (hasHeredoc && /^\d*<<-?$/.test(words[i])) i++;
+    else if (!(hasHeredoc && /^\d*<<-?\S/.test(words[i]))) args.push(words[i]);
+  }
+  const valueFlags = python
+    ? PYTHON_SCRIPT_VALUE_FLAGS
+    : node
+    ? NODE_SCRIPT_VALUE_FLAGS
+    : DENO_SCRIPT_VALUE_FLAGS;
+  const evalMode = deno && argv[1] === "eval";
+  const finish = (script: InterpreterScript | null, from: number) => {
+    result.script = script;
+    result.args = args.slice(from);
+    return result;
+  };
+  const positional = (value: string | undefined, from: number) =>
+    finish(
+      value === undefined
+        ? hasHeredoc ? { kind: "heredoc" } : null
+        : value === "-" || value === "/dev/stdin"
+        ? { kind: "heredoc" }
+        : evalMode
+        ? { kind: "inline", code: value }
+        : { kind: "file", path: value },
+      from,
+    );
+  const preload = (flag: string, value: string | undefined) => {
+    if (!value) return;
+    const executes = deno
+      ? flag === "--preload" || flag === "--require"
+      : node && ["-r", "--require", "--import"].includes(flag);
+    // Node package specifiers such as dotenv/config are not local script files.
+    if (executes && (deno || /^(?:[./~$]|file:|[A-Za-z]:[\\/])/.test(value))) {
+      result.preloads.push(value);
+    }
+  };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") return positional(args[i + 1], i + 2);
+    if (["--help", "--version", "-h", ...(node ? ["-v"] : ["-V"])].includes(arg)) {
+      return { ...result, preloads: [] };
+    }
+    if (python && arg === "-m") return finish(null, i + 2);
+    if (python && arg.startsWith("-m") && arg.length > 2) return finish(null, i + 1);
+    const codeFlag = python
+      ? /^-[bBdEhiIOqsSuvVx]*c([\s\S]*)$/.exec(arg)
+      : node
+      ? /^-[ic]*(?:pe|ep|e|p)([\s\S]*)$/.exec(arg)
+      : null;
+    if (codeFlag) {
+      return finish(
+        { kind: "inline", code: codeFlag[1] || args[i + 1] || "" },
+        i + (codeFlag[1] ? 1 : 2),
+      );
+    }
+    if (node && ["--eval", "--print"].includes(arg)) {
+      return finish({ kind: "inline", code: args[i + 1] ?? "" }, i + 2);
+    }
+    if (node && /^(?:--eval|--print)=/.test(arg)) {
+      return finish({ kind: "inline", code: arg.slice(arg.indexOf("=") + 1) }, i + 1);
+    }
+    const equals = arg.indexOf("=");
+    if (arg.startsWith("--") && equals >= 0) {
+      preload(arg.slice(0, equals), arg.slice(equals + 1));
+      continue;
+    }
+    if (valueFlags.has(arg)) {
+      preload(arg, args[++i]);
+      continue;
+    }
+    const shortValue = arg.slice(0, 2);
+    if (arg.length > 2 && !arg.startsWith("--") && valueFlags.has(shortValue)) {
+      preload(shortValue, arg.slice(2));
+      continue;
+    }
+    if (!arg.startsWith("-") || arg === "-") return positional(arg, i + 1);
+  }
+  return positional(undefined, args.length);
+}
+
+/** Interpreters that actually consume a heredoc, including a piped stdin reader. */
+export function readInterpreterHeredocs(line: string): InterpreterInvocation[] {
+  if (!findHeredocMarker(line)) return [];
+  const invocations: InterpreterInvocation[] = [];
+  for (const segment of splitOnOperators(line).segments) {
+    const resolved = resolveThroughWrappers(splitShellTokens(segment));
+    if (resolved.kind !== "argv") continue;
+    const invocation = readInterpreterScript(resolved.argv, true);
+    if (invocation?.script?.kind === "heredoc") invocations.push(invocation);
+  }
+  return invocations;
+}
+
 // A "sane" cap on how many NESTED command strings (`bash -c`, `eval`, `ssh`)
 // a caller should recurse through. Hitting it also fails CLOSED.
 export const MAX_WRAPPER_RECURSION_DEPTH = 6;
