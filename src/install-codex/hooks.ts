@@ -41,26 +41,36 @@ function arrayEntries(source: string, name: string): string[] {
   throw new Error(`cannot read hook array ${name}: expected literal entries`);
 }
 
+const EXCLUDED_CODEX_HOOKS = new Set<string>([
+  "business-deadline-reminder.sh", // Claude Code only per design (web-jam-tools#1690)
+]);
+
 export function readHookRegistrations(source: string, home: string): Record<Event, Registration[]> {
   const arrays = ["SESSION_START_HOOKS", "PRE_TOOL_USE_HOOKS", "POST_TOOL_USE_HOOKS", "STOP_HOOKS"];
   return Object.fromEntries(EVENTS.map((event, index) => {
-    const registrations = arrayEntries(source, arrays[index]).map((entry) => {
-      const paired = event === "PreToolUse" || event === "PostToolUse";
-      const parts = paired ? entry.split("::") : [entry];
-      const script = parts[paired ? 1 : 0];
-      if (parts.length !== (paired ? 2 : 1) || !script || !/^[a-zA-Z0-9_-]+\.sh$/.test(script)) {
-        throw new Error(`invalid hook entry in ${arrays[index]}: ${entry}`);
-      }
-      const matcher = paired ? parts[0] : event === "SessionStart" ? "startup|resume" : undefined;
-      if (paired && !matcher) throw new Error(`missing matcher in ${arrays[index]}`);
-      return {
-        ...(matcher === undefined ? {} : { matcher }),
-        hooks: [{
-          type: "command" as const,
-          command: hookCommand(join(home, ".claude/hooks", script)),
-        }],
-      };
-    });
+    const registrations = arrayEntries(source, arrays[index])
+      .filter((entry) => {
+        const paired = event === "PreToolUse" || event === "PostToolUse";
+        const script = paired ? entry.split("::")[1] : entry;
+        return !EXCLUDED_CODEX_HOOKS.has(script);
+      })
+      .map((entry) => {
+        const paired = event === "PreToolUse" || event === "PostToolUse";
+        const parts = paired ? entry.split("::") : [entry];
+        const script = parts[paired ? 1 : 0];
+        if (parts.length !== (paired ? 2 : 1) || !script || !/^[a-zA-Z0-9_-]+\.sh$/.test(script)) {
+          throw new Error(`invalid hook entry in ${arrays[index]}: ${entry}`);
+        }
+        const matcher = paired ? parts[0] : event === "SessionStart" ? "startup|resume" : undefined;
+        if (paired && !matcher) throw new Error(`missing matcher in ${arrays[index]}`);
+        return {
+          ...(matcher === undefined ? {} : { matcher }),
+          hooks: [{
+            type: "command" as const,
+            command: hookCommand(join(home, ".claude/hooks", script)),
+          }],
+        };
+      });
     return [event, registrations];
   })) as Record<Event, Registration[]>;
 }
