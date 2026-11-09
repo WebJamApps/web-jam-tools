@@ -774,6 +774,80 @@ if [ -n "$NO_CLOSE_REASON" ]; then
   raw_tag_check no-close-reason "$NO_CLOSE_REASON"
 fi
 
+# --- refuse repository version numbers and bump wording in description (web-jam-tools#1725) ---
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+VERSION_FILE=""
+if [ -e "$REPO_ROOT/deno.json" ] || [ -L "$REPO_ROOT/deno.json" ]; then
+  VERSION_FILE="deno.json"
+elif [ -e "$REPO_ROOT/package.json" ] || [ -L "$REPO_ROOT/package.json" ]; then
+  VERSION_FILE="package.json"
+fi
+
+read_json_version() {
+  jq -er 'if type == "object" and (.version | type) == "string" and (.version | length) > 0 then .version else empty end' 2>/dev/null
+}
+
+escape_ere() {
+  printf '%s' "$1" | sed -E 's/[][\\.^$*+?(){}|]/\\&/g'
+}
+
+BRANCH_VERSION=""
+BASE_VERSION=""
+ESCAPED_BRANCH_VERSION=""
+ESCAPED_BASE_VERSION=""
+
+if [ -n "$VERSION_FILE" ]; then
+  if [ ! -r "$REPO_ROOT/$VERSION_FILE" ] || ! BRANCH_VERSION="$(read_json_version < "$REPO_ROOT/$VERSION_FILE")" || [ -z "$BRANCH_VERSION" ]; then
+    echo "ERROR: could not read a 'version' value from $VERSION_FILE (web-jam-tools#1725)." >&2
+    echo "       Fix $VERSION_FILE so its root object carries a readable \"version\" string." >&2
+    exit 1
+  fi
+  ESCAPED_BRANCH_VERSION="$(escape_ere "$BRANCH_VERSION")"
+
+  if git cat-file -e "origin/$BASE:$VERSION_FILE" 2>/dev/null; then
+    if ! BASE_VERSION="$(git show "origin/$BASE:$VERSION_FILE" 2>/dev/null | read_json_version)" || [ -z "$BASE_VERSION" ]; then
+      echo "ERROR: could not read a 'version' value from $VERSION_FILE on origin/$BASE (web-jam-tools#1725)." >&2
+      exit 1
+    fi
+    ESCAPED_BASE_VERSION="$(escape_ere "$BASE_VERSION")"
+  fi
+fi
+
+version_or_bump_check() {
+  local field="$1" text="$2" line hit
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -z "$line" ] && continue
+    hit=0
+    # shellcheck disable=SC2016 # backtick inside single-quoted ERE is literal
+    if [ -n "$ESCAPED_BRANCH_VERSION" ] && printf '%s\n' "$line" | grep -qE "(^|[^0-9.])${ESCAPED_BRANCH_VERSION}($|[^0-9.]|\.$|\.[^0-9])"; then
+      hit=1
+    elif [ -n "$ESCAPED_BASE_VERSION" ] && printf '%s\n' "$line" | grep -qE "(^|[^0-9.])${ESCAPED_BASE_VERSION}($|[^0-9.]|\.$|\.[^0-9])"; then
+      hit=1
+    elif printf '%s\n' "$line" | grep -qiE '(^|[^[:alnum:]_])((version|semver)[[:space:]`]+bump|(bump|bumps|bumped|bumping)[[:space:]`]+(the[[:space:]`]+)?((patch|minor|major|semver|package|app)[[:space:]`]+)?(the[[:space:]`]+)?(version|deno\.json|package\.json))($|[^[:alnum:]_])'; then
+      hit=1
+    fi
+    if [ "$hit" -eq 1 ]; then
+      echo "ERROR: --$field mentions the repository's version or version bump (web-jam-tools#1725):" >&2
+      echo "         $line" >&2
+      echo "       The version is in the diff and CI checks it — never put it in the PR description." >&2
+      echo "       Remove that line and run the same command again." >&2
+      exit 1
+    fi
+  done <<< "$text"
+}
+
+version_or_bump_check summary "$SUMMARY"
+version_or_bump_check test-plan "$TEST_PLAN"
+if [ -n "$TEST_EVIDENCE" ]; then
+  version_or_bump_check test-evidence "$TEST_EVIDENCE"
+fi
+if [ "$HAS_SCREENSHOTS" -eq 1 ]; then
+  version_or_bump_check screenshots "$SCREENSHOTS"
+fi
+if [ -n "$NO_CLOSE_REASON" ]; then
+  version_or_bump_check no-close-reason "$NO_CLOSE_REASON"
+fi
+
 # --- auto-fence an unfenced --test-evidence (web-jam-tools#150) ---
 # Callers across lanes keep passing raw console output, which markdown garbles
 # (web-jam-back#935: the coverage report's "====" separator lines acted as

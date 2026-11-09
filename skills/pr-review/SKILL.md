@@ -455,7 +455,7 @@ afterward.
    - **Nits** (`### 🔵 Nits`): Cosmetic, non-blocking findings about the PR's own description or a linked issue's body — the Step 2 item 11 class ("Issue Body & PR Body Prose (Never a Must Fix)"): stale, incomplete, or drifted Summary, Non-goals, acceptance-criteria wording, "Files changed" lists, and "How to test locally" / test-plan narration. **Placed directly beneath `### 🟡 Suggestions`** in the post body, as the last section. Prefix each nit line with 🔵. If none, render `### Nits` with `✅ None`.
      - **Scope, exactly**: this section holds the Step 2 item 11 body-prose class and nothing else. A finding about the code, the tests, or the version field is a Suggestion (or a Must Fix), not a Nit.
      - **Never a merge blocker**: like a Suggestion, a Nit never produces `**🛑 Changes Requested**` on its own, and it is never restated in Step 4's follow-up post. On a re-review, a Nit that has since been edited away is reported once with ✅ under `### Changes Since Last Review`, exactly like any other fixed finding.
-     - **Fixed by editing text, not by pushing code**: a Nit is cleared with `gh pr edit --body` or an issue-body edit, which is precisely why it does not share a section with findings that require a commit.
+     - **Fixed by editing text, not by pushing code**: a Nit about a PR description is cleared by the author rerunning `scripts/create-draft-pr.sh --update` and one about an issue body with `deno task edit-issue`, which is precisely why it does not share a section with findings that require a commit.
    - **Reviewer line** (web-jam-tools#1193 "skills/pr-review: name the reviewing agent and model in every review comment, and refuse to post without it"): the **final element of every review post**, after `### 🔵 Nits` (or, in a Step 4 follow-up, after the last section), on a line of its own: `🤖 Reviewed by <tool> — <model>` (an em dash with a space on each side), e.g. `🤖 Reviewed by Claude Code — Claude Opus 5.5` or `🤖 Reviewed by Antigravity — Gemini Flash (High)`. It is not a section and carries no heading. `<tool>` and `<model>` name the agent surface and the model **actually running this review** — never copied from the PR's own `🤖 Work by …` author footer, which names whoever wrote the code. Every agent posts through the same GitHub account, so this line is the only thing that shows who reviewed.
 
    **Example — initial post (post #1), re-review with one remaining blocker and two now-fixed
@@ -485,7 +485,7 @@ afterward.
    - 🟡 Version bump — `deno.json`'s version does not strictly exceed `origin/dev`'s current tip (Step 2 item 5).
 
    ### 🔵 Nits
-   - 🔵 The PR body's "How to test locally" block names a worktree path that no longer exists — fix with `gh pr edit --body`; no commit needed.
+   - 🔵 The PR body's "How to test locally" block names a worktree path that no longer exists — fix by rerunning `scripts/create-draft-pr.sh --update`; no commit needed.
 
    🤖 Reviewed by Claude Code — Claude Opus 5.5
    ````

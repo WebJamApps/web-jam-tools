@@ -42,6 +42,7 @@ Josh alone reviews and flips draft → ready on GitHub.
    (web-jam-tools) or `package.json` (other repos). The CI "Version bump check" gate
    blocks PRs with no version change from the merge-base with `dev`. Follow-up commits
    to an already-open PR keep the same version.
+   The description never mentions the version or the bump, because the diff shows it and CI checks it.
 4. **In-range dependency updates & security fixes:** `npm audit fix` (Node repos) and
    `deno outdated --update` restricted to minor/patch (Deno repos) are allowed and encouraged
    inside the working PR — they stay within the project's declared semver range, and the

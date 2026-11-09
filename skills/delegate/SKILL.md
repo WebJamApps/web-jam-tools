@@ -173,11 +173,6 @@ PR attribution & conventions:
   web-jam-tools, do NOT go looking for it inside the target repo; a past agent
   wrongly concluded it "doesn't exist" because it searched the wrong repo):
     ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "<tool> — <the model actually doing the work>"
-- If you must fall back to `gh pr create --draft --base dev` directly, the PR
-  body MUST end with the line `🤖 Work by <tool> — <model>`, naming the model
-  that actually did the work — NEVER the generic "🤖 Generated with Claude
-  Code" tagline. Josh tracks per-model PR quality via this footer; a miss here
-  is a real regression (it happened on web-jam-back#892, 2026-07-02).
 - Commit trailers (`Co-Authored-By:`) name the model actually doing the work,
   not a different one.
 - **One semver version bump per PR, on the first commit only** — `deno.json` for
@@ -265,11 +260,11 @@ silently skip all of that at the moment it matters most:
   finalize below. This preserves every create-time guard (draft + base dev,
   author-roster check, `Closes #NNN`, attribution footer, raw-HTML-tag check)
   at the moment the checkpoint PR is born.
-- **Cadence updates — plain edits, not the script.** Every checklist tick and
-  "Decisions / blockers" line after that is `gh pr edit <num> --body-file
-  <path>` — these are lightweight status pokes, not a finished deliverable
-  description, so they don't need to clear the script's content guards; that's
-  what finalize is for.
+- **Cadence updates — `create-draft-pr.sh --update` on the SAME PR.** Every
+  checklist tick and "Decisions / blockers" line after that is written by
+  rerunning `create-draft-pr.sh --update` with the updated checklist as
+  `--summary-file` (never a plain `gh pr edit`), so every version of the
+  description passes the same checks.
 - **Finalize — `create-draft-pr.sh --update` on the SAME PR**, with the REAL
   `--summary` / `--test-plan` / `--test-evidence` / `--author` (and `--part-of`
   if applicable) — replacing the checkpoint scaffolding with bulleted `##
@@ -313,7 +308,7 @@ Rules:
   Follow the "Dispatch checkpoint" subsection above for the whole PR lifecycle:
   open the checkpoint draft PR early (right after branch + first commit + push,
   via create-draft-pr.sh CREATE mode), keep it updated at each of the two
-  triggers via `gh pr edit`, and finalize the SAME PR at the end via
+  triggers via create-draft-pr.sh `--update`, and finalize the SAME PR at the end via
   create-draft-pr.sh `--update` — never open a second PR. (Skip this
   checkpoint step entirely for a pure research/lookup task that creates no
   branch.)
@@ -353,7 +348,7 @@ Rules:
 - Follow the "Dispatch checkpoint" subsection above for the whole PR lifecycle:
   open the checkpoint draft PR early (right after branch + first commit + push,
   via create-draft-pr.sh CREATE mode per that subsection's recipe), keep it
-  updated at each of the two triggers via `gh pr edit`, and finalize the SAME
+  updated at each of the two triggers via create-draft-pr.sh `--update`, and finalize the SAME
   PR at the end via create-draft-pr.sh **--update** — never open a second PR.
   (Skip entirely if this is a follow-up commit to an already-open checkpoint
   PR — just keep updating it, and let whichever dispatch finishes the work run
@@ -407,7 +402,7 @@ Rules:
 - Follow the "Dispatch checkpoint" subsection above for the whole PR lifecycle:
   open the checkpoint draft PR early (right after branch + first commit + push,
   via create-draft-pr.sh CREATE mode per that subsection's recipe), keep it
-  updated at each of the two triggers via `gh pr edit`, and finalize the SAME
+  updated at each of the two triggers via create-draft-pr.sh `--update`, and finalize the SAME
   PR at the end via create-draft-pr.sh **--update** — never open a second PR.
   (Skip entirely if this is a follow-up commit to an already-open checkpoint
   PR — just keep updating it, and let whichever dispatch finishes the work run
