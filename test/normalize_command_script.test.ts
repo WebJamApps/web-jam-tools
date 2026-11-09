@@ -61,6 +61,7 @@ const rows: Array<{
   { command: "node - <<'JS'\nconsole.log(1);\nJS", script: stdin, language: "javascript" },
   { command: "node --version", script: null },
   { command: "deno run -A /tmp/s.ts a.md", script: file("/tmp/s.ts"), args: ["a.md"] },
+  { command: "deno /tmp/s.ts a.md", script: file("/tmp/s.ts"), args: ["a.md"] },
   {
     command: "deno run --config deno.json --allow-read --allow-env /tmp/sim.ts",
     script: file("/tmp/sim.ts"),
@@ -198,4 +199,14 @@ Deno.test("heredoc selection keeps stdin code separate from scripts, inline code
     "javascript",
   );
   assertEquals(readInterpreterHeredocs("env FOO=bar python3 - <<EOF")[0]?.language, "python");
+});
+
+Deno.test("implicit deno run reads file argument when not a subcommand", () => {
+  assertEquals(readInterpreterScript(["deno", "/tmp/s.ts"])?.script, file("/tmp/s.ts"));
+  assertEquals(readInterpreterScript(["deno", "-A", "/tmp/s.ts"])?.script, file("/tmp/s.ts"));
+  assertEquals(readInterpreterScript(["deno", "--quiet", "/tmp/s.ts"])?.script, file("/tmp/s.ts"));
+  assertEquals(readInterpreterScript(["deno", "test"]), null);
+  assertEquals(readInterpreterScript(["deno", "task", "test"]), null);
+  assertEquals(readInterpreterScript(["deno", "fmt"]), null);
+  assertEquals(readInterpreterScript(["deno", "lint"]), null);
 });

@@ -874,6 +874,56 @@ const DENO_SCRIPT_VALUE_FLAGS = new Set([
   "--require",
   "--conditions",
 ]);
+const DENO_SUBCOMMANDS = new Set([
+  "add",
+  "approve-scripts",
+  "audit",
+  "bench",
+  "bundle",
+  "cache",
+  "check",
+  "clean",
+  "compile",
+  "completions",
+  "coverage",
+  "create",
+  "deploy",
+  "desktop",
+  "doc",
+  "eval",
+  "fmt",
+  "help",
+  "info",
+  "init",
+  "install",
+  "jupyter",
+  "lint",
+  "link",
+  "list",
+  "lsp",
+  "outdated",
+  "pack",
+  "publish",
+  "remove",
+  "repl",
+  "run",
+  "sandbox",
+  "serve",
+  "task",
+  "test",
+  "transpile",
+  "types",
+  "uninstall",
+  "unlink",
+  "update",
+  "upgrade",
+  "vendor",
+  "watch",
+  "why",
+  "x",
+  "bump-version",
+  "ci",
+]);
 
 /**
  * Select an interpreter's script without reading or executing it. Only flags
@@ -903,16 +953,34 @@ export function readInterpreterScript(
     if (hasHeredoc && /^\d*<<-?$/.test(argv[i])) i++;
     else if (!(hasHeredoc && /^\d*<<-?\S/.test(argv[i]))) words.push(argv[i]);
   }
-  const sub = words[0];
-  const denoRepl = deno && (sub === "repl" || sub === undefined || sub.startsWith("-"));
-  if (deno && sub !== "run" && sub !== "eval" && !(hasHeredoc && denoRepl)) return null;
-  const args = deno && (sub === "run" || sub === "eval" || sub === "repl") ? words.slice(1) : words;
   const valueFlags = python
     ? PYTHON_SCRIPT_VALUE_FLAGS
     : node
     ? NODE_SCRIPT_VALUE_FLAGS
     : DENO_SCRIPT_VALUE_FLAGS;
+  let subIndex = 0;
+  while (deno && subIndex < words.length && words[subIndex].startsWith("-")) {
+    if (words[subIndex].includes("=")) subIndex += 1;
+    else if (valueFlags.has(words[subIndex])) subIndex += 2;
+    else subIndex += 1;
+  }
+  const sub = deno ? words[subIndex] : undefined;
+  if (
+    deno &&
+    sub !== undefined &&
+    DENO_SUBCOMMANDS.has(sub) &&
+    sub !== "run" &&
+    sub !== "eval" &&
+    sub !== "repl"
+  ) {
+    return null;
+  }
   const evalMode = deno && sub === "eval";
+  const denoRepl = deno && (sub === "repl" || sub === undefined);
+  let args = words;
+  if (deno && (sub === "run" || sub === "eval" || sub === "repl")) {
+    args = words.filter((_, idx) => idx !== subIndex);
+  }
   const heredocScript: InterpreterScript | null = hasHeredoc ? { kind: "heredoc" } : null;
   const finish = (script: InterpreterScript | null, from: number) => {
     result.script = script;

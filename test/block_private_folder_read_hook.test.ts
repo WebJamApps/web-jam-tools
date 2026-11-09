@@ -650,6 +650,11 @@ const SHELL_SYNTAX_CASES: Array<{
     deny: true,
     scriptWording: true,
   },
+  {
+    command: "deno /tmp/zz-missing-script.sh",
+    deny: true,
+    scriptWording: true,
+  },
   { command: "bash scripts/ubuntu-health.sh", deny: false },
   { command: "(echo hi) >/dev/null", deny: false },
   { command: "(echo hi) 2>/dev/null", deny: false },
