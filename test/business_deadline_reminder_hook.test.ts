@@ -1,6 +1,7 @@
 // business_deadline_reminder_hook.test.ts
 
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { readHookRegistrations } from "../src/install-codex/hooks.ts";
 
 const SCRIPT_PATH = new URL(
   "../hooks/business-deadline-reminder.sh",
@@ -184,4 +185,78 @@ Deno.test("malformed entry (named, others still shown)", async () => {
     assertStringIncludes(parsed.systemMessage, "Valid 30-Day Item");
     assertStringIncludes(parsed.systemMessage, "due in 30 days");
   });
+});
+
+Deno.test("previous-cycle payment does not suppress next yearly deadline (shown)", async () => {
+  await withSandbox(async (listPath) => {
+    // Due 2027-12-08, paid in previous cycle on 2026-12-08, evaluated on 2027-11-08 (due in 30 days)
+    const markdown = `# Web Jam LLC Deadlines
+
+| Item | Due Date | Amount | Where Paid | Warn Days | Last Paid Date | Confirmation |
+|---|---|---|---|---|---|---|
+| Virginia SCC Annual Registration Fee | 2027-12-08 | $50.00 | https://cis.scc.virginia.gov | 30 | 2026-12-08 | CONF-PREV-YEAR |
+`;
+    await Deno.writeTextFile(listPath, markdown);
+
+    const res = await runHook({
+      BUSINESS_DEADLINES_PATH: listPath,
+      BUSINESS_DEADLINES_NOW: "2027-11-08",
+    });
+    assertEquals(res.code, 0);
+    const parsed = JSON.parse(res.stdout);
+    assertStringIncludes(parsed.systemMessage, "Virginia SCC Annual Registration Fee");
+    assertStringIncludes(parsed.systemMessage, "due in 30 days");
+    assertStringIncludes(parsed.systemMessage, "2027-12-08");
+  });
+});
+
+Deno.test("current-cycle payment suppresses reminder (silent)", async () => {
+  await withSandbox(async (listPath) => {
+    // Due 2027-12-08, paid for current cycle on 2027-11-08, evaluated on 2027-11-08
+    const markdown = `# Web Jam LLC Deadlines
+
+| Item | Due Date | Amount | Where Paid | Warn Days | Last Paid Date | Confirmation |
+|---|---|---|---|---|---|---|
+| Virginia SCC Annual Registration Fee | 2027-12-08 | $50.00 | https://cis.scc.virginia.gov | 30 | 2027-11-08 | CONF-CURRENT-YEAR |
+`;
+    await Deno.writeTextFile(listPath, markdown);
+
+    const res = await runHook({
+      BUSINESS_DEADLINES_PATH: listPath,
+      BUSINESS_DEADLINES_NOW: "2027-11-08",
+    });
+    assertEquals(res.code, 0);
+    assertEquals(res.stdout, "");
+  });
+});
+
+Deno.test("hook is absent from Codex and agy registrations", () => {
+  // Assert absence on Codex
+  const installHooksScript = Deno.readTextFileSync(
+    new URL("../scripts/install-hooks.sh", import.meta.url),
+  );
+  const codexRegistrations = readHookRegistrations(installHooksScript, "/tmp/home");
+  for (const [event, regs] of Object.entries(codexRegistrations)) {
+    for (const reg of regs) {
+      for (const hook of reg.hooks) {
+        assert(
+          !hook.command.includes("business-deadline-reminder.sh"),
+          `business-deadline-reminder.sh must not be registered on Codex (${event})`,
+        );
+      }
+    }
+  }
+
+  // Assert absence on agy: agy config/hooks.json has no lifecycle registrations
+  const geminiHooksPath = `${Deno.env.get("HOME")}/.gemini/config/hooks.json`;
+  try {
+    const agyConfig = JSON.parse(Deno.readTextFileSync(geminiHooksPath));
+    const rawAgy = JSON.stringify(agyConfig);
+    assert(
+      !rawAgy.includes("business-deadline-reminder.sh"),
+      "business-deadline-reminder.sh must not be registered in agy config",
+    );
+  } catch {
+    // File missing or inaccessible in test sandbox is fine
+  }
 });

@@ -236,8 +236,19 @@ export function evaluateDeadlines(
     if (entry.lastPaidDate && !isAbsentValue(entry.lastPaidDate)) {
       const [py, pm, pd] = entry.lastPaidDate.split("-").map(Number);
       const paidUtc = new Date(Date.UTC(py, pm - 1, pd));
-      // Paid if paid within 365 days before due date, on due date, or after
-      if (paidUtc.getTime() >= dueUtc.getTime() - (365 * 86400 * 1000)) {
+      // For yearly obligations, the previous cycle was due 1 year prior.
+      // A payment belongs to the current due cycle if paid on or after the due date
+      // (on-time or late payment), or in advance within the current cycle's warning/advance
+      // window (after the prior cycle's due date, up to max(warnDays, 90) days before due date).
+      // Any payment on or before the previous cycle belongs to the prior obligation.
+      const prevDueUtc = new Date(Date.UTC(y - 1, m - 1, Math.min(d, 28)));
+      const advanceWindowMs = Math.max(entry.warnDays, 90) * 86400 * 1000;
+      const cycleStartUtc = Math.max(
+        dueUtc.getTime() - advanceWindowMs,
+        prevDueUtc.getTime() + 86400 * 1000,
+      );
+
+      if (paidUtc.getTime() >= cycleStartUtc) {
         isPaid = true;
       }
     }

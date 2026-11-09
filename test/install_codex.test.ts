@@ -95,7 +95,7 @@ function capture(run: () => number): { code: number; output: string } {
   }
 }
 
-Deno.test("fresh home: exact 29 nested registrations, matcher fidelity, sandbox and regular rules", () => {
+Deno.test("fresh home: exact 28 nested registrations, matcher fidelity, sandbox and regular rules", () => {
   fixture((home, repo) => {
     assertEquals(installCodex({ home, repo }), 0);
     const text = Deno.readTextFileSync(join(home, ".codex/config.toml"));
@@ -108,7 +108,6 @@ Deno.test("fresh home: exact 29 nested registrations, matcher fidelity, sandbox 
         "backup-refusal-reminder.sh",
         "hook-install-drift-reminder.sh",
         "permission-wildcard-drift-reminder.sh",
-        "business-deadline-reminder.sh",
       ].map((name) => ["startup|resume", name]),
       PreToolUse: [
         ["Bash", "semver-push-reminder.sh"],
@@ -368,7 +367,7 @@ Deno.test("literal array reader rejects shell expansion, malformed entries and m
     assert(failed, replacement);
   }
   const start = HOOKS.slice(HOOKS.indexOf("SESSION_START_HOOKS=("));
-  assertEquals(readHookRegistrations(start, "/tmp/home").SessionStart.length, 6);
+  assertEquals(readHookRegistrations(start, "/tmp/home").SessionStart.length, 5);
   assertEquals(
     readHookRegistrations(
       HOOKS.replace("PRE_TOOL_USE_HOOKS=(", "PRE_TOOL_USE_HOOKS=(\n# comment"),
