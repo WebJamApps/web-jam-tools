@@ -40,12 +40,13 @@
 #   5. How many days ahead to warn (Warn Days): integer days (default: 30)
 #   6. Date of last payment (Last Paid Date): ISO date YYYY-MM-DD, or '-' / empty
 #   7. Confirmation number (Confirmation): confirmation code, or '-' / empty
+#   8. Paid through cycle (Paid Through): ISO date YYYY-MM-DD or year YYYY (optional)
 #
 # Table format (primary):
-#   | Item | Due Date | Amount | Where Paid | Warn Days | Last Paid Date | Confirmation |
-#   |---|---|---|---|---|---|---|
-#   | Virginia SCC Annual Registration Fee | 2027-01-31 | $50.00 | https://cis.scc.virginia.gov | 30 | 2026-01-20 | 1701531000 |
-#   | City of Salem Business License | 2027-03-01 | TBD | City of Salem Commissioner of Revenue | 30 | - | - |
+#   | Item | Due Date | Amount | Where Paid | Warn Days | Last Paid Date | Confirmation | Paid Through |
+#   |---|---|---|---|---|---|---|---|
+#   | Virginia SCC Annual Registration Fee | 2027-01-31 | $50.00 | https://cis.scc.virginia.gov | 30 | 2026-01-20 | 1701531000 | 2026-01-31 |
+#   | City of Salem Business License | 2027-03-01 | TBD | City of Salem Commissioner of Revenue | 30 | - | - | - |
 #
 # Block format (alternative):
 #   ## Virginia SCC Annual Registration Fee
@@ -55,9 +56,17 @@
 #   - Warn: 30
 #   - Last Paid: 2026-01-20
 #   - Confirmation: 1701531000
+#   - Paid Through: 2026-01-31
 #
-# Recording a valid Last Paid Date (and optional confirmation number) for the
-# current cycle marks the obligation as paid and ends the reminder.
+# Cycle and payment association:
+#   An obligation is marked paid (ending the reminder) if:
+#     1. An explicit Paid Through date/year is specified and covers the current
+#        due cycle (Paid Through >= Due Date, or matching year).
+#     2. Or when Paid Through is omitted, Last Paid Date is after the prior
+#        cycle's due date (i.e. paid for the current cycle, whether on-time, late,
+#        or months in advance).
+#   A payment on or before the prior cycle's due date belongs to the previous
+#   cycle and does not suppress the upcoming reminder.
 # ==============================================================================
 set -euo pipefail
 

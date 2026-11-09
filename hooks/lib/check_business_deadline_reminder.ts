@@ -14,6 +14,7 @@ export interface DeadlineEntry {
   warnDays: number;
   lastPaidDate?: string;
   confirmation?: string;
+  paidThrough?: string;
 }
 
 export interface MalformedEntry {
@@ -82,8 +83,14 @@ export function parseDeadlines(markdown: string): ParseResult {
         warnDays = currentBlockData.warnDays;
       }
       const lastPaid = cleanCell(currentBlockData.lastPaidDate);
+      const paidThrough = cleanCell(currentBlockData.paidThrough);
       if (lastPaid && !isAbsentValue(lastPaid) && !isValidDate(lastPaid)) {
         malformed.push({ item, reason: `invalid last paid date: '${lastPaid}'` });
+      } else if (
+        paidThrough && !isAbsentValue(paidThrough) && !isValidDate(paidThrough) &&
+        !/^\d{4}$/.test(paidThrough)
+      ) {
+        malformed.push({ item, reason: `invalid paid through: '${paidThrough}'` });
       } else {
         entries.push({
           item,
@@ -91,8 +98,9 @@ export function parseDeadlines(markdown: string): ParseResult {
           amount: currentBlockData.amount,
           wherePaid: currentBlockData.wherePaid,
           warnDays,
-          lastPaidDate: lastPaid,
+          lastPaidDate: isAbsentValue(lastPaid) ? undefined : lastPaid,
           confirmation: currentBlockData.confirmation,
+          paidThrough: isAbsentValue(paidThrough) ? undefined : paidThrough,
         });
       }
     }
@@ -160,6 +168,14 @@ export function parseDeadlines(markdown: string): ParseResult {
       }
 
       const confirmation = cleanCell(cells[6]);
+      const paidThroughRaw = cleanCell(cells[7]);
+      const paidThrough = isAbsentValue(paidThroughRaw) ? undefined : paidThroughRaw;
+      if (
+        paidThrough && !isValidDate(paidThrough) && !/^\d{4}$/.test(paidThrough)
+      ) {
+        malformed.push({ item, reason: `invalid paid through: '${paidThrough}'` });
+        continue;
+      }
 
       entries.push({
         item,
@@ -169,6 +185,7 @@ export function parseDeadlines(markdown: string): ParseResult {
         warnDays,
         lastPaidDate: isAbsentValue(lastPaidDate) ? undefined : lastPaidDate,
         confirmation: isAbsentValue(confirmation) ? undefined : confirmation,
+        paidThrough,
       });
       continue;
     }
@@ -204,6 +221,8 @@ export function parseDeadlines(markdown: string): ParseResult {
           currentBlockData.lastPaidDate = isAbsentValue(val) ? undefined : val;
         } else if (key === "confirmation" || key === "conf") {
           currentBlockData.confirmation = isAbsentValue(val) ? undefined : val;
+        } else if (key === "paid through" || key === "paid cycle" || key === "paid for") {
+          currentBlockData.paidThrough = isAbsentValue(val) ? undefined : val;
         }
       }
     }
@@ -233,22 +252,23 @@ export function evaluateDeadlines(
     );
 
     let isPaid = false;
-    if (entry.lastPaidDate && !isAbsentValue(entry.lastPaidDate)) {
+    if (entry.paidThrough && !isAbsentValue(entry.paidThrough)) {
+      if (isValidDate(entry.paidThrough)) {
+        isPaid = entry.paidThrough >= entry.dueDate;
+      } else if (/^\d{4}$/.test(entry.paidThrough)) {
+        isPaid = parseInt(entry.paidThrough, 10) >= y;
+      }
+    } else if (entry.lastPaidDate && !isAbsentValue(entry.lastPaidDate)) {
       const [py, pm, pd] = entry.lastPaidDate.split("-").map(Number);
       const paidUtc = new Date(Date.UTC(py, pm - 1, pd));
-      // For yearly obligations, the previous cycle was due 1 year prior.
-      // A payment belongs to the current due cycle if paid on or after the due date
-      // (on-time or late payment), or in advance within the current cycle's warning/advance
-      // window (after the prior cycle's due date, up to max(warnDays, 90) days before due date).
-      // Any payment on or before the previous cycle belongs to the prior obligation.
-      const prevDueUtc = new Date(Date.UTC(y - 1, m - 1, Math.min(d, 28)));
-      const advanceWindowMs = Math.max(entry.warnDays, 90) * 86400 * 1000;
-      const cycleStartUtc = Math.max(
-        dueUtc.getTime() - advanceWindowMs,
-        prevDueUtc.getTime() + 86400 * 1000,
-      );
+      // For yearly obligations, the previous cycle was due 1 year prior (handling Feb 29 leap years)
+      const prevDay = (m === 2 && d === 29) ? 28 : d;
+      const prevDueUtc = new Date(Date.UTC(y - 1, m - 1, prevDay));
 
-      if (paidUtc.getTime() >= cycleStartUtc) {
+      // Any payment strictly after the previous cycle's due date belongs to the
+      // current due cycle, regardless of whether paid days or months in advance.
+      // Payments on or before the previous cycle's due date belong to the prior obligation.
+      if (paidUtc.getTime() > prevDueUtc.getTime()) {
         isPaid = true;
       }
     }
