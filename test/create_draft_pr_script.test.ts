@@ -2071,3 +2071,173 @@ Deno.test("issue line table: Row 4 - malformed parent response fails closed", as
     /malformed parent issue response for #100 \(number not found\)/,
   );
 });
+
+// --- web-jam-tools#1725: refuse repository version numbers and bump wording ---
+
+type VersionFixtureKind = "deno" | "package" | "none" | "deno-missing-version";
+
+async function makeVersionFixtureRepo(kind: VersionFixtureKind): Promise<string> {
+  const dir = await Deno.makeTempDir({ prefix: `wjt1725-${kind}-` });
+  const run = async (args: string[]) => {
+    const cmd = new Deno.Command("git", { args, cwd: dir, stdout: "null", stderr: "piped" });
+    const { code, stderr } = await cmd.output();
+    if (code !== 0) {
+      throw new Error(`git ${args.join(" ")} failed: ${new TextDecoder().decode(stderr)}`);
+    }
+  };
+  await run(["init", "-q"]);
+  await run(["config", "user.email", "test@example.com"]);
+  await run(["config", "user.name", "Test"]);
+  await run(["checkout", "-q", "-b", "dev"]);
+
+  if (kind === "deno") {
+    await Deno.writeTextFile(
+      `${dir}/deno.json`,
+      JSON.stringify({ name: "@webjam/tools", version: "1.61.4" }, null, 2) + "\n",
+    );
+    await run(["add", "deno.json"]);
+  } else if (kind === "package") {
+    await Deno.writeTextFile(
+      `${dir}/package.json`,
+      JSON.stringify({ name: "jammusic", version: "2.26.0" }, null, 2) + "\n",
+    );
+    await run(["add", "package.json"]);
+  } else {
+    await Deno.writeTextFile(`${dir}/f.txt`, "hi\n");
+    await run(["add", "f.txt"]);
+  }
+  await run(["commit", "-q", "-m", "base commit"]);
+  await run(["update-ref", "refs/remotes/origin/dev", "HEAD"]);
+
+  await run(["checkout", "-q", "-b", "scratch-branch"]);
+  if (kind === "deno") {
+    await Deno.writeTextFile(
+      `${dir}/deno.json`,
+      JSON.stringify({ name: "@webjam/tools", version: "1.61.5" }, null, 2) + "\n",
+    );
+    await run(["add", "deno.json"]);
+    await run(["commit", "-q", "-m", "branch commit"]);
+  } else if (kind === "package") {
+    await Deno.writeTextFile(
+      `${dir}/package.json`,
+      JSON.stringify({ name: "jammusic", version: "2.27.0" }, null, 2) + "\n",
+    );
+    await run(["add", "package.json"]);
+    await run(["commit", "-q", "-m", "branch commit"]);
+  } else if (kind === "deno-missing-version") {
+    await Deno.writeTextFile(
+      `${dir}/deno.json`,
+      JSON.stringify({ name: "@webjam/tools" }, null, 2) + "\n",
+    );
+    await run(["add", "deno.json"]);
+    await run(["commit", "-q", "-m", "branch commit without version"]);
+  }
+
+  return dir;
+}
+
+const APPENDIX_A_CASES: ReadonlyArray<{
+  line: string;
+  repo: VersionFixtureKind;
+  outcome: "refused" | "sent" | "refused-file";
+}> = [
+  { line: "- Bumps `deno.json` version 1.61.4 -> 1.61.5", repo: "deno", outcome: "refused" },
+  {
+    line: "- Bump `deno.json` patch version from `1.61.4` to `1.61.5`",
+    repo: "deno",
+    outcome: "refused",
+  },
+  { line: "- Version: 1.61.5", repo: "deno", outcome: "refused" },
+  { line: "- Ships as v1.61.5.", repo: "deno", outcome: "refused" },
+  { line: "- Rebased onto dev at 1.61.4", repo: "deno", outcome: "refused" },
+  { line: "- Bumped the version.", repo: "deno", outcome: "refused" },
+  { line: "- Version Bump", repo: "deno", outcome: "refused" },
+  { line: "- Bump semver version", repo: "deno", outcome: "refused" },
+  { line: "- bump deno.json", repo: "deno", outcome: "refused" },
+  { line: "- Bumped `package.json` and `package-lock.json`", repo: "deno", outcome: "refused" },
+  { line: "- semver bump: patch", repo: "deno", outcome: "refused" },
+  { line: "> jammusic@2.27.0 test", repo: "package", outcome: "refused" },
+  { line: "- Bump the application to 2.26.0", repo: "package", outcome: "refused" },
+  { line: "curl http://127.0.0.1:8080/health", repo: "deno", outcome: "sent" },
+  { line: "- Updated `.nvmrc` to `24.19.0`", repo: "deno", outcome: "sent" },
+  { line: "docker run --rm cimg/node:24.19.0 node --version", repo: "deno", outcome: "sent" },
+  {
+    line: "- Cause: `@vitest/eslint-plugin` 1.6.28 declares a TypeScript peer it does not meet",
+    repo: "deno",
+    outcome: "sent",
+  },
+  { line: "- npm audit fix bumped undici from 7.30.0 to 7.30.1", repo: "deno", outcome: "sent" },
+  { line: "- Fixes the version picker on the settings page", repo: "deno", outcome: "sent" },
+  { line: "- Design record updated to 1.8.0", repo: "deno", outcome: "sent" },
+  { line: "- Counts 11.61.55 rows", repo: "deno", outcome: "sent" },
+  { line: "- Reaches 21.61.5 on the chart", repo: "deno", outcome: "sent" },
+  { line: "- Pings 1.61.5.2 on the test network", repo: "deno", outcome: "sent" },
+  { line: "- Model: Sonnet 5.5", repo: "deno", outcome: "sent" },
+  { line: "- Bumped the version.", repo: "none", outcome: "refused" },
+  { line: "- Ships 1.61.5", repo: "none", outcome: "sent" },
+  { line: "- Adds the export button", repo: "deno-missing-version", outcome: "refused-file" },
+];
+
+for (const [idx, tc] of APPENDIX_A_CASES.entries()) {
+  Deno.test(
+    `Appendix A row ${idx + 1} (${tc.repo} -> ${tc.outcome}): ${tc.line}`,
+    async () => {
+      const dir = await makeVersionFixtureRepo(tc.repo);
+      try {
+        const isBullet = tc.line.startsWith("- ");
+        const summary = isBullet ? tc.line : `${VALID_SUMMARY}\n${tc.line}`;
+        const res = await runScript(dir, baseArgs({ summary }));
+        if (tc.outcome === "sent") {
+          assertEquals(res.code, 0, res.stderr);
+          assertMatch(res.stdout, /=== DRY RUN/);
+        } else if (tc.outcome === "refused-file") {
+          assertEquals(res.code, 1);
+          assertMatch(res.stderr, /deno\.json/);
+        } else {
+          assertEquals(res.code, 1);
+          assertEquals(res.stderr.includes(tc.line), true, `stderr missing line: ${res.stderr}`);
+          assertMatch(res.stderr, /The version is in the diff and CI checks it/);
+          assertMatch(res.stderr, /Remove that line and run the same command again/);
+        }
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    },
+  );
+}
+
+Deno.test("version check also refuses version/bump lines in --update mode, --test-plan, --test-evidence, --screenshots, and --no-close-reason", async () => {
+  const dir = await makeVersionFixtureRepo("deno");
+  try {
+    const updateRes = await runScript(dir, [
+      ...baseArgs({ summary: "- Version: 1.61.5" }),
+      "--update",
+    ]);
+    assertEquals(updateRes.code, 1);
+    assertEquals(updateRes.stderr.includes("- Version: 1.61.5"), true);
+
+    const planRes = await runScript(
+      dir,
+      baseArgs({ testPlan: "Verify build output at version 1.61.5." }),
+    );
+    assertEquals(planRes.code, 1);
+    assertMatch(planRes.stderr, /--test-plan mentions the repository's version/);
+
+    const evidenceRes = await runScript(
+      dir,
+      baseArgs({ evidence: "```\n> tools@1.61.5 test\nok\n```" }),
+    );
+    assertEquals(evidenceRes.code, 1);
+    assertMatch(evidenceRes.stderr, /--test-evidence mentions the repository's version/);
+
+    const screenshotsRes = await runScript(dir, [
+      ...baseArgs(),
+      "--screenshots",
+      "Footer showing v1.61.5",
+    ]);
+    assertEquals(screenshotsRes.code, 1);
+    assertMatch(screenshotsRes.stderr, /--screenshots mentions the repository's version/);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
