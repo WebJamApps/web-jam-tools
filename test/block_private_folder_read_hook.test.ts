@@ -609,6 +609,52 @@ const SHELL_SYNTAX_CASES: Array<{
     deny: false,
   },
   { command: "bash scripts/handle-agy-tasks.sh", deny: false },
+  { command: "python3 --help", deny: false },
+  { command: "python3 --version", deny: false },
+  { command: "node --version", deny: false },
+  { command: "deno run --help", deny: false },
+  { command: "python3 -m http.server 8000", deny: false },
+  { command: "deno run --lock lk.json /tmp/s.sh", source: "console.log(1)", deny: false },
+  { command: "deno run --config deno.json /tmp/s.sh", source: "console.log(1)", deny: false },
+  { command: "deno run -c deno.json /tmp/s.sh", source: "console.log(1)", deny: false },
+  {
+    command: "node --require /tmp/s.sh -e 'console.log(1)'",
+    source: "cat /home/joshua/Dropbox/financial/a.txt",
+    deny: true,
+  },
+  {
+    command: "deno run --preload /tmp/s.sh - <<'TS'\nconsole.log(1)\nTS",
+    source: "cat /home/joshua/Dropbox/financial/a.txt",
+    deny: true,
+  },
+  {
+    command: "deno <<'EOF'\nDeno.readTextFileSync('/home/joshua/Dropbox/financial/a.txt')\nEOF",
+    deny: true,
+  },
+  {
+    command:
+      "deno repl <<'EOF'\nDeno.readTextFileSync('/home/joshua/Dropbox/financial/a.txt')\nEOF",
+    deny: true,
+  },
+  {
+    command:
+      "deno repl -A <<'EOF'\nDeno.readTextFileSync('/home/joshua/Dropbox/financial/a.txt')\nEOF",
+    deny: true,
+  },
+  {
+    command: "python3 -m code <<'EOF'\nopen('/home/joshua/Dropbox/financial/a.txt')\nEOF",
+    deny: true,
+  },
+  {
+    command: "node -r /tmp/zz-missing-script.sh -e 'console.log(1)'",
+    deny: true,
+    scriptWording: true,
+  },
+  {
+    command: "deno /tmp/zz-missing-script.sh",
+    deny: true,
+    scriptWording: true,
+  },
   { command: "bash scripts/ubuntu-health.sh", deny: false },
   { command: "(echo hi) >/dev/null", deny: false },
   { command: "(echo hi) 2>/dev/null", deny: false },

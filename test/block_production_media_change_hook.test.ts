@@ -16,6 +16,84 @@ const HOOK_SCRIPT = path.join(REPO_ROOT, "hooks", "block-production-media-change
 const INSTALL_HOOKS_SCRIPT = path.join(REPO_ROOT, "scripts", "install-hooks.sh");
 const INSTALL_CODEX_SCRIPT = path.join(REPO_ROOT, "scripts", "install-codex.ts");
 
+Deno.test("shared interpreter selection preserves production-media decisions on all three tools", async () => {
+  const home = await createFixtureHome();
+  try {
+    const safe = path.join(home, "safe.ts");
+    const preload = path.join(home, "preload.js");
+    const config = path.join(home, "config.json");
+    const missing = path.join(home, "missing.js");
+    await Deno.writeTextFile(safe, "console.log(1)");
+    await Deno.writeTextFile(config, "{}");
+    await Deno.writeTextFile(
+      preload,
+      `Deno.removeSync("${home}/Dropbox/joshandmariamusic/audio/take1.wav")`,
+    );
+    const cases: Array<[string, boolean]> = [
+      ["deno run --help", false],
+      [`deno run --config ${config} ${safe}`, false],
+      [`deno run --lock lk.json ${safe}`, false],
+      [`deno run --config ${config} ${preload}`, true],
+      [`node --require ${preload} ${safe}`, true],
+      [`deno run --preload ${preload} ${safe}`, true],
+      [`python3 - ${preload} <<'PY'\nprint(1)\nPY`, false],
+      [
+        `deno <<'EOF'\nDeno.removeSync("${home}/Dropbox/joshandmariamusic/audio/take1.wav")\nEOF`,
+        true,
+      ],
+      [
+        `deno repl <<'EOF'\nDeno.removeSync("${home}/Dropbox/joshandmariamusic/audio/take1.wav")\nEOF`,
+        true,
+      ],
+      [
+        `deno repl -A <<'EOF'\nDeno.removeSync("${home}/Dropbox/joshandmariamusic/audio/take1.wav")\nEOF`,
+        true,
+      ],
+      [
+        `python3 -m code <<'EOF'\nimport os\nos.remove("${home}/Dropbox/joshandmariamusic/audio/take1.wav")\nEOF`,
+        true,
+      ],
+      [`node -r ${missing} -e 'console.log(1)'`, true],
+    ];
+    const shim = path.join(REPO_ROOT, "hooks/agy-hook-shim.sh");
+    for (const [command, deny] of cases) {
+      for (const surface of ["claude", "agy", "codex"]) {
+        const payload = surface === "agy"
+          ? { toolCall: { name: "run_command", args: { CommandLine: command, Cwd: home } } }
+          : { tool_name: "Bash", cwd: home, tool_input: { command } };
+        const child = new Deno.Command("bash", {
+          args: surface === "agy" ? [shim, "PreToolUse", btoa("Bash"), HOOK_SCRIPT] : [HOOK_SCRIPT],
+          env: { HOME: home, WJT_SURFACE: surface },
+          stdin: "piped",
+          stdout: "piped",
+          stderr: "piped",
+        }).spawn();
+        const writer = child.stdin.getWriter();
+        await writer.write(new TextEncoder().encode(JSON.stringify(payload)));
+        await writer.close();
+        const output = await child.output();
+        const reason = new TextDecoder().decode(output.stderr);
+        assertEquals(
+          output.code,
+          surface === "agy" ? 0 : deny ? 2 : 0,
+          `${surface}: ${command}: ${reason}`,
+        );
+        if (surface === "agy") {
+          assertEquals(
+            JSON.parse(new TextDecoder().decode(output.stdout)).decision,
+            deny ? "deny" : "allow",
+            command,
+          );
+        } else if (command.includes(missing)) {
+          assertStringIncludes(reason, `Cannot read the script ${missing} yet`);
+        }
+      }
+    }
+  } finally {
+    await cleanupFixtureHome(home);
+  }
+});
+
 for (const sameCommandWritesScript of [false, true]) {
   Deno.test(`production-media unreadable script wording: ${sameCommandWritesScript ? "not written yet" : "missing"}`, async () => {
     const home = await createFixtureHome();

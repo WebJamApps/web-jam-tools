@@ -21,6 +21,8 @@ import {
   findHeredocMarker,
   MAX_WRAPPER_ITERATIONS,
   MAX_WRAPPER_RECURSION_DEPTH,
+  readInterpreterHeredocs,
+  readInterpreterScript,
   resolveThroughWrappers,
   resolveWrapperLayer,
   splitOnOperators,
@@ -374,23 +376,23 @@ function inspectScript(
   return shell ? inspectShell(text, context, depth + 1) : null;
 }
 
-function scriptArgument(argv: string[]): string | undefined {
-  const name = path.basename(argv[0] ?? "");
-  if (!INTERPRETERS.has(name)) return undefined;
-  let index = name === "deno" ? 2 : 1;
-  if (name === "deno" && argv[1] !== "run") return undefined;
-  for (; index < argv.length; index++) {
-    const word = argv[index];
-    if (["-c", "-e", "--eval", "-m", "-p", "--print"].includes(word)) return undefined;
-    if (["-s", "-", "/dev/stdin"].includes(word)) return undefined;
-    if (word === "--") return argv[index + 1];
-    if (["--config", "--import-map", "--loader", "--require", "-r"].includes(word)) {
-      index++;
-      continue;
-    }
-    if (!word.startsWith("-")) return word;
+function scriptArgument(argv: string[]): string[] {
+  const invocation = readInterpreterScript(argv);
+  if (invocation) {
+    return [
+      ...invocation.preloads,
+      ...(invocation.script?.kind === "file" ? [invocation.script.path] : []),
+    ];
   }
-  return undefined;
+  const name = path.basename(argv[0] ?? "");
+  if (name !== "bash" && name !== "sh") return [];
+  for (let index = 1; index < argv.length; index++) {
+    const word = argv[index];
+    if (["-c", "-s", "-", "/dev/stdin"].includes(word)) return [];
+    if (word === "--") return argv[index + 1] ? [argv[index + 1]] : [];
+    if (!word.startsWith("-")) return [word];
+  }
+  return [];
 }
 
 const UNRESOLVED_SHELL_COMMANDS = new Set([
@@ -833,6 +835,7 @@ function inspectShell(
     shellLines.push(lines[index]);
     const marker = findHeredocMarker(lines[index]);
     if (!marker) continue;
+    const header = lines[index];
     const shell = !/(?:^|[\s/])(python3?|node|deno)(?=\s|$)/.test(lines[index]);
     const body: string[] = [];
     while (++index < lines.length) {
@@ -842,7 +845,10 @@ function inspectShell(
     }
     if (index >= lines.length) throw new Error("unterminated heredoc");
     shellLines.push(lines[index]);
-    const denied = inspectScript(body.join("\n"), { ...context }, depth + 1, shell);
+    const consumesHeredoc = shell || readInterpreterHeredocs(header).length > 0;
+    const denied = consumesHeredoc
+      ? inspectScript(body.join("\n"), { ...context }, depth + 1, shell)
+      : null;
     if (denied) return denied;
   }
   const substitutions = shellSubstitutions(shellLines.join("\n"));
@@ -929,16 +935,10 @@ function inspectShell(
     const name = argv[0] === "." ? "." : path.basename(argv[0] ?? "");
     if (name === "dropbox") return "Dropbox desktop command";
     if (sweepCommand(argv, context)) return "whole-home sweep";
-    if (INTERPRETERS.has(name)) {
-      const shell = name === "bash" || name === "sh";
-      const inline = argv.findIndex((arg) =>
-        ["-c", "-e", "-p", "--eval", "--print"].includes(arg) ||
-        (shell && /^-[a-z]*c[a-z]*$/.test(arg)) || (name === "deno" && arg === "eval")
-      );
+    if (name === "bash" || name === "sh") {
+      const inline = argv.findIndex((arg) => /^-[a-z]*c[a-z]*$/.test(arg));
       if (inline >= 0 && argv[inline + 1]) {
-        const denied = shell
-          ? inspectShell(argv[inline + 1], { ...context }, depth + 1)
-          : inspectScript(argv[inline + 1], { ...context }, depth + 1);
+        const denied = inspectShell(argv[inline + 1], { ...context }, depth + 1);
         if (denied) return denied;
         context = parentContext;
         continue;
@@ -995,8 +995,8 @@ function inspectShell(
     }
     const ownPath = !INTERPRETERS.has(name) && (argv[0] ?? "").includes("/") &&
       (!context.scriptText || !/[()"'`;&|]/.test(argv[0]));
-    const file = scriptArgument(argv) ?? (ownPath ? argv[0] : undefined);
-    if (file !== undefined) {
+    const files = ownPath ? [argv[0]] : scriptArgument(argv);
+    for (const file of files) {
       if (path.basename(file) === "dropbox") return "Dropbox desktop command";
       const privateScript = privatePath(file, context);
       if (privateScript) return privateScript;
@@ -1014,6 +1014,11 @@ function inspectShell(
         ownPath || name === "bash" || name === "sh",
         ownPath,
       );
+      if (denied) return denied;
+    }
+    const scriptCall = readInterpreterScript(argv);
+    if (scriptCall?.script?.kind === "inline") {
+      const denied = inspectScript(scriptCall.script.code, { ...context }, depth + 1);
       if (denied) return denied;
     }
     context = parentContext;
