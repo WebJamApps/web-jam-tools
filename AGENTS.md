@@ -96,6 +96,12 @@ rules and do not reconstruct them from memory or from this file.
     fold /learn updates into rules`) and pushed up together with the work. Never open a separate PR,
     never defer updating rules to a follow-up step, and never leave rule updates unpushed or waiting
     for a post-merge step on `dev`.
+27. **Close Stdin (`< /dev/null`) When Running `deno task test` / `deno test` in Agent PTY Sessions:**
+    Unit tests that exercise interactive confirmation prompts (e.g. `venue-tag` tests calling
+    `prompt(...)` to verify absent/EOF confirmation behavior) block indefinitely when invoked from
+    an agent command runner that attaches an open PTY/stdin. Always redirect stdin from `/dev/null`
+    (`deno task test < /dev/null` or `deno test ... < /dev/null`) so `prompt()` immediately receives
+    EOF instead of hanging the test run.
 ## Opening pull requests (all WebJamApps repos)
 
 Open every PR through the `draft-pr` skill (`skills/draft-pr/SKILL.md`), never `gh pr create`
@@ -124,7 +130,7 @@ Every PR runs a CircleCI **quality + security gate** (`.circleci/config.yml`), r
 deno task check      # type check
 deno task lint
 deno task fmt:check   # formatting (deno task fmt to auto-fix)
-deno task test        # unit tests
+deno task test < /dev/null  # unit tests (redirect stdin so prompt() tests do not hang on open PTYs)
 deno task audit       # Trivy: dependency CVEs (HIGH/CRITICAL fail) + secret scan
 deno task sast        # Semgrep: static analysis of src/
 ```
