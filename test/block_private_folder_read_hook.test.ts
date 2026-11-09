@@ -628,6 +628,24 @@ const SHELL_SYNTAX_CASES: Array<{
     deny: true,
   },
   {
+    command: "deno <<'EOF'\nDeno.readTextFileSync('/home/joshua/Dropbox/financial/a.txt')\nEOF",
+    deny: true,
+  },
+  {
+    command:
+      "deno repl <<'EOF'\nDeno.readTextFileSync('/home/joshua/Dropbox/financial/a.txt')\nEOF",
+    deny: true,
+  },
+  {
+    command:
+      "deno repl -A <<'EOF'\nDeno.readTextFileSync('/home/joshua/Dropbox/financial/a.txt')\nEOF",
+    deny: true,
+  },
+  {
+    command: "python3 -m code <<'EOF'\nopen('/home/joshua/Dropbox/financial/a.txt')\nEOF",
+    deny: true,
+  },
+  {
     command: "node -r /tmp/zz-missing-script.sh -e 'console.log(1)'",
     deny: true,
     scriptWording: true,

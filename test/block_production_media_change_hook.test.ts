@@ -37,6 +37,22 @@ Deno.test("shared interpreter selection preserves production-media decisions on 
       [`node --require ${preload} ${safe}`, true],
       [`deno run --preload ${preload} ${safe}`, true],
       [`python3 - ${preload} <<'PY'\nprint(1)\nPY`, false],
+      [
+        `deno <<'EOF'\nDeno.removeSync("${home}/Dropbox/joshandmariamusic/audio/take1.wav")\nEOF`,
+        true,
+      ],
+      [
+        `deno repl <<'EOF'\nDeno.removeSync("${home}/Dropbox/joshandmariamusic/audio/take1.wav")\nEOF`,
+        true,
+      ],
+      [
+        `deno repl -A <<'EOF'\nDeno.removeSync("${home}/Dropbox/joshandmariamusic/audio/take1.wav")\nEOF`,
+        true,
+      ],
+      [
+        `python3 -m code <<'EOF'\nimport os\nos.remove("${home}/Dropbox/joshandmariamusic/audio/take1.wav")\nEOF`,
+        true,
+      ],
       [`node -r ${missing} -e 'console.log(1)'`, true],
     ];
     const shim = path.join(REPO_ROOT, "hooks/agy-hook-shim.sh");

@@ -895,22 +895,25 @@ export function readInterpreterScript(
   const node = name === "node";
   const deno = name === "deno";
   if (!python && !node && !deno) return null;
-  if (deno && argv[1] !== "run" && argv[1] !== "eval") return null;
   const language = python ? "python" : node ? "javascript" : "typescript";
   const result: InterpreterInvocation = { language, script: null, preloads: [], args: [] };
-  const words = argv.slice(deno ? 2 : 1);
   // Headers retain <<EOF or << EOF; their bodies are handled by the caller.
-  const args: string[] = [];
-  for (let i = 0; i < words.length; i++) {
-    if (hasHeredoc && /^\d*<<-?$/.test(words[i])) i++;
-    else if (!(hasHeredoc && /^\d*<<-?\S/.test(words[i]))) args.push(words[i]);
+  const words: string[] = [];
+  for (let i = 1; i < argv.length; i++) {
+    if (hasHeredoc && /^\d*<<-?$/.test(argv[i])) i++;
+    else if (!(hasHeredoc && /^\d*<<-?\S/.test(argv[i]))) words.push(argv[i]);
   }
+  const sub = words[0];
+  const denoRepl = deno && (sub === "repl" || sub === undefined || sub.startsWith("-"));
+  if (deno && sub !== "run" && sub !== "eval" && !(hasHeredoc && denoRepl)) return null;
+  const args = deno && (sub === "run" || sub === "eval" || sub === "repl") ? words.slice(1) : words;
   const valueFlags = python
     ? PYTHON_SCRIPT_VALUE_FLAGS
     : node
     ? NODE_SCRIPT_VALUE_FLAGS
     : DENO_SCRIPT_VALUE_FLAGS;
-  const evalMode = deno && argv[1] === "eval";
+  const evalMode = deno && sub === "eval";
+  const heredocScript: InterpreterScript | null = hasHeredoc ? { kind: "heredoc" } : null;
   const finish = (script: InterpreterScript | null, from: number) => {
     result.script = script;
     result.args = args.slice(from);
@@ -919,7 +922,7 @@ export function readInterpreterScript(
   const positional = (value: string | undefined, from: number) =>
     finish(
       value === undefined
-        ? hasHeredoc ? { kind: "heredoc" } : null
+        ? heredocScript
         : value === "-" || value === "/dev/stdin"
         ? { kind: "heredoc" }
         : evalMode
@@ -943,8 +946,9 @@ export function readInterpreterScript(
     if (["--help", "--version", "-h", ...(node ? ["-v"] : ["-V"])].includes(arg)) {
       return { ...result, preloads: [] };
     }
-    if (python && arg === "-m") return finish(null, i + 2);
-    if (python && arg.startsWith("-m") && arg.length > 2) return finish(null, i + 1);
+    if (denoRepl) continue;
+    if (python && arg === "-m") return finish(heredocScript, i + 2);
+    if (python && arg.startsWith("-m") && arg.length > 2) return finish(heredocScript, i + 1);
     const codeFlag = python
       ? /^-[bBdEhiIOqsSuvVx]*c([\s\S]*)$/.exec(arg)
       : node

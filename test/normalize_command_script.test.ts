@@ -177,12 +177,11 @@ Deno.test("value flags and preloads support detached, attached and equals spelli
   );
 });
 
-Deno.test("heredoc selection keeps stdin code separate from scripts, modules, inline code and data", () => {
+Deno.test("heredoc selection keeps stdin code separate from scripts, inline code and data while inspecting bare deno, deno repl, and python -m", () => {
   for (
     const header of [
       "python3 file.py <<EOF",
       "node -e 'console.log(1)' <<EOF",
-      "python3 -m http.server <<EOF",
       "python3 --help <<EOF",
       "deno task test <<EOF",
       "cat <<EOF",
@@ -190,6 +189,10 @@ Deno.test("heredoc selection keeps stdin code separate from scripts, modules, in
   ) {
     assertEquals(readInterpreterHeredocs(header), [], header);
   }
+  assertEquals(readInterpreterHeredocs("deno <<'EOF'")[0]?.language, "typescript");
+  assertEquals(readInterpreterHeredocs("deno repl <<'EOF'")[0]?.language, "typescript");
+  assertEquals(readInterpreterHeredocs("deno repl -A <<'EOF'")[0]?.language, "typescript");
+  assertEquals(readInterpreterHeredocs("python3 -m code <<'EOF'")[0]?.language, "python");
   assertEquals(
     readInterpreterHeredocs("cat <<EOF | /usr/bin/node --input-type=module")[0]?.language,
     "javascript",

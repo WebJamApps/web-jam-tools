@@ -37,6 +37,9 @@ Deno.test("shared script selection: only executed inline and stdin code names wr
   assertEquals(targets(`node --input-type=module <<'JS'\nfs.writeFileSync('out','x')\nJS`), [
     "/repo/out",
   ]);
+  assertEquals(targets(`deno <<'TS'\nDeno.writeTextFileSync('out','x')\nTS`), ["/repo/out"]);
+  assertEquals(targets(`deno repl <<'TS'\nDeno.writeTextFileSync('out','x')\nTS`), ["/repo/out"]);
+  assertEquals(targets(`python3 -m code <<'PY'\nopen('out','w')\nPY`), ["/repo/out"]);
 });
 
 Deno.test("resolvePath: relative, absolute, ~, $HOME, dot segments, and unknown variables", () => {
