@@ -38,6 +38,11 @@
 # warning and the agents start anyway; it never changes the exit code. Override the
 # command with AGENTS_UPDATE_SCRIPTS_CMD.
 #
+# Right after that, in the same situations, it fetches dev for all eight WebJamApps
+# clones so tab 1 measures their rules files from origin/dev (web-jam-tools#1738).
+# A failed fetch prints a warning and the agents start anyway. Override the
+# command with AGENTS_FETCH_REPOS_CMD.
+#
 # When `agents` is typed over SSH (SSH_CONNECTION is set) and no laptop-screen
 # window is showing the session, it also opens a gnome-terminal window on the laptop
 # screen attached to the session, both when it creates the session and when it only
@@ -109,6 +114,7 @@ UPDATE_CMD="${AGENTS_UPDATE_CMD:-$REPO_DIR/scripts/update-all.sh}"
 CHECK_TOKEN_EXPIRY_CMD="${AGENTS_CHECK_TOKEN_EXPIRY_CMD:-deno task --config "$REPO_DIR/deno.json" check-token-expiry}"
 CHECK_SNAP_UPDATES_CMD="${AGENTS_CHECK_SNAP_UPDATES_CMD:-deno task --config "$REPO_DIR/deno.json" check-snap-updates}"
 UPDATE_SCRIPTS_CMD="${AGENTS_UPDATE_SCRIPTS_CMD:-$REPO_DIR/scripts/update-scripts.sh}"
+FETCH_REPOS_CMD="${AGENTS_FETCH_REPOS_CMD:-}"
 HEALTH_REPORT_CMD="${AGENTS_HEALTH_REPORT_CMD:-deno task --config "$REPO_DIR/deno.json" health-report}"
 AGY_CONFIG_CMD="${AGENTS_AGY_CONFIG_CMD:-agy -p /config}"
 # agy skips the laptop's login keyring whenever any SSH_* variable is set, so a
@@ -287,6 +293,36 @@ fi
 # Update the installed hooks right after the agents (same situations; never blocks startup).
 if ! bash -c "$UPDATE_SCRIPTS_CMD"; then
   echo "warning: update-scripts failed; starting the agents with the hooks already installed" >&2
+fi
+
+# Fetch dev for the eight clones before tab 1 opens (web-jam-tools#1738).
+# A failed fetch prints a warning and never stops the agents from starting.
+fetch_repos_dev() {
+  local base_dir="${AGENTS_WEBJAMAPPS_DIR:-$HOME/WebJamApps}"
+  local repos=(
+    "web-jam-tools"
+    "JaMmusic"
+    "CollegeLutheran"
+    "AppersonAuto"
+    "web-jam-back"
+    "WebJamSocketCluster"
+    "TimShermanMusic"
+    "HenricksonForSalem"
+  )
+  for repo in "${repos[@]}"; do
+    local repo_dir="$base_dir/$repo"
+    if ! git -C "$repo_dir" fetch origin dev 2>/dev/null; then
+      echo "warning: fetch dev failed for $repo; starting the agents anyway" >&2
+    fi
+  done
+}
+
+if [ -n "$FETCH_REPOS_CMD" ]; then
+  if ! bash -c "$FETCH_REPOS_CMD"; then
+    echo "warning: fetch dev failed; starting the agents anyway" >&2
+  fi
+else
+  fetch_repos_dev
 fi
 
 # Check agy's Tool Permission setting before creating a new session (web-jam-tools#1212).

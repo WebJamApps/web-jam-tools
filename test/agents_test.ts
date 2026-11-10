@@ -29,7 +29,7 @@ async function run(
     args,
     stdout: "piped",
     stderr: "piped",
-    // Default the laptop-window step, agy-config check, token-expiry, snap-update and health-report checks to stubs so tests stay isolated.
+    // Default the laptop-window step, agy-config check, token-expiry, snap-update, health-report and fetch-repos checks to stubs so tests stay isolated.
     env: {
       ...Deno.env.toObject(),
       AGENTS_LAPTOP_WINDOW_CMD: "true",
@@ -37,6 +37,7 @@ async function run(
       AGENTS_CHECK_SNAP_UPDATES_CMD: "true",
       AGENTS_HEALTH_REPORT_CMD: "true",
       AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
+      AGENTS_FETCH_REPOS_CMD: "true",
       ...(env ?? {}),
     },
   });
@@ -535,6 +536,89 @@ Deno.test("agents.sh still creates the session and exits 0, with a warning, when
       TMUX_TMPDIR: tmpDir,
     });
     assertEquals(has.code, 0);
+  });
+});
+
+Deno.test("agents.sh still creates the session and exits 0, with a warning, when fetch dev fails", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const res = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+      AGENTS_FETCH_REPOS_CMD: "exit 1",
+    });
+    assertEquals(res.code, 0, res.stderr);
+    assert(
+      res.stderr.includes(
+        "warning: fetch dev failed; starting the agents anyway",
+      ),
+      `no warning in: ${res.stderr}`,
+    );
+    assert(!res.stderr.includes("warning: update-all failed"), res.stderr);
+    const has = await run("tmux", ["-L", socketName, "has-session", "-t", "agents"], {
+      TMUX_TMPDIR: tmpDir,
+    });
+    assertEquals(has.code, 0);
+  });
+});
+
+Deno.test("agents.sh fetches dev for the eight clones in its update step and warns on clone failure", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const res = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+      AGENTS_FETCH_REPOS_CMD: "",
+      AGENTS_WEBJAMAPPS_DIR: tmpDir,
+    });
+    assertEquals(res.code, 0, res.stderr);
+    assert(
+      res.stderr.includes("warning: fetch dev failed for web-jam-tools"),
+      `no warning in: ${res.stderr}`,
+    );
+    const has = await run("tmux", ["-L", socketName, "has-session", "-t", "agents"], {
+      TMUX_TMPDIR: tmpDir,
+    });
+    assertEquals(has.code, 0);
+  });
+});
+
+Deno.test("agents.sh runs fetch dev after update-scripts and before the new session exists, and not when it only attaches", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const marker = `${tmpDir}/order.txt`;
+    const sessionState = `if tmux -L ${socketName} has-session -t agents 2>/dev/null; ` +
+      `then echo session-existed; else echo no-session-yet; fi`;
+    const env = {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: `echo update-all >> "${marker}"`,
+      AGENTS_UPDATE_SCRIPTS_CMD: `echo "update-scripts $(${sessionState})" >> "${marker}"`,
+      AGENTS_FETCH_REPOS_CMD: `echo "fetch-repos $(${sessionState})" >> "${marker}"`,
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+    };
+    const res1 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+    assertEquals(res1.code, 0, res1.stderr);
+    const expected = [
+      "update-all",
+      "update-scripts no-session-yet",
+      "fetch-repos no-session-yet",
+    ];
+    assertEquals((await Deno.readTextFile(marker)).trim().split("\n"), expected);
+
+    // Second run only attaches, so fetch command does not run again.
+    const res2 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+    assertEquals(res2.code, 0, res2.stderr);
+    assertEquals((await Deno.readTextFile(marker)).trim().split("\n"), expected);
   });
 });
 

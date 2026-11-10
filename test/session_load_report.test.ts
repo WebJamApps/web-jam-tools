@@ -6,6 +6,7 @@ import { join } from "@std/path";
 import {
   computeSessionLoadReport,
   generateSessionLoadReport,
+  getRepoRulesFileSize,
   loadLimits,
 } from "../src/session-load/report.ts";
 import { lintRunbookFile } from "../src/design-issue/lint_runbook.ts";
@@ -1041,3 +1042,118 @@ Deno.test("safety rules file report cases: exact limit produces ok, limit + 1 pr
     await Deno.remove(tempDir, { recursive: true });
   }
 });
+
+Deno.test(
+  "a fixture clone whose working folder is on a feature branch is measured from its origin/dev copy",
+  async () => {
+    const { tempDir, homeDir, webJamAppsDir } = await setupFixtureWorkspace();
+    const originRepoDir = join(tempDir, "origin-CollegeLutheran");
+    const cloneRepoDir = join(webJamAppsDir, "CollegeLutheran");
+
+    const limits = await loadLimits(LIMITS_PATH);
+    const cleanDevRules = "x".repeat(100);
+    const excessBytes = 500;
+    const bloatedBranchRules = "y".repeat(
+      limits.otherRepoRules.overMark + excessBytes,
+    );
+
+    const runGit = async (cwd: string, args: string[]) => {
+      const cmd = new Deno.Command("git", {
+        args: ["-C", cwd, ...args],
+        stdout: "piped",
+        stderr: "piped",
+      });
+      const out = await cmd.output();
+      if (!out.success) {
+        throw new Error(
+          `git ${args.join(" ")} failed in ${cwd}: ${new TextDecoder().decode(out.stderr)}`,
+        );
+      }
+    };
+
+    try {
+      // 1. Create origin repository with branch dev and clean rules
+      await Deno.mkdir(originRepoDir, { recursive: true });
+      await runGit(originRepoDir, ["init", "-b", "dev"]);
+      await runGit(originRepoDir, ["config", "user.name", "Test"]);
+      await runGit(originRepoDir, ["config", "user.email", "test@example.com"]);
+      await Deno.writeTextFile(
+        join(originRepoDir, "AGENTS.md"),
+        cleanDevRules,
+      );
+      await runGit(originRepoDir, ["add", "AGENTS.md"]);
+      await runGit(originRepoDir, ["commit", "-m", "dev rules commit"]);
+
+      // 2. Clone origin into webJamAppsDir as CollegeLutheran
+      const cloneCmd = new Deno.Command("git", {
+        args: ["clone", "-b", "dev", originRepoDir, cloneRepoDir],
+        stdout: "piped",
+        stderr: "piped",
+      });
+      const cloneOut = await cloneCmd.output();
+      assert(cloneOut.success, "git clone must succeed");
+      await runGit(cloneRepoDir, ["config", "user.name", "Test"]);
+      await runGit(cloneRepoDir, ["config", "user.email", "test@example.com"]);
+
+      // 3. Switch clone to a feature branch and bloat AGENTS.md in the working tree
+      await runGit(cloneRepoDir, ["checkout", "-b", "feature/some-task"]);
+      await Deno.writeTextFile(
+        join(cloneRepoDir, "AGENTS.md"),
+        bloatedBranchRules,
+      );
+
+      // Verify direct helper function reads origin/dev size (cleanDevRules.length = 100), not the working folder size
+      const measuredDirect = await getRepoRulesFileSize(
+        cloneRepoDir,
+        "AGENTS.md",
+      );
+      assertEquals(measuredDirect, cleanDevRules.length);
+
+      // 4. Run computeSessionLoadReport: CollegeLutheran must be measured from origin/dev
+      const result = await computeSessionLoadReport({
+        homeDir,
+        webJamAppsDir,
+        limitsPath: LIMITS_PATH,
+      });
+
+      // The working folder is bloated, but origin/dev is clean, so CollegeLutheran must NOT be flagged as OVER
+      const allItems = [
+        ...result.tools.claudeCode.items,
+        ...result.tools.agy.items,
+        ...result.tools.codex.items,
+      ];
+      assert(
+        !allItems.some((item) => item.includes("CollegeLutheran")),
+        `CollegeLutheran was flagged in report: ${result.text}`,
+      );
+
+      // 5. Conversely, if origin/dev holds bloated rules while the feature branch working copy is small:
+      await Deno.writeTextFile(
+        join(originRepoDir, "AGENTS.md"),
+        bloatedBranchRules,
+      );
+      await runGit(originRepoDir, ["commit", "-am", "bloat dev in origin"]);
+      await runGit(cloneRepoDir, ["fetch", "origin", "dev"]);
+      await runGit(cloneRepoDir, ["checkout", "feature/some-task"]);
+      await Deno.writeTextFile(
+        join(cloneRepoDir, "AGENTS.md"),
+        cleanDevRules,
+      );
+
+      const resultBloatedDev = await computeSessionLoadReport({
+        homeDir,
+        webJamAppsDir,
+        limitsPath: LIMITS_PATH,
+      });
+
+      assert(
+        resultBloatedDev.tools.claudeCode.items.some((item) =>
+          item.includes(`CollegeLutheran rules +${excessBytes}`)
+        ),
+        `Expected CollegeLutheran rules +${excessBytes} in report, got: ${resultBloatedDev.text}`,
+      );
+    } finally {
+      await Deno.remove(tempDir, { recursive: true });
+    }
+  },
+);
