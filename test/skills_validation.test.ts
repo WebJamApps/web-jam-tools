@@ -1192,38 +1192,22 @@ Deno.test("skills/design-issue/SKILL.md contains Runbook Format Requirements rul
   );
 });
 
-Deno.test("skills/design-issue/SKILL.md contains Writing Style rule", async () => {
+Deno.test("skills/design-issue/SKILL.md contains Writing Style pointer (web-jam-tools#1700)", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);
 
   assertStringIncludes(text, "### Writing Style");
-  assertStringIncludes(
-    text,
-    "- **The document states what the thing IS.** Present tense, design first. A reader who has never seen the conversation should be able to read it top to bottom and know what is being built.",
+  assertStringIncludes(text, '"Writing a design document"');
+  assertStringIncludes(text, '"Next steps"');
+  assertEquals(
+    text.includes("- **The document states what the thing IS.**"),
+    false,
+    "skills/design-issue/SKILL.md must not restate full Writing Style rules",
   );
-  assertStringIncludes(
-    text,
-    "- **The decision history goes in an appendix**, as one row per decision with its outcome — never interleaved with the design.",
-  );
-  assertStringIncludes(
-    text,
-    "- **The document never records the skill's own process state.**",
-  );
-  assertStringIncludes(
-    text,
-    '- **Never a bare label in the body.** No "per D-7" or "R-39"; labels exist so the decision table has stable row names, and nowhere else.',
-  );
-  assertStringIncludes(
-    text,
-    "- **Josh's own words are preserved where they are load-bearing** — his ruling is the authority, and a paraphrase is weaker than his actual sentence.",
-  );
-  assertStringIncludes(
-    text,
-    "- **A design document proves its own premises, and the gate will not open without them.**",
-  );
-  assertStringIncludes(
-    text,
-    "- **Consolidation happens BEFORE Gate 1, never after.**",
+  assertEquals(
+    text.includes("- **Consolidation happens BEFORE Gate 1, never after.**"),
+    false,
+    "skills/design-issue/SKILL.md must not restate consolidation rule",
   );
 });
 
@@ -1416,32 +1400,25 @@ Deno.test("skills/design-issue/SKILL.md creates undated design documents consist
   );
 });
 
-Deno.test("skills/design-issue/SKILL.md contains load-bearing-premises rule", async () => {
+Deno.test("skills/design-issue/SKILL.md contains load-bearing-premises pointers (web-jam-tools#1700)", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);
 
-  assertStringIncludes(
-    text,
-    "**A design document proves its own premises, and the gate will not open without them.**",
-  );
-  assertStringIncludes(
-    text,
-    "Every design document carries a `## Load-bearing premises` section: one row per premise the design depends on, naming what was checked and what it showed.",
-  );
-  assertStringIncludes(
-    text,
-    "The document checker fails a document that omits the section, and fails any row whose proof is empty or hedged.",
+  assertStringIncludes(text, '"Keeping worked content"');
+  assertStringIncludes(text, '"Writing a design document"');
+  assertEquals(
+    text.includes(
+      "**A design document proves its own premises, and the gate will not open without them.**",
+    ),
+    false,
+    "skills/design-issue/SKILL.md must not restate retired Writing Style premise rule",
   );
 });
 
-Deno.test("skills/design-issue/SKILL.md pins exact carried premise matching and both refusals", async () => {
+Deno.test("skills/design-issue/SKILL.md pins exact carried premise matching refusals (web-jam-tools#1700)", async () => {
   const text = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
   for (
     const fragment of [
-      "**Every premise row carries a `Proved` date; an earlier date passes only on an exact stored-row match.**",
-      "after trimming the white space around each cell; case and internal spacing matter, row order does not, and carried rows never expire",
-      "when a record exists and cannot be read or parsed, the checker refuses and names its path",
-      "`deno task design:gate1` prints the fresh and carried row counts and the date of the approval or adoption",
       "| pass a premise row dated before the presenting day unless the Gate 1 record holds that exact row from an approval or an adoption |",
       "| store a document's premise rows as adopted without Josh naming that document |",
     ]
