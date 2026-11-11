@@ -47,7 +47,8 @@ Think of it as a small scrum team: one Product Owner (Josh), several specialist 
   |---|---|
   | Mechanical one-off: a typo, a one-line change, a single-field data fix, a link update | `Luna` or `Haiku` |
   | Logic- and safety-heavy coding | `Sol` or `Sonnet` |
-  | All other coding: screens, styling, wording, documentation, configuration, small contained features | `Flash` |
+  | All other coding of about 150 non-test changed lines or fewer: screens, styling, wording, documentation, configuration, small contained features | `Flash` or `Terra`; either model may work the issue |
+  | All other coding over about 150 non-test changed lines | Any one of `Sol`, `Sonnet` or `Argon`; any of those three models may work the issue |
   | Design, and coding whose list of cases cannot be closed when the issue is written | `Opus` |
   | Recording | `Astra`, only when Josh names it |
 
@@ -56,6 +57,8 @@ Think of it as a small scrum team: one Product Owner (Josh), several specialist 
   - it changes code that sends, writes or deletes something outside the repo: an email or outreach dispatch, a database write or migration, a payment, a write to GitHub;
   - it changes login, permissions or the handling of credentials;
   - its acceptance criteria list cases that a resolver, a classifier or a change of state has to get right.
+
+  Which lines count as non-test, and the checks that hold an everyday issue to its size, are designed in `~/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md`, "Sizing".
 - **Dispatch vs. inline — judge by output volume and duration, not by task category.** **Dispatch** to a Haiku/Sonnet subagent when the job is long-running or produces heavy tool output: test suites, builds, migrations, multi-file scans or edits, anything log-noisy. This keeps that output out of the Opus session's context, which is the scarce resource. **Do it inline** when it is a handful of commands with trivial output (a few lines) — e.g. pruning a merged branch, removing a stray worktree, one `gh issue view`. A cold subagent pays its own system prompt, tool schemas and briefing before running anything, and still returns a report into the Opus context; for a job this small that fixed cost exceeds the work itself. The purpose is saving money and context. **If applying the rule would cost more than ignoring it, the rule does not apply** — say so plainly rather than following it into the more expensive path.
 - **Credential & MCP Server Authorization:** See [cross-ai-rules.md](cross-ai-rules.md) for the operational hard rule requiring Josh's explicit authorization before connecting any new account, credential, or MCP server.
 - **Adaptive Escalation Rule (Flash → Subagent Boost):** Antigravity (agy) sessions should use **`Flash`** as the standard tier for full-stack coding and interactive work; trivial edits go to Luna or Haiku. If a subtask encounters complex multi-file refactoring, difficult type/lint errors, or intricate REAPER routing/composition, the session automatically dispatches a subagent with `Model: "inherit"` (`invoke_subagent` inheriting `gemini-3.8-flash-high`) to solve that specific block and report back. When delegating subagent tasks via `invoke_subagent`, `Model: "flash"` runs as `gemini-3.8-flash-tiered` and passes the model guard.
