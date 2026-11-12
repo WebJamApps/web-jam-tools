@@ -1,0 +1,15 @@
+# sample-rules.rules
+skip 1
+fields date, description, amount, id, memo
+date-format %Y-%m-%d
+account1 Assets:Checking:Truist
+account2 Expenses:Uncategorized
+
+if Floyd Country Store
+  account2 Income:Performance
+
+if Penn Station
+  account2 Expenses:Meals
+
+if State Corporation Commission
+  account2 Expenses:RegistrationFees

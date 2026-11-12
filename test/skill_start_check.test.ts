@@ -307,8 +307,9 @@ Deno.test("readSkillFirstHeading - reads first # heading line", async () => {
   await assertRejects(() => readSkillFirstHeading(SKILLS_DIR, "non-existent-skill"));
 });
 
-Deno.test("All 14 skills under skills/ carry a start-check.json with both prompts", async () => {
+Deno.test("All 15 skills under skills/ carry a start-check.json with both prompts", async () => {
   const expectedSkills = [
+    "accounting",
     "backlog-groom",
     "book-gig",
     "delegate",
