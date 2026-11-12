@@ -111,8 +111,10 @@ Deno.test("SessionStart hook exists in scripts/claude-settings.json and nowhere 
       entry.hooks?.map((h) => h.command || "") || [],
   );
   assert(
-    commands.some((c: string) => c.includes("scripts/session-load-report.ts")),
-    "SessionStart in scripts/claude-settings.json must execute session-load-report.ts",
+    commands.some((c: string) =>
+      c.includes("scripts/session-load-report.ts") && c.includes("--allow-run=git")
+    ),
+    "SessionStart in scripts/claude-settings.json must execute session-load-report.ts with --allow-run=git",
   );
 
   // Must not be registered in ~/.claude/settings.json
@@ -496,12 +498,24 @@ Deno.test("report accurately detects memoryIndex, other repo rules, and codex sk
   }
 });
 
+Deno.test("scripts/session-load-report.ts shebang includes --allow-run=git", async () => {
+  const content = await Deno.readTextFile(
+    join(REPO_ROOT, "scripts/session-load-report.ts"),
+  );
+  const firstLine = content.split("\n")[0];
+  assert(
+    firstLine.includes("--allow-run=git"),
+    `scripts/session-load-report.ts shebang must include --allow-run=git, got: ${firstLine}`,
+  );
+});
+
 Deno.test("scripts/session-load-report.ts prints valid JSON systemMessage and exits 0", async () => {
   const cmd = new Deno.Command(Deno.execPath(), {
     args: [
       "run",
       "--allow-read",
       "--allow-env",
+      "--allow-run=git",
       join(REPO_ROOT, "scripts/session-load-report.ts"),
     ],
     stdout: "piped",
@@ -1043,6 +1057,56 @@ Deno.test("safety rules file report cases: exact limit produces ok, limit + 1 pr
   }
 });
 
+async function setupFeatureBranchFixtureRepo(options: {
+  originRepoDir: string;
+  cloneRepoDir: string;
+  cleanDevRules: string;
+  bloatedBranchRules: string;
+}) {
+  const runGit = async (cwd: string, args: string[]) => {
+    const cmd = new Deno.Command("git", {
+      args: ["-C", cwd, ...args],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const out = await cmd.output();
+    if (!out.success) {
+      throw new Error(
+        `git ${args.join(" ")} failed in ${cwd}: ${new TextDecoder().decode(out.stderr)}`,
+      );
+    }
+  };
+
+  await Deno.mkdir(options.originRepoDir, { recursive: true });
+  await runGit(options.originRepoDir, ["init", "-b", "dev"]);
+  await runGit(options.originRepoDir, ["config", "user.name", "Test"]);
+  await runGit(options.originRepoDir, ["config", "user.email", "test@example.com"]);
+  await Deno.writeTextFile(
+    join(options.originRepoDir, "AGENTS.md"),
+    options.cleanDevRules,
+  );
+  await runGit(options.originRepoDir, ["add", "AGENTS.md"]);
+  await runGit(options.originRepoDir, ["commit", "-m", "dev rules commit"]);
+
+  const cloneCmd = new Deno.Command("git", {
+    args: ["clone", "-b", "dev", options.originRepoDir, options.cloneRepoDir],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const cloneOut = await cloneCmd.output();
+  assert(cloneOut.success, "git clone must succeed");
+  await runGit(options.cloneRepoDir, ["config", "user.name", "Test"]);
+  await runGit(options.cloneRepoDir, ["config", "user.email", "test@example.com"]);
+
+  await runGit(options.cloneRepoDir, ["checkout", "-b", "feature/some-task"]);
+  await Deno.writeTextFile(
+    join(options.cloneRepoDir, "AGENTS.md"),
+    options.bloatedBranchRules,
+  );
+
+  return { runGit };
+}
+
 Deno.test(
   "a fixture clone whose working folder is on a feature branch is measured from its origin/dev copy",
   async () => {
@@ -1057,50 +1121,13 @@ Deno.test(
       limits.otherRepoRules.overMark + excessBytes,
     );
 
-    const runGit = async (cwd: string, args: string[]) => {
-      const cmd = new Deno.Command("git", {
-        args: ["-C", cwd, ...args],
-        stdout: "piped",
-        stderr: "piped",
-      });
-      const out = await cmd.output();
-      if (!out.success) {
-        throw new Error(
-          `git ${args.join(" ")} failed in ${cwd}: ${new TextDecoder().decode(out.stderr)}`,
-        );
-      }
-    };
-
     try {
-      // 1. Create origin repository with branch dev and clean rules
-      await Deno.mkdir(originRepoDir, { recursive: true });
-      await runGit(originRepoDir, ["init", "-b", "dev"]);
-      await runGit(originRepoDir, ["config", "user.name", "Test"]);
-      await runGit(originRepoDir, ["config", "user.email", "test@example.com"]);
-      await Deno.writeTextFile(
-        join(originRepoDir, "AGENTS.md"),
+      const { runGit } = await setupFeatureBranchFixtureRepo({
+        originRepoDir,
+        cloneRepoDir,
         cleanDevRules,
-      );
-      await runGit(originRepoDir, ["add", "AGENTS.md"]);
-      await runGit(originRepoDir, ["commit", "-m", "dev rules commit"]);
-
-      // 2. Clone origin into webJamAppsDir as CollegeLutheran
-      const cloneCmd = new Deno.Command("git", {
-        args: ["clone", "-b", "dev", originRepoDir, cloneRepoDir],
-        stdout: "piped",
-        stderr: "piped",
-      });
-      const cloneOut = await cloneCmd.output();
-      assert(cloneOut.success, "git clone must succeed");
-      await runGit(cloneRepoDir, ["config", "user.name", "Test"]);
-      await runGit(cloneRepoDir, ["config", "user.email", "test@example.com"]);
-
-      // 3. Switch clone to a feature branch and bloat AGENTS.md in the working tree
-      await runGit(cloneRepoDir, ["checkout", "-b", "feature/some-task"]);
-      await Deno.writeTextFile(
-        join(cloneRepoDir, "AGENTS.md"),
         bloatedBranchRules,
-      );
+      });
 
       // Verify direct helper function reads origin/dev size (cleanDevRules.length = 100), not the working folder size
       const measuredDirect = await getRepoRulesFileSize(
@@ -1151,6 +1178,101 @@ Deno.test(
           item.includes(`CollegeLutheran rules +${excessBytes}`)
         ),
         `Expected CollegeLutheran rules +${excessBytes} in report, got: ${resultBloatedDev.text}`,
+      );
+    } finally {
+      await Deno.remove(tempDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "actual SessionStart hook invocation measures origin/dev when working tree rules differ",
+  async () => {
+    const { tempDir, homeDir, webJamAppsDir } = await setupFixtureWorkspace();
+    const originRepoDir = join(tempDir, "origin-CollegeLutheran");
+    const cloneRepoDir = join(webJamAppsDir, "CollegeLutheran");
+
+    const limits = await loadLimits(LIMITS_PATH);
+    const cleanDevRules = "x".repeat(100);
+    const excessBytes = 500;
+    const bloatedBranchRules = "y".repeat(
+      limits.otherRepoRules.overMark + excessBytes,
+    );
+
+    try {
+      await setupFeatureBranchFixtureRepo({
+        originRepoDir,
+        cloneRepoDir,
+        cleanDevRules,
+        bloatedBranchRules,
+      });
+
+      // Verify SessionStart hook command in scripts/claude-settings.json includes --allow-run=git
+      const claudeSettingsText = await Deno.readTextFile(
+        join(REPO_ROOT, "scripts/claude-settings.json"),
+      );
+      const claudeSettings = JSON.parse(claudeSettingsText);
+      const hookCommand = claudeSettings.hooks.SessionStart[0].hooks[0].command as string;
+      assert(
+        hookCommand.includes("--allow-run=git"),
+        "SessionStart hook command must include --allow-run=git",
+      );
+
+      // 4. Run the report script under the permission contract of the SessionStart hook:
+      // deno run --allow-read --allow-env --allow-run=git scripts/session-load-report.ts
+      const hookCmd = new Deno.Command(Deno.execPath(), {
+        args: [
+          "run",
+          "--allow-read",
+          "--allow-env",
+          "--allow-run=git",
+          "--no-prompt",
+          join(REPO_ROOT, "scripts/session-load-report.ts"),
+        ],
+        env: {
+          HOME: homeDir,
+        },
+        stdout: "piped",
+        stderr: "piped",
+      });
+      const hookOutput = await hookCmd.output();
+      assertEquals(hookOutput.code, 0, "hook command must exit 0");
+
+      const stdout = new TextDecoder().decode(hookOutput.stdout).trim();
+      const parsed = JSON.parse(stdout);
+      assert(
+        typeof parsed.systemMessage === "string",
+        "stdout must contain systemMessage",
+      );
+      // Because git cat-file was permitted, origin/dev (clean) was measured instead of the bloated working copy.
+      assert(
+        !parsed.systemMessage.includes("CollegeLutheran"),
+        `Expected CollegeLutheran NOT to be reported as OVER, got: ${parsed.systemMessage}`,
+      );
+
+      // 5. Conversely, if run WITHOUT --allow-run=git, git fails permission check and falls back to disk,
+      // which falsely reports CollegeLutheran as OVER.
+      const noRunCmd = new Deno.Command(Deno.execPath(), {
+        args: [
+          "run",
+          "--allow-read",
+          "--allow-env",
+          "--no-prompt",
+          join(REPO_ROOT, "scripts/session-load-report.ts"),
+        ],
+        env: {
+          HOME: homeDir,
+        },
+        stdout: "piped",
+        stderr: "piped",
+      });
+      const noRunOutput = await noRunCmd.output();
+      assertEquals(noRunOutput.code, 0, "must exit 0 even on fallback");
+      const noRunStdout = new TextDecoder().decode(noRunOutput.stdout).trim();
+      const noRunParsed = JSON.parse(noRunStdout);
+      assert(
+        noRunParsed.systemMessage.includes(`CollegeLutheran rules +${excessBytes}`),
+        `Without --allow-run=git, expected fallback to report CollegeLutheran rules +${excessBytes}, got: ${noRunParsed.systemMessage}`,
       );
     } finally {
       await Deno.remove(tempDir, { recursive: true });

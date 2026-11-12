@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-read --allow-env
+#!/usr/bin/env -S deno run --allow-read --allow-env --allow-run=git
 // scripts/session-load-report.ts
 // SessionStart hook: reports every session-load part's size against limits (web-jam-tools#1234).
 // Emits a single JSON line with a systemMessage for Claude Code tab 1. Always exits 0.
