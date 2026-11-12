@@ -165,6 +165,20 @@ function b64urlToUtf8(s: string): string {
   return b64ToUtf8(s.replace(/-/g, "+").replace(/_/g, "/"));
 }
 
+Deno.test("heartbeat includes the backup age or unavailable state in text and HTML", () => {
+  for (
+    const summary of [
+      "Backup: newest good run is 25.0 hours old.",
+      "Backup: no good run exists.",
+      "Backup: backend cannot determine the newest good run (HTTP 500).",
+    ]
+  ) {
+    const email = formatHeartbeatEmail([], summary);
+    assertStringIncludes(email.text, summary);
+    assertStringIncludes(email.html, summary);
+  }
+});
+
 Deno.test("sendAlertEmail validates environment variables and throws naming all three Gmail settings", async () => {
   const failedResults: CheckResult[] = [
     {
@@ -297,7 +311,12 @@ Deno.test("sendHeartbeatEmail makes one token request and one send request to Gm
       return Promise.reject(new Error(`Unexpected fetch URL: ${urlStr}`));
     };
 
-    const res = await sendHeartbeatEmail(results, mockFetch);
+    const res = await sendHeartbeatEmail(
+      results,
+      mockFetch,
+      undefined,
+      "Backup: newest good run is 25.0 hours old.",
+    );
     assertEquals(res, "heartbeat-msg-456");
     assertEquals(calls.length, 2);
 
@@ -317,6 +336,7 @@ Deno.test("sendHeartbeatEmail makes one token request and one send request to Gm
     );
     const bodyPart = decoded.split("\r\n\r\n").slice(1).join("\r\n\r\n");
     assertStringIncludes(b64ToUtf8(bodyPart), "Site A");
+    assertStringIncludes(b64ToUtf8(bodyPart), "Backup: newest good run is 25.0 hours old.");
   } finally {
     if (origId) Deno.env.set("GMAIL_CLIENT_ID", origId);
     else Deno.env.delete("GMAIL_CLIENT_ID");
