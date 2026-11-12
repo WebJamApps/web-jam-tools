@@ -3,6 +3,9 @@ import {
   sendAlertEmail as defaultSendAlertEmail,
   sendHeartbeatEmail as defaultSendHeartbeatEmail,
 } from "./monitor.ts";
+import type { CheckResult } from "./monitor.ts";
+import { runBackupCheck as defaultRunBackupCheck } from "./backup_check.ts";
+import type { BackupCheckResult } from "./backup_check.ts";
 
 export async function runCronCheck(
   runAllChecksFn = defaultRunAllChecks,
@@ -24,25 +27,50 @@ export async function runCronCheck(
 
 export async function runDailyHeartbeatCheck(
   runAllChecksFn = defaultRunAllChecks,
-  sendHeartbeatEmailFn = defaultSendHeartbeatEmail,
+  sendHeartbeatEmailFn = (results: CheckResult[], backupSummary: string) =>
+    defaultSendHeartbeatEmail(results, undefined, undefined, backupSummary),
+  runBackupCheckFn = defaultRunBackupCheck,
 ): Promise<void> {
-  console.log(`[${new Date().toISOString()}] Running Daily 8:00 AM Uptime Heartbeat check...`);
-  const results = await runAllChecksFn();
+  console.log(`[${new Date().toISOString()}] Running daily 12:00 UTC uptime heartbeat check...`);
+  const [results, backup] = await Promise.all([
+    runAllChecksFn(),
+    runBackupCheckFn().catch((err: unknown) => {
+      console.error(
+        `[${new Date().toISOString()}] Backup warning email failed to send: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      if (err && typeof err === "object" && "backupResult" in err) {
+        return (err as { backupResult: BackupCheckResult }).backupResult;
+      }
+      return undefined;
+    }),
+  ]);
   console.log(`[${new Date().toISOString()}] Dispatching daily heartbeat status email...`);
-  await sendHeartbeatEmailFn(results);
+  await sendHeartbeatEmailFn(results, backup?.summary ?? "Backup: status check failed.");
+}
+
+export function registerCronJobs(
+  register: (name: string, schedule: string, handler: () => Promise<void>) => void,
+  jobs = {
+    uptime: runCronCheck,
+    daily: runDailyHeartbeatCheck,
+    backup: async () => {
+      await defaultRunBackupCheck();
+    },
+  },
+): void {
+  // Every 30 minutes: 24/7 failure monitoring check (silent on success, email on outage)
+  register("WebJam Production Uptime Check", "*/30 * * * *", jobs.uptime);
+
+  // Daily 8:00 AM EDT (12:00 UTC): Self-health heartbeat report email
+  register("WebJam Production Daily Heartbeat", "0 12 * * *", jobs.daily);
+  register("WebJam Production Midnight Backup Check", "0 0 * * *", jobs.backup);
 }
 
 // Native Deno Deploy 24/7 cron triggers
 if (typeof Deno !== "undefined" && typeof Deno.cron === "function") {
-  // Every 30 minutes: 24/7 failure monitoring check (silent on success, email on outage)
-  Deno.cron("WebJam Production Uptime Check", "*/30 * * * *", async () => {
-    await runCronCheck();
-  });
-
-  // Daily 8:00 AM EDT (12:00 UTC): Self-health heartbeat report email
-  Deno.cron("WebJam Production Daily Heartbeat", "0 12 * * *", async () => {
-    await runDailyHeartbeatCheck();
-  });
+  registerCronJobs(Deno.cron);
 }
 
 async function timingSafeEqual(a: string, b: string): Promise<boolean> {
