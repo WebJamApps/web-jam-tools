@@ -14,6 +14,8 @@ export interface CheckResult {
   error?: string;
 }
 
+export const PRODUCTION_BACKEND_URL = "https://web-jam.com";
+
 export const DEFAULT_TARGETS: UptimeCheckConfig[] = [
   {
     name: "Josh & Maria Music",
@@ -27,7 +29,7 @@ export const DEFAULT_TARGETS: UptimeCheckConfig[] = [
   },
   {
     name: "Web Jam",
-    url: "https://web-jam.com",
+    url: PRODUCTION_BACKEND_URL,
     expectedStatus: [200],
   },
   {
@@ -39,6 +41,11 @@ export const DEFAULT_TARGETS: UptimeCheckConfig[] = [
   {
     name: "College Lutheran",
     url: "https://collegelutheran.org",
+    expectedStatus: [200],
+  },
+  {
+    name: "Tim Sherman Music",
+    url: "https://timshermanmusic.com",
     expectedStatus: [200],
   },
 ];
@@ -141,7 +148,7 @@ export function formatAlertEmail(failedResults: CheckResult[]): {
   return { subject, text, html };
 }
 
-export function formatHeartbeatEmail(results: CheckResult[]): {
+export function formatHeartbeatEmail(results: CheckResult[], backupSummary?: string): {
   subject: string;
   text: string;
   html: string;
@@ -160,8 +167,8 @@ export function formatHeartbeatEmail(results: CheckResult[]): {
     return `${icon} ${r.config.name} (${r.config.url})${statusStr}${errorStr}`;
   });
 
-  const text = `Uptime Monitoring Daily Heartbeat\n\nStatus Summary:\n${
-    lines.join("\n")
+  const text = `Uptime Monitoring Daily Heartbeat\n\nStatus Summary:\n${lines.join("\n")}${
+    backupSummary ? `\n\n${backupSummary}` : ""
   }\n\nTimestamp: ${new Date().toISOString()}`;
 
   const htmlList = results
@@ -175,9 +182,9 @@ export function formatHeartbeatEmail(results: CheckResult[]): {
     .join("");
 
   const html =
-    `<h2>Uptime Monitoring Daily Heartbeat</h2><p>All monitored production resources are active:</p><ul>${htmlList}</ul><p><small>Timestamp: ${
-      new Date().toISOString()
-    }</small></p>`;
+    `<h2>Uptime Monitoring Daily Heartbeat</h2><p>All monitored production resources are active:</p><ul>${htmlList}</ul>${
+      backupSummary ? `<p>${backupSummary}</p>` : ""
+    }<p><small>Timestamp: ${new Date().toISOString()}</small></p>`;
 
   return { subject, text, html };
 }
@@ -207,6 +214,7 @@ export async function sendHeartbeatEmail(
   results: CheckResult[],
   recipientsOrFetch: string[] | typeof fetch = DEFAULT_ALERT_RECIPIENTS,
   fetchFn: typeof fetch = fetch,
+  backupSummary?: string,
 ): Promise<unknown> {
   let recipients = DEFAULT_ALERT_RECIPIENTS;
   let customFetch = fetchFn;
@@ -215,6 +223,6 @@ export async function sendHeartbeatEmail(
   } else if (Array.isArray(recipientsOrFetch)) {
     recipients = recipientsOrFetch;
   }
-  const { subject, html } = formatHeartbeatEmail(results);
+  const { subject, html } = formatHeartbeatEmail(results, backupSummary);
   return await sendEmail(recipients, subject, html, customFetch);
 }

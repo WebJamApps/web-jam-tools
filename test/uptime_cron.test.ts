@@ -1,6 +1,12 @@
 import { assertEquals } from "@std/assert";
-import { handleHttpReq, runCronCheck, runDailyHeartbeatCheck } from "../src/uptime/cron.ts";
+import {
+  handleHttpReq,
+  registerCronJobs,
+  runCronCheck,
+  runDailyHeartbeatCheck,
+} from "../src/uptime/cron.ts";
 import type { CheckResult, UptimeCheckConfig } from "../src/uptime/monitor.ts";
+import { runBackupCheck } from "../src/uptime/backup_check.ts";
 
 const dummyTarget: UptimeCheckConfig = {
   name: "Dummy Target",
@@ -44,20 +50,123 @@ Deno.test("runCronCheck dispatches email alert when a check fails", async () => 
 Deno.test("runDailyHeartbeatCheck dispatches daily status email", async () => {
   let heartbeatSent = false;
   let receivedResults: CheckResult[] = [];
+  let backupCalls = 0;
+  const backupSummary = "Backup: newest good run is 25.0 hours old.";
   const mockRunAll = () =>
     Promise.resolve([
       { config: dummyTarget, success: true, status: 200 },
     ]);
-  const mockSendHeartbeat = (results: CheckResult[]) => {
+  const mockSendHeartbeat = (results: CheckResult[], summary: string) => {
+    assertEquals(summary, backupSummary);
     heartbeatSent = true;
     receivedResults = results;
     return Promise.resolve();
   };
 
-  await runDailyHeartbeatCheck(mockRunAll, mockSendHeartbeat);
+  await runDailyHeartbeatCheck(mockRunAll, mockSendHeartbeat, () => {
+    backupCalls++;
+    return Promise.resolve({ state: "healthy", ageHours: 25, summary: backupSummary });
+  });
+  assertEquals(backupCalls, 1);
   assertEquals(heartbeatSent, true);
   assertEquals(receivedResults.length, 1);
   assertEquals(receivedResults[0].success, true);
+});
+
+Deno.test("cron schedules invoke backup work only at noon and midnight", async () => {
+  const handlers = new Map<string, () => Promise<void>>();
+  const calls: string[] = [];
+  registerCronJobs((_name, schedule, handler) => {
+    handlers.set(schedule, handler);
+  }, {
+    uptime: () => {
+      calls.push("sites");
+      return Promise.resolve();
+    },
+    daily: () => {
+      calls.push("daily with backup");
+      return Promise.resolve();
+    },
+    backup: () => {
+      calls.push("backup only");
+      return Promise.resolve();
+    },
+  });
+  assertEquals([...handlers.keys()], ["*/30 * * * *", "0 12 * * *", "0 0 * * *"]);
+  await handlers.get("*/30 * * * *")!();
+  assertEquals(calls, ["sites"]);
+  await handlers.get("0 12 * * *")!();
+  await handlers.get("0 0 * * *")!();
+  assertEquals(calls, ["sites", "daily with backup", "backup only"]);
+});
+
+Deno.test("noon sends a missing-backup warning and reuses its single read in the heartbeat", async () => {
+  let reads = 0;
+  const warnings: string[] = [];
+  const heartbeats: string[] = [];
+  const fetchFn: typeof fetch = () => {
+    reads++;
+    return Promise.resolve(Response.json({ newestGoodRun: "none", lastRunFailed: true }));
+  };
+  await runDailyHeartbeatCheck(
+    () => Promise.resolve([]),
+    (_results, summary) => {
+      heartbeats.push(summary);
+      return Promise.resolve();
+    },
+    () =>
+      runBackupCheck(fetchFn, (result) => {
+        warnings.push(result.summary);
+        return Promise.resolve();
+      }),
+  );
+  assertEquals(reads, 1);
+  assertEquals(warnings, ["Backup: no good run exists."]);
+  assertEquals(heartbeats, warnings);
+});
+
+Deno.test("noon sends heartbeat even if backup warning email fails to send", async () => {
+  let heartbeatSent = false;
+  let receivedSummary = "";
+  const mockRunAll = () =>
+    Promise.resolve([
+      { config: dummyTarget, success: true, status: 200 },
+    ]);
+  const mockSendHeartbeat = (_results: CheckResult[], summary: string) => {
+    heartbeatSent = true;
+    receivedSummary = summary;
+    return Promise.resolve();
+  };
+
+  const failingBackupCheck = () =>
+    runBackupCheck(
+      () => Promise.resolve(Response.json({ newestGoodRun: "none" })),
+      () => Promise.reject(new Error("Gmail API 500")),
+    );
+
+  await runDailyHeartbeatCheck(mockRunAll, mockSendHeartbeat, failingBackupCheck);
+  assertEquals(heartbeatSent, true);
+  assertEquals(receivedSummary, "Backup: no good run exists.");
+});
+
+Deno.test("noon sends heartbeat even if backup check throws generic error", async () => {
+  let heartbeatSent = false;
+  let receivedSummary = "";
+  const mockRunAll = () =>
+    Promise.resolve([
+      { config: dummyTarget, success: true, status: 200 },
+    ]);
+  const mockSendHeartbeat = (_results: CheckResult[], summary: string) => {
+    heartbeatSent = true;
+    receivedSummary = summary;
+    return Promise.resolve();
+  };
+
+  const genericFailingCheck = () => Promise.reject(new Error("unexpected error"));
+
+  await runDailyHeartbeatCheck(mockRunAll, mockSendHeartbeat, genericFailingCheck);
+  assertEquals(heartbeatSent, true);
+  assertEquals(receivedSummary, "Backup: status check failed.");
 });
 
 function makeRequest(url: string, headers?: Record<string, string>): Request {

@@ -10,6 +10,7 @@ import {
   approvingSessionId,
   checkIssueApprovalToken,
   checkIssueApprovalTokenAuto,
+  decide,
 } from "../hooks/lib/check_issue_approval_token.ts";
 
 const PROJECT = "/home/joshua/.claude/projects/-home-joshua";
@@ -227,4 +228,84 @@ Deno.test("approvingSessionId: resolves only a session's own subagent transcript
   assertEquals(approvingSessionId("S2", null), "S2");
   assertEquals(approvingSessionId("S2", `${PROJECT}/S1/subagents/agent-a1.jsonl/extra`), "S2");
   assertEquals(approvingSessionId("S2", `${PROJECT}/S1/agent-a1.jsonl`), "S2");
+});
+
+// Literal rows from the approval-token table in the hooks design's
+// "Recognising Josh's approval to file an issue" section. Bash exemptions
+// must be silent PASS, never an ALLOW that bypasses other permission checks.
+const filingForms = [
+  ["deno task create-issue --help", "pass"],
+  ["deno task create-issue -h", "pass"],
+  ["deno task create-issue", "pass"],
+  ["deno run -A scripts/create-issue.ts --help", "pass"],
+  [
+    "cd /home/joshua/WebJamApps/web-jam-tools && deno task create-issue --help 2>&1 | head -40",
+    "pass",
+  ],
+  ["deno task create-issue --repo WebJamApps/web-jam-tools --body-file /tmp/b.md", "pass"],
+  ["gh issue create", "deny"],
+  ['gh issue create --body "x"', "deny"],
+  [
+    'deno task create-issue --help && deno task create-issue --repo WebJamApps/web-jam-tools --title "not approved"',
+    "deny",
+  ],
+] as const;
+
+for (const [command, expected] of filingForms) {
+  Deno.test(`approval-token design table: ${command}`, async () => {
+    await withToken("S1", (tokenPath) => {
+      assertEquals(decide("Bash", { command }, "S1", tokenPath, Date.now()).outcome, expected);
+      // Help/title-less calls also pass without any session or approval token.
+      assertEquals(decide("Bash", { command }, "", null, Date.now()).outcome, expected);
+    });
+  });
+}
+
+for (
+  const [args, expected] of [
+    ["--title ''", "pass"],
+    ["--title=", "pass"],
+    ["--title '   '", "deny"],
+    ['--title "" --title "not approved"', "deny"],
+    ['--title= --title="not approved"', "deny"],
+    ['--title "not approved" --help', "pass"],
+  ] as const
+) {
+  Deno.test(`approval-token script exemption boundaries: ${args}`, () => {
+    assertEquals(
+      decide("Bash", { command: `deno task create-issue ${args}` }, "", null, Date.now()).outcome,
+      expected,
+    );
+  });
+}
+
+for (const flag of ["--help", "-h"]) {
+  Deno.test(`create-issue task ${flag} prints usage and exits 0`, async () => {
+    for (const extraArgs of [[], ["--title", "unused", "--body-file", "/must-not-read.md"]]) {
+      const output = await new Deno.Command(Deno.execPath(), {
+        args: ["task", "create-issue", flag, ...extraArgs],
+        cwd: new URL("../", import.meta.url),
+        stdout: "piped",
+        stderr: "piped",
+        stdin: "null",
+      }).output();
+      assertEquals(output.code, 0);
+      const text = new TextDecoder().decode(output.stdout) +
+        new TextDecoder().decode(output.stderr);
+      assertStringIncludes(text, "Usage: deno task create-issue");
+      assertStringIncludes(text, "--body-file");
+    }
+  });
+}
+
+Deno.test("create-issue without a title exits with usage before reading the body or filing", async () => {
+  const output = await new Deno.Command(Deno.execPath(), {
+    args: ["run", "--no-prompt", "scripts/create-issue.ts", "--body-file", "/must-not-read.md"],
+    cwd: new URL("../", import.meta.url),
+    stdout: "piped",
+    stderr: "piped",
+    stdin: "null",
+  }).output();
+  assertEquals(output.code, 1);
+  assertStringIncludes(new TextDecoder().decode(output.stderr), "Usage: deno task create-issue");
 });
