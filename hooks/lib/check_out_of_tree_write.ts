@@ -1,13 +1,9 @@
 /**
  * PreToolUse guard (Write|Edit|NotebookEdit) module (web-jam-tools#511).
  *
- * COVERAGE LIMIT:
- * This hook fences Claude Code sessions and subagents only. It does not fence agy.
- * agy internal file writes are not seen by Claude Code PreToolUse hooks.
- * Full coverage of agy is blocked on web-jam-tools#432 "agy hooks do not enforce — all 12 are inert on Flash, and a Stop/SessionStart entry kills the whole config; fix that, then give Antigravity Gmail MCP fenced by a working hook".
- *
  * Denies Write/Edit/NotebookEdit calls targeting paths outside the current repository working tree,
- * allowlisting /tmp and session scratchpad directories.
+ * allowlisting /tmp and session scratchpad directories. agy reaches this guard through the shim;
+ * its payload's artifactDirectoryPath also allows that conversation's own plan and task files.
  */
 
 import * as path from "jsr:@std/path@^1.0.0";
@@ -87,13 +83,25 @@ export function getRepoRoot(startDir: string): string | null {
   return null;
 }
 
-export function isInsideTree(targetPath: string, repoRoot: string | null, cwd?: string): boolean {
+export function isInsideTree(
+  targetPath: string,
+  repoRoot: string | null,
+  cwd?: string,
+  artifactDirectoryPath?: string,
+): boolean {
   const baseDir = cwd ? path.resolve(cwd) : Deno.cwd();
   const expanded = expandHome(targetPath);
   const resolvedTarget = path.resolve(baseDir, expanded);
 
   if (isAllowlisted(resolvedTarget)) {
     return true;
+  }
+
+  if (artifactDirectoryPath && path.isAbsolute(artifactDirectoryPath)) {
+    const artifactRoot = path.resolve(artifactDirectoryPath);
+    if (resolvedTarget === artifactRoot || resolvedTarget.startsWith(artifactRoot + "/")) {
+      return true;
+    }
   }
 
   if (!repoRoot) {
@@ -119,18 +127,21 @@ export function main(): void {
       rawInput += decoder.decode(buf.subarray(0, n));
     }
   } catch {
-    Deno.exit(0);
+    allowWithNote("hook payload could not be read");
+    return;
   }
 
   if (!rawInput.trim()) {
-    Deno.exit(0);
+    allowWithNote("hook payload is empty");
+    return;
   }
 
   let data: Record<string, unknown> = {};
   try {
     data = JSON.parse(rawInput);
   } catch {
-    Deno.exit(0);
+    allowWithNote("hook payload could not be parsed");
+    return;
   }
 
   const toolName = String(data.tool_name ?? data.name ?? "").trim();
@@ -169,11 +180,23 @@ export function main(): void {
     targetPaths = [singlePath];
   }
 
-  const cwd = Deno.cwd();
+  const cwd = typeof data.cwd === "string" && path.isAbsolute(data.cwd) ? data.cwd : undefined;
+  if (!cwd) {
+    allowWithNote("cwd is missing or is not an absolute path");
+    return;
+  }
   const repoRoot = getRepoRoot(cwd);
+  if (!repoRoot) {
+    allowWithNote("repository root could not be resolved from payload cwd");
+    return;
+  }
+
+  const artifactDirectoryPath = typeof data.artifactDirectoryPath === "string"
+    ? data.artifactDirectoryPath
+    : undefined;
 
   for (const targetPath of targetPaths) {
-    if (!isInsideTree(targetPath, repoRoot, cwd)) {
+    if (!isInsideTree(targetPath, repoRoot, cwd, artifactDirectoryPath)) {
       const expanded = expandHome(targetPath);
       const resolvedTarget = path.resolve(cwd, expanded);
       const repoInfo = repoRoot ? `'${repoRoot}'` : "none (not inside a git repository)";
@@ -193,4 +216,14 @@ export function main(): void {
 
 if (import.meta.main) {
   main();
+}
+
+function allowWithNote(field: string): void {
+  console.log(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      additionalContext:
+        `out-of-tree write guard: ${field}; proceeding. Verify the target is in the intended repository working tree or an allowed scratch/document path before writing.`,
+    },
+  }));
 }

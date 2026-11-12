@@ -7,21 +7,34 @@
 // test/check_irreversible_operations_lib.test.ts.
 
 import { assertEquals } from "@std/assert";
+import {
+  COMMENT_HEREDOC_GUARD_CASES,
+  HEREDOC_REVIEW_CASES,
+} from "./comment_heredoc_guard_cases.ts";
 
 const HOOK_PATH = new URL("../hooks/block-irreversible-operations.sh", import.meta.url).pathname;
+const SHIM_PATH = new URL("../hooks/agy-hook-shim.sh", import.meta.url).pathname;
 
 async function runHook(
   payload: { tool_name?: string; command?: string },
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const input = JSON.stringify({
-    tool_name: payload.tool_name,
+    tool_name: payload.tool_name ?? "Bash",
     tool_input: payload.command ? { command: payload.command } : undefined,
   });
+  return await runPayload(input);
+}
+
+async function runPayload(
+  input: string,
+  args = [HOOK_PATH],
+): Promise<{ code: number; stdout: string; stderr: string }> {
   const process = new Deno.Command("bash", {
-    args: [HOOK_PATH],
+    args,
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
+    env: { BASH_ENV: "", AGY_HOOK_RECORD_PATH: "off" },
   });
   const child = process.spawn();
   const writer = child.stdin.getWriter();
@@ -34,6 +47,208 @@ async function runHook(
     stdout: new TextDecoder().decode(output.stdout).trim(),
     stderr: new TextDecoder().decode(output.stderr).trim(),
   };
+}
+
+const PART_R_TOOLS = [
+  "mcp__google-drive__deleteCalendarEvent",
+  "mcp__google-drive__deleteComment",
+  "mcp__google-drive__deleteGoogleSlide",
+  "mcp__google-drive__deleteSlideElement",
+  "mcp__google-drive__deleteSheet",
+  "mcp__google-drive__deleteRange",
+  "mcp__gmail__delete_email",
+  "mcp__gmail__batch_delete_emails",
+  "mcp__gmail__delete_filter",
+  "mcp__gmail__delete_label",
+  "mcp__claude_ai_Gmail__delete_label",
+];
+
+for (const tool of PART_R_TOOLS) {
+  Deno.test(`Part R named tool refuses: ${tool}`, async () => {
+    const result = await runHook({ tool_name: tool });
+    assertEquals(result.code, 2, result.stderr);
+    assertEquals(result.stdout, "");
+    assertEquals(result.stderr.includes(tool), true);
+    assertEquals(result.stderr.includes("Stop and report this refusal to Josh"), true);
+  });
+}
+
+for (
+  const server of [
+    "mcp__google-drive__",
+    "mcp__gmail__",
+    "mcp__claude_ai_Gmail__",
+    "mcp__claude_ai_Google_Drive__",
+    "mcp__claude_ai_Dropbox__",
+  ]
+) {
+  for (const verb of ["delete", "destroy", "remove", "purge", "wipe"]) {
+    Deno.test(`Part R backstop refuses ${verb} on ${server}`, async () => {
+      const tool = `${server}${verb}_unlisted_resource`;
+      const result = await runHook({ tool_name: tool });
+      assertEquals(result.code, 2, result.stderr);
+      assertEquals(result.stderr.includes(tool), true);
+    });
+  }
+}
+
+for (
+  const tool of [
+    "mcp__gmail__purge_thread",
+    "mcp__google-drive__batchDeleteCells",
+    "mcp__claude_ai_Dropbox__permanentlyRemoveResource",
+  ]
+) {
+  Deno.test(`Part R backstop covers embedded and camelCase verbs: ${tool}`, async () => {
+    const result = await runHook({ tool_name: tool });
+    assertEquals(result.code, 2, result.stderr);
+  });
+}
+
+const ALLOWED_MCP_TOOLS = [
+  "mcp__reaper__track_delete",
+  "mcp__reaper__item_delete",
+  "mcp__reaper__midi_delete_note",
+  "mcp__reaper__midi_delete_cc",
+  "mcp__reaper__midi_delete_file",
+  "mcp__reaper__merge_pull_request",
+  "mcp__reaper__purge_resource",
+  "mcp__google-drive__deleteItem",
+  "mcp__google-drive__readFile",
+  "mcp__gmail__search_emails",
+  "mcp__claude_ai_Gmail__list_labels",
+  "mcp__claude_ai_Google_Drive__list_files",
+  "mcp__claude_ai_Dropbox__search",
+  "mcp__github__remove_label",
+  "mcp__other__purge_thread",
+  "mcp__gmail_archive__purge_thread",
+];
+
+for (const tool of ALLOWED_MCP_TOOLS) {
+  Deno.test(`Part R exemption or out-of-scope tool passes: ${tool}`, async () => {
+    const result = await runHook({ tool_name: tool });
+    assertEquals(result.code, 0, result.stderr);
+    assertEquals(result.stdout, "");
+    assertEquals(result.stderr, "");
+  });
+}
+
+Deno.test("Part R backstop inspects tool names, not destructive words in arguments", async () => {
+  const result = await runPayload(JSON.stringify({
+    tool_name: "mcp__gmail__search_emails",
+    tool_input: { query: "delete destroy remove purge wipe" },
+  }));
+  assertEquals(result.code, 0, result.stderr);
+});
+
+for (
+  const input of [
+    "not JSON",
+    "{}",
+    '{"tool_name":null}',
+    '{"tool_name":""}',
+    '{"tool_name":"   "}',
+    '{"tool_name":42}',
+    '{"tool_name":[]}',
+    '{"tool_name":{}}',
+    '{"toolCall":{"name":null}}',
+    '{"tool_name":"Bash\\nmcp__gmail__purge_thread"}',
+    '{"tool_name":"Bash"}\n{"tool_name":"mcp__gmail__purge_thread"}',
+  ]
+) {
+  Deno.test(`unreadable tool name fails closed: ${input}`, async () => {
+    const result = await runPayload(input);
+    assertEquals(result.code, 2, result.stderr);
+    assertEquals(result.stderr.includes("could not read a nonempty string tool name"), true);
+    assertEquals(result.stderr.includes("no protected operation was identified"), true);
+  });
+}
+
+Deno.test("Part R tool names also evaluate from native agy payloads", async () => {
+  for (
+    const [tool, expected] of [["mcp__gmail__purge_thread", 2], [
+      "mcp__reaper__track_delete",
+      0,
+    ]] as const
+  ) {
+    const result = await runPayload(JSON.stringify({ toolCall: { name: tool, args: {} } }));
+    assertEquals(result.code, expected, result.stderr);
+  }
+});
+
+for (
+  const input of [
+    "not JSON",
+    "null",
+    "[]",
+    "{}",
+    '{"toolCall":{"args":{}}}',
+    ...[
+      null,
+      "",
+      "   ",
+      42,
+      false,
+      [],
+      {},
+      "Bash\n",
+      "mcp__gmail__purge_thread\n",
+      "Bash\nmcp__gmail__purge_thread",
+    ].map((name) => JSON.stringify({ toolCall: { name, args: {} } })),
+    '{"tool_name":"Bash","toolCall":{"args":{}}}',
+    '{"toolCall":{"name":"Bash"}}\n{"toolCall":{"name":"mcp__gmail__purge_thread"}}',
+  ]
+) {
+  Deno.test(`agy unreadable tool name fails closed: ${input}`, async () => {
+    const result = await runPayload(
+      input,
+      [SHIM_PATH, "PreToolUse", btoa("Bash|mcp__.*"), HOOK_PATH],
+    );
+    assertEquals(result.code, 0, result.stderr);
+    const verdict = JSON.parse(result.stdout);
+    assertEquals(verdict.decision, "deny", result.stdout);
+    assertEquals(verdict.reason.includes("could not read a nonempty string tool name"), true);
+    assertEquals(verdict.reason.includes("same guard"), true);
+  });
+}
+
+Deno.test("agy shim translates Part R refusals and preserves exemptions", async () => {
+  const cases = [
+    ...PART_R_TOOLS.map((tool) => ({ tool, decision: "deny" })),
+    { tool: "mcp__gmail__purge_thread", decision: "deny" },
+    { tool: "mcp__claude_ai_Dropbox__wipe_unlisted_resource", decision: "deny" },
+    ...ALLOWED_MCP_TOOLS.map((tool) => ({ tool, decision: "allow" })),
+  ];
+  for (const { tool, decision } of cases) {
+    const result = await runPayload(
+      JSON.stringify({ toolCall: { name: tool, args: {} } }),
+      [SHIM_PATH, "PreToolUse", btoa("Bash|mcp__.*"), HOOK_PATH],
+    );
+    assertEquals(result.code, 0, result.stderr);
+    assertEquals(JSON.parse(result.stdout).decision, decision, tool);
+  }
+});
+
+for (const row of [...COMMENT_HEREDOC_GUARD_CASES, ...HEREDOC_REVIEW_CASES]) {
+  Deno.test(`apostrophe shell literal case ${row.id}: ${row.irreversible}`, async () => {
+    const result = await runHook({ tool_name: "Bash", command: row.command });
+    assertEquals(result.code, row.irreversible === "allow" ? 0 : 2, result.stderr);
+    if (row.irreversible === "allow") {
+      assertEquals(result.stderr, "");
+    } else if (row.irreversible === "operation") {
+      assertEquals(result.stderr.includes("This operation is irreversible"), true, result.stderr);
+      assertEquals(result.stderr.includes("could not read the command"), false, result.stderr);
+    } else {
+      assertEquals(result.stderr.includes("could not read the command"), true, result.stderr);
+      assertEquals(result.stderr.includes("no protected operation was identified"), true);
+      assertEquals(result.stderr.includes("restate the same action"), true);
+      assertEquals(result.stderr.includes("same guard"), true);
+      assertEquals(result.stderr.includes("Do not change what the command does"), true);
+      assertEquals(result.stderr.includes("end of the turn"), true);
+      assertEquals(result.stderr.includes("irreversible and hard-blocked"), false);
+      assertEquals(result.stderr.includes("separate terminal"), false);
+    }
+  });
 }
 
 Deno.test("irreversible operations: all 17 operations blocked with exit 2 and runnable commands (R-24 & R-25)", async () => {
@@ -252,7 +467,7 @@ Deno.test("when deno itself is unavailable, the guard still fails CLOSED", async
     );
     await Deno.chmod(fakeDeno, 0o755);
 
-    const input = JSON.stringify({ tool_input: { command: "git status" } });
+    const input = JSON.stringify({ tool_name: "Bash", tool_input: { command: "git status" } });
     const process = new Deno.Command("bash", {
       args: [HOOK_PATH],
       stdin: "piped",
@@ -272,10 +487,41 @@ Deno.test("when deno itself is unavailable, the guard still fails CLOSED", async
 
     assertEquals(output.code, 2, `expected fail-closed when deno is missing, stderr: ${stderr}`);
     assertEquals(stderr.includes("guard could not evaluate"), true, stderr);
+    assertEquals(stderr.includes("no protected operation was identified"), true, stderr);
+    assertEquals(stderr.includes("irreversible and hard-blocked"), false, stderr);
   } finally {
     await Deno.remove(shadowDir, { recursive: true });
   }
 });
+
+for (const [output, code] of [["", 0], ["OK", 7], ["unexpected", 0]] as const) {
+  Deno.test(`apostrophe checker failure ${JSON.stringify(output)}/${code} uses the could-not-read response`, async () => {
+    const dir = await Deno.makeTempDir({ prefix: "apostrophe-failed-checker-" });
+    try {
+      await Deno.writeTextFile(`${dir}/deno`, `#!/bin/sh\nprintf '%s' '${output}'\nexit ${code}\n`);
+      await Deno.chmod(`${dir}/deno`, 0o755);
+      const child = new Deno.Command("bash", {
+        args: [HOOK_PATH],
+        env: { BASH_ENV: "", PATH: `${dir}:${Deno.env.get("PATH") ?? ""}` },
+        stdin: "piped",
+        stdout: "piped",
+        stderr: "piped",
+      }).spawn();
+      const writer = child.stdin.getWriter();
+      await writer.write(
+        new TextEncoder().encode(JSON.stringify({ tool_input: { command: "git status" } })),
+      );
+      await writer.close();
+      const result = await child.output();
+      const stderr = new TextDecoder().decode(result.stderr);
+      assertEquals(result.code, 2, stderr);
+      assertEquals(stderr.includes("could not read the command"), true, stderr);
+      assertEquals(stderr.includes("irreversible and hard-blocked"), false, stderr);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+}
 
 // --- web-jam-tools#1223: git global options before the subcommand ---
 // Real hook script, full PreToolUse Bash payload, exit code per table row.

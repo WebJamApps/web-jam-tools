@@ -136,7 +136,7 @@ Deno.test("--list-roster is read-only and needs no git repository", async () => 
     assertEquals(result.code, 0);
     assertEquals(new TextDecoder().decode(result.stderr), "");
     const entries = new TextDecoder().decode(result.stdout).trimEnd().split("\n");
-    for (const entry of ["GPT-6 Luna", "GPT-6.1 Sol", "GPT-6 Astra"]) {
+    for (const entry of ["Gemini Argon", "GPT-6 Luna", "GPT-6.1 Sol", "GPT-6 Astra"]) {
       assertEquals(entries.includes(entry), true);
     }
     assertEquals(Array.from(Deno.readDirSync(dir)).map((entry) => entry.name), ["git"]);
@@ -364,8 +364,8 @@ Deno.test("roster: the retired medium level is refused in any letter case (web-j
   }
 });
 
-Deno.test("roster match is by substring: 'Claude Code — Haiku 4.5' passes", async () => {
-  const res = await runScript(repoDir, baseArgs({ author: "Claude Code — Haiku 4.5" }));
+Deno.test("roster match is by substring: 'Claude Code — Haiku 5.5' passes", async () => {
+  const res = await runScript(repoDir, baseArgs({ author: "Claude Code — Haiku 5.5" }));
   assertEquals(res.code, 0, res.stderr);
 });
 
@@ -619,6 +619,11 @@ async function makeMockGh(
     issueTitle?: string;
     issueLabels?: string[];
     failLabelsFetch?: boolean;
+    parentInfo?: string;
+    parentFailure?: string;
+    failStatusMutation?: boolean;
+    statusReadbackValue?: string;
+    nodeId?: string;
   } = {},
 ) {
   const dir = await Deno.makeTempDir({ prefix: "mock-gh-" });
@@ -645,6 +650,36 @@ LABELS_EOF
   }
     fi
   done
+fi
+if [ "$1" = "api" ]; then
+  if [[ "\${2:-}" == *"/parent"* ]]; then
+    ${
+    options.parentInfo
+      ? `echo -e "${options.parentInfo}"; exit 0`
+      : options.parentFailure
+      ? `echo "${options.parentFailure}" >&2; exit 1`
+      : 'echo "gh: No parent issue found (HTTP 404)" >&2; exit 1'
+  }
+  elif [ "\${2:-}" = "graphql" ]; then
+    ${
+    options.failStatusMutation
+      ? 'echo "mutation failed" >&2; exit 1'
+      : 'echo \'{"data":{"updateIssueFieldValue":{"clientMutationId":null}}}\'; exit 0'
+  }
+  else
+    for arg in "$@"; do
+      if [ "$arg" = ".node_id" ]; then
+        ${
+    options.nodeId !== undefined
+      ? `echo "${options.nodeId}"; exit 0`
+      : 'echo "I_mock_node_id"; exit 0'
+  }
+      elif [[ "$arg" == *".issue_field_values"* ]]; then
+        echo "${options.statusReadbackValue ?? "In review"}"
+        exit 0
+      fi
+    done
+  fi
 fi
 exit 0
 `;
@@ -1258,9 +1293,21 @@ Deno.test("opening a PR when current branch matches --base is refused", async ()
 
 // --- --base passed through to gh pr create/edit tests ---
 
-async function makeMockGhWithArgCapture() {
+async function makeMockGhWithArgCapture(
+  options: {
+    labelFailure?: boolean;
+    initialLabels?: string[];
+    issueLabels?: string[];
+    parentInfo?: string;
+    parentFailure?: string;
+    failStatusMutation?: boolean;
+    statusReadbackValue?: string;
+    nodeId?: string;
+  } = {},
+) {
   const dir = await Deno.makeTempDir({ prefix: "mock-gh-args-" });
   const argsLogPath = `${dir}/gh-invocations.txt`;
+  await Deno.writeTextFile(`${dir}/labels`, (options.initialLabels ?? []).join("\n"));
 
   const scriptContent = `#!/usr/bin/env bash
 # Log all invocations to a file for inspection
@@ -1286,16 +1333,54 @@ if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
       echo "Test Issue"
       exit 0
     elif [ "$arg" = "labels" ]; then
-      echo ""
+      echo "${(options.issueLabels ?? []).join("\n")}"
       exit 0
     fi
   done
 fi
+if [ "$1" = "api" ]; then
+  if [[ "\${2:-}" == *"/parent"* ]]; then
+    ${
+    options.parentInfo
+      ? `echo -e "${options.parentInfo}"; exit 0`
+      : options.parentFailure
+      ? `echo "${options.parentFailure}" >&2; exit 1`
+      : 'echo "gh: No parent issue found (HTTP 404)" >&2; exit 1'
+  }
+  elif [ "\${2:-}" = "graphql" ]; then
+    ${
+    options.failStatusMutation
+      ? 'echo "mutation failed" >&2; exit 1'
+      : 'echo \'{"data":{"updateIssueFieldValue":{"clientMutationId":null}}}\'; exit 0'
+  }
+  else
+    for arg in "$@"; do
+      if [ "$arg" = ".node_id" ]; then
+        ${
+    options.nodeId !== undefined
+      ? `echo "${options.nodeId}"; exit 0`
+      : 'echo "I_mock_node_id"; exit 0'
+  }
+      elif [[ "$arg" == *".issue_field_values"* ]]; then
+        echo "${options.statusReadbackValue ?? "In review"}"
+        exit 0
+      fi
+    done
+  fi
+fi
 if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
+  touch "${dir}/pr-open"
   echo "https://github.com/WebJamApps/web-jam-tools/pull/9999"
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then
+  if [ "\${4:-}" = "--add-label" ]; then
+    if [ "${options.labelFailure ? "1" : "0"}" = "1" ]; then
+      echo "label does not exist" >&2
+      exit 1
+    fi
+    printf '%s\\n' "$5" >> "${dir}/labels"
+  fi
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
@@ -1310,6 +1395,190 @@ exit 0
   await Deno.chmod(ghPath, 0o755);
   return { dir, argsLogPath };
 }
+
+// Run the actual create/update paths offline; gh records every argument, and git only stubs push.
+async function withModelLabelFixture(
+  test: (fixture: {
+    repo: string;
+    dir: string;
+    env: Record<string, string>;
+    invocations: () => Promise<string[][]>;
+  }) => Promise<void>,
+  options: {
+    labelFailure?: boolean;
+    initialLabels?: string[];
+    issueLabels?: string[];
+    parentInfo?: string;
+    parentFailure?: string;
+    failStatusMutation?: boolean;
+    statusReadbackValue?: string;
+    nodeId?: string;
+  } = {},
+): Promise<void> {
+  const repo = await makeFixtureRepo();
+  const { dir, argsLogPath } = await makeMockGhWithArgCapture(options);
+  try {
+    await Deno.writeTextFile(
+      `${dir}/git`,
+      '#!/usr/bin/env bash\nif [ "$1" = "push" ]; then exit 0; fi\nexec /usr/bin/git "$@"\n',
+    );
+    await Deno.chmod(`${dir}/git`, 0o755);
+    await test({
+      repo,
+      dir,
+      env: { PATH: `${dir}:${Deno.env.get("PATH")}` },
+      invocations: async () => {
+        try {
+          return (await Deno.readTextFile(argsLogPath))
+            .split("=== gh invocation ===\n").slice(1)
+            .map((call) => call.split("\n=== end ===")[0].split("\n"));
+        } catch (error) {
+          if (error instanceof Deno.errors.NotFound) return [];
+          throw error;
+        }
+      },
+    });
+  } finally {
+    await Deno.remove(repo, { recursive: true });
+    await Deno.remove(dir, { recursive: true });
+  }
+}
+
+const MODEL_LABEL_CASES = [
+  ["Claude Code — Claude Haiku 5.5", "Haiku"],
+  ["Codex — GPT-6 Luna", "Luna"],
+  ["agy — Gemini Flash", "Flash"],
+  ["agy — Gemini Argon", "Argon"],
+  ["Codex — GPT-6.1 Sol", "Sol"],
+  ["Codex — GPT-6 Astra", "Astra"],
+  ["Claude Code — Claude Sonnet 5.5", "Sonnet"],
+  ["Claude Code — Claude Opus", "Opus"],
+] as const;
+const LABEL_PR_URL = "https://github.com/WebJamApps/web-jam-tools/pull/9999";
+
+for (const [author, label] of MODEL_LABEL_CASES) {
+  Deno.test(`model label: creation signed ${author} adds ${label} once after opening`, () =>
+    withModelLabelFixture(async ({ repo, env, invocations }) => {
+      const result = await runScriptWithoutDryRun(repo, baseArgs({ author }), env);
+      assertEquals(result.code, 0, result.stderr);
+      const calls = await invocations();
+      assertEquals(calls.map((call) => call.slice(0, 2)), [["pr", "create"], ["pr", "edit"]]);
+      assertEquals(calls[0].includes("--draft"), true);
+      assertEquals(calls[0].includes("--label"), false);
+      assertEquals(calls[0].includes("--add-label"), false);
+      assertEquals(calls[0].join("\n").includes(`🤖 Work by ${author}`), true);
+      assertEquals(calls[1], ["pr", "edit", LABEL_PR_URL, "--add-label", label]);
+    }));
+
+  Deno.test(`model label: missing ${label} preserves the new PR and reports repository`, () =>
+    withModelLabelFixture(async ({ repo, dir, env, invocations }) => {
+      const result = await runScriptWithoutDryRun(repo, baseArgs({ author }), env);
+      assertEquals(result.code, 1);
+      assertEquals((await Deno.stat(`${dir}/pr-open`)).isFile, true);
+      assertEquals(result.stdout.includes(`Draft PR opened: ${LABEL_PR_URL}`), true);
+      assertEquals(result.stderr.includes(`model label '${label}'`), true);
+      assertEquals(result.stderr.includes("WebJamApps/web-jam-tools"), true);
+      assertEquals((await invocations()).map((call) => call.slice(0, 2)), [
+        ["pr", "create"],
+        ["pr", "edit"],
+      ]);
+    }, { labelFailure: true }));
+
+  Deno.test(`model label: dry run signed ${author} prints ${label} with no writes`, () =>
+    withModelLabelFixture(async ({ repo, dir, env, invocations }) => {
+      const result = await runScript(repo, baseArgs({ author }), env);
+      assertEquals(result.code, 0, result.stderr);
+      assertEquals(
+        result.stdout.includes(`MODEL LABEL: ${label} (would add once after creation)`),
+        true,
+      );
+      assertEquals(await invocations(), []);
+      assertEquals(
+        Array.from(Deno.readDirSync(dir)).some((entry) => entry.name === "pr-open"),
+        false,
+      );
+      assertEquals(await Deno.readTextFile(`${dir}/labels`), "");
+    }));
+}
+
+Deno.test("model label: Fable opens the draft before reporting no tier-order label", () =>
+  withModelLabelFixture(async ({ repo, dir, env, invocations }) => {
+    const result = await runScriptWithoutDryRun(
+      repo,
+      baseArgs({ author: "Claude Code — Claude Fable 5" }),
+      env,
+    );
+    assertEquals(result.code, 1);
+    assertEquals((await Deno.stat(`${dir}/pr-open`)).isFile, true);
+    assertEquals(result.stderr.includes("Claude Fable 5"), true);
+    assertEquals(result.stderr.includes("no model label"), true);
+    assertEquals(result.stderr.includes("WebJamApps/web-jam-tools"), true);
+    assertEquals((await invocations()).map((call) => call.slice(0, 2)), [["pr", "create"]]);
+  }));
+
+for (const initialLabels of [["Flash"], []]) {
+  Deno.test(`model label: update preserves ${initialLabels.length ? "Flash" : "no labels"}`, () =>
+    withModelLabelFixture(async ({ repo, dir, env, invocations }) => {
+      const result = await runScriptWithoutDryRun(
+        repo,
+        [...baseArgs({ author: "Codex — GPT-6.1 Sol" }), "--update"],
+        env,
+      );
+      assertEquals(result.code, 0, result.stderr);
+      const calls = await invocations();
+      assertEquals(calls.filter((call) => call[1] === "create"), []);
+      assertEquals(calls.filter((call) => call.includes("--add-label")), []);
+      assertEquals(calls.filter((call) => call.includes("--remove-label")), []);
+      assertEquals(await Deno.readTextFile(`${dir}/labels`), initialLabels.join("\n"));
+    }, { initialLabels }));
+}
+
+Deno.test("model label: forced signing author controls footer and label", () =>
+  withModelLabelFixture(async ({ repo, env, invocations }) => {
+    const result = await runScriptWithoutDryRun(repo, baseArgs({ author: "Codex — GPT-6.1 Sol" }), {
+      ...env,
+      FORCED_PR_AUTHOR: "agy — Gemini Flash",
+    });
+    assertEquals(result.code, 0, result.stderr);
+    const calls = await invocations();
+    assertEquals(calls[0].join("\n").includes("🤖 Work by agy — Gemini Flash"), true);
+    assertEquals(calls[1], ["pr", "edit", LABEL_PR_URL, "--add-label", "Flash"]);
+  }));
+
+Deno.test("model label: Sol signature wins over the issue's Flash label", () =>
+  withModelLabelFixture(async ({ repo, env, invocations }) => {
+    const result = await runScriptWithoutDryRun(
+      repo,
+      [...baseArgs({ author: "Codex — GPT-6.1 Sol" }), "--issue", "999"],
+      env,
+    );
+    assertEquals(result.code, 0, result.stderr);
+    const labelCalls = (await invocations()).filter((call) => call.includes("--add-label"));
+    assertEquals(labelCalls, [["pr", "edit", LABEL_PR_URL, "--add-label", "Sol"]]);
+  }, { issueLabels: ["Flash"] }));
+
+Deno.test("model label: Codex session resolves Sol instead of the typed Astra author", () =>
+  withSigningFixture(async (_options, signingEnv, sessionPath) => {
+    await Deno.writeTextFile(
+      sessionPath,
+      '{"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}\n',
+      { append: true },
+    );
+    await withModelLabelFixture(async ({ repo, env, invocations }) => {
+      const result = await runScriptWithoutDryRun(
+        repo,
+        baseArgs({ author: "Codex — GPT-6 Astra" }),
+        {
+          ...env,
+          ...signingEnv,
+        },
+      );
+      assertEquals(result.code, 0, result.stderr);
+      const calls = await invocations();
+      assertEquals(calls[0].join("\n").includes("🤖 Work by Codex — GPT-6.1 Sol"), true);
+      assertEquals(calls[1], ["pr", "edit", LABEL_PR_URL, "--add-label", "Sol"]);
+    });
+  }));
 
 Deno.test("--base some-branch is passed through to gh pr create call", async () => {
   const { dir, argsLogPath } = await makeMockGhWithArgCapture();
@@ -1500,8 +1769,19 @@ for (
   const [author, code] of [
     ["Antigravity — Gemini Flash (Medium)", 1],
     ["Antigravity — gemini flash (MEDIUM)", 1],
+    ["Antigravity — Gemini Flash (Low)", 1],
     ["Antigravity — Gemini Flash", 0],
     ["Antigravity — Gemini Flash (High)", 0],
+    ["agy — Gemini Argon", 0],
+    ["agy — Gemini Argon (High)", 0],
+    ["agy — Gemini Argon (Low)", 1],
+    ["agy — Gemini Argon (Medium)", 1],
+    ["agy — Gemini 4 Argon (High)", 1],
+    ["agy — Gemini 4 Argon (Low)", 1],
+    ["agy — Gemini 4 Argon (Medium)", 1],
+    ["agy — Claude Sonnet 5.5", 0],
+    ["agy — Claude Sonnet 5.5 (Low)", 1],
+    ["agy — Claude Sonnet 5.5 (Medium)", 1],
   ] as const
 ) {
   Deno.test(`create-draft-pr.sh --check-author: ${author} exits ${code}`, async () => {
@@ -1513,3 +1793,451 @@ for (
     assertEquals(out.code, code, new TextDecoder().decode(out.stderr));
   });
 }
+
+// --- issue line table and Workflow Status tests (web-jam-tools#1614) ---
+
+Deno.test("issue line table: Row 1 - done once dev is pulled emits Closes #N", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "100"],
+    env,
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes #100/);
+  assertNotMatch(res.stdout, /Part of/);
+});
+
+Deno.test("issue line table: Row 2 - needs a local step emits Part of #N (local step after merge)", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "101", "--local-step"],
+    env,
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Part of #101 \(local step after merge\)/);
+  assertNotMatch(res.stdout, /Closes #101/);
+});
+
+Deno.test("issue line table: Row 3 - has more coding work emits Part of #N via --part-of", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "102", "--part-of"],
+    env,
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Part of #102/);
+  assertNotMatch(res.stdout, /local step after merge/);
+  assertNotMatch(res.stdout, /Closes/);
+});
+
+Deno.test("issue line table: Row 4 - Epic child emits Closes #N and Part of for Epic", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    parentInfo: "900\tWebJamApps/web-jam-tools",
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "103"],
+    env,
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes #103\s+Part of #900/);
+});
+
+Deno.test("issue line table: Row 4 cross-repo - Epic child emits Closes #N and Part of OWNER/REPO#<Epic>", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    parentInfo: "500\tWebJamApps/other-repo",
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "104"],
+    env,
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes #104\s+Part of WebJamApps\/other-repo#500/);
+});
+
+Deno.test("issue line table: Row 5 - no issue emits no issue line", async () => {
+  const res = await runScript(
+    await makeFixtureRepo(),
+    baseArgs(),
+  );
+  assertEquals(res.code, 0, res.stderr);
+  const composedBody =
+    res.stdout.split("=== COMPOSED BODY ===\n")[1]?.split("\n=== END DRY RUN ===")[0] ?? "";
+  assertNotMatch(composedBody, /Closes/);
+  assertNotMatch(composedBody, /Part of/);
+  assertNotMatch(composedBody, /Refs/);
+});
+
+Deno.test("--local-step without an issue is refused", async () => {
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--local-step"],
+  );
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /--local-step needs an issue/);
+});
+
+Deno.test("--local-step and --part-of together is refused", async () => {
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "105", "--local-step", "--part-of"],
+  );
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /pass --part-of or --local-step, not both/);
+});
+
+Deno.test("--local-step and --no-close together is refused", async () => {
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "106", "--local-step", "--no-close"],
+  );
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /pass --no-close or --local-step, not both/);
+});
+
+Deno.test("cross-repo --issue with --local-step produces Part of OWNER/REPO#N (local step after merge)", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "WebJamApps/JaMmusic#1250", "--local-step"],
+    env,
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Part of WebJamApps\/JaMmusic#1250 \(local step after merge\)/);
+});
+
+Deno.test("Workflow Status write: confirmed write and read-back proceeds to open draft PR", async () => {
+  await withModelLabelFixture(async ({ repo, env, invocations }) => {
+    const res = await runScriptWithoutDryRun(
+      repo,
+      [...baseArgs({ author: "agy — Gemini Flash" }), "--issue", "999"],
+      env,
+    );
+    assertEquals(res.code, 0, res.stderr);
+    assertMatch(res.stdout, /Setting Workflow Status to 'In review'/);
+    assertMatch(res.stdout, /Workflow Status: In review \(read-back verified\)/);
+    assertMatch(res.stdout, /Draft PR opened:/);
+    const calls = await invocations();
+    const hasGraphQL = calls.some((c) => c[0] === "api" && c[1] === "graphql");
+    assertEquals(hasGraphQL, true);
+  });
+});
+
+Deno.test("Workflow Status write: mutation failure makes script refuse and fail closed", async () => {
+  await withModelLabelFixture(async ({ repo, env, invocations }) => {
+    const res = await runScriptWithoutDryRun(
+      repo,
+      [...baseArgs({ author: "agy — Gemini Flash" }), "--issue", "999"],
+      env,
+    );
+    assertEquals(res.code, 1);
+    assertMatch(res.stderr, /GraphQL mutation failed to set Workflow Status/);
+    const calls = await invocations();
+    const hasPrCreate = calls.some((c) => c[0] === "pr" && c[1] === "create");
+    assertEquals(hasPrCreate, false);
+  }, { failStatusMutation: true });
+});
+
+Deno.test("Workflow Status write: read-back mismatch makes script refuse and fail closed", async () => {
+  await withModelLabelFixture(async ({ repo, env, invocations }) => {
+    const res = await runScriptWithoutDryRun(
+      repo,
+      [...baseArgs({ author: "agy — Gemini Flash" }), "--issue", "999"],
+      env,
+    );
+    assertEquals(res.code, 1);
+    assertMatch(res.stderr, /Workflow Status write unverified on #999/);
+    const calls = await invocations();
+    const hasPrCreate = calls.some((c) => c[0] === "pr" && c[1] === "create");
+    assertEquals(hasPrCreate, false);
+  }, { statusReadbackValue: "In progress" });
+});
+
+Deno.test("Workflow Status write: legacy base64 node ID succeeds and passes issueId to mutation", async () => {
+  await withModelLabelFixture(async ({ repo, env, invocations }) => {
+    const res = await runScriptWithoutDryRun(
+      repo,
+      [...baseArgs({ author: "agy — Gemini Flash" }), "--issue", "999"],
+      env,
+    );
+    assertEquals(res.code, 0, res.stderr);
+    assertMatch(res.stdout, /Setting Workflow Status to 'In review'/);
+    assertMatch(res.stdout, /Workflow Status: In review \(read-back verified\)/);
+    assertMatch(res.stdout, /Draft PR opened:/);
+    const calls = await invocations();
+    const graphQLCall = calls.find((c) => c[0] === "api" && c[1] === "graphql");
+    assertEquals(Boolean(graphQLCall), true);
+    assertEquals(graphQLCall?.includes("issueId=MDU6SXNzdWU0NjU3NDY2NTU="), true);
+  }, { nodeId: "MDU6SXNzdWU0NjU3NDY2NTU=" });
+});
+
+Deno.test("Workflow Status write: missing or null node ID causes script to fail closed", async () => {
+  await withModelLabelFixture(async ({ repo, env, invocations }) => {
+    const res = await runScriptWithoutDryRun(
+      repo,
+      [...baseArgs({ author: "agy — Gemini Flash" }), "--issue", "999"],
+      env,
+    );
+    assertEquals(res.code, 1);
+    assertMatch(res.stderr, /could not resolve issue node_id for #999/);
+    const calls = await invocations();
+    const hasPrCreate = calls.some((c) => c[0] === "pr" && c[1] === "create");
+    assertEquals(hasPrCreate, false);
+  }, { nodeId: "null" });
+});
+
+Deno.test("issue line table: Row 4 - parent API failure (rate limit / 500) fails closed", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    parentFailure: "gh: API rate limit exceeded (HTTP 403)",
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "100"],
+    env,
+  );
+  assertEquals(res.code, 1);
+  assertMatch(
+    res.stderr,
+    /could not lookup parent issue for #100 \(via gh\): gh: API rate limit exceeded \(HTTP 403\)/,
+  );
+});
+
+Deno.test("issue line table: Row 4 - transport failure with 404 in URL fails closed", async () => {
+  for (const issueNum of ["404", "1404"]) {
+    const transportErr =
+      `gh api: Get "https://api.github.com/repos/WebJamApps/web-jam-tools/issues/${issueNum}/parent": dial tcp: lookup api.github.com: no such host`;
+    const mockGhDir = await makeMockGh({
+      ownerRepo: "WebJamApps/web-jam-tools",
+      parentFailure: transportErr,
+    });
+    const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+    const res = await runScript(
+      await makeFixtureRepo(),
+      [...baseArgs(), "--issue", issueNum],
+      env,
+    );
+    assertEquals(res.code, 1, `Expected failure for issue ${issueNum}, but got ${res.code}`);
+    assertMatch(
+      res.stderr,
+      new RegExp(`could not lookup parent issue for #${issueNum} \\(via gh\\)`),
+    );
+  }
+});
+
+Deno.test("issue line table: Row 1 - legitimate no-parent HTTP 404 on issue 1404 proceeds", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    parentFailure: "gh: No parent issue found (HTTP 404)",
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "1404"],
+    env,
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes #1404/);
+  assertNotMatch(res.stdout, /Part of/);
+});
+
+Deno.test("issue line table: Row 4 - malformed parent response fails closed", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    parentInfo: "not-a-number\tWebJamApps/web-jam-tools",
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    await makeFixtureRepo(),
+    [...baseArgs(), "--issue", "100"],
+    env,
+  );
+  assertEquals(res.code, 1);
+  assertMatch(
+    res.stderr,
+    /malformed parent issue response for #100 \(number not found\)/,
+  );
+});
+
+// --- web-jam-tools#1725: refuse repository version numbers and bump wording ---
+
+type VersionFixtureKind = "deno" | "package" | "none" | "deno-missing-version";
+
+async function makeVersionFixtureRepo(kind: VersionFixtureKind): Promise<string> {
+  const dir = await Deno.makeTempDir({ prefix: `wjt1725-${kind}-` });
+  const run = async (args: string[]) => {
+    const cmd = new Deno.Command("git", { args, cwd: dir, stdout: "null", stderr: "piped" });
+    const { code, stderr } = await cmd.output();
+    if (code !== 0) {
+      throw new Error(`git ${args.join(" ")} failed: ${new TextDecoder().decode(stderr)}`);
+    }
+  };
+  await run(["init", "-q"]);
+  await run(["config", "user.email", "test@example.com"]);
+  await run(["config", "user.name", "Test"]);
+  await run(["checkout", "-q", "-b", "dev"]);
+
+  if (kind === "deno") {
+    await Deno.writeTextFile(
+      `${dir}/deno.json`,
+      JSON.stringify({ name: "@webjam/tools", version: "1.61.4" }, null, 2) + "\n",
+    );
+    await run(["add", "deno.json"]);
+  } else if (kind === "package") {
+    await Deno.writeTextFile(
+      `${dir}/package.json`,
+      JSON.stringify({ name: "jammusic", version: "2.26.0" }, null, 2) + "\n",
+    );
+    await run(["add", "package.json"]);
+  } else {
+    await Deno.writeTextFile(`${dir}/f.txt`, "hi\n");
+    await run(["add", "f.txt"]);
+  }
+  await run(["commit", "-q", "-m", "base commit"]);
+  await run(["update-ref", "refs/remotes/origin/dev", "HEAD"]);
+
+  await run(["checkout", "-q", "-b", "scratch-branch"]);
+  if (kind === "deno") {
+    await Deno.writeTextFile(
+      `${dir}/deno.json`,
+      JSON.stringify({ name: "@webjam/tools", version: "1.61.5" }, null, 2) + "\n",
+    );
+    await run(["add", "deno.json"]);
+    await run(["commit", "-q", "-m", "branch commit"]);
+  } else if (kind === "package") {
+    await Deno.writeTextFile(
+      `${dir}/package.json`,
+      JSON.stringify({ name: "jammusic", version: "2.27.0" }, null, 2) + "\n",
+    );
+    await run(["add", "package.json"]);
+    await run(["commit", "-q", "-m", "branch commit"]);
+  } else if (kind === "deno-missing-version") {
+    await Deno.writeTextFile(
+      `${dir}/deno.json`,
+      JSON.stringify({ name: "@webjam/tools" }, null, 2) + "\n",
+    );
+    await run(["add", "deno.json"]);
+    await run(["commit", "-q", "-m", "branch commit without version"]);
+  }
+
+  return dir;
+}
+
+const APPENDIX_A_CASES: ReadonlyArray<{
+  line: string;
+  repo: VersionFixtureKind;
+  outcome: "refused" | "sent" | "refused-file";
+}> = [
+  { line: "- Bumps `deno.json` version 1.61.4 -> 1.61.5", repo: "deno", outcome: "refused" },
+  {
+    line: "- Bump `deno.json` patch version from `1.61.4` to `1.61.5`",
+    repo: "deno",
+    outcome: "refused",
+  },
+  { line: "- Version: 1.61.5", repo: "deno", outcome: "refused" },
+  { line: "- Ships as v1.61.5.", repo: "deno", outcome: "refused" },
+  { line: "- Rebased onto dev at 1.61.4", repo: "deno", outcome: "refused" },
+  { line: "- Bumped the version.", repo: "deno", outcome: "refused" },
+  { line: "- Version Bump", repo: "deno", outcome: "refused" },
+  { line: "- Bump semver version", repo: "deno", outcome: "refused" },
+  { line: "- bump deno.json", repo: "deno", outcome: "refused" },
+  { line: "- Bumped `package.json` and `package-lock.json`", repo: "deno", outcome: "refused" },
+  { line: "- semver bump: patch", repo: "deno", outcome: "refused" },
+  { line: "> jammusic@2.27.0 test", repo: "package", outcome: "refused" },
+  { line: "- Bump the application to 2.26.0", repo: "package", outcome: "refused" },
+  { line: "curl http://127.0.0.1:8080/health", repo: "deno", outcome: "sent" },
+  { line: "- Updated `.nvmrc` to `24.19.0`", repo: "deno", outcome: "sent" },
+  { line: "docker run --rm cimg/node:24.19.0 node --version", repo: "deno", outcome: "sent" },
+  {
+    line: "- Cause: `@vitest/eslint-plugin` 1.6.28 declares a TypeScript peer it does not meet",
+    repo: "deno",
+    outcome: "sent",
+  },
+  { line: "- npm audit fix bumped undici from 7.30.0 to 7.30.1", repo: "deno", outcome: "sent" },
+  { line: "- Fixes the version picker on the settings page", repo: "deno", outcome: "sent" },
+  { line: "- Design record updated to 1.8.0", repo: "deno", outcome: "sent" },
+  { line: "- Counts 11.61.55 rows", repo: "deno", outcome: "sent" },
+  { line: "- Reaches 21.61.5 on the chart", repo: "deno", outcome: "sent" },
+  { line: "- Pings 1.61.5.2 on the test network", repo: "deno", outcome: "sent" },
+  { line: "- Model: Sonnet 5.5", repo: "deno", outcome: "sent" },
+  { line: "- Bumped the version.", repo: "none", outcome: "refused" },
+  { line: "- Ships 1.61.5", repo: "none", outcome: "sent" },
+  { line: "- Adds the export button", repo: "deno-missing-version", outcome: "refused-file" },
+];
+
+for (const [idx, tc] of APPENDIX_A_CASES.entries()) {
+  Deno.test(
+    `Appendix A row ${idx + 1} (${tc.repo} -> ${tc.outcome}): ${tc.line}`,
+    async () => {
+      const dir = await makeVersionFixtureRepo(tc.repo);
+      try {
+        const isBullet = tc.line.startsWith("- ");
+        const summary = isBullet ? tc.line : `${VALID_SUMMARY}\n${tc.line}`;
+        const res = await runScript(dir, baseArgs({ summary }));
+        if (tc.outcome === "sent") {
+          assertEquals(res.code, 0, res.stderr);
+          assertMatch(res.stdout, /=== DRY RUN/);
+        } else if (tc.outcome === "refused-file") {
+          assertEquals(res.code, 1);
+          assertMatch(res.stderr, /deno\.json/);
+        } else {
+          assertEquals(res.code, 1);
+          assertEquals(res.stderr.includes(tc.line), true, `stderr missing line: ${res.stderr}`);
+          assertMatch(res.stderr, /The version is in the diff and CI checks it/);
+          assertMatch(res.stderr, /Remove that line and run the same command again/);
+        }
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    },
+  );
+}
+
+Deno.test("version check also refuses version/bump lines in --update mode, --test-plan, --test-evidence, --screenshots, and --no-close-reason", async () => {
+  const dir = await makeVersionFixtureRepo("deno");
+  try {
+    const updateRes = await runScript(dir, [
+      ...baseArgs({ summary: "- Version: 1.61.5" }),
+      "--update",
+    ]);
+    assertEquals(updateRes.code, 1);
+    assertEquals(updateRes.stderr.includes("- Version: 1.61.5"), true);
+
+    const planRes = await runScript(
+      dir,
+      baseArgs({ testPlan: "Verify build output at version 1.61.5." }),
+    );
+    assertEquals(planRes.code, 1);
+    assertMatch(planRes.stderr, /--test-plan mentions the repository's version/);
+
+    const evidenceRes = await runScript(
+      dir,
+      baseArgs({ evidence: "```\n> tools@1.61.5 test\nok\n```" }),
+    );
+    assertEquals(evidenceRes.code, 1);
+    assertMatch(evidenceRes.stderr, /--test-evidence mentions the repository's version/);
+
+    const screenshotsRes = await runScript(dir, [
+      ...baseArgs(),
+      "--screenshots",
+      "Footer showing v1.61.5",
+    ]);
+    assertEquals(screenshotsRes.code, 1);
+    assertMatch(screenshotsRes.stderr, /--screenshots mentions the repository's version/);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});

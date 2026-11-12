@@ -57,8 +57,14 @@ const EXPECTED_HOOK_SCRIPTS = [
   // denies a non-Flash model chosen mid-session via agy's `modelName`
   // payload field, agy-only (Claude Code carries no such field).
   "agy-model-guard.sh",
+  // PreToolUse hook (web-jam-tools#1319) — rewrites run_command terminal commands
+  // into calls of scripts/agy-skill-run.sh when a skill run is open.
+  "agy-skill-run-hook.sh",
   "backlog-groom-reminder.sh",
   "backup-refusal-reminder.sh",
+  // SessionStart reminder (web-jam-tools#1690) — reminds of Web Jam LLC
+  // deadlines due within 30 days.
+  "business-deadline-reminder.sh",
   // Unconditional send/delete fence for Gmail on the agy surface
   // (web-jam-tools#432 scope item 3) — agy-only.
   "block-agy-gmail-send-delete.sh",
@@ -75,6 +81,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   // PreToolUse guard (web-jam-tools#1141) — refuses shell command naming any
   // of the 16 private Dropbox folders.
   "block-private-folder-read.sh",
+  // PreToolUse guard (web-jam-tools#1580) — refuses changing existing production
+  // media or removing/moving lead-sheet documents in ~/Dropbox/joshandmariamusic.
+  "block-production-media-change.sh",
   // PreToolUse guard (web-jam-tools#685) — denies the four raw `gh` write
   // verbs (gh pr review/comment, gh issue comment/edit) so a dispatched
   // reviewing subagent can only reach them through the guarded
@@ -97,7 +106,6 @@ const EXPECTED_HOOK_SCRIPTS = [
   // SessionStart reminder (web-jam-tools#664) — reports when installed hooks
   // are behind origin/dev, registered at a dead path, or unregistered.
   "hook-install-drift-reminder.sh",
-  "memory-cleanup-reminder.sh",
   "notes-sync-reminder.sh",
   // PreToolUse gate (web-jam-tools#641) — refuses repository code writes
   // attempted directly by an Opus main session without explicit grant.

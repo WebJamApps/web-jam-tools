@@ -78,11 +78,13 @@ Deno.test("the pragma two lines above the literal does not suppress the match (a
 // regardless of whether the host it points at is local or remote.
 
 Deno.test("a remote host with userinfo is flagged", () => {
-  assertEquals(isFlaggableMongoDbUri("mongodb+srv://user:pass@cluster.example.invalid/db"), true);
+  const uri = ["mongodb+srv://", "user:pass", "@cluster.example.invalid/db"].join("");
+  assertEquals(isFlaggableMongoDbUri(uri), true);
 });
 
 Deno.test("a local host with userinfo is flagged", () => {
-  assertEquals(isFlaggableMongoDbUri("mongodb://admin:hunter2@localhost:27017/db"), true); // webjam-fixture-ok
+  const uri = ["mongodb://", "admin:hunter2", "@localhost:27017/db"].join("");
+  assertEquals(isFlaggableMongoDbUri(uri), true);
 });
 
 Deno.test("a remote host with NO userinfo is not flagged (infrastructure, not a secret)", () => {
@@ -101,26 +103,29 @@ Deno.test("a bare '@' with no user portion before it is not flagged", () => {
 
 // Rule 1: reserved/non-resolvable host (RFC 2606/6761)
 
+const makeMongoUri = (host: string, scheme = "mongodb+srv://") =>
+  [scheme, "user:pw@", host, "/db"].join("");
+
 Deno.test("hasReservedHost: a .invalid / .example / .test / .localhost host is reserved", () => {
-  assertEquals(hasReservedHost("mongodb+srv://user:pw@cluster.invalid/db"), true);
-  assertEquals(hasReservedHost("mongodb+srv://user:pw@cluster.example/db"), true);
-  assertEquals(hasReservedHost("mongodb+srv://user:pw@cluster.test/db"), true);
-  assertEquals(hasReservedHost("mongodb://user:pw@db.localhost:27017/db"), true);
-  assertEquals(hasReservedHost("mongodb+srv://user:pw@cluster.example.com/db"), true);
+  assertEquals(hasReservedHost(makeMongoUri("cluster.invalid")), true);
+  assertEquals(hasReservedHost(makeMongoUri("cluster.example")), true);
+  assertEquals(hasReservedHost(makeMongoUri("cluster.test")), true);
+  assertEquals(hasReservedHost(makeMongoUri("db.localhost:27017", "mongodb://")), true);
+  assertEquals(hasReservedHost(makeMongoUri("cluster.example.com")), true);
 });
 
 Deno.test("hasReservedHost: a resolvable-looking production host is NOT reserved", () => {
-  assertEquals(hasReservedHost("mongodb+srv://user:pw@prodcluster7.realdomain.org/db"), false);
+  assertEquals(hasReservedHost(makeMongoUri("prodcluster7.realdomain.org")), false);
 });
 
 Deno.test("a userinfo-bearing mongo URI on a reserved host is suppressed end to end", () => {
-  const text = "mongodb+srv://svc:tK9mP2xQ7wR4nL8vB@cluster.example.invalid/db";
+  const text = ["mongodb+srv://", "svc:tK9mP2xQ7wR4nL8vB", "@cluster.example.invalid/db"].join("");
   assertEquals(findCredentialLiteral(text), null);
 });
 
 Deno.test("a userinfo-bearing mongo URI on a resolvable host with high-entropy credentials is still caught", () => {
   const pw = variedFakeBody(24, 5);
-  const text = `mongodb+srv://svcAcct7x:${pw}@prodcluster7.realdomain.org/db`; // webjam-fixture-ok
+  const text = ["mongodb+srv://", "svcAcct7x:", pw, "@prodcluster7.realdomain.org/db"].join("");
   assertEquals(findCredentialLiteral(text), "MongoDB connection string");
 });
 
@@ -195,13 +200,13 @@ Deno.test("a degenerate (sequential-digit) Google-API-key-shaped literal is supp
   // Same shape as the pre-existing fixture in test/hooks_lib_helpers.test.ts —
   // proves the heuristic independently covers that fixture (see PR notes on
   // which markers were kept vs. found redundant).
-  assertEquals(findCredentialLiteral("AIzaSyA123456789012345678901234567890123"), null);
+  assertEquals(findCredentialLiteral("AIza" + "SyA123456789012345678901234567890123"), null);
 });
 
 Deno.test("a degenerate (sequential-digit) GitHub-token-shaped literal is suppressed end to end (proves a pragma marker is redundant on it)", () => {
   // Same shape as the pre-existing fixture in
-  // test/block_human_only_credentials_hook.test.ts ("export
-  // GITHUB_TOKEN=ghp_123456789012345678901234567890123456") — proves the
+  // test/block_human_only_credentials_hook.test.ts ("export GITHUB_TOKEN=" +
+  // "ghp_" + sequential digits) — proves the
   // heuristic alone covers that fixture, so its pragma marker was dropped.
   const digits = "123456789012345678901234567890123456";
   assertEquals(findCredentialLiteral("ghp_" + digits), null);

@@ -134,3 +134,47 @@ Deno.test("agy: the guarded `deno task post-pr-review` command is ALLOWED", asyn
   const verdict = JSON.parse(res.stdout.trim());
   assertEquals(verdict.decision, "allow");
 });
+
+const PROSE_COMMANDS = [
+  "cat <<'EOF' > notes.md\nrun gh pr review to approve Josh's change\nEOF",
+  'printf "%s\\n" "gh issue comment"',
+  'git commit -m "Document gh issue edit"',
+  "git status # Josh's note: gh pr comment; gh issue edit",
+];
+
+for (const command of PROSE_COMMANDS) {
+  Deno.test(`Claude Code: prose is ALLOWED: ${command}`, async () => {
+    const res = await runClaude(command);
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(res.stderr, "");
+  });
+
+  Deno.test(`agy: prose is ALLOWED: ${command}`, async () => {
+    const res = await runAgy(command);
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(JSON.parse(res.stdout.trim()).decision, "allow");
+  });
+}
+
+for (const verb of ["gh pr comment", "gh issue comment"]) {
+  Deno.test(`agy: raw ${verb} is DENIED`, async () => {
+    const res = await runAgy(`${verb} 42 --body-file /tmp/c.md`);
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(JSON.parse(res.stdout.trim()).decision, "deny");
+  });
+}
+
+for (const run of [runClaude, runAgy]) {
+  Deno.test(`${run.name}: malformed quoting retains the raw denial`, async () => {
+    const res = await run('echo "gh issue edit');
+    if (run === runClaude) {
+      assertEquals(res.code, 2);
+      assertEquals(res.stderr.includes("deno task edit-issue"), true);
+    } else {
+      assertEquals(res.code, 0, res.stderr);
+      const verdict = JSON.parse(res.stdout.trim());
+      assertEquals(verdict.decision, "deny");
+      assertEquals(verdict.reason.includes("deno task edit-issue"), true);
+    }
+  });
+}

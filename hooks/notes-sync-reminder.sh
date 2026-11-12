@@ -26,6 +26,9 @@
 # gracefully instead of erroring on an unusual PATH.
 set -euo pipefail
 
+HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+"$HOOK_DIR/lib/run_hook.sh" --check-only >/dev/null 2>&1 || true
+
 NOTES_PATH="${CLAUDE_SYNC_NOTES_PATH:-$HOME/Dropbox/web-jam-llms/windows-desktop-notes.md}"
 
 # No file at the watched path -> nothing to surface, nothing to record.

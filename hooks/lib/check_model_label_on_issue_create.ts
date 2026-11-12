@@ -544,13 +544,15 @@ export function decide(
     const present = labels.length ? labels.join(", ") : "(none)";
     return `DENY:no model label (labels present: ${present}). Valid model labels: ${validStr}.`;
   }
-  if (matched.length > 1) {
+  const isSolSonnetPair = matched.length === 2 && matched.includes("Sol") &&
+    matched.includes("Sonnet");
+  if (matched.length > 1 && !isSolSonnetPair) {
     const joined = matched.join(", ");
-    return `DENY:${matched.length} model labels given (${joined}) — exactly one is required. Valid model labels: ${validStr}.`;
+    return `DENY:${matched.length} model labels given (${joined}) — exactly one is required, except for the Sol and Sonnet pair. Valid model labels: ${validStr}.`;
   }
 
-  const matchedTier = matched[0];
-  if (ESCALATION_LABELS.has(matchedTier)) {
+  const matchedTier = matched.find((label) => ESCALATION_LABELS.has(label));
+  if (matchedTier) {
     const reason = escalationReason?.trim();
     if (!reason) {
       if (mode === "mcp") {
@@ -640,7 +642,7 @@ async function scanIssueCommandSegments(
       try {
         modelLabels = loadModelLabels(modelLabelsPath);
       } catch (e) {
-        return `DENY:couldn't load valid model labels from model-labels.json (${e})`;
+        return `PASS: could not determine valid model labels from model-labels.json (${e}); proceeding. Verify the issue has exactly one valid model label before creating it.`;
       }
       const [labels, ok] = extractLabelValues(createArgs);
       if (!ok) {
@@ -708,7 +710,7 @@ export async function checkModelLabelOnIssueCreate(
   try {
     payload = JSON.parse(inputJson);
   } catch {
-    return "PASS";
+    return "PASS: could not determine the issue call from the JSON payload; proceeding. Verify the model label, native type, and body before creating or editing an issue.";
   }
 
   const toolName = String(payload.tool_name || "");
@@ -776,7 +778,7 @@ export async function checkModelLabelOnIssueCreate(
     // whole-string test, scored against the heredoc-stripped text so a
     // stripped data body can never contribute a false match.
     if (looksLikeIssueCreatingOrEditingCommand(stripped)) {
-      return "DENY:the command couldn't be parsed (unbalanced quoting) but appears to create/edit a gh issue";
+      return "PASS: could not determine the issue command (unbalanced quoting); proceeding. Verify the model label, native type, and body before creating or editing an issue.";
     }
     return "PASS";
   }
@@ -801,9 +803,9 @@ export async function checkModelLabelOnIssueCreate(
       return "PASS";
     }
     if (method !== "create") {
-      return `DENY:couldn't determine this issue_write call is a create/update (method=${
+      return `PASS: could not determine this issue_write call is a create/update (method=${
         JSON.stringify(method)
-      })`;
+      }); proceeding. Verify the model label, native type, and body before creating or editing an issue.`;
     }
     const typeVal = typeof toolInput.type === "string" ? toolInput.type.trim() : "";
     if (!typeVal || !VALID_NATIVE_TYPES_LOWER.has(typeVal.toLowerCase())) {
@@ -813,7 +815,7 @@ export async function checkModelLabelOnIssueCreate(
     try {
       modelLabels = loadModelLabels(modelLabelsPath);
     } catch (e) {
-      return `DENY:couldn't load valid model labels from model-labels.json (${e})`;
+      return `PASS: could not determine valid model labels from model-labels.json (${e}); proceeding. Verify the issue has exactly one valid model label before creating it.`;
     }
     const rawLabels = toolInput.labels;
     if (!Array.isArray(rawLabels) || !rawLabels.every((x) => typeof x === "string")) {

@@ -308,8 +308,15 @@ export function renderDarkHtml(result: BookGigResult): string {
   const runDate = new Date().toLocaleString("en-US", { dateStyle: "full", timeStyle: "short" });
 
   let heroTag = "🎵 Target Outreach Discovery";
-  if (result.mode === "send" || result.batchDispatch) {
+  if (
+    result.mode === "send" ||
+    (result.batchDispatch && result.mode !== "gate1" && result.mode !== "gate2")
+  ) {
     heroTag = "🚀 Batch Outreach Dispatch";
+  } else if (result.mode === "gate1") {
+    heroTag = "📋 Gate 1 Candidate Review";
+  } else if (result.mode === "gate2") {
+    heroTag = "✉️ Gate 2 Draft Copy Review";
   } else if (result.mode === "replies" || result.repliesTracking) {
     heroTag = "📬 Outreach Response & Reply Tracking";
   }
@@ -317,9 +324,6 @@ export function renderDarkHtml(result: BookGigResult): string {
   // Hero Grid Stats
   let heroStatsHtml = "";
   if (result.repliesTracking || result.mode === "replies") {
-    const checked = result.repliesTracking?.checkReplies.checked ??
-      result.repliesTracking?.campaigns.length ?? 0;
-    const matched = result.repliesTracking?.checkReplies.matched ?? 0;
     const pending = result.repliesTracking?.pendingReplies.length ?? 0;
     const totalCampaigns = result.repliesTracking?.campaigns.length ?? 0;
 
@@ -327,10 +331,6 @@ export function renderDarkHtml(result: BookGigResult): string {
       <div class="stat-item">
         <span class="stat-label">Active Campaigns</span>
         <span class="stat-val">${totalCampaigns} tracked</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">Replies Matched</span>
-        <span class="stat-val" style="color: var(--badge-green-txt);">${matched} of ${checked} checked</span>
       </div>
       <div class="stat-item">
         <span class="stat-label">Pending Action</span>
@@ -341,7 +341,7 @@ export function renderDarkHtml(result: BookGigResult): string {
         <span class="stat-val" style="font-size: 0.95rem;">${runDate}</span>
       </div>
     `;
-  } else if (result.batchDispatch) {
+  } else if (result.batchDispatch && result.mode !== "gate1" && result.mode !== "gate2") {
     heroStatsHtml = `
       <div class="stat-item">
         <span class="stat-label">Target Location</span>
@@ -1108,14 +1108,27 @@ export function renderDarkHtml(result: BookGigResult): string {
   <script id="book-gig-run-data" type="application/json">
 ${
     JSON.stringify({
-      candidates: result.candidates,
-      pitches: result.pitches,
+      candidates: (result as unknown as { _runDataCandidates?: CandidateVenue[] })
+        ._runDataCandidates ?? result.candidates,
+      pitches: (result as unknown as { _runDataPitches?: PitchEmail[] })
+        ._runDataPitches ?? result.pitches,
       batchDispatch: result.batchDispatch,
       weekend: result.weekend,
       location: result.location,
       reportUrl: result.reportUrl,
       batches: (result as unknown as { _runDataBatches?: WeekendRunData["batches"] })
-        ._runDataBatches,
+        ._runDataBatches ?? (result.batchDispatch
+          ? [{
+            candidateIds: (result.candidates || []).map((c) =>
+              c._id || (c as unknown as { venueId?: string }).venueId || c.name
+            ),
+            requested: result.batchDispatch.requested,
+            sent: result.batchDispatch.sent,
+            skippedVenueIds: (result.batchDispatch.skipped || []).map((s) =>
+              s.venueId || s.venueName
+            ),
+          }]
+          : undefined),
     })
   }
   </script>

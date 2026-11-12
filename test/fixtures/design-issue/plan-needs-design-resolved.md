@@ -2,9 +2,9 @@
 
 ## Plan
 
-| # | Proposed title                            | Epic / child of | Model tier | Priority | Repo          | Tests                                                 | Closes when   |
-| - | ----------------------------------------- | --------------- | ---------- | -------- | ------------- | ----------------------------------------------------- | ------------- |
-| 1 | record-song: build the REAPER setup skill | -               | Opus       | High     | web-jam-tools | A run against a saved session restores its track list | the PR merges |
+| # | Proposed title                            | Epic / child of   | Model tier | Priority | Repo          | Tests                                                 | Closes when   |
+| - | ----------------------------------------- | ----------------- | ---------- | -------- | ------------- | ----------------------------------------------------- | ------------- |
+| 1 | record-song: build the REAPER setup skill | web-jam-tools#485 | Opus       | High     | web-jam-tools | A run against a saved session restores its track list | the PR merges |
 
 ## Needs Design label removals
 

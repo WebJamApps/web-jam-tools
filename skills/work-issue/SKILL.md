@@ -10,12 +10,12 @@ aliases:
 
 # /work-issue — run a model-labeled coding task (Claude Code, Antigravity & Codex)
 
-This skill is installed across all agent surfaces (Claude Code, Antigravity/agy, Codex) and model tiers (Haiku, Flash, Sonnet, Opus, Luna, Sol, Astra). It delegates the deterministic setup (issue fetch + git branching) to a
+This skill is installed across all agent surfaces (Claude Code, Antigravity/agy, Codex) and model tiers in the canonical vocabulary. It delegates the deterministic setup (issue fetch + git branching) to a
 shell script, then you (the agent) do the actual coding inside this same session.
 Dispatch is always against a concrete GitHub issue (web-jam-tools#249 removed the
 older stateful queue-file mode). There are two ways to arrive at that issue:
 
-- **`/work-issue Repo#123`** (named mode) — the issue is given explicitly (invoked as `$work-issue Repo#123` on Codex). Read the GitHub issue's model tier label (`Haiku`, `Flash`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`) to determine agent delegation or session execution (valid across Claude Code, Antigravity, and Codex), then run the pre-checks below before "## Steps".
+- **`/work-issue Repo#123`** (named mode) — the issue is given explicitly (invoked as `$work-issue Repo#123` on Codex). Read the GitHub issue's model labels under the tier-order design (see "Model Label Check & Approval") to determine agent delegation or session execution (valid across Claude Code, Antigravity, and Codex), then run the pre-checks below before "## Steps".
 - **`/work-issue`** (no argument, auto-pick mode) — read-only resolve the next
   actionable issue from `~/Dropbox/web-jam-llms/haiku-issues.md` (when invoked via Claude Code / Haiku), then hand off
   to the same flow below. Under Antigravity (Flash / agy) and Codex there is no worklist: stop and ask Josh to name an issue. See "## No-argument mode" first.
@@ -35,18 +35,23 @@ written**, and they run for a named issue and an auto-picked one alike:
 
 ## Model Label Check & Approval
 
+Allowed model-label combinations follow
+`~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`, "How the order is used".
+For a paired issue, run on whichever of its two lanes Josh dispatches it to. Matching either label
+satisfies the model-label check: retain both labels and do not ask for a label override.
+
 When `work-issue` begins an issue (`<Repo>#<num>`):
-1. **Read the GitHub issue's model label**: Read the issue's model tier label (`Haiku`, `Flash`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`).
+1. **Read the GitHub issue's model labels**: Read the model labels under the tier-order design cited above.
 2. **Determine Agent Delegation vs Execution**:
    - Under **Claude Code** (e.g., Opus/Sonnet interactive session): If the issue is labeled `Haiku` or `Sonnet`, delegate execution to a subagent matching the labeled tier per delegation rules.
    - Under **Antigravity** (e.g., Flash interactive session): If the issue is labeled `Flash`, execute it in the session or hand it to a subagent at the same level.
    - Under **Codex**: Execute directly when the running model's tier matches the issue's `Luna`, `Sol`, or `Astra` label. If it differs, follow the approval rule below before overruling the label.
-   - If the active session tier matches the issue's model label, execute the task directly in the current session.
-3. **Prompt for approval before overruling**: If the active session tier differs from the issue's model label and the session intends to overrule the label rather than delegating down, prompt Josh for explicit approval in chat before executing:
+   - If the active session tier matches either of the issue's model labels, execute the task directly in the current session.
+3. **Prompt for approval before overruling**: If the active session tier matches none of the issue's model labels and the session intends to overrule the labels rather than delegating down, prompt Josh for explicit approval in chat before executing:
    ```bash
    gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>
    ```
-4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini Flash"` for Flash subagents or `--author "Claude Code — Haiku 4.5"` for Haiku subagents). On Codex, read `payload.model` from the latest `turn_context` entry in this session's rollout JSONL under `~/.codex/sessions/`; identify this session by the `session_meta` ID, rather than selecting another session's newest file or the default model in `config.toml`. Find that model's accepted display spelling in `ROSTER` in `scripts/create-draft-pr.sh`, then validate it with `~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --check-author "Codex — <roster spelling>"` before passing the same value in `--author`. Do not pass the raw API slug as the display name or substitute another model if the roster probe refuses it.
+4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini Flash"` for Flash subagents or `--author "Claude Code — Haiku 5.5"` for Haiku on Claude Code). On Codex, read `payload.model` from the latest `turn_context` entry in this session's rollout JSONL under `~/.codex/sessions/`; identify this session by the `session_meta` ID, rather than selecting another session's newest file or the default model in `config.toml`. Find that model's accepted display spelling in `ROSTER` in `scripts/create-draft-pr.sh`, then validate it with `~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --check-author "Codex — <roster spelling>"` before passing the same value in `--author`. Do not pass the raw API slug as the display name or substitute another model if the roster probe refuses it.
 
 ## Startability test
 
@@ -73,7 +78,7 @@ An issue `<Repo>#<num>` is **startable** when it passes all four checks below:
    - Check if an OPEN PR references it:
      ```bash
      gh pr list --repo WebJamApps/<Repo> --state open --json headRefName,body,reviews,commits,statusCheckRollup \
-       --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#<num>([^0-9]|$)"))'
+       --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+(?:(?:WebJamApps/)?<Repo>)?#<num>([^0-9]|$)"))'
      ```
    - **Fix-bucket resume carve-out**: If an OPEN PR exists for this issue, check whether it belongs to the **fix bucket** — having changes requested (one or more Must Fix items in its current automated review) or failing CI checks (`statusCheckRollup` has failures/errors). If so, the skill proceeds in **resume mode** rather than stopping:
      - No new branch is cut off `dev`.
@@ -88,18 +93,36 @@ An issue `<Repo>#<num>` is **startable** when it passes all four checks below:
      ```
      returns nothing (unless in resume mode for an existing branch).
 
-4. **Not already done (completion detection)**:
+4. **Not already done (completion detection & post-merge validation)**:
    - **Signal 1 (Merged or closed PR)**: Query for merged or closed PRs whose body references the issue with `Closes` or `Part of`:
      ```bash
      gh pr list --repo WebJamApps/<Repo> --state merged --json headRefName,body \
-       --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#<num>([^0-9]|$)")) | .headRefName'
+       --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+(?:(?:WebJamApps/)?<Repo>)?#<num>([^0-9]|$)")) | .headRefName'
      ```
-     If a merged or closed PR already addressed the issue, the issue is **appears already done: verify and close** (not startable).
+     Matches bare `Closes`/`Part of #<num>`, `Part of <Repo>#<num>`, and `Part of WebJamApps/<Repo>#<num>` (scoped to `<Repo>` to prevent cross-repo false positives). If a merged or closed PR already addressed the issue, the issue is **appears already done: verify and close** (not startable for new branch or PR creation).
    - **Signal 2 (Concrete mechanically checkable end state)**: When the issue's acceptance criteria name a concrete, mechanically checkable end state — a filesystem path that must exist or must not exist (e.g. `test -d /path` or `test -f /path`), or a deterministic command whose exit status decides the matter — verify that state directly.
      - *Priority for `Josh`-labeled manual steps*: `Josh`-labeled manual steps never produce a PR, so Signal 1 can never detect them. Prioritize checking their concrete end states directly (e.g. verifying an obsolete backup directory was deleted).
      - *Bounded scope*: Only mechanically checkable criteria are verified directly. Do not attempt open-ended verification of arbitrary prose criteria, keeping check costs flat.
-   - If either signal indicates completion, the issue is classified as **appears already done: verify and close**.
-   - **Read-only rule**: This check is strictly read-only. It never closes an issue, comments on an issue, or edits a label on its own. It reports the completion evidence and lets Josh verify and close it.
+   - If either signal indicates completion, the issue is classified as **appears already done: verify and close** (no new branch or PR is cut off `dev`). Instead, execute the post-merge validation step below across Claude Code, agy/Antigravity, and Codex.
+   - **Post-merge acceptance criteria validation (Three outcomes)**:
+     When an issue is detected as already implemented, validate each of its acceptance criteria against `dev` and local state (running the issue's `## How to test locally` commands, symlink/registration checks, and concrete end-state checks):
+     - *Non-mutating verification bounds*: Only deterministic, non-mutating validation commands are executed (e.g. `deno check`, `deno test`, `deno task lint`, `git status`, or inspecting filesystem paths). The agent must NEVER execute commands with external side-effects (no `git push`, no deleting branches, no sending network writes, emails, or modifying database records). Any acceptance criterion requiring external mutations, live production side-effects, or subjective prose-only verification that cannot be verified locally without side-effects falls to **Outcome 3** (unable to determine) and remains unchecked for human review.
+     - **Outcome 1 (All acceptance criteria pass validation):** When every acceptance criterion is verified against `dev` and local state, the agent:
+       1. Updates the issue body to check off all verified AC checkboxes (`- [ ]` → `- [x]`) using:
+          ```bash
+          deno task edit-issue --repo WebJamApps/<Repo> --issue <num> --body-file <path> --author "<tool — model>"
+          ```
+          (where `<tool — model>` matches the active agent identity, e.g. `agy — Gemini Flash`, updating the `🤖 Authored by` footer; outside Codex, `--author` is required when replacing the body).
+       2. Posts a structured validation comment with the concrete verification receipts using:
+          ```bash
+          deno task post-issue-comment --repo WebJamApps/<Repo> --issue <num> --body-file <path>
+          ```
+       3. Stops and leaves the issue for Josh to review and close.
+     - **Outcome 2 (One or more acceptance criteria fail validation):** When any acceptance criterion does not hold, the agent refuses to check off the failing criterion (`- [ ]` remains unchecked), reports the failing criterion and receipts in chat, and stops without closing the issue.
+     - **Outcome 3 (Unable to determine whether an acceptance criterion holds):** When a verification check errors, times out, or cannot read the required state, the agent **refuses** (fails closed on validation): leaves that criterion's checkbox unchecked (`- [ ]`), reports what could not be verified, and does not claim validation passed.
+   - **Hard safety bounds on completion detection**:
+     - **Never close an issue autonomously:** Agents are strictly forbidden from running `gh issue close` autonomously without Josh's explicit authorization in chat naming the specific issue (`gh issue close` remains human-gated per `docs/cross-ai-rules.md`).
+     - **No label or worklist edits:** The agent never edits labels (`gh issue edit --add-label` / `--remove-label`) and never writes to `haiku-issues.md` (or any other worklist file) during completion detection.
 
 ## No-argument mode — auto-pick worklist based on agent surface
 
@@ -283,9 +306,9 @@ When an issue's deliverables are strictly external documents (such as manual ver
 
 3. **Perform Model Label Check & Model Selection:** Before implementing:
    - Perform the **Model Label Check**:
-     1. Read the GitHub issue's model label (`Flash`, `Haiku`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`).
-     2. Compare the issue's model label against the active executing session tier.
-     3. If the active session tier differs from the issue's model label and the session intends to overrule the label, prompt Josh for explicit approval in chat before executing `gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>`.
+     1. Read the issue's model labels under the tier-order design cited above.
+     2. Compare the issue's model labels against the active executing session tier.
+     3. If the active session tier matches none of the issue's model labels and the session intends to overrule the labels, prompt Josh for explicit approval in chat before executing `gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>`.
      4. Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier.
    - **Codex**: Keep the matching running model and execute in this session. Do not invoke the agy `/model` switch or use the Claude/Gemini fallback ladder below. A tier mismatch uses the Model Label Check & Approval rule above.
    - **Claude Code**: Follow the delegation/execution choice in Model Label Check & Approval above.

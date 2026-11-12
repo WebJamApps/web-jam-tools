@@ -224,7 +224,7 @@ Deno.test("publishAndOpenReport: never posts over the stored report when reading
       };
 
       const { result, htmlPath } = await publishAndOpenReport(
-        sampleResult,
+        { ...sampleResult, mode: "send" },
         { backendUrl: "https://mock-backend.web-jam.com", scratchDir, noOpen: true },
         mockFetch,
       );
@@ -324,7 +324,12 @@ Deno.test("publishAndOpenReport: a second dispatch batch for the same weekend ac
       candidates: [sampleResult.candidates[0]],
       density: { count: 1, isSparse: true },
       pitches: [],
-      batchDispatch: { requested: 1, sent: 1, skipped: [], records: [{ venueId: "v1" }] },
+      batchDispatch: {
+        requested: 1,
+        sent: 1,
+        skipped: [],
+        records: [{ _id: "outreach-1", venueId: "v1" }],
+      },
     };
     const batch2: BookGigResult = {
       mode: "send",
@@ -332,7 +337,12 @@ Deno.test("publishAndOpenReport: a second dispatch batch for the same weekend ac
       candidates: [sampleResult.candidates[1]],
       density: { count: 1, isSparse: true },
       pitches: [],
-      batchDispatch: { requested: 1, sent: 1, skipped: [], records: [{ venueId: "v2" }] },
+      batchDispatch: {
+        requested: 1,
+        sent: 1,
+        skipped: [],
+        records: [{ _id: "outreach-2", venueId: "v2" }],
+      },
     };
 
     await publishAndOpenReport(

@@ -21,7 +21,6 @@ import { executeVenueHold } from "./cooldown.ts";
 import { Gate2ReviewSession, isExplicitWholeBatchApproval } from "./gate2.ts";
 import {
   BatchDispatchError,
-  checkGmailReplies,
   dispatchBatchOutreach,
   fetchOutreachCampaigns,
   fetchPendingReplies,
@@ -151,7 +150,7 @@ export async function runBookGigCli(
   const parsed = parseBookGigArgs(args);
 
   // -------------------------------------------------------------------------
-  // Mode: Replies & Response Tracking (--replies / --check-replies)
+  // Mode: Replies & Response Tracking (--replies)
   // -------------------------------------------------------------------------
   if (parsed.mode === "replies") {
     console.log(`\n======================================================`);
@@ -166,14 +165,7 @@ export async function runBookGigCli(
     }
     console.log(`------------------------------------------------------\n`);
 
-    // 1. Scan Gmail for incoming replies
-    console.log(`Scanning Gmail inbox for incoming replies to active pitches...`);
-    const checkReplies = await checkGmailReplies({}, fetchFn);
-    console.log(
-      `Reply Scan Completed: ${checkReplies.checked} checked, ${checkReplies.matched} matched (${checkReplies.classified} classified, ${checkReplies.bounced} bounced).`,
-    );
-
-    // 2. Fetch pending replies & active campaigns
+    // 1. Fetch pending replies & active campaigns
     console.log(`Fetching live outreach records and venue metadata...`);
     const [pendingReplies, rawCampaigns, venueMap] = await Promise.all([
       fetchPendingReplies({}, fetchFn),
@@ -234,7 +226,6 @@ export async function runBookGigCli(
       density: { count: 0, isSparse: false },
       pitches: [],
       repliesTracking: {
-        checkReplies,
         pendingReplies: enrichedPending,
         campaigns,
         targetWeekend: parsed.weekend,
@@ -391,7 +382,6 @@ export async function runBookGigCli(
     const candidates = filterAndRankCandidates(rawCandidates, location, {
       targetWeekend: weekend,
     });
-    const density = assessDensity(candidates, location);
 
     // 2. Resolve approved venue IDs
     let eligibleVenues = candidates.filter(isPitchableCandidate);
@@ -416,6 +406,7 @@ export async function runBookGigCli(
     }
 
     const venueIds = eligibleVenues.map((c) => c._id);
+    const density = assessDensity(eligibleVenues, location);
 
     if (venueIds.length === 0) {
       console.error(`\n⚠️  No eligible candidate venues found to approve for ${weekend.label}.`);
@@ -480,7 +471,7 @@ export async function runBookGigCli(
       location,
       includeVenues: parsed.includeVenues,
       excludeVenues: parsed.excludeVenues,
-      candidates,
+      candidates: eligibleVenues,
       density,
       pitches: [],
       gate1Record,
@@ -517,7 +508,6 @@ export async function runBookGigCli(
     const candidates = filterAndRankCandidates(rawCandidates, location, {
       targetWeekend: weekend,
     });
-    const density = assessDensity(candidates, location);
 
     // 2. Resolve eligible venues
     let eligibleVenues = candidates.filter(isPitchableCandidate);
@@ -546,6 +536,8 @@ export async function runBookGigCli(
       throw new Error("No eligible candidate venues found for Gate 2 review");
     }
 
+    const density = assessDensity(eligibleVenues, location);
+
     // 3. Render pitches via backend with any tweaks
     const pitches = await renderPitchesFromBackend(
       eligibleVenues,
@@ -563,7 +555,7 @@ export async function runBookGigCli(
       eligibleVenues,
       weekend,
       templates,
-      verificationOptionsFromTweaks(eligibleVenues, parsed.tweaks),
+      verificationOptionsFromTweaks(eligibleVenues, parsed.tweaks, weekend, templates),
     );
     if (!templateVerification.valid) {
       const details = templateVerification.violations
@@ -606,7 +598,7 @@ export async function runBookGigCli(
         location,
         includeVenues: parsed.includeVenues,
         excludeVenues: parsed.excludeVenues,
-        candidates,
+        candidates: eligibleVenues,
         density,
         pitches,
         tweaksApplied: parsed.tweaks,
@@ -672,7 +664,7 @@ export async function runBookGigCli(
         location,
         includeVenues: parsed.includeVenues,
         excludeVenues: parsed.excludeVenues,
-        candidates,
+        candidates: eligibleVenues,
         density,
         pitches,
         gate2Status: "holding",
@@ -741,7 +733,7 @@ export async function runBookGigCli(
       location,
       includeVenues: parsed.includeVenues,
       excludeVenues: parsed.excludeVenues,
-      candidates,
+      candidates: eligibleVenues,
       density,
       pitches,
       gate2Record,
@@ -889,7 +881,7 @@ export async function runBookGigCli(
     candidates,
     weekend,
     templates,
-    verificationOptionsFromTweaks(candidates, parsed.tweaks),
+    verificationOptionsFromTweaks(candidates, parsed.tweaks, weekend, templates),
   );
   if (!templateVerification.valid) {
     const details = templateVerification.violations
@@ -941,6 +933,7 @@ export async function runBookGigCli(
             weekend,
             venueIds,
             venueNames,
+            pitches,
             onProgress: (p) => {
               console.log(
                 `  → Send call ${p.callNumber}: ${p.sent} sent so far, ` +

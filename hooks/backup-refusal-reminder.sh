@@ -7,6 +7,9 @@
 # Reminders are emitted as SessionStart JSON systemMessage. Always exits 0.
 set -euo pipefail
 
+HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+"$HOOK_DIR/lib/run_hook.sh" --check-only >/dev/null 2>&1 || true
+
 F="${SETTINGS_BACKUP_REFUSAL_FILE:-$HOME/.claude/settings-backup-refusal.txt}"
 
 if [ -f "$F" ]; then

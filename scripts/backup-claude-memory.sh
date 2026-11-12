@@ -11,9 +11,8 @@
 # Dropbox handles version history for free, so each run overwrites the
 # destination — restore is a copy in the other direction (see claude-backup/README.md).
 #
-# Scheduled via crontab at 06:55 and 18:55 ET (every 12h), keeping the morning
-# run 5 min clear of drive-cleanup at 07:00. Twice daily halves the window in
-# which same-day memory/rule edits exist only on the laptop.
+# Scheduled via crontab at 06:55 and 18:55 ET (every 12h). Twice daily halves
+# the window in which same-day memory/rule edits exist only on the laptop.
 # Manual: just run this script.
 
 set -euo pipefail

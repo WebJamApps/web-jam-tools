@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertFalse, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertFalse, assertStringIncludes, assertThrows } from "@std/assert";
 
 const SKILL_MD_PATH = new URL("../skills/pr-review/SKILL.md", import.meta.url).pathname;
 
@@ -86,6 +86,45 @@ export const WORKED_CONVERSATION_SEQUENCES: readonly WorkedSequence[] = [
     outcome: "ineligible",
   },
   {
+    sequence: "Sol writes → another model reviews → Luna fixes → Josh asks Sol to review",
+    expectedResult:
+      "Sol reviews the commits since that review and says its review covers only them",
+    outcome: "eligible",
+  },
+  {
+    sequence: "Sol writes → another model reviews → Sol and Luna both fix → Sol review requested",
+    expectedResult: "Sol does not review; one commit in the range is its own",
+    outcome: "ineligible",
+  },
+  {
+    sequence: "Sol writes → no review yet → Luna fixes → Sol review requested",
+    expectedResult: "Sol does not review; a first review covers every commit, Sol's included",
+    outcome: "ineligible",
+  },
+  {
+    sequence: "Sonnet writes → another model reviews → Sol fixes → Flash selected",
+    expectedResult: "Refuse because the reviewer ranks below the author of a commit in the range",
+    outcome: "ineligible",
+  },
+  {
+    sequence: "Reviewed → branch rebased → review requested",
+    expectedResult:
+      "The reviewer reviews the whole pull request and says the rebase is why; eligibility covers every commit on it",
+    outcome: "eligible",
+  },
+  {
+    sequence:
+      "Sol writes → another model reviews → Luna fixes → branch rebased → Sol review requested",
+    expectedResult:
+      "Sol does not review; the whole-PR review covers Sol's own commits, so Sol names the eligible reviewer choices",
+    outcome: "ineligible",
+  },
+  {
+    sequence: "A commit since the last review has no author the reviewer can establish",
+    expectedResult: "Name the commit and ask Josh; do not guess",
+    outcome: "undetermined",
+  },
+  {
     sequence: "Contributor identity cannot be established",
     expectedResult:
       "Explain the missing information and ask Josh; do not guess or delegate automatically",
@@ -152,7 +191,7 @@ Deno.test("skills/pr-review/SKILL.md Step 1 checks reviewer eligibility before t
   );
   assertStringIncludes(
     step1,
-    "Stop if the active model contributed implementation or pushed any fix to the PR",
+    "Stop if the active model contributed implementation or pushed any fix in the review range",
   );
   assertStringIncludes(
     step1,
@@ -161,10 +200,16 @@ Deno.test("skills/pr-review/SKILL.md Step 1 checks reviewer eligibility before t
   assertStringIncludes(step1, "Never infer the active reviewer model from the PR author's footer");
   assertStringIncludes(
     step1,
-    "Stop if the PR carries Astra contributions (implementation or fixes) and the active model is not Opus",
+    "Stop if the review range carries Astra contributions (implementation or fixes) and the active model is not Opus",
   );
-  assertStringIncludes(step1, "Stop if any commit names an Opus author or co-author");
-  assertStringIncludes(step1, "Stop if the active model ranks below any contributor's tier");
+  assertStringIncludes(
+    step1,
+    "Stop if any commit in the review range names an Opus author or co-author",
+  );
+  assertStringIncludes(
+    step1,
+    "Stop if the active model ranks below any contributor's tier in the review range",
+  );
   assertStringIncludes(
     step1,
     "Stop and ask Josh if contributor or active model identity cannot be established",
@@ -172,6 +217,12 @@ Deno.test("skills/pr-review/SKILL.md Step 1 checks reviewer eligibility before t
 
   // Old unconditional session ban is absent from Step 1
   assertFalse(step1.includes("Stop if this session wrote or pushed any commit on the PR."));
+  assertFalse(
+    step1.includes(
+      "Stop if the active model contributed implementation or pushed any fix to the PR",
+    ),
+  );
+  assertFalse(step1.includes("Stop if the PR carries Astra contributions"));
   assertStringIncludes(step1, "Session continuity alone never blocks review.");
 
   assert(
@@ -181,9 +232,19 @@ Deno.test("skills/pr-review/SKILL.md Step 1 checks reviewer eligibility before t
   );
 });
 
-Deno.test("skills/pr-review/SKILL.md covers all 14 worked sequences and three eligibility outcomes", async () => {
+function assertWorkedSequences(skillText: string): void {
+  for (const { sequence, expectedResult } of WORKED_CONVERSATION_SEQUENCES) {
+    assertStringIncludes(
+      skillText,
+      `| ${sequence} | ${expectedResult} |`,
+      `SKILL.md must document worked sequence: ${sequence}`,
+    );
+  }
+}
+
+Deno.test("skills/pr-review/SKILL.md covers all 21 worked sequences and three eligibility outcomes", async () => {
   const skillText = await Deno.readTextFile(SKILL_MD_PATH);
-  assertEquals(WORKED_CONVERSATION_SEQUENCES.length, 14);
+  assertEquals(WORKED_CONVERSATION_SEQUENCES.length, 21);
 
   const eligibleCount = WORKED_CONVERSATION_SEQUENCES.filter((s) => s.outcome === "eligible")
     .length;
@@ -193,19 +254,159 @@ Deno.test("skills/pr-review/SKILL.md covers all 14 worked sequences and three el
     WORKED_CONVERSATION_SEQUENCES.filter((s) => s.outcome === "undetermined")
       .length;
 
-  assertEquals(eligibleCount, 4);
-  assertEquals(ineligibleCount, 9);
-  assertEquals(undeterminedCount, 1);
+  assertEquals(eligibleCount, 6);
+  assertEquals(ineligibleCount, 13);
+  assertEquals(undeterminedCount, 2);
 
-  for (const { sequence, expectedResult, outcome } of WORKED_CONVERSATION_SEQUENCES) {
-    assertStringIncludes(
-      skillText,
-      `| ${sequence} | ${expectedResult} |`,
-      `SKILL.md must document worked sequence: ${sequence}`,
-    );
+  assertWorkedSequences(skillText);
+  for (const { sequence, outcome } of WORKED_CONVERSATION_SEQUENCES) {
     assert(
       outcome === "eligible" || outcome === "ineligible" || outcome === "undetermined",
       `valid outcome for sequence: ${sequence}`,
     );
   }
+});
+
+Deno.test("skills/pr-review/SKILL.md scopes eligibility, attribution and diff to the review range", async () => {
+  const skillText = await Deno.readTextFile(SKILL_MD_PATH);
+  const pairing = between(skillText, "## Purpose & Model Pairing", "## Trigger & Invocation");
+  const step1 = between(skillText, "### Step 1:", "### Step 2:");
+  for (
+    const rule of [
+      "Eligibility is judged against the commits a review covers.",
+      "A re-review covers the commits that arrived since the newest automated review",
+      "A model that wrote earlier commits may review this later range when it wrote or pushed none of the contributions in it.",
+      "A first review covers every commit, so the model that wrote the pull request is never its first reviewer.",
+      "The review states the commit range it covers and that the earlier commits are outside it",
+      "If a commit in the range is the reviewer's own, it does not review.",
+      "If it cannot establish who wrote a commit in the range, it names that commit and asks Josh",
+      "use that signed comment to establish the author of those fix commits",
+      "A rebase replays a pull request's commits onto a newer base",
+      "The reviewer does not stop or ask about the range.",
+      "It reviews the whole pull request as it stands against its base",
+      "Eligibility is then judged as for a first review, over the authors of every commit on the pull request.",
+    ]
+  ) assertStringIncludes(pairing, rule);
+  assertStringIncludes(step1, "only automated reviews carrying");
+  assertStringIncludes(step1, "the `## PR Review Summary` header set its start");
+  assertStringIncludes(step1, "With no earlier automated review, the range is every PR commit.");
+  assertStringIncludes(step1, "If the start cannot be established as an ancestor");
+  assertStringIncludes(step1, "the reviewer does not stop or ask about the range");
+  assertStringIncludes(step1, "reviews the whole pull request as it stands against its base");
+  assertFalse(
+    step1.includes("name the missing range evidence and ask Josh"),
+    "Step 1 must not tell the reviewer to ask Josh about the range after a rebase",
+  );
+  assertFalse(
+    skillText.includes("name the missing range evidence and ask Josh"),
+    "skill must not tell the reviewer to ask Josh about the range after a rebase",
+  );
+  assertStringIncludes(step1, "For an unknown author, name the commit in the review range.");
+  assertStringIncludes(
+    step1,
+    "state the exclusive start SHA and inclusive head SHA and that earlier commits are outside the review",
+  );
+  assertStringIncludes(
+    step1,
+    "For an incremental re-review (where `last_review_sha` is an ancestor of `head_sha`), fetch the diff",
+  );
+  assertStringIncludes(step1, "compare/<last_review_sha>...<head_sha>");
+  assertStringIncludes(step1, "Limit findings and the review verdict to this range.");
+  assertStringIncludes(
+    step1,
+    "For a re-review after a rebase (where `last_review_sha` is not an ancestor of `head_sha`), do not\n   fetch the `compare` diff; use the whole-PR diff (`gh pr diff <pr-num>`)",
+  );
+  assertStringIncludes(
+    step1,
+    "evaluate findings and the review",
+  );
+  assertStringIncludes(
+    step1,
+    "verdict across the whole pull request",
+  );
+  assert(
+    step1.indexOf("Establish the review range") <
+      step1.indexOf("Stop if the active model contributed"),
+    "the range must be determined before the contributor restrictions are applied",
+  );
+});
+
+Deno.test("skills/pr-review/SKILL.md routes rebased PRs through whole-PR diff and review output instead of incremental range", async () => {
+  const skillText = await Deno.readTextFile(SKILL_MD_PATH);
+  const step1 = between(skillText, "### Step 1:", "### Step 2:");
+  const step3 = between(skillText, "### Step 3:", "### Step 4:");
+
+  // Step 1 item 2: Already-reviewed check restricts incremental range to ancestor case
+  assertStringIncludes(
+    step1,
+    "If new commits exist after the newest review and `last_review_sha` is an ancestor of `head_sha`",
+  );
+  assertStringIncludes(
+    step1,
+    "If `last_review_sha` is not an ancestor of `head_sha` (for example after a rebase), proceed with a whole-PR review against the base branch",
+  );
+
+  // Step 1 item 4: Diff fetching routes rebase to whole-PR diff
+  assertStringIncludes(
+    step1,
+    "For an incremental re-review (where `last_review_sha` is an ancestor of `head_sha`), fetch the diff",
+  );
+  assertStringIncludes(
+    step1,
+    "For a re-review after a rebase (where `last_review_sha` is not an ancestor of `head_sha`), do not\n   fetch the `compare` diff; use the whole-PR diff (`gh pr diff <pr-num>`)",
+  );
+  assertStringIncludes(
+    step1,
+    "evaluate findings and the review",
+  );
+  assertStringIncludes(
+    step1,
+    "verdict across the whole pull request",
+  );
+
+  // Step 3: Changes Since Last Review separates incremental ancestor from rebased case
+  assertStringIncludes(step3, "Incremental re-review (ancestor case)");
+  assertStringIncludes(
+    step3,
+    "State `last_review_sha..head_sha` (exclusive start, inclusive end) and that earlier commits are outside this review and retain their previous review.",
+  );
+  assertStringIncludes(step3, "Rebased PR (non-ancestor case)");
+  assertStringIncludes(
+    step3,
+    "State in one line that the branch was rebased after the review at `<last_review_sha>` and that this review therefore covers the whole pull request against its base (rather than stating an incremental range or excluding earlier commits).",
+  );
+});
+
+Deno.test("removing any of the seven range cases from a scratch skill copy fails validation", async () => {
+  const skillText = await Deno.readTextFile(SKILL_MD_PATH);
+  const scratch = await Deno.makeTempFile({ suffix: ".md" });
+  try {
+    for (const { sequence, expectedResult } of WORKED_CONVERSATION_SEQUENCES.slice(13, 20)) {
+      const row = `| ${sequence} | ${expectedResult} |`;
+      assertStringIncludes(skillText, row);
+      await Deno.writeTextFile(scratch, skillText.replace(row, ""));
+      const damagedCopy = await Deno.readTextFile(scratch);
+      assertThrows(() => assertWorkedSequences(damagedCopy), Error, sequence);
+    }
+  } finally {
+    await Deno.remove(scratch);
+  }
+});
+
+Deno.test("skills/pr-review/SKILL.md fails if the skill tells a reviewer to ask Josh about the range after a rebase", async () => {
+  const skillText = await Deno.readTextFile(SKILL_MD_PATH);
+  const step1 = between(skillText, "### Step 1:", "### Step 2:");
+
+  assertFalse(
+    step1.includes("name the missing range evidence and ask Josh"),
+    "skill must not tell reviewer to ask Josh about the range after a rebase",
+  );
+  assertFalse(
+    skillText.includes("name the missing range evidence and ask Josh"),
+    "skill must not tell reviewer to ask Josh about the range after a rebase",
+  );
+  assertStringIncludes(
+    step1,
+    "the reviewer does not stop or ask about the range",
+  );
 });

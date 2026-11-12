@@ -578,6 +578,40 @@ export function decide(
   return { outcome: "pass" };
 }
 
+/**
+ * Matches a Claude Code subagent transcript, `<project>/<session_id>/subagents/agent-<agent_id>.jsonl`
+ * (layout documented in hooks/lib/opus_gate.ts), and captures the owning session's directory name.
+ */
+const SUBAGENT_TRANSCRIPT_RE = /\/([^/]+)\/subagents\/agent-[A-Za-z0-9_-]+\.jsonl$/;
+
+/**
+ * The session whose approval token applies to this call (web-jam-tools#1054, design decision D-36).
+ *
+ * A filing subagent's payload carries the subagent's own `session_id`, which never equals the
+ * approving session's, so comparing it to the token refused every filing a subagent made under a
+ * token Josh had approved. A call whose `transcript_path` is that session's own subagent transcript
+ * resolves to the session directory named in the path: the approving session. Any other call
+ * resolves to its own `session_id`, so a main-thread transcript, a missing or unparseable path, or a
+ * path containing ".." never borrows another session's token, and a path under another session's
+ * directory resolves to that other session, whose token (if any) is not the one being checked.
+ */
+export function approvingSessionId(sessionId: string, transcriptPath: unknown): string {
+  if (typeof transcriptPath !== "string" || transcriptPath.split("/").includes("..")) {
+    return sessionId;
+  }
+  const match = transcriptPath.match(SUBAGENT_TRANSCRIPT_RE);
+  if (!match || !isSafeSessionId(match[1])) return sessionId;
+  return match[1];
+}
+
+/** The approving session id for a PreToolUse payload: its own, or its parent's for a subagent call. */
+function payloadSessionId(data: Record<string, unknown>): string {
+  const own = typeof data.session_id === "string"
+    ? data.session_id
+    : (typeof data.conversationId === "string" ? data.conversationId : "");
+  return approvingSessionId(own, data.transcript_path);
+}
+
 /** Parses the raw PreToolUse JSON and returns the sentinel string printed to stdout: "PASS" | "ALLOW:<reason>" | "DENY:<reason>". */
 export function checkIssueApprovalToken(
   inputJson: string,
@@ -591,9 +625,7 @@ export function checkIssueApprovalToken(
     return "PASS";
   }
   const toolName = typeof data.tool_name === "string" ? data.tool_name : "";
-  const sessionId = typeof data.session_id === "string"
-    ? data.session_id
-    : (typeof data.conversationId === "string" ? data.conversationId : "");
+  const sessionId = payloadSessionId(data);
   const toolInputRaw = data.tool_input;
   const toolInput = typeof toolInputRaw === "object" && toolInputRaw !== null
     ? (toolInputRaw as Record<string, unknown>)
@@ -627,9 +659,7 @@ export function checkIssueApprovalTokenAuto(inputJson: string, nowMs: number): s
     return "PASS";
   }
   const toolName = typeof data.tool_name === "string" ? data.tool_name : "";
-  const sessionId = typeof data.session_id === "string"
-    ? data.session_id
-    : (typeof data.conversationId === "string" ? data.conversationId : "");
+  const sessionId = payloadSessionId(data);
   const toolInputRaw = data.tool_input;
   const toolInput = typeof toolInputRaw === "object" && toolInputRaw !== null
     ? (toolInputRaw as Record<string, unknown>)

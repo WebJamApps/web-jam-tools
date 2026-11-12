@@ -56,7 +56,8 @@ export async function runWithRetry(
 ): Promise<RetryResult> {
   const attempts = opts.attempts ?? 3;
   const delayMs = opts.delayMs ?? 500;
-  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep = opts.sleep ??
+    ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
   let last: CmdResult = { code: 1, stdout: "", stderr: "" };
   for (let attempt = 1; attempt <= attempts; attempt++) {

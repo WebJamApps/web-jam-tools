@@ -24,6 +24,9 @@ import {
   assertThrows,
 } from "@std/assert";
 import { parse as parseYaml } from "@std/yaml";
+import { join } from "@std/path";
+import { installSkills } from "../src/install-skills/lib.ts";
+import { installCodex } from "../src/install-codex/install.ts";
 import { loadLimits } from "../src/session-load/report.ts";
 
 const SKILLS_DIR = new URL("../skills/", import.meta.url).pathname;
@@ -33,6 +36,51 @@ Deno.test("cross-AI rules require Codex to look up its running model", async () 
   assertStringIncludes(
     rules,
     "On Codex, run `deno task whoami` whenever you need your own model — when Josh asks which model you are, and before `$pr-review` applies the reviewer rule — and never answer from your own context or from `~/.codex/config.toml`.",
+  );
+});
+
+function assertGate2DuplicateTitleRules(text: string): void {
+  const start = text.indexOf("12. **GATE 2 — stop.**");
+  const end = text.indexOf("### Phase 3", start);
+  assert(start >= 0 && end > start, "Phase 2 Gate 2 item must exist");
+  const gate2 = text.slice(start, end);
+  assertStringIncludes(gate2, "Every new title passes the duplicate search before Gate 2");
+  assertStringIncludes(
+    gate2,
+    "Where it is different work, the run rewords the title and runs the check again until it passes; Josh is not asked.",
+    "Gate 2 must require rewording different work and rerunning without asking Josh",
+  );
+  assertStringIncludes(
+    gate2,
+    "Where it is the same work, the run never rewords around the search: the new row leaves the plan and the plan names the existing issue in its place.",
+    "Gate 2 must forbid rewording the same work and substitute the existing issue",
+  );
+}
+
+Deno.test("skills/design-issue/SKILL.md requires both Gate 2 duplicate-title rules (web-jam-tools#1356)", async () => {
+  assertGate2DuplicateTitleRules(await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`));
+});
+
+Deno.test("Gate 2 duplicate-title validation fails when either rewording rule is removed", async () => {
+  const text = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
+  assertGate2DuplicateTitleRules(text);
+  assertThrows(
+    () =>
+      assertGate2DuplicateTitleRules(text.replace(
+        "Where it is different work, the run rewords the title and runs the check again until it passes; Josh is not asked.",
+        "",
+      )),
+    Error,
+    "Gate 2 must require rewording different work",
+  );
+  assertThrows(
+    () =>
+      assertGate2DuplicateTitleRules(text.replace(
+        "Where it is the same work, the run never rewords around the search: the new row leaves the plan and the plan names the existing issue in its place.",
+        "",
+      )),
+    Error,
+    "Gate 2 must forbid rewording the same work",
   );
 });
 
@@ -127,10 +175,10 @@ Deno.test("every text span removed from a shortened skill description appears wo
       'Does NOT decide which tier a task belongs to (that routing table lives in docs/ai-team-playbook.md, migrating from global CLAUDE.md per web-jam-tools#115) — this skill only fires once a tier is chosen, so the mechanics of the handoff are never skipped. Triggered when a Fable/Opus session is about to do mechanical or contained-coding work itself, or Josh/the session says "delegate" or "hand off".',
     ],
     "draft-pr": [
-      '(Closes #N by default; Part of #N with --part-of for partial PRs, standing run-log/epic issues, and hook issues that must be confirmed firing before closing). Use this to finish ANY coding task in a WebJamApps repo across Claude Code, agy, or Codex instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you\'ve completed a coding task on a feature branch.',
+      '(`Closes #N` by default; `Part of #N (local step after merge)` with `--local-step` for post-merge local installer or laptop steps; `Part of #N` with `--part-of` for partial PRs or standing run-log/epic issues). Use this to finish ANY coding task in a WebJamApps repo across Claude Code, agy, or Codex instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you\'ve completed a coding task on a feature branch.',
     ],
     "drive-cleanup": [
-      "Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a Haiku subagent then classifies only the ambiguous remainder. Invoke when the session-start reminder appears or Josh asks (or /drive-cleanup) — it does NOT auto-run.",
+      "Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a subagent (Claude Code: Haiku; agy: Flash) then classifies only the ambiguous remainder. Invoke when Josh asks (or /drive-cleanup) — it does NOT auto-run.",
     ],
     "file-issue": [
       'File a GitHub issue the WebJamApps way — deliverable-first body shape (`## What this builds`), a deliberately chosen model label, every referenced issue/PR cited as repo + number + title, a duplicate search first, epics closing when children close, native Priority set via MCP, and concrete closeable acceptance criteria (no perpetual trackers). Use this instead of calling `gh issue create` (or the GitHub MCP `issue_write` create path) directly. Triggered when a message opens with a filing verb (file, create, open, draft, make, add, log, raise, write), optionally behind a leading affirmation (yes/yeah/yep/ok/okay/sure, optional comma), optionally behind please/pls or can/could/would/will you (please), and optionally go ahead and, followed by up to three short filler words (a, an, the, new, another, quick, separate, follow-up) and then issue, ticket, bug, or bug report (singular or plural) — for example "file an issue", "please create a new issue", "can you open a ticket", "yes file the new issue", or "file the issues" — or when a task needs a tracking issue instead of just being done inline.',
@@ -139,13 +187,13 @@ Deno.test("every text span removed from a shortened skill description appears wo
       "Recurring GitHub issue-label AND topic-milestone drift-detector across the active WebJamApps repos. Computes label drift (missing / misnamed / miscolored / wrong-repo / non-canonical) by diffing each repo's actual labels against skills/fix-labels/labels.yaml in code (`deno task fix-labels:diff`), with blast radius per label, and milestone-name drift (missing / misspelled / non-canonical) the same way (`deno task fix-labels:milestone-diff`). Waits for Josh's per-item approval, then applies only what he approved. Manual only — `/fix-labels`, never auto-runs. Interactive, hard-gated to Haiku (same pattern as handle-gmails), does NOT dispatch a subagent. A clean workspace reports \"no changes\"; re-run anytime to catch drift that accumulates over time.",
     ],
     "handle-gmails": [
-      'Runs on TWO surfaces — laptop Haiku (Claude Code, local mcp__gmail__ tools + local files; MUST be on the Haiku model — the skill refuses to run on a pricier model) and phone Sonnet (Claude app, mcp__claude_ai_Gmail__ tools, no filesystem). Covers joshua.v.sherman@gmail.com primary account only — web.jam.adm@gmail.com is handled manually via the Gmail web UI. Per-sender auto-archive rules in rules.yaml (laptop only). Daily-handled log in log/<YYYY-MM-DD>.md (laptop only, auto-pruned after 7 days). Triggered when Josh says "/handle-gmails", "handle my gmails", "process my inbox", or similar. Also invoke if a session-start hook reminder appears noting today hasn\'t been handled.',
+      'Process Josh\'s Gmail inbox one message at a time, newest first. Suggest action (archive / delete / draft reply / label / mark important / mark spam / unsubscribe / next). Pause for approval before executing. Runs across laptop Haiku (Claude Code), laptop Flash (Antigravity), and phone Sonnet (Claude app) — running the identical flow with no local runtime state. Covers joshua.v.sherman@gmail.com primary account only — web.jam.adm@gmail.com is handled manually via the Gmail web UI. Triggered when Josh says "/handle-gmails", "handle my gmails", "process my inbox", or similar.',
     ],
     "memory-cleanup": [
-      "Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, global and per-repo CLAUDE.md/AGENTS.md, cross-AI rules doc/task queues, bridge-log, handle-gmails rules, Google Drive memory/bridge files, hooks.json, and brain scratch files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap subagent (Haiku / Flash); findings are reported as separate action/flag tables and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says \"clean up memory\", or when a session-start reminder notes it hasn't run today. Reminder-only — never auto-runs.",
+      "Cross-agent memory hygiene audit. Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, global and per-repo CLAUDE.md/AGENTS.md, cross-AI rules doc/task queues, bridge-log, hooks.json, and brain scratch files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap subagent (Haiku / Flash); findings are reported as separate action/flag tables and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says \"clean up memory\".",
     ],
     "pr-review": [
-      "where reviewer tier is never below author tier (Sonnet reviews Flash/Haiku; Flash reviews Haiku; Opus reviews Sonnet/Flash on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).",
+      "where automatic reviewer selection never goes below author tier (Sonnet reviews Flash/Haiku; Flash reviews Haiku; Opus reviews Sonnet/Flash on Josh's per-PR call). Josh's direct named invocation authorizes the current reviewer; self-review and posting guards remain in place. Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).",
     ],
     "venue-mining": [
       'Three seed modes — metro (seedless sweep), artist (harvest every venue an artist played), venue (verify/enrich one venue, incl. refreshing a DB record). Propose→Josh-approves→create via POST /venue (requires street address for every venue); auto-flip outreachEligible only on a viable booking/general email from a published source (venue site, Google Maps/Business listing, swept publication) — a probed/invented domain flips it only when the page identifies itself as that venue (D-49); NEVER pitches, NEVER scrapes Facebook. Metro registry lives in sources.yaml next to this file; sweep history, cooldowns, publications, coverage areas and exclude keywords live in the backend sweep-history API. Triggered by /venue-mining <metro|artist|venue> <name>, or Josh saying "mine venues", "venue sweep", "find venues in <metro>".',
@@ -411,6 +459,37 @@ Deno.test("skills/file-issue/SKILL.md item 14 splits both-surfaces acceptance cr
   );
 });
 
+Deno.test("skills/file-issue/SKILL.md item 14 defines the three single-surface exemptions and forbids exempting hooks registered by agy or Codex (web-jam-tools#819)", async () => {
+  const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
+  const text = await Deno.readTextFile(fileIssuePath);
+
+  assert(
+    text.includes("work on a path under `~/.claude/`") ||
+      text.includes("Work on a path under `~/.claude/`"),
+    "skills/file-issue/SKILL.md item 14 must name the ~/.claude/ exemption",
+  );
+  assertStringIncludes(
+    text,
+    "work on a Claude Code settings file",
+  );
+  assertStringIncludes(
+    text,
+    "work on a hook that the installers register on Claude Code alone",
+  );
+  assertStringIncludes(
+    text,
+    "The issue names which of the three made it exempt and, for a hook, shows where it is registered.",
+  );
+  assertStringIncludes(
+    text,
+    "Where a hook is registered cannot be established, it is not exempt (fails closed).",
+  );
+  assertStringIncludes(
+    text,
+    "A hook that agy or Codex also registers is never exempt, whatever its event",
+  );
+});
+
 Deno.test("skills/file-issue/SKILL.md contains the issue titles rule for PM audience, skill/feature prefix, and Epic citation (#869)", async () => {
   const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
   const text = await Deno.readTextFile(fileIssuePath);
@@ -466,6 +545,150 @@ Deno.test("skills/file-issue/SKILL.md announces permission-prompt count and forb
   assertStringIncludes(
     text,
     'web-jam-tools#1115 "hooks: refuse at issue create a body that defers a verification"',
+  );
+});
+
+/**
+ * Asserts that skills/file-issue/SKILL.md rule 10 carries the four Priority level tests
+ * and the default of Medium, as stated in the design document (web-jam-tools#1347).
+ */
+export function assertFileIssueRule10PriorityLevelTests(text: string): void {
+  const rule10Match = text.match(
+    /10\.\s+\*\*Set Native Priority Field[\s\S]*?(?=\n\s*11\.\s+\*\*|$)/,
+  );
+  assert(
+    rule10Match !== null,
+    "skills/file-issue/SKILL.md must contain rule 10 ('Set Native Priority Field')",
+  );
+  const rule10 = rule10Match[0];
+
+  const urgentIndex = rule10.indexOf(
+    "Something live is broken, exposed or losing data. Other open issues are waiting on it and nothing open blocks it. Josh says it is urgent.",
+  );
+  assert(
+    urgentIndex !== -1,
+    "skills/file-issue/SKILL.md rule 10 must carry the Urgent level test ('Something live is broken, exposed or losing data. Other open issues are waiting on it and nothing open blocks it. Josh says it is urgent.')",
+  );
+
+  const highIndex = rule10.indexOf(
+    "It is a defect that costs something every time it is hit: a wrong result, wasted tokens, an extra review round.",
+  );
+  assert(
+    highIndex !== -1,
+    "skills/file-issue/SKILL.md rule 10 must carry the High level test ('It is a defect that costs something every time it is hit: a wrong result, wasted tokens, an extra review round.')",
+  );
+
+  const lowIndex = rule10.indexOf("It is nice to have, and nothing waits on it.");
+  assert(
+    lowIndex !== -1,
+    "skills/file-issue/SKILL.md rule 10 must carry the Low level test ('It is nice to have, and nothing waits on it.')",
+  );
+
+  const mediumIndex = rule10.indexOf("Nothing above fits.");
+  assert(
+    mediumIndex !== -1,
+    "skills/file-issue/SKILL.md rule 10 must carry the Medium level test ('Nothing above fits.')",
+  );
+
+  assert(
+    lowIndex < mediumIndex,
+    "skills/file-issue/SKILL.md rule 10 must order Low before Medium fallback so Low is reachable under first-match",
+  );
+
+  assert(
+    rule10.includes("Medium is the default") ||
+      (rule10.includes("This is the default.") && rule10.includes("Medium")),
+    "skills/file-issue/SKILL.md rule 10 must state the default of Medium",
+  );
+
+  assert(
+    rule10.includes(
+      "Whether other open issues are waiting on an issue is read from GitHub's native dependency links, never from body prose.",
+    ),
+    "skills/file-issue/SKILL.md rule 10 must state that open issues waiting is read from native dependency links",
+  );
+}
+
+Deno.test("skills/file-issue/SKILL.md rule 10 carries the four Priority level tests and Medium default (web-jam-tools#1347)", async () => {
+  const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
+  const text = await Deno.readTextFile(fileIssuePath);
+
+  assertFileIssueRule10PriorityLevelTests(text);
+});
+
+Deno.test("assertFileIssueRule10PriorityLevelTests fails when rule 10 loses any of the four level tests, misorders the Medium fallback before Low, or loses the default of Medium (web-jam-tools#1347)", async () => {
+  const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
+  const text = await Deno.readTextFile(fileIssuePath);
+
+  // Fails when Urgent level test is missing
+  assertThrows(
+    () =>
+      assertFileIssueRule10PriorityLevelTests(
+        text.replace(
+          "Something live is broken, exposed or losing data. Other open issues are waiting on it and nothing open blocks it. Josh says it is urgent.",
+          "",
+        ),
+      ),
+    Error,
+    "Urgent level test",
+  );
+
+  // Fails when High level test is missing
+  assertThrows(
+    () =>
+      assertFileIssueRule10PriorityLevelTests(
+        text.replace(
+          "It is a defect that costs something every time it is hit: a wrong result, wasted tokens, an extra review round.",
+          "",
+        ),
+      ),
+    Error,
+    "High level test",
+  );
+
+  // Fails when Medium level test is missing
+  assertThrows(
+    () =>
+      assertFileIssueRule10PriorityLevelTests(
+        text.replace("Nothing above fits.", ""),
+      ),
+    Error,
+    "Medium level test",
+  );
+
+  // Fails when Low level test is missing
+  assertThrows(
+    () =>
+      assertFileIssueRule10PriorityLevelTests(
+        text.replace("It is nice to have, and nothing waits on it.", ""),
+      ),
+    Error,
+    "Low level test",
+  );
+
+  // Fails when Medium fallback is placed before Low (making Low unreachable under first-match)
+  assertThrows(
+    () =>
+      assertFileIssueRule10PriorityLevelTests(
+        text.replace(
+          /\| Low \|[^\n]+\n\s*\| Medium \|[^\n]+/,
+          "| Medium | Planned work | Nothing above fits. This is the default. |\n      | Low | When there is time | It is nice to have, and nothing waits on it. |",
+        ),
+      ),
+    Error,
+    "Low before Medium",
+  );
+
+  // Fails when default of Medium is missing
+  assertThrows(
+    () =>
+      assertFileIssueRule10PriorityLevelTests(
+        text
+          .replace("Medium is the default", "Medium is standard")
+          .replace("This is the default.", "This is standard."),
+      ),
+    Error,
+    "default of Medium",
   );
 });
 
@@ -528,7 +751,7 @@ Deno.test("skills/design-issue/SKILL.md contains resume rule in Phase 1 step 1",
 
   assertStringIncludes(
     text,
-    "**Resume rather than restart:** Resolving the canonical design document is a precondition of the run itself rather than of creating one, so every run — including one that creates no document at all — looks in the theme folder for an existing `<topic>-design-*.md` and continues from its decision record; a run that wants a fresh document says so.",
+    "**Resume rather than restart:** Resolving the canonical design document is a precondition of the run itself rather than of creating one, so every run — including one that creates no document at all — looks in the theme folder for an existing `<topic>-design.md` and continues from its decision record; a run that wants a fresh document says so.",
   );
 });
 
@@ -563,7 +786,7 @@ Deno.test("skills/design-issue/SKILL.md states canonical-document resolution as 
   );
   assertStringIncludes(
     text,
-    "| create a redundant parallel design document (e.g. `*-phase-2-design-*.md`) for a feature or skill that already has a canonical design document in `~/Dropbox/web-jam-llms/<Theme>/` |",
+    "| create a redundant parallel design document (e.g. `*-phase-2-design.md`) for a feature or skill that already has a canonical design document in `~/Dropbox/web-jam-llms/<Theme>/` |",
   );
 
   // Canonical-document discovery is described in exactly one place (STEP ZERO) — the duplicate
@@ -588,7 +811,7 @@ Deno.test("skills/design-issue/SKILL.md states canonical-document resolution as 
     const staleTrigger of [
       "Before creating a design document, look in the theme folder",
       "Before creating a new file, run `deno task design:candidates",
-      "for pre-existing canonical design documents (`<topic>-design-*.md` or `<topic>-skill-design-*.md`) before creating a new document",
+      "for pre-existing canonical design documents (`<topic>-design.md` or `<topic>-skill-design.md`) before creating a new document",
     ]
   ) {
     assertEquals(
@@ -711,7 +934,7 @@ Deno.test("skills/design-issue/SKILL.md contains Sized for Flash rule", async ()
   assertStringIncludes(text, "### Sized for Flash");
   assertStringIncludes(
     text,
-    "Non-epic issues default to **`Flash`** as the implementation tier. Sizing is governed by the reviewer's burden in one sitting (Josh's per-sitting review burden) rather than raw file count.",
+    "An issue's model label comes from the triage table in `docs/ai-team-playbook.md`; the sizing checklist below keeps the size limit for everyday coding tasks (`Flash`). Sizing is governed by the reviewer's burden in one sitting (Josh's per-sitting review burden) rather than raw file count.",
   );
   assertStringIncludes(text, "- one repo;");
   assertStringIncludes(text, "- one layer — frontend or backend, not both;");
@@ -969,38 +1192,22 @@ Deno.test("skills/design-issue/SKILL.md contains Runbook Format Requirements rul
   );
 });
 
-Deno.test("skills/design-issue/SKILL.md contains Writing Style rule", async () => {
+Deno.test("skills/design-issue/SKILL.md contains Writing Style pointer (web-jam-tools#1700)", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);
 
   assertStringIncludes(text, "### Writing Style");
-  assertStringIncludes(
-    text,
-    "- **The document states what the thing IS.** Present tense, design first. A reader who has never seen the conversation should be able to read it top to bottom and know what is being built.",
+  assertStringIncludes(text, '"Writing a design document"');
+  assertStringIncludes(text, '"Next steps"');
+  assertEquals(
+    text.includes("- **The document states what the thing IS.**"),
+    false,
+    "skills/design-issue/SKILL.md must not restate full Writing Style rules",
   );
-  assertStringIncludes(
-    text,
-    "- **The decision history goes in an appendix**, as one row per decision with its outcome — never interleaved with the design.",
-  );
-  assertStringIncludes(
-    text,
-    "- **The document never records the skill's own process state.**",
-  );
-  assertStringIncludes(
-    text,
-    '- **Never a bare label in the body.** No "per D-7" or "R-39"; labels exist so the decision table has stable row names, and nowhere else.',
-  );
-  assertStringIncludes(
-    text,
-    "- **Josh's own words are preserved where they are load-bearing** — his ruling is the authority, and a paraphrase is weaker than his actual sentence.",
-  );
-  assertStringIncludes(
-    text,
-    "- **A design document proves its own premises, and the gate will not open without them.**",
-  );
-  assertStringIncludes(
-    text,
-    "- **Consolidation happens BEFORE Gate 1, never after.**",
+  assertEquals(
+    text.includes("- **Consolidation happens BEFORE Gate 1, never after.**"),
+    false,
+    "skills/design-issue/SKILL.md must not restate consolidation rule",
   );
 });
 
@@ -1008,16 +1215,57 @@ Deno.test("skills/design-issue/SKILL.md contains Design Tiers and Delegation Rul
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);
 
+  assertStringIncludes(text, "### The model conducting the design");
+  assertStringIncludes(
+    text,
+    "When Josh invokes `/design-issue` or `$design-issue` in a session, the current model conducts the design. The run does not stop, require a model switch, or ask for additional authorization merely because that model differs from a default recommendation.",
+  );
+  assertStringIncludes(
+    text,
+    "The defaults guide choosing a new session: Flash for a single genuinely simple Bug or Task; Opus for a Feature, Epic, multi-repository or multi-issue design, or a Bug or Task whose scope requires substantial judgment. They are recommendations for arranging work, not an eligibility list for a session Josh invokes.",
+  );
+  assertStringIncludes(text, "### Phase 1 — Design\n");
+  assertStringIncludes(text, "### Phase 2 — The Issue Plan\n");
+  assertFalse(
+    text.includes("### Phase 1 — Design (Opus / Flash for simple Bug or Task)"),
+    "Phase 1 heading must not contradict current-session authorization rule",
+  );
+  assertFalse(
+    text.includes("### Phase 2 — The Issue Plan (Opus / Flash)"),
+    "Phase 2 heading must not contradict current-session authorization rule",
+  );
+
   assertStringIncludes(text, "## Which Model Runs What & Design Tiers");
+  assertStringIncludes(
+    text,
+    "| Invoked Design Session | Current model | Invocation authorizes the current model; does not stop, require a model switch, or ask for additional authorization merely because it differs from a default recommendation |",
+  );
+  assertStringIncludes(
+    text,
+    "| Simple `Bug` or `Task` Design (recommended default) | Flash | Recommended default for choosing a new session: contained judgment about one repo's own behavior |",
+  );
+  assertStringIncludes(
+    text,
+    "| Complex Design (`Feature`, `Epic`, multi-repo, multi-issue, or arguable scope) (recommended default) | Opus | Recommended default for choosing a new session: architectural reasoning and deep system judgment |",
+  );
   assertStringIncludes(text, "### Design Tiers");
   assertStringIncludes(
     text,
-    "- **`Flash` is the default design tier for a single genuinely simple `Bug` or `Task`.** A one-issue Bug or Task design is a contained judgment about one repo's own behavior.",
+    "- **Defaults remain recommendations; invocation authorizes the current model:** When Josh invokes `/design-issue` or `$design-issue` in a session, the current model conducts the design. The run does not stop, require a model switch, or ask for additional authorization merely because that model differs from a default recommendation. Defaults guide choosing a new session, not an eligibility list for a session Josh invokes.",
   );
   assertStringIncludes(
     text,
-    "- **`Opus` keeps everything else:** new `Feature` issues, `Epic` designs, cross-repo work, multi-issue plans with dependency chains, and any `Bug` or `Task` whose scope is arguable.",
+    "- **`Flash` is the recommended default design tier for a single genuinely simple `Bug` or `Task`.** A one-issue Bug or Task design is a contained judgment about one repo's own behavior.",
   );
+  assertStringIncludes(
+    text,
+    "- **`Opus` is the recommended default for complex design:** new `Feature` issues, `Epic` designs, cross-repo work, multi-issue plans with dependency chains, or any `Bug` or `Task` whose scope requires substantial judgment.",
+  );
+  assertFalse(
+    text.includes("- **`Opus` keeps everything else:"),
+    "Design Tiers must stop pinning exclusive Opus wording",
+  );
+
   assertStringIncludes(text, "### Delegation Rules for Filing");
   assertStringIncludes(
     text,
@@ -1031,6 +1279,88 @@ Deno.test("skills/design-issue/SKILL.md contains Design Tiers and Delegation Rul
     text,
     "- An **agy** session already running on **Flash** files the issues itself without delegating: spawning a subagent on the tier you are already running costs a cold start and re-derived context to save nothing.",
   );
+});
+
+Deno.test("design-issue symlink resolves into fixture canonical clone across Claude Code, agy, and Codex fixture surfaces", async () => {
+  const root = new URL("../", import.meta.url).pathname;
+  const tempDir = await Deno.makeTempDir({ prefix: "design_issue_symlink_test_" });
+  try {
+    const fixtureCanonical = join(tempDir, "canonical-clone");
+    const tempHome = join(tempDir, "home");
+
+    await Deno.mkdir(join(fixtureCanonical, "skills/design-issue"), { recursive: true });
+    await Deno.copyFile(
+      `${SKILLS_DIR}design-issue/SKILL.md`,
+      join(fixtureCanonical, "skills/design-issue/SKILL.md"),
+    );
+
+    // 1. Claude Code and agy installation
+    const claudeDest = join(tempHome, ".claude/skills");
+    const agyDest = join(tempHome, ".gemini/config/plugins/webjam-tasks/skills");
+    await installSkills({
+      repoDir: fixtureCanonical,
+      claudeDest,
+      agyDest,
+      claudeBackupDest: join(tempHome, ".claude/skills-backups"),
+      agyBackupDest: join(tempHome, ".gemini/config/plugins/webjam-tasks/skills-backups"),
+      allowNonCanonical: true,
+      allowUnsafeForTesting: true,
+      quiet: true,
+    });
+
+    // 2. Codex installation
+    await Deno.mkdir(join(fixtureCanonical, "scripts"), { recursive: true });
+    const hooksSh = await Deno.readTextFile(join(root, "scripts/install-hooks.sh"));
+    await Deno.writeTextFile(join(fixtureCanonical, "scripts/install-hooks.sh"), hooksSh);
+    await Deno.mkdir(join(fixtureCanonical, "codex/rules"), { recursive: true });
+    const rules = await Deno.readTextFile(join(root, "codex/rules/web-jam-tools.rules"));
+    await Deno.writeTextFile(join(fixtureCanonical, "codex/rules/web-jam-tools.rules"), rules);
+
+    await Deno.mkdir(join(tempHome, ".claude/hooks"), { recursive: true });
+    const { readHookRegistrations } = await import("../src/install-codex/hooks.ts");
+    for (const groups of Object.values(readHookRegistrations(hooksSh, tempHome))) {
+      for (const group of groups) {
+        const name = group.hooks[0].command.split("/").at(-1)!.slice(0, -1);
+        await Deno.writeTextFile(join(tempHome, ".claude/hooks", name), "#!/bin/sh\nexit 0\n");
+      }
+    }
+
+    const code = installCodex({ home: tempHome, repo: fixtureCanonical });
+    assertEquals(code, 0, "installCodex should succeed");
+
+    const claudeSymlink = join(claudeDest, "design-issue");
+    const claudeStat = Deno.lstatSync(claudeSymlink);
+    assertEquals(claudeStat.isSymlink, true, "Claude Code skill must be a symlink");
+    assertEquals(
+      await Deno.realPath(claudeSymlink),
+      await Deno.realPath(join(fixtureCanonical, "skills/design-issue")),
+      "Claude Code skill must resolve into fixture canonical clone",
+    );
+
+    const agySymlink = join(agyDest, "design-issue");
+    const agyStat = Deno.lstatSync(agySymlink);
+    assertEquals(agyStat.isSymlink, true, "agy skill must be a symlink");
+    assertEquals(
+      await Deno.realPath(agySymlink),
+      await Deno.realPath(join(fixtureCanonical, "skills/design-issue")),
+      "agy skill must resolve into fixture canonical clone",
+    );
+
+    const codexSymlink = join(tempHome, ".codex/skills/design-issue");
+    const codexStat = Deno.lstatSync(codexSymlink);
+    assertEquals(codexStat.isSymlink, true, "Codex skill must be a symlink");
+    assertEquals(
+      await Deno.realPath(codexSymlink),
+      await Deno.realPath(join(fixtureCanonical, "skills/design-issue")),
+      "Codex skill must resolve into fixture canonical clone",
+    );
+  } finally {
+    try {
+      await Deno.remove(tempDir, { recursive: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  }
 });
 
 Deno.test("skills/design-issue/SKILL.md contains installer-scope rule", async () => {
@@ -1052,32 +1382,43 @@ Deno.test("skills/design-issue/SKILL.md contains installer-scope rule", async ()
   );
 });
 
-Deno.test("skills/design-issue/SKILL.md contains load-bearing-premises rule", async () => {
-  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
-  const text = await Deno.readTextFile(designIssuePath);
-
+Deno.test("skills/design-issue/SKILL.md creates undated design documents consistently", async () => {
+  const text = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
+  const createStep = text.split("1. **Establish the theme and milestone.**")[1]?.split(
+    "2. **Record",
+  )[0];
+  assertEquals(typeof createStep, "string");
   assertStringIncludes(
-    text,
-    "**A design document proves its own premises, and the gate will not open without them.**",
+    createStep!,
+    "create the design document at `~/Dropbox/web-jam-llms/<Theme>/<topic>-design.md`",
   );
+  assertEquals(/design-(?:<YYYY-MM-DD>|\*)\.md/.test(text), false);
+  assertStringIncludes(text, "(`<topic>-design.md` or `<topic>-skill-design.md`)");
   assertStringIncludes(
     text,
-    "Every design document carries a `## Load-bearing premises` section: one row per premise the design depends on, naming what was checked and what it showed.",
-  );
-  assertStringIncludes(
-    text,
-    "The document checker fails a document that omits the section, and fails any row whose proof is empty or hedged.",
+    "Design documents (`<topic>-design.md`) are permanent architectural records",
   );
 });
 
-Deno.test("skills/design-issue/SKILL.md pins exact carried premise matching and both refusals", async () => {
+Deno.test("skills/design-issue/SKILL.md contains load-bearing-premises pointers (web-jam-tools#1700)", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(text, '"Keeping worked content"');
+  assertStringIncludes(text, '"Writing a design document"');
+  assertEquals(
+    text.includes(
+      "**A design document proves its own premises, and the gate will not open without them.**",
+    ),
+    false,
+    "skills/design-issue/SKILL.md must not restate retired Writing Style premise rule",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md pins exact carried premise matching refusals (web-jam-tools#1700)", async () => {
   const text = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
   for (
     const fragment of [
-      "**Every premise row carries a `Proved` date; an earlier date passes only on an exact stored-row match.**",
-      "after trimming the white space around each cell; case and internal spacing matter, row order does not, and carried rows never expire",
-      "when a record exists and cannot be read or parsed, the checker refuses and names its path",
-      "`deno task design:gate1` prints the fresh and carried row counts and the date of the approval or adoption",
       "| pass a premise row dated before the presenting day unless the Gate 1 record holds that exact row from an approval or an adoption |",
       "| store a document's premise rows as adopted without Josh naming that document |",
     ]
@@ -1170,7 +1511,7 @@ Deno.test("skills/pr-review/SKILL.md pairing matrix ranks Sonnet above Flash", a
 
   assertStringIncludes(
     text,
-    "**Tier order (weakest to strongest): Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus.**",
+    "**Tier order (weakest to strongest): Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus.**",
   );
 
   // The matrix rows themselves, weakest reviewer first: Flash reviews
@@ -1241,7 +1582,7 @@ Deno.test("skills/delegate/SKILL.md escalates coding to Sol or Sonnet and design
   );
   assertStringIncludes(
     text,
-    "Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus",
+    "Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus",
   );
   assertStringIncludes(text, "`Astra` is kept for REAPER recording.");
   assertFalse(
@@ -1253,11 +1594,11 @@ Deno.test("skills/delegate/SKILL.md escalates coding to Sol or Sonnet and design
 // --- Tier-order pin across playbook, delegate, and pr-review (web-jam-tools#1134) ---
 //
 // The tier order across all seven model labels is:
-// Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus (Sol, Astra, and Sonnet share a rung).
+// Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus (Sol, Astra, and Sonnet share a rung).
 // Stated in docs/ai-team-playbook.md, skills/delegate/SKILL.md, and skills/pr-review/SKILL.md.
 // Must fail on any other tier-order line in those three files.
 
-const EXPECTED_TIER_ORDER = "Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus";
+const EXPECTED_TIER_ORDER = "Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus";
 const TIER_ORDER_FILES = [
   "docs/ai-team-playbook.md",
   "skills/delegate/SKILL.md",
@@ -1278,7 +1619,7 @@ function assertTierOrder(text: string, file: string): void {
 }
 
 Deno.test(
-  "tier order across docs/ai-team-playbook.md, skills/delegate/SKILL.md, and skills/pr-review/SKILL.md states Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus",
+  "tier order across docs/ai-team-playbook.md, skills/delegate/SKILL.md, and skills/pr-review/SKILL.md states Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus",
   async () => {
     for (const file of TIER_ORDER_FILES) {
       const text = await Deno.readTextFile(file);
@@ -1291,8 +1632,8 @@ Deno.test("tier-order check accepts Markdown and whitespace variations of the cu
   for (
     const text of [
       EXPECTED_TIER_ORDER,
-      "**Tier order: `Haiku`→`Luna` → `Flash` → `Sol`=`Astra` = `Sonnet` → `Opus`.**",
-      "Haiku  → Luna\t→ Flash →\n  Sol = Astra = Sonnet → Opus",
+      "**Tier order: `Luna`→`Haiku` → `Flash` → `Sol`=`Astra` = `Sonnet` → `Opus`.**",
+      "Luna  → Haiku\t→ Flash →\n  Sol = Astra = Sonnet → Opus",
       `${EXPECTED_TIER_ORDER}\n${EXPECTED_TIER_ORDER}`,
       `${EXPECTED_TIER_ORDER}\nA workflow hands off Flash → Sonnet.`,
     ]
@@ -1313,9 +1654,9 @@ Deno.test("tier-order check rejects any different chain alongside the correct or
     "Haiku→Flash Med→Flash→Sonnet→Opus",
     "`Haiku`  →  `Flash Med` →\n `Flash` → `Sonnet` → `Opus`",
     "Flash Med → Flash → Sonnet → Opus",
-    "Haiku → Luna → Flash → Sol → Sonnet → Astra → Opus",
-    "Haiku → Luna → Flash → Sol = Astra → Sonnet → Opus",
-    "Haiku → Luna → Flash → Sol = Sonnet = Astra → Opus",
+    "Luna → Haiku → Flash → Sol → Sonnet → Astra → Opus",
+    "Luna → Haiku → Flash → Sol = Astra → Sonnet → Opus",
+    "Luna → Haiku → Flash → Sol = Sonnet = Astra → Opus",
     "Luna → Flash → Sol = Astra = Sonnet → Opus",
     `${EXPECTED_TIER_ORDER} → Haiku`,
   ];
@@ -1442,5 +1783,746 @@ Deno.test("skills/design-issue/SKILL.md pins the Gate 1 record's stored premise 
     ]
   ) {
     assertStringIncludes(text, sentence);
+  }
+});
+
+Deno.test("skills/memory-cleanup/SKILL.md scan helper hands Josh back to main session (web-jam-tools#1220)", async () => {
+  const text = await Deno.readTextFile(`${SKILLS_DIR}memory-cleanup/SKILL.md`);
+
+  // Exact reply sentence
+  assertStringIncludes(
+    text,
+    "I'm the memory-cleanup scan helper and I can't edit files. Go back to the main session. It can write, and it will apply the fixes.",
+    "skills/memory-cleanup/SKILL.md must contain the exact reply sentence",
+  );
+
+  // Messages from Josh rule in Phase 1 Step 2
+  assertStringIncludes(
+    text,
+    "Messages from Josh (include word for word in scan subagent prompt on Claude Code and agy/Antigravity)",
+  );
+
+  // Prohibitions:
+  // 1. saying or implying the session is read-only
+  assertStringIncludes(
+    text,
+    "saying or implying that the session is read-only",
+  );
+
+  // 2. telling Josh to start a new session
+  assertStringIncludes(
+    text,
+    "telling Josh to start a new session",
+  );
+
+  // 3. telling Josh to apply the edits by hand
+  assertStringIncludes(
+    text,
+    "telling Josh to apply the edits by hand",
+  );
+
+  // Hard rules section contains matching rule
+  assertStringIncludes(
+    text,
+    "Scan helper hands Josh back to main session.",
+  );
+});
+
+/**
+ * Asserts skills/design-issue/SKILL.md follows the design document rules (web-jam-tools#1345).
+ * Validates revision table, rendered page, Phase 4 memory rules, and plan row priority.
+ */
+export function assertDesignIssueRules(text: string): void {
+  // 1. Must not say one row per Epic or retain obsolete Epic-based exceptions
+  assertFalse(
+    text.includes("One row per Epic"),
+    "skills/design-issue/SKILL.md must not say 'One row per Epic'",
+  );
+  assertFalse(
+    text.includes("append exactly one row for that Epic or Issue"),
+    "skills/design-issue/SKILL.md must not say 'append exactly one row for that Epic or Issue'",
+  );
+  assertFalse(
+    text.includes("Child issues of an Epic do not get their own row"),
+    "skills/design-issue/SKILL.md must not say 'Child issues of an Epic do not get their own row'",
+  );
+  assertFalse(
+    text.includes("rolls up into that Epic's existing row"),
+    "skills/design-issue/SKILL.md must not retain the obsolete Epic-based rollup exception",
+  );
+
+  // 2. Must contain one-row-per-run rule
+  assertStringIncludes(
+    text,
+    "append exactly one row for the design run before Gate 1",
+    "skills/design-issue/SKILL.md must specify appending one row for the design run",
+  );
+  assertStringIncludes(
+    text,
+    "One row and one version bump per design run",
+    "skills/design-issue/SKILL.md must specify one row and one version bump per design run",
+  );
+
+  // 3. Must contain every-issue-linked rule
+  assertStringIncludes(
+    text,
+    "with every issue behind the revision linked in that row",
+    "skills/design-issue/SKILL.md must specify every issue behind the revision linked in that row",
+  );
+  assertStringIncludes(
+    text,
+    "The row's `Epic / Issue` cell links every Epic and issue whose work is in the revision, each by its title",
+    "skills/design-issue/SKILL.md must specify linking every Epic and issue by title",
+  );
+
+  // 4. Phase 4 must not write into the design document and must keep copy in captured-rules file
+  const phase4Match = text.match(/### Phase 4 —[\s\S]*?(?=## The Two Approval Gates)/);
+  assert(phase4Match, "Phase 4 section must exist");
+  const phase4Text = phase4Match[0];
+  assertFalse(
+    phase4Text.includes("captures against the design document"),
+    "Phase 4 must not verify captures against or write into the design document",
+  );
+  assertFalse(
+    /writes? into the design document/i.test(phase4Text),
+    "Phase 4 must not write into the design document",
+  );
+  assertStringIncludes(
+    phase4Text,
+    "In a file of its own beside the design document, `~/Dropbox/web-jam-llms/<Theme>/<topic>-captured-rules.md`, and never in the design document.",
+    "Phase 4 must keep consumed rule copy in captured-rules file beside design document",
+  );
+
+  // 5. Gate 2 plan row Priority must be tied to level tests owned by /file-issue without restating tests
+  assertStringIncludes(
+    text,
+    "Each Gate 2 plan row takes its Priority level from the level tests that `/file-issue` owns",
+    "Gate 2 plan row Priority must be tied to level tests that /file-issue owns",
+  );
+  assertStringIncludes(
+    text,
+    "this skill does not restate the tests",
+    "skill must not restate the Priority level tests",
+  );
+
+  // 6. Carries the rendered-page rule for the history tables and paging
+  assertStringIncludes(
+    text,
+    "### The Rendered Page",
+    "skill must contain ### The Rendered Page section",
+  );
+  assertStringIncludes(
+    text,
+    "**The history tables show newest first on the page.**",
+    "skill must state history tables show newest first on the page",
+  );
+  assertStringIncludes(
+    text,
+    "- **The revision table** — the document's structured revision table — is shown bottom row first.",
+    "skill must specify revision table is shown bottom row first",
+  );
+  assertStringIncludes(
+    text,
+    "- **The premises table** — the table under the `Load-bearing premises` heading — is sorted by its `Proved` date, newest first; rows with the same date are shown bottom row first.",
+    "skill must specify premises table is sorted newest first",
+  );
+  assertStringIncludes(
+    text,
+    "- **The decision record** — the table under a heading that contains `Decision record`, `Decisions record`, `Decision log` or, as the whole heading, `Decisions`, in any capitalisation — is shown bottom row first.",
+    "skill must specify decision record is shown bottom row first",
+  );
+  assertStringIncludes(
+    text,
+    "**Every table is paged.** A table with more than 10 rows shows 10 rows at a time, with a control under it offering 10, 20, 30 and all, a previous and a next button, and a count of the rows shown.",
+    "skill must state table paging rule",
+  );
+}
+
+Deno.test("skills/design-issue/SKILL.md satisfies one-row-per-run, rendered-page, Phase 4 captured-rules, and plan priority rules (web-jam-tools#1345)", async () => {
+  const text = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
+  assertDesignIssueRules(text);
+});
+
+Deno.test("skills/design-issue/SKILL.md validator fails on rule violations (web-jam-tools#1345)", async () => {
+  const validText = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
+
+  // 1. Fails when the skill says one row per Epic
+  const textWithOneRowPerEpic = validText.replace(
+    "One row and one version bump per design run",
+    "One row per Epic or standalone Issue",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithOneRowPerEpic),
+    Error,
+    "must not say 'One row per Epic'",
+  );
+
+  // Fails when step 6 intro says "for that Epic or Issue"
+  const textWithRowForEpicOrIssue = validText.replace(
+    "append exactly one row for the design run before Gate 1",
+    "append exactly one row for that Epic or Issue before Gate 1",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithRowForEpicOrIssue),
+    Error,
+    "must not say 'append exactly one row for that Epic or Issue'",
+  );
+
+  // Fails when retaining the obsolete Epic-based rollup exception
+  const textWithChildIssuesRollup = validText.replace(
+    "- **Required columns:**",
+    "- **Child issues of an Epic do not get their own row:** Work done under an Epic rolls up into that Epic's existing row: the summary widens by a clause if needed and the date advances to the latest revision, but the version does not bump again.\n   - **Required columns:**",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithChildIssuesRollup),
+    Error,
+    "must not say 'Child issues of an Epic do not get their own row'",
+  );
+
+  // 2. Fails when it loses the one-row-per-run rule
+  const textWithoutOneRowPerRun = validText.replaceAll(
+    "One row and one version bump per design run",
+    "Revision table rule",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithoutOneRowPerRun),
+    Error,
+    "must specify one row and one version bump per design run",
+  );
+
+  // 3. Fails when it loses the every-issue-linked rule
+  const textWithoutEveryIssueLinked = validText.replace(
+    "with every issue behind the revision linked in that row",
+    "",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithoutEveryIssueLinked),
+    Error,
+    "must specify every issue behind the revision linked in that row",
+  );
+
+  // 4. Fails when it says Phase 4 writes into the design document
+  const textWithPhase4WritingToDoc = validText.replace(
+    "keeps a word-for-word copy of each consumed rule and checks that copy byte for byte",
+    "byte-verifies captures against the design document appendix",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithPhase4WritingToDoc),
+    Error,
+    "Phase 4 must not verify captures against or write into the design document",
+  );
+
+  // 5. Fails when a plan row's Priority is not tied to the level tests
+  const textWithoutPriorityTied = validText.replace(
+    "Each Gate 2 plan row takes its Priority level from the level tests that `/file-issue` owns",
+    "Each Gate 2 plan row takes its Priority level from habit",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithoutPriorityTied),
+    Error,
+    "Gate 2 plan row Priority must be tied to level tests that /file-issue owns",
+  );
+});
+
+/**
+ * Asserts skills/backlog-groom/SKILL.md follows the running-model and guarded command rules (web-jam-tools#1350).
+ * Validates the who-does-the-run table, running-model usage, Codex invocation ($backlog-groom),
+ * guarded commands (edit-issue, unblock-issue), and absence of raw gh issue edit commands.
+ */
+export function assertBacklogGroomRules(text: string): void {
+  // 1. Table of who does the run
+  assertStringIncludes(
+    text,
+    "| Tool | The session is on | Who does the run |",
+    "skills/backlog-groom/SKILL.md must contain the table of who does the run",
+  );
+  assertStringIncludes(
+    text,
+    "| Claude Code | Opus | a Sonnet helper the session starts |",
+    "skills/backlog-groom/SKILL.md table must include Claude Code Opus row",
+  );
+  assertStringIncludes(
+    text,
+    "| Claude Code | Sonnet | a Sonnet helper the session starts |",
+    "skills/backlog-groom/SKILL.md table must include Claude Code Sonnet row",
+  );
+  assertStringIncludes(
+    text,
+    "| agy | Flash | a Flash helper the session starts |",
+    "skills/backlog-groom/SKILL.md table must include agy Flash row",
+  );
+  assertStringIncludes(
+    text,
+    "deno task running-model",
+    "skills/backlog-groom/SKILL.md must use deno task running-model to determine session model",
+  );
+
+  // 2. Must not leave Codex out: includes Codex rows in the table and $backlog-groom
+  assertStringIncludes(
+    text,
+    "| Codex | Astra | a Sol helper the session starts |",
+    "skills/backlog-groom/SKILL.md must include Codex in table of who does the run",
+  );
+  assertStringIncludes(
+    text,
+    "| Codex | Sol | a Sol helper the session starts |",
+    "skills/backlog-groom/SKILL.md must include Codex in table of who does the run",
+  );
+  assertStringIncludes(
+    text,
+    "$backlog-groom",
+    "skills/backlog-groom/SKILL.md must include Codex invocation $backlog-groom",
+  );
+
+  // 3. Must not name raw gh edit commands
+  assertFalse(
+    /\bgh\s+issue\s+edit\b/.test(text),
+    "skills/backlog-groom/SKILL.md must not name raw gh issue edit commands",
+  );
+
+  // 4. Must use guarded commands
+  assertStringIncludes(
+    text,
+    "deno task edit-issue",
+    "skills/backlog-groom/SKILL.md must use deno task edit-issue",
+  );
+  assertStringIncludes(
+    text,
+    "deno task unblock-issue",
+    "skills/backlog-groom/SKILL.md must use deno task unblock-issue",
+  );
+
+  // 5. Every workflow route must use the helper selected by the table.
+  assertStringIncludes(
+    text,
+    'The helper selected by the table in "Which Model Does the Run" performs Steps 1–3 and the approved actions in Step 5.',
+    "skills/backlog-groom/SKILL.md workflow must assign the full run to the selected helper",
+  );
+  assertFalse(
+    /the session itself/i.test(text),
+    "skills/backlog-groom/SKILL.md must not run the audit inline in the primary session",
+  );
+
+  for (
+    const row of [
+      "| Claude Code | Haiku | a Haiku helper the session starts |",
+      "| Codex | Luna | a Luna helper the session starts |",
+    ]
+  ) assertStringIncludes(text, row, "must delegate cheap sessions to a helper too");
+  for (const native of ["Agent", "collaboration.spawn_agent", "invoke_subagent"]) {
+    assertStringIncludes(text, native, "must name native background delegation mechanism");
+  }
+  assertStringIncludes(
+    text,
+    "deno task backlog-groom:collect",
+    "must collect once before analysis",
+  );
+  assertStringIncludes(text, "--snapshot", "must reuse the snapshot for ranking");
+  assertStringIncludes(text, "Include every open issue", "must include legacy parked issues");
+  assertStringIncludes(text, "/fix-labels", "must route retired label deletion to fix-labels");
+
+  // 6. Seventh check: Priority
+  assertStringIncludes(
+    text,
+    "### 7. Priority",
+    "skills/backlog-groom/SKILL.md must include the seventh check, Priority",
+  );
+  assertStringIncludes(
+    text,
+    "deno task backlog-groom:rank",
+    "skills/backlog-groom/SKILL.md must call ranking entry point deno task backlog-groom:rank",
+  );
+  assertStringIncludes(
+    text,
+    "deno task edit-issue --priority",
+    "skills/backlog-groom/SKILL.md must set approved levels with deno task edit-issue --priority",
+  );
+
+  // 7. Focus argument
+  assertStringIncludes(
+    text,
+    "focus <milestone>",
+    "skills/backlog-groom/SKILL.md must take focus <milestone>",
+  );
+  assertStringIncludes(
+    text,
+    "/backlog-groom focus gig-outreach",
+    "skills/backlog-groom/SKILL.md must include focus argument example for Claude Code / agy",
+  );
+  assertStringIncludes(
+    text,
+    "$backlog-groom focus gig-outreach",
+    "skills/backlog-groom/SKILL.md must include focus argument example for Codex",
+  );
+
+  // 8. One batch per repository
+  assertStringIncludes(
+    text,
+    "one batch for each repository",
+    "skills/backlog-groom/SKILL.md must show proposed Priority moves as one batch for each repository",
+  );
+
+  // 9. Does not restate the level tests, the shares or the ranking
+  assertStringIncludes(
+    text,
+    'what each Priority level means is in "Priority Levels" in `~/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md`',
+    "skills/backlog-groom/SKILL.md must point to Priority Levels in design-issue and file-issue design",
+  );
+  assertStringIncludes(
+    text,
+    'the shares, the ranking, and the focus are in "The Priority check" in `~/Dropbox/web-jam-llms/Token_Savings/backlog-groom-design.md`',
+    "skills/backlog-groom/SKILL.md must point to The Priority check in backlog-groom design",
+  );
+  assertFalse(
+    /Urgent\s+10\s+percent/i.test(text),
+    "skills/backlog-groom/SKILL.md must not restate level shares",
+  );
+  assertFalse(
+    /Work this (?:first|next)/i.test(text),
+    "skills/backlog-groom/SKILL.md must not restate the Priority level tests",
+  );
+
+  // 10. Model doing the run judges the two facts and gives reason
+  assertStringIncludes(
+    text,
+    "something live is broken, exposed or losing data",
+    "skills/backlog-groom/SKILL.md must name first fact: something live is broken, exposed or losing data",
+  );
+  assertStringIncludes(
+    text,
+    "it is a defect that costs something every time it is hit",
+    "skills/backlog-groom/SKILL.md must name second fact: it is a defect that costs something every time it is hit",
+  );
+  assertStringIncludes(
+    text,
+    "hands the ranking a yes or a no for each",
+    "skills/backlog-groom/SKILL.md must state model hands ranking a yes or a no for each",
+  );
+  assertStringIncludes(
+    text,
+    "gives its reason in one line beside every move it proposes",
+    "skills/backlog-groom/SKILL.md must state model gives reason in one line beside every move it proposes",
+  );
+
+  // 11. Small-repo input contract, Epic contract, and schema pointer
+  assertStringIncludes(
+    text,
+    "levelFromTests",
+    "skills/backlog-groom/SKILL.md must specify levelFromTests for repositories below the 20-issue floor",
+  );
+  assertStringIncludes(
+    text,
+    "Epic with no open child carrying a Priority",
+    "skills/backlog-groom/SKILL.md must specify levelFromTests for Epics with no open child carrying a Priority",
+  );
+  assertStringIncludes(
+    text,
+    "docs/scripts.md",
+    "skills/backlog-groom/SKILL.md must point to input schema in docs/scripts.md",
+  );
+}
+
+Deno.test(
+  "skills/backlog-groom/SKILL.md satisfies running-model table, guarded commands, and Codex (web-jam-tools#1350)",
+  async () => {
+    const text = await Deno.readTextFile(`${SKILLS_DIR}backlog-groom/SKILL.md`);
+    assertBacklogGroomRules(text);
+  },
+);
+
+Deno.test(
+  "skills/backlog-groom/SKILL.md validator fails on rule violations (web-jam-tools#1350)",
+  async () => {
+    const validText = await Deno.readTextFile(`${SKILLS_DIR}backlog-groom/SKILL.md`);
+
+    // 1. Fails when it loses the table of who does the run
+    const textWithoutTable = validText.replace(
+      "| Tool | The session is on | Who does the run |",
+      "| Tool | Model | Who runs |",
+    );
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutTable),
+      Error,
+      "must contain the table of who does the run",
+    );
+
+    // 2. Fails when it names a raw gh issue edit command
+    const textWithRawGh = validText + "\n- `gh issue edit --milestone test`\n";
+    assertThrows(
+      () => assertBacklogGroomRules(textWithRawGh),
+      Error,
+      "must not name raw gh issue edit commands",
+    );
+
+    // 3. Fails when it leaves Codex out
+    const textWithoutCodex = validText.replaceAll("Codex", "OtherTool");
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutCodex),
+      Error,
+      "must include Codex",
+    );
+
+    // 4. Fails when it omits Codex syntax ($backlog-groom)
+    const textWithoutCodexSyntax = validText.replaceAll("$backlog-groom", "/bg");
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutCodexSyntax),
+      Error,
+      "must include Codex invocation $backlog-groom",
+    );
+
+    assertThrows(
+      () => assertBacklogGroomRules(validText + "\nThe session itself does the audit.\n"),
+      Error,
+      "must not run the audit inline",
+    );
+    assertThrows(
+      () => assertBacklogGroomRules(validText.replace("performs Steps 1–3", "performs Step 1")),
+      Error,
+      "workflow must assign the full run",
+    );
+  },
+);
+
+Deno.test(
+  "skills/backlog-groom/SKILL.md validator fails on Priority check rule violations (web-jam-tools#1352)",
+  async () => {
+    const validText = await Deno.readTextFile(`${SKILLS_DIR}backlog-groom/SKILL.md`);
+
+    // 1. Fails when the skill loses the seventh check (Priority)
+    const textWithoutPriority = validText.replace("### 7. Priority", "### 7. Other Check");
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutPriority),
+      Error,
+      "must include the seventh check, Priority",
+    );
+
+    // 2. Fails when the skill loses the focus argument
+    const textWithoutFocus = validText.replaceAll("focus <milestone>", "other <arg>");
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutFocus),
+      Error,
+      "must take focus <milestone>",
+    );
+
+    // 3. Fails when the skill loses the one-batch-per-repository rule
+    const textWithoutOneBatch = validText.replaceAll(
+      "one batch for each repository",
+      "spread across repositories",
+    );
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutOneBatch),
+      Error,
+      "must show proposed Priority moves as one batch for each repository",
+    );
+
+    // 4. Fails when the skill restates the level tests
+    const textWithRestatedTests = validText +
+      "\nUrgent: Work this first when something is broken.\n";
+    assertThrows(
+      () => assertBacklogGroomRules(textWithRestatedTests),
+      Error,
+      "must not restate the Priority level tests",
+    );
+
+    // 5. Fails when the skill loses the model judging two facts
+    const textWithoutTwoFacts = validText.replaceAll(
+      "something live is broken, exposed or losing data",
+      "the issue is high priority",
+    );
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutTwoFacts),
+      Error,
+      "must name first fact: something live is broken, exposed or losing data",
+    );
+
+    // 6. Fails when the skill loses giving reason beside every proposed move
+    const textWithoutReason = validText.replaceAll(
+      "gives its reason in one line beside every move it proposes",
+      "proposes moves without reasons",
+    );
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutReason),
+      Error,
+      "must state model gives reason in one line beside every move it proposes",
+    );
+
+    // 7. Fails when the skill loses the small-repo or Epic levelFromTests requirement
+    const textWithoutSmallRepo = validText.replaceAll("levelFromTests", "ignoredField");
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutSmallRepo),
+      Error,
+      "must specify levelFromTests for repositories below the 20-issue floor",
+    );
+    const textWithoutEpic = validText.replaceAll(
+      "Epic with no open child carrying a Priority",
+      "ignoredField",
+    );
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutEpic),
+      Error,
+      "must specify levelFromTests for Epics with no open child carrying a Priority",
+    );
+  },
+);
+
+function assertModelLabelGuidance(skill: string, text: string): void {
+  assertStringIncludes(text, "model-tier-order-design-2026-10-02.md");
+  for (
+    const stale of [
+      "exactly one label from",
+      "Exactly **one** label",
+      "hook requires exactly one",
+      "exactly one model label",
+      "exactly one *model* label",
+      "hook denies zero or two-plus",
+      "simultaneously (e.g. both",
+      "createIssueAndVerify()` never validates it",
+    ]
+  ) {
+    assertFalse(text.includes(stale), `${skill}: stale model-label rule: ${stale}`);
+  }
+  if (skill === "backlog-groom") assertStringIncludes(text, "must not be reduced to one label");
+  if (skill === "work-issue") {
+    assertStringIncludes(text, "retain both labels and do not ask for a label override");
+  }
+  if (skill === "design-issue") {
+    assertStringIncludes(text, "### Changing a value tools read");
+    assertStringIncludes(text, "searches the repository for the value itself");
+    assertStringIncludes(text, "no plan uses the new value until those readers carry it");
+    assertStringIncludes(text, "every row (the epic included)");
+    assertStringIncludes(text, "escalationReason");
+  }
+}
+
+Deno.test("filing skills point to the tier-order design and preserve paired lanes", async () => {
+  for (const skill of ["file-issue", "design-issue", "backlog-groom", "work-issue"]) {
+    const text = await Deno.readTextFile(`${SKILLS_DIR}${skill}/SKILL.md`);
+    assertModelLabelGuidance(skill, text);
+    assertThrows(() =>
+      assertModelLabelGuidance(
+        skill,
+        text.replaceAll("model-tier-order-design-2026-10-02.md", "missing"),
+      )
+    );
+    assertThrows(() =>
+      assertModelLabelGuidance(skill, `${text}\nA hook requires exactly one model label.\n`)
+    );
+  }
+});
+
+Deno.test("docs/ai-team-playbook.md and skills: triage issues to model labels by kind of work (web-jam-tools#1203)", async () => {
+  const playbook = await Deno.readTextFile("docs/ai-team-playbook.md");
+
+  // 1. docs/ai-team-playbook.md contains header line | Kind of work | Label |
+  assertStringIncludes(playbook, "| Kind of work | Label |");
+
+  // A row for each of the five kinds of work with its label cell
+  const kindsOfWork = [
+    { kind: "Mechanical one-off", label: "`Luna` or `Haiku`" },
+    { kind: "Logic- and safety-heavy coding", label: "`Sol` or `Sonnet`" },
+    { kind: "All other coding", label: "`Flash`" },
+    { kind: "Design, and coding whose list of cases cannot be closed", label: "`Opus`" },
+    { kind: "Recording", label: "`Astra`, only when Josh names it" },
+  ];
+  for (const { kind, label } of kindsOfWork) {
+    assert(playbook.includes(kind), `docs/ai-team-playbook.md must contain kind of work: ${kind}`);
+    const row = playbook.split("\n").find((l) => l.includes(kind) && l.includes(label));
+    assert(
+      row,
+      `docs/ai-team-playbook.md must contain row with kind '${kind}' and label '${label}'`,
+    );
+  }
+
+  // Four-point definition
+  for (
+    const def of [
+      "changes a guard, hook, matcher, filter, regular expression or permission rule",
+      "sends, writes or deletes something outside the repo",
+      "changes login, permissions or the handling of credentials",
+      "acceptance criteria list cases that a resolver, a classifier or a change of state has to get right",
+    ]
+  ) {
+    assertStringIncludes(playbook, def);
+  }
+
+  // 2. skills/file-issue, design-issue, delegate, backlog-groom each contain docs/ai-team-playbook.md and "triage table"
+  const skills = [
+    "skills/file-issue/SKILL.md",
+    "skills/design-issue/SKILL.md",
+    "skills/delegate/SKILL.md",
+    "skills/backlog-groom/SKILL.md",
+  ];
+  const legacyLabelBulletRegex = /^\s*-\s*`(?:Flash|Haiku|Luna|Sol|Astra|Sonnet|Opus)`\s*—/m;
+
+  for (const file of skills) {
+    const text = await Deno.readTextFile(file);
+    assertStringIncludes(
+      text,
+      "docs/ai-team-playbook.md",
+      `${file} must contain docs/ai-team-playbook.md`,
+    );
+    assertStringIncludes(text, "triage table", `${file} must contain 'triage table'`);
+    assertFalse(
+      legacyLabelBulletRegex.test(text),
+      `${file} must not contain legacy bulleted label list`,
+    );
+  }
+
+  // 3. skills/design-issue/SKILL.md sends guard, hook and matcher work to Sol or Sonnet and keeps Opus escalation
+  const designIssueText = await Deno.readTextFile("skills/design-issue/SKILL.md");
+  const caseListPassage = designIssueText.split("### Sized by Case List, Not Diff")[1]?.split(
+    "### Closeable, Always",
+  )[0];
+  assert(caseListPassage, "Missing Sized by Case List, Not Diff section");
+  assertStringIncludes(caseListPassage, "Sol");
+  assertStringIncludes(caseListPassage, "Sonnet");
+  assertStringIncludes(caseListPassage, "Opus");
+  assert(
+    caseListPassage.includes("`Sol` or `Sonnet`") || caseListPassage.includes("Sol or Sonnet"),
+    "design-issue passage must route to Sol or Sonnet",
+  );
+
+  // 4. skills/backlog-groom/SKILL.md states that it compares each open coding issue's label with the triage table and proposes a relabel per issue, asking Josh per item
+  const backlogGroomText = await Deno.readTextFile("skills/backlog-groom/SKILL.md");
+  assertStringIncludes(
+    backlogGroomText,
+    "The skill compares each open coding issue's label with the triage table and proposes a relabel per issue, asking Josh per item.",
+  );
+
+  // 5. Installed skill symlinks resolve into canonical clone across Claude Code and agy
+  const home = Deno.env.get("HOME") || "/home/joshua";
+  const skillNames = ["file-issue", "design-issue", "delegate", "backlog-groom"];
+  const claudeSkillsDir = `${home}/.claude/skills`;
+  const agySkillsDir = `${home}/.gemini/config/plugins/webjam-tasks/skills`;
+  const hasClaude = await Deno.stat(claudeSkillsDir).then((s) => s.isDirectory).catch(() => false);
+  const hasAgy = await Deno.stat(agySkillsDir).then((s) => s.isDirectory).catch(() => false);
+
+  if (!Deno.env.get("CI")) {
+    assert(
+      hasClaude || hasAgy,
+      "Expected at least one installed skill surface (~/.claude/skills or ~/.gemini/config/plugins/webjam-tasks/skills) on local runs",
+    );
+  }
+
+  if (hasClaude) {
+    for (const skill of skillNames) {
+      const claudeLink = `${claudeSkillsDir}/${skill}`;
+      const claudeInfo = await Deno.lstat(claudeLink).catch(() => null);
+      assertExists(claudeInfo, `~/.claude/skills/${skill} must exist`);
+      assertEquals(claudeInfo.isSymlink, true, `~/.claude/skills/${skill} must be a symlink`);
+      const target = await Deno.readLink(claudeLink);
+      assertStringIncludes(target, `web-jam-tools/skills/${skill}`);
+    }
+  }
+
+  if (hasAgy) {
+    for (const skill of skillNames) {
+      const agyLink = `${agySkillsDir}/${skill}`;
+      const agyInfo = await Deno.lstat(agyLink).catch(() => null);
+      assertExists(agyInfo, `~/.gemini/.../skills/${skill} must exist`);
+      assertEquals(agyInfo.isSymlink, true, `~/.gemini/.../skills/${skill} must be a symlink`);
+      const target = await Deno.readLink(agyLink);
+      assertStringIncludes(target, `web-jam-tools/skills/${skill}`);
+    }
   }
 });

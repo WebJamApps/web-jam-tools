@@ -20,7 +20,7 @@ HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 stderr_file=$(mktemp)
 trap 'rm -f "$stderr_file"' EXIT
 
-result=$(printf '%s' "$input" | deno run --no-config --allow-env --allow-read "$HOOK_DIR/lib/check_backend_mutation.ts" 2>"$stderr_file") || true
+result=$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group safety --name block-backend-mutation deno run --no-config --allow-env --allow-read "$HOOK_DIR/lib/check_backend_mutation.ts" 2>"$stderr_file") || true
 
 if [ -z "$result" ]; then
   err=$(cat "$stderr_file" 2>/dev/null || echo "")

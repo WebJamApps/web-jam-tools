@@ -12,19 +12,35 @@
 // Claude Code Bash tool call, it never passes through the *installed*
 // PreToolUse hook itself — only through the copy of the script under test.
 
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertStringIncludes } from "@std/assert";
+import { checkSecretDumpSideEffects } from "../hooks/lib/check_secret_dump_side_effects.ts";
 
 const SCRIPT_PATH = new URL("../hooks/block-secret-dumps.sh", import.meta.url).pathname;
 
 interface RunResult {
   code: number;
   stderr: string;
+  stdout: string;
 }
 
 async function runHook(command: string): Promise<RunResult> {
-  const input = JSON.stringify({ tool_input: { command } });
+  return await runPayloadHook(JSON.stringify({ tool_input: { command } }));
+}
+
+async function runPayloadHook(
+  input: string,
+  surface: "claude" | "agy" | "codex" = "claude",
+): Promise<RunResult> {
   const cmd = new Deno.Command("bash", {
-    args: [SCRIPT_PATH],
+    args: surface === "agy"
+      ? [
+        new URL("../hooks/agy-hook-shim.sh", import.meta.url).pathname,
+        "PreToolUse",
+        btoa("Bash"),
+        SCRIPT_PATH,
+      ]
+      : [SCRIPT_PATH],
+    env: { WJT_SURFACE: surface === "claude" ? "claude-code" : surface },
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -33,8 +49,111 @@ async function runHook(command: string): Promise<RunResult> {
   const writer = child.stdin.getWriter();
   await writer.write(new TextEncoder().encode(input));
   await writer.close();
-  const { code, stderr } = await child.output();
-  return { code, stderr: new TextDecoder().decode(stderr) };
+  const { code, stderr, stdout } = await child.output();
+  return {
+    code,
+    stderr: new TextDecoder().decode(stderr),
+    stdout: new TextDecoder().decode(stdout),
+  };
+}
+
+// Every literal row in "Credential files and environment one-liners".
+// These are hook input strings, never commands executed by the tests.
+const credentialFileAndOneLinerCases: Array<[string, number]> = [
+  ["cat .env", 2],
+  ["cat ./.env", 2],
+  ["cat app/.env.local", 2],
+  ["cat .env.test", 2],
+  ["source .env", 2],
+  ["grep KEY .env", 2],
+  ["echo $(cat .env)", 2],
+  [`printf '%s' "$(< .env)"`, 2],
+  ["ls -la .env.example", 2],
+  [`deno eval 'console.log(Deno.env.get("GH_TOKEN"))'`, 2],
+  [`node -e 'console.log(process.env.GH_TOKEN)'`, 2],
+  [`node -p 'process.env["API_KEY"]'`, 2],
+  [`python3 -c 'import os; print(os.environ["GH_TOKEN"])'`, 2],
+  [`python3 -c 'import os; print(os.environ.get("API_KEY"))'`, 2],
+  [`python3 -c 'import os; print(os.getenv("MY_SECRET"))'`, 2],
+  [`grep -n 'Deno.env.get' scripts/circleci-settings.ts`, 0],
+  [`grep -rn 'Deno.env.get("CIRCLECI_TOKEN")' src`, 0],
+  ["grep -n process.env src/a.ts", 0],
+  [`jq -nc --arg c "grep -n 'Deno.env.get' x.ts" '{c:$c}' > /tmp/p.json`, 0],
+  [`deno eval 'console.log(Deno.env.get("HOME"))'`, 0],
+  [`node -e 'console.log(process.env.HOME)'`, 0],
+  ["cat .environment", 0],
+  ["deno run --allow-env scripts/circleci-settings.ts --check", 0],
+  ["deno task ci:rerun web-jam-tools 1678", 0],
+];
+
+for (const surface of ["claude", "agy", "codex"] as const) {
+  for (const [command, expected] of credentialFileAndOneLinerCases) {
+    Deno.test(`credential file and one-liner design row (${surface}): ${command}`, async () => {
+      const payload = surface === "agy"
+        ? { toolCall: { name: "run_command", args: { CommandLine: command } } }
+        : { tool_name: "Bash", tool_input: { command } };
+      const result = await runPayloadHook(JSON.stringify(payload), surface);
+      if (surface === "agy") {
+        assertEquals(result.code, 0, result.stderr);
+        const verdict = JSON.parse(result.stdout);
+        assertEquals(verdict.decision, expected === 2 ? "deny" : "allow", command);
+        if (expected === 2) assertBlocked(verdict.reason);
+      } else {
+        assertEquals(result.code, expected, result.stderr);
+        if (expected === 2) assertBlocked(result.stderr);
+      }
+    });
+  }
+}
+
+const credentialBoundaryRegressions: Array<[string, number]> = [
+  [`cat '.env'`, 2],
+  [`cat ".env.local"`, 2],
+  ["cat <.env", 2],
+  ["FILE=.env cat", 2],
+  ["cat service.env", 0],
+  ["cat .env_backup", 0],
+  ["cat .env-backup", 0],
+  [`grep -n 'os.environ.get("API_KEY")' src`, 0],
+  [`python -c 'import os; print(os.getenv("db_password"))'`, 2],
+  [`python3 -c 'import os; print(os.environ["PATH"])'`, 0],
+  [`python3 -c 'import os; print(os.environ.get("HOME"))'`, 0],
+  [`python3 -c 'import os; print(os.getenv("PATH"))'`, 0],
+  [`node -p 'process.env["HOME"]'`, 0],
+  [`node -e 'console.log(process.env.SERVICE_CREDENTIAL)'`, 2],
+  [`deno eval 'console.log(Deno.env.get("MY_APIKEY"))'`, 2],
+  [`node --eval='console.log(process.env.DB_PASSWD)'`, 2],
+  [`node -p'process.env.AUTH'`, 2],
+  [`python3 -c'import os; print(os.getenv("MY_SECRET"))'`, 2],
+  [`python3 -W ignore -c 'import os; print(os.getenv("MY_SECRET"))'`, 2],
+  [`node --require ./setup.js -p 'process.env.GH_TOKEN'`, 2],
+  [`node --loader ./l.mjs -p 'process.env.GH_TOKEN'`, 2],
+  [`node --loader ./l.mjs -p 'process.env.HOME'`, 0],
+  [`node -pe 'process.env.GH_TOKEN'`, 2],
+  [`node -pe 'process.env["API_KEY"]'`, 2],
+  [`node -pe 'process.env.HOME'`, 0],
+  [`python3 -Bc 'import os; print(os.getenv("GH_TOKEN"))'`, 2],
+  [`python3 -Bc 'import os; print(os.getenv("HOME"))'`, 0],
+  [`python3 -uc 'import os; print(os.getenv("GH_TOKEN"))'`, 2],
+  [`python3 -uc 'import os; print(os.getenv("HOME"))'`, 0],
+  [`deno eval --ext ts 'console.log(Deno.env.get("GH_TOKEN"))'`, 2],
+  [`deno eval --ext ts 'console.log(Deno.env.get("HOME"))'`, 0],
+  [`env /usr/bin/python3 -c 'import os; print(os.getenv("GH_TOKEN"))'`, 2],
+  [`bash -c 'node -p "process.env.GH_TOKEN"'`, 2],
+  [`deno eval --no-check 'console.log(Deno.env.get("GH_TOKEN"))'`, 2],
+  [`node script.js -e 'process.env.GH_TOKEN'`, 0],
+  [`python3 script.py -c 'os.getenv("GH_TOKEN")'`, 0],
+  [`python3 -m module -c 'os.getenv("GH_TOKEN")'`, 0],
+  [`deno run script.ts 'Deno.env.get("GH_TOKEN")'`, 0],
+  [`echo node -p 'process.env.GH_TOKEN'`, 0],
+];
+
+for (const [command, expected] of credentialBoundaryRegressions) {
+  Deno.test(`credential file and one-liner regression: ${command}`, async () => {
+    const result = await runHook(command);
+    assertEquals(result.code, expected, result.stderr);
+    if (expected === 2) assertBlocked(result.stderr);
+  });
 }
 
 // --- newly allowed: cp ---
@@ -587,4 +706,245 @@ function assertBlocked(stderr: string) {
   if (!stderr.includes("BLOCKED (secret-dump guard)")) {
     throw new Error(`expected BLOCKED message in stderr, got: ${stderr}`);
   }
+}
+
+// Literal cases from the hooks design, "Commands that print secrets as a side effect".
+// Payload data only: no process listing, container query or environment dump is executed.
+const sideEffectCases: Array<[string, number]> = [
+  ["ps aux", 2],
+  ["ps -ef", 2],
+  ["ps -f -p 1234", 2],
+  ["ps -F", 2],
+  ["ps u", 2],
+  ["ps e", 2],
+  ["ps -o args -p 1234", 2],
+  ["ps -o cmd -p 1234", 2],
+  ["ps -o command -p 1234", 2],
+  ["pgrep -fa 'deno (task|test)|docker run'", 2],
+  ["pgrep -a docker", 2],
+  ["pgrep --list-full docker", 2],
+  ["cat /proc/1234/cmdline", 2],
+  ["cat /proc/*/cmdline", 2],
+  ["strings /proc/1234/environ", 2],
+  ["xargs -0 < /proc/1234/environ", 2],
+  ["cat /proc/self/environ", 2],
+  ["tr '\\0' '\\n' < /proc/self/environ", 2],
+  ["cat /proc/thread-self/environ", 2],
+  ["pstree -a", 2],
+  ["pstree --arguments", 2],
+  ["top -c", 2],
+  ["htop -c", 2],
+  ["docker inspect 3f2a", 2],
+  ["docker container inspect 3f2a", 2],
+  ["docker top 3f2a", 2],
+  ["docker ps --no-trunc", 2],
+  ["systemctl status docker", 2],
+  ["set", 2],
+  ["export", 2],
+  ["export -p", 2],
+  ["declare", 2],
+  ["declare -x", 2],
+  ["declare -p", 2],
+  ["declare -px", 2],
+  ["typeset", 2],
+  ["typeset -x", 2],
+  ["typeset -p", 2],
+  ["declare -p GH_TOKEN", 2],
+  ["printenv GH_TOKEN", 2],
+  ["printenv GITHUB_TOKEN", 2],
+  ['printenv "GH_TOKEN"', 2],
+  ["printenv API_KEY", 2],
+  ["printenv MY_SECRET", 2],
+  ["printenv PATH GH_TOKEN", 2],
+  ["sh -c 'printenv GH_TOKEN'", 2],
+  ["printenv XAUTHORITY", 2],
+  ['sh -c "ps aux"', 2],
+  ["echo x | xargs ps -ef", 2],
+  ["bash -c 'export -p'", 2],
+  ["sh -c set", 2],
+  ["pgrep -f docker", 0],
+  ["pgrep -l docker", 0],
+  ["ps -o pid,etime,stat -p 1234", 0],
+  ["kill -0 1234", 0],
+  ["set -euo pipefail", 0],
+  ["set -e", 0],
+  ["set -o pipefail", 0],
+  ["set --", 0],
+  ['export PATH="$PATH:/home/joshua/.local/bin"', 0],
+  ["export FOO=bar", 0],
+  ["declare -a items", 0],
+  ["declare -p PATH", 0],
+  ["printenv PATH", 0],
+  ["printenv HOME", 0],
+  ["printenv PATH HOME", 0],
+  ["compgen -v", 0],
+  ['gh issue create --title "x" --body "never run ps aux or read /proc/1/cmdline"', 0],
+  ['git commit -m "document why ps aux is blocked"', 0],
+];
+
+for (const [command, expected] of sideEffectCases) {
+  Deno.test(`side-effect design row: ${command}`, async () => {
+    assertEquals(
+      checkSecretDumpSideEffects(JSON.stringify({ tool_input: { command } })) !== undefined,
+      expected === 2,
+    );
+    const result = await runHook(command);
+    assertEquals(result.code, expected, result.stderr);
+    if (expected === 2) {
+      assertBlocked(result.stderr);
+      assertStringIncludes(result.stderr, "Safe alternative:");
+      assertStringIncludes(result.stderr, "ps -o pid,etime,stat");
+    }
+  });
+}
+
+const sideEffectRegressions: Array<[string, number]> = [
+  ["ps", 2],
+  ["ps -o pid,args -p 1234", 2],
+  ["ps -o pid -o command", 2],
+  ["ps -o pid -f -p 1234", 2],
+  ["ps -o", 2],
+  ["ps -o pid -p", 2],
+  ["ps -o pid,unknown", 2],
+  ["ps o pid,ppid,etime,etimes,stat,state,comm,user,%cpu,%mem,rss,vsz,tty,start,time -p 1234", 0],
+  ["ps -opid,stat -p1234", 0],
+  ["ps opid,stat -e", 0],
+  ["ps -o pid -o comm --pid 1234", 0],
+  ["FOO=bar env /usr/bin/ps aux", 2],
+  ["echo x | xargs -n 1 /bin/sh -c 'ps aux'", 2],
+  ["bash <<'EOF'\nps aux\nEOF", 2],
+  ["cat <<'EOF'\nps aux\nexport -p\n/proc/1/cmdline\nEOF", 0],
+  ["echo ready # ps aux", 0],
+  ["echo ready\nps aux", 2],
+  ["echo ready; export -p", 2],
+  ["pgrep -alf docker", 2],
+  ["pgrep -- -a", 0],
+  ["pstree -p", 0],
+  ["top -b -n 1", 0],
+  ["htop --help", 0],
+  ["docker ps", 0],
+  ["docker version", 0],
+  ["systemctl is-active docker", 0],
+  ["cat /proc/1234/status", 0],
+  ["cat </proc/1234/environ", 2],
+  ['git commit -m "/proc/1/cmdline"', 0],
+  ['gh issue create --title "x" --body="/proc/1/environ"', 0],
+  ["declare -p MY_API_KEY", 2],
+  ["typeset -p PASSWORD", 2],
+  ["export -p GH_TOKEN", 2],
+  ["export -p PATH", 2],
+  ["declare -x FOO=bar", 0],
+  ["export GH_TOKEN", 0],
+  ["typeset -a items", 0],
+  ["set -- one two", 0],
+  ["", 0],
+  ["sudo ".repeat(30) + "ps aux", 2],
+  ["eval ".repeat(10) + "ps aux", 2],
+  ["if true; then ps aux; fi", 2],
+  ["for i in 1; do ps aux; done", 2],
+  ["while true; do ps aux; done", 2],
+  ["! ps aux", 2],
+  ["time ps aux", 2],
+  ["time -p ps aux", 2],
+  ["builtin set", 2],
+  ["if true; then ps -o pid,etime,stat -p 1234; fi", 0],
+  ["time ps -o pid,etime,stat -p 1234", 0],
+  ["! ps -o pid,etime,stat -p 1234", 0],
+  ["echo `ps aux`", 2],
+  ['echo "`ps aux`"', 2],
+  ["`ps aux`", 2],
+  ["VAR=`ps aux`", 2],
+  ["echo `date`", 0],
+  ["cat /proc/$$/environ", 2],
+  ["cat /proc/[0-9]*/cmdline", 2],
+  ["cat /proc/1*/environ", 2],
+  ["cat /proc/1/task/1/environ", 2],
+  ["cat /proc/$PID/cmdline", 2],
+  ["docker -H unix:///x inspect 3f2a", 2],
+  ["docker --context a top 3f2a", 2],
+  ["docker container top 3f2a", 2],
+  ["docker container ls --no-trunc", 2],
+  ["docker container ps --no-trunc", 2],
+  ["docker container ls", 0],
+  ["printenv PROBE_FAKE_TOKEN", 2],
+  ["printenv db_password", 2],
+  ["printenv DB_PASSWD", 2],
+  ["printenv SERVICE_CREDENTIAL", 2],
+  ["printenv MY_APIKEY", 2],
+  ["printenv --null GH_TOKEN", 2],
+  ["printenv -- PATH GH_TOKEN", 2],
+  ["/usr/bin/printenv GH_TOKEN", 2],
+  ["env /usr/bin/printenv GH_TOKEN", 2],
+  ["echo x | xargs printenv GH_TOKEN", 2],
+  ["echo ready; printenv GH_TOKEN", 2],
+  ["bash <<'EOF'\nprintenv GH_TOKEN\nEOF", 2],
+  ["echo `printenv GH_TOKEN`", 2],
+  ["printenv PATH # GH_TOKEN is only a comment", 0],
+  ["echo printenv GH_TOKEN", 0],
+  ['git commit -m "never run printenv GH_TOKEN"', 0],
+  ["cat <<'EOF'\nprintenv GH_TOKEN\nEOF", 0],
+];
+
+for (const [command, expected] of sideEffectRegressions) {
+  Deno.test(`side-effect regression: ${command}`, async () => {
+    assertEquals(
+      checkSecretDumpSideEffects(JSON.stringify({ tool_input: { command } })) !== undefined,
+      expected === 2,
+    );
+    const result = await runHook(command);
+    assertEquals(result.code, expected, result.stderr);
+  });
+}
+
+// Both unreadable JSON and unreadable shell text use the design's raw-word fallback.
+for (
+  const word of [
+    "ps",
+    "pgrep",
+    "/proc/",
+    "pstree",
+    "top",
+    "htop",
+    "docker",
+    "systemctl",
+    "declare",
+    "typeset",
+    "printenv",
+  ]
+) {
+  for (
+    const payload of [
+      `{"tool_input":{"command":"${word}`,
+      JSON.stringify({ tool_input: { command: `${word} "unclosed` } }),
+      JSON.stringify({ tool_input: { command: [word] } }),
+    ]
+  ) {
+    Deno.test(`unreadable dump payload: ${payload}`, async () => {
+      assertStringIncludes(checkSecretDumpSideEffects(payload) ?? "", "could not be read");
+      const result = await runPayloadHook(payload);
+      assertEquals(result.code, 2, result.stderr);
+      assertStringIncludes(result.stderr, "could not be read");
+      assertStringIncludes(result.stderr, "Safe alternative:");
+    });
+  }
+}
+
+for (
+  const payload of [
+    "{broken unrelated payload",
+    "{}",
+    "null",
+    JSON.stringify({ tool_input: { command: null } }),
+    JSON.stringify({ tool_input: { command: 'echo "unclosed' } }),
+    JSON.stringify({ tool_input: { command: 'set "unclosed' } }),
+    JSON.stringify({ tool_input: { command: 'export "unclosed' } }),
+    JSON.stringify({ tool_input: { command: 'echo postscript desktop "unclosed' } }),
+    JSON.stringify({ tool_input: { command: 'echo reprintenvironment "unclosed' } }),
+  ]
+) {
+  Deno.test(`unreadable unrelated payload stays allowed: ${payload}`, async () => {
+    assertEquals(checkSecretDumpSideEffects(payload), undefined);
+    const result = await runPayloadHook(payload);
+    assertEquals(result.code, 0, result.stderr);
+  });
 }

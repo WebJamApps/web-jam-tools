@@ -165,7 +165,9 @@ Deno.test("machine-consumed GITHUB_TOKEN export is allowed by this hook", async 
     // No fixture-pragma marker needed: this value's sequential-digit body is
     // independently suppressed by the synthetic-value heuristic (proven in
     // test/detect_credential_literal.test.ts).
-    tool_input: { command: "export GITHUB_TOKEN=ghp_123456789012345678901234567890123456" },
+    tool_input: {
+      command: "export GITHUB_TOKEN=" + "ghp_" + "123456789012345678901234567890123456",
+    },
   });
   assertEquals(res.code, 0, res.stderr);
 });

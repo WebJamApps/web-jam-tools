@@ -8,8 +8,8 @@
 # by reading the newest assistant message's model from the transcript JSONL.
 # If the model is not Haiku, we DENY the tool call and tell Josh to switch.
 #
-# Fail-CLOSED: if the model can't be determined, deny (this is a hard cost gate,
-# so "unknown" must not silently run on an expensive model).
+# Workflow guard: if the session model cannot be determined, allow and tell
+# the agent to verify that Gmail work is running on Haiku.
 set -euo pipefail
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
@@ -20,12 +20,22 @@ tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || tr
 
 model=""
 if [ -n "$tp" ] && [ -f "$tp" ]; then
+  NOTE_FILE=$(mktemp)
+  trap 'rm -f "$NOTE_FILE"' EXIT
   # newest genuine assistant turn's model = current session model
   # (selected via hooks/lib/select_transcript_entry.ts, excluding isSidechain and isApiErrorMessage entries — web-jam-tools#566)
-  model="$(deno run --no-config --allow-read "$SELECTOR" --model "$tp" 2>/dev/null || true)"
+  model="$("$HOOK_DIR/lib/run_hook.sh" --group workflow --name haiku-only-gmail-gate --allow-with-note "Haiku Gmail gate: could not determine the session model from transcript_path; proceeding. Before using Gmail tools, verify the session is on Haiku or switch with /model haiku." --note-file "$NOTE_FILE" deno run --no-config --allow-read "$SELECTOR" --model "$tp" 2>/dev/null)" || model=""
+  if [ -s "$NOTE_FILE" ]; then
+    cat "$NOTE_FILE"
+    exit 0
+  fi
 fi
 
 case "$model" in
+  "")
+    note="Haiku Gmail gate: could not determine the session model from transcript_path; proceeding. Before using Gmail tools, verify the session is on Haiku or switch with /model haiku."
+    jq -cn --arg note "$note" '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$note}}'
+    exit 0 ;;
   *haiku*)
     exit 0 ;;  # on Haiku — allow the Gmail action
   *)

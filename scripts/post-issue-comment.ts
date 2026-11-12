@@ -33,7 +33,8 @@ export interface Deps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-const USAGE = "usage: post-issue-comment --repo <owner/repo> --issue <n> --body-file <path> [--dry-run]";
+const USAGE =
+  "usage: post-issue-comment --repo <owner/repo> --issue <n> --body-file <path> [--dry-run]";
 
 export async function run(args: string[], deps: Deps): Promise<number> {
   const opts = parseArgs(args);
@@ -75,9 +76,17 @@ export async function run(args: string[], deps: Deps): Promise<number> {
 }
 
 async function realRunCmd(cmd: string[]) {
-  const command = new Deno.Command(cmd[0], { args: cmd.slice(1), stdout: "piped", stderr: "piped" });
+  const command = new Deno.Command(cmd[0], {
+    args: cmd.slice(1),
+    stdout: "piped",
+    stderr: "piped",
+  });
   const { code, stdout, stderr } = await command.output();
-  return { code, stdout: new TextDecoder().decode(stdout), stderr: new TextDecoder().decode(stderr) };
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+  };
 }
 
 if (import.meta.main) {

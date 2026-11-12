@@ -36,7 +36,9 @@ const MERGE_AGENTS_MD_SCRIPT = `${REPO_ROOT}scripts/merge-agents-md-pointer.ts`;
 const STATUS_LINE_SCRIPT = `${REPO_ROOT}scripts/statusline.sh`;
 const AGENT_ALERT_SCRIPT = `${REPO_ROOT}scripts/agent-alert.sh`;
 const AGY_PROMPT_WATCH_SCRIPT = `${REPO_ROOT}scripts/agy-prompt-watch.sh`;
+const AGY_SKILL_RUN_SCRIPT = `${REPO_ROOT}scripts/agy-skill-run.sh`;
 const HOOKS_SRC_DIR = `${REPO_ROOT}hooks`;
+const SAFETY_RULES_SRC = `${REPO_ROOT}docs/safety-rules.md`;
 
 interface RunResult {
   code: number;
@@ -56,7 +58,13 @@ async function run(
     stdout: "piped",
     stderr: "piped",
     // Never inherit real Codex config overrides into an installer fixture.
-    env: { ...Deno.env.toObject(), CODEX_HOME: "", CODEX_HOOKS_PATH: "", ...env },
+    env: {
+      ...Deno.env.toObject(),
+      CODEX_HOME: "",
+      CODEX_HOOKS_PATH: "",
+      PATH: `${Deno.execPath().slice(0, Deno.execPath().lastIndexOf("/"))}:/usr/bin:/bin`,
+      ...env,
+    },
   });
 
   if (stdinText !== undefined) {
@@ -102,6 +110,34 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
   const settingsDir = await Deno.makeTempDir();
   const settingsPath = `${settingsDir}/settings.json`;
   try {
+    // Start with the old matcher on both surfaces to prove an upgrade replaces it.
+    await Deno.writeTextFile(
+      settingsPath,
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [{
+            matcher: "Edit|Write",
+            hooks: [{ type: "command", command: "$HOME/.claude/hooks/feature-branch-guard.sh" }],
+          }],
+        },
+      }),
+    );
+    await Deno.writeTextFile(
+      `${settingsDir}/hooks.json`,
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [{
+            matcher: ".*",
+            hooks: [{
+              type: "command",
+              command: `$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${
+                btoa("Edit|Write")
+              } $HOME/.claude/hooks/feature-branch-guard.sh`,
+            }],
+          }],
+        },
+      }),
+    );
     const res = await run("bash", [
       INSTALL_SCRIPT,
       "--hooks-dir",
@@ -118,7 +154,13 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     // only lists hooks/*.sh) or be picked up by the hook-registration loops.
     assertEquals(
       linked,
-      [...shHookNames(), "agent-alert.sh", "agy-prompt-watch.sh", "statusline.sh"].sort(),
+      [
+        ...shHookNames(),
+        "agent-alert.sh",
+        "agy-prompt-watch.sh",
+        "agy-skill-run.sh",
+        "statusline.sh",
+      ].sort(),
     );
     for (const name of linked) {
       const info = await Deno.lstat(`${hooksDir}/${name}`);
@@ -126,6 +168,7 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     }
 
     const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+    assertEquals(settings.modelSettings, { "claude-haiku-5-5": { effortLevel: "high" } });
     assert(settings.hooks.SessionStart.length > 0);
     assert(settings.hooks.SessionEnd.length > 0);
     assertEquals(
@@ -171,6 +214,18 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
       ),
       "expected $HOME/.claude/hooks/agy-prompt-watch.sh in agy PreToolUse hooks",
     );
+    // web-jam-tools#1320: agy-skill-run-hook.sh is registered under matcher ".*" and is LAST
+    assert(
+      preToolHooks.some(
+        (h: { command?: string }) => h.command === "$HOME/.claude/hooks/agy-skill-run-hook.sh",
+      ),
+      "expected $HOME/.claude/hooks/agy-skill-run-hook.sh in agy PreToolUse hooks",
+    );
+    assertEquals(
+      preToolHooks[preToolHooks.length - 1]?.command,
+      "$HOME/.claude/hooks/agy-skill-run-hook.sh",
+      "expected agy-skill-run-hook.sh to be the last PreToolUse hook",
+    );
     // web-jam-tools#691: agy never gets a statusLine surface.
     assertEquals(agyHooks.statusLine, undefined);
     // web-jam-tools#705: agy has no permission-mode concept at all
@@ -180,8 +235,15 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     assertEquals(agyHooks.permissions?.defaultMode, undefined);
     // web-jam-tools#1240: agy never gets a skillOverrides surface.
     assertEquals(agyHooks.skillOverrides, undefined);
-    // web-jam-tools#1240: settings.json gets the 30 bundled skills set to name-only
-    assertEquals(Object.keys(settings.skillOverrides).length, 30);
+    assertEquals(agyHooks.modelSettings, undefined);
+    // web-jam-tools#1240, web-jam-tools#1416: settings.json gets the 30 bundled skills set to name-only from limits.json
+    const limits = JSON.parse(
+      await Deno.readTextFile(`${REPO_ROOT}src/session-load/limits.json`),
+    );
+    assertEquals(
+      Object.keys(settings.skillOverrides).sort(),
+      [...limits.bundledSkills.skills].sort(),
+    );
     for (const [k, v] of Object.entries(settings.skillOverrides)) {
       assertEquals(v, "name-only", `expected skillOverride ${k} to be name-only`);
     }
@@ -222,6 +284,27 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     const allAgyPreToolUseCmds: string[] = agyHooks.hooks.PreToolUse.flatMap(
       (entry: { hooks: Array<{ command: string }> }) => entry.hooks.map((h) => h.command),
     );
+    const featureEntries = settings.hooks.PreToolUse.flatMap(
+      (entry: { matcher: string; hooks: Array<{ command: string }> }) =>
+        entry.hooks.filter((h) => h.command.endsWith("/feature-branch-guard.sh"))
+          .map(() => entry.matcher),
+    );
+    assertEquals(featureEntries, ["Bash|Edit|Write"]);
+    assertEquals(
+      allAgyPreToolUseCmds.filter((c) => c.endsWith("/feature-branch-guard.sh")),
+      [`$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${
+        btoa("Bash|Edit|Write")
+      } $HOME/.claude/hooks/feature-branch-guard.sh`],
+    );
+    const check = await run("bash", [
+      INSTALL_SCRIPT,
+      "--hooks-dir",
+      hooksDir,
+      "--settings-path",
+      settingsPath,
+      "--check",
+    ]);
+    assertEquals(check.code, 0, check.stdout + check.stderr);
     const secretLiteralsCmd = allAgyPreToolUseCmds.find((c) =>
       c.includes("block-secret-literals.sh")
     );
@@ -548,7 +631,13 @@ Deno.test("default invocation (no --hooks-dir) still targets $HOME/.claude/hooks
     // default destination too, but is not itself a hook.
     assertEquals(
       linked,
-      [...shHookNames(), "agent-alert.sh", "agy-prompt-watch.sh", "statusline.sh"].sort(),
+      [
+        ...shHookNames(),
+        "agent-alert.sh",
+        "agy-prompt-watch.sh",
+        "agy-skill-run.sh",
+        "statusline.sh",
+      ].sort(),
     );
 
     // web-jam-tools#721: a normal, unsandboxed-hooks-dir run must still
@@ -584,17 +673,43 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
   await Deno.copyFile(`${REPO_ROOT}deno.json`, `${mainRepo}/deno.json`);
   await Deno.mkdir(`${mainRepo}/scripts`, { recursive: true });
   await Deno.copyFile(INSTALL_SCRIPT, `${mainRepo}/scripts/install-hooks.sh`);
+  await Deno.copyFile(
+    `${REPO_ROOT}scripts/agy-permissions.ts`,
+    `${mainRepo}/scripts/agy-permissions.ts`,
+  );
+  await Deno.copyFile(
+    `${REPO_ROOT}scripts/claude-settings.json`,
+    `${mainRepo}/scripts/claude-settings.json`,
+  );
   await Deno.chmod(`${mainRepo}/scripts/install-hooks.sh`, 0o755);
   await Deno.copyFile(MERGE_SCRIPT, `${mainRepo}/scripts/merge-hooks-into-settings.ts`);
   await Deno.copyFile(MERGE_CODEX_SCRIPT, `${mainRepo}/scripts/merge-codex-reaper-hook.ts`);
   await Deno.copyFile(MERGE_AGENTS_MD_SCRIPT, `${mainRepo}/scripts/merge-agents-md-pointer.ts`);
-  // install-hooks.sh requires scripts/statusline.sh, scripts/agent-alert.sh, and scripts/agy-prompt-watch.sh to exist (web-jam-tools#688, web-jam-tools#1176, web-jam-tools#1212).
+  // install-hooks.sh requires scripts/statusline.sh, scripts/agent-alert.sh, scripts/agy-prompt-watch.sh, and scripts/agy-skill-run.sh to exist (web-jam-tools#688, web-jam-tools#1176, web-jam-tools#1212, web-jam-tools#1320).
   await Deno.copyFile(STATUS_LINE_SCRIPT, `${mainRepo}/scripts/statusline.sh`);
   await Deno.chmod(`${mainRepo}/scripts/statusline.sh`, 0o755);
   await Deno.copyFile(AGENT_ALERT_SCRIPT, `${mainRepo}/scripts/agent-alert.sh`);
   await Deno.chmod(`${mainRepo}/scripts/agent-alert.sh`, 0o755);
   await Deno.copyFile(AGY_PROMPT_WATCH_SCRIPT, `${mainRepo}/scripts/agy-prompt-watch.sh`);
   await Deno.chmod(`${mainRepo}/scripts/agy-prompt-watch.sh`, 0o755);
+  await Deno.copyFile(AGY_SKILL_RUN_SCRIPT, `${mainRepo}/scripts/agy-skill-run.sh`);
+  await Deno.chmod(`${mainRepo}/scripts/agy-skill-run.sh`, 0o755);
+  await Deno.copyFile(
+    `${REPO_ROOT}scripts/scan-settings-for-secrets.sh`,
+    `${mainRepo}/scripts/scan-settings-for-secrets.sh`,
+  );
+  await Deno.chmod(`${mainRepo}/scripts/scan-settings-for-secrets.sh`, 0o755);
+  await Deno.copyFile(
+    `${REPO_ROOT}scripts/scan_settings_for_secrets.ts`,
+    `${mainRepo}/scripts/scan_settings_for_secrets.ts`,
+  );
+  await Deno.mkdir(`${mainRepo}/src/session-load`, { recursive: true });
+  await Deno.copyFile(
+    `${REPO_ROOT}src/session-load/limits.json`,
+    `${mainRepo}/src/session-load/limits.json`,
+  );
+  await Deno.mkdir(`${mainRepo}/docs`, { recursive: true });
+  await Deno.copyFile(SAFETY_RULES_SRC, `${mainRepo}/docs/safety-rules.md`);
   await Deno.mkdir(`${mainRepo}/hooks/lib`, { recursive: true });
   for (const entry of Deno.readDirSync(`${HOOKS_SRC_DIR}/lib`)) {
     if (entry.isFile) {
@@ -1635,6 +1750,21 @@ Deno.test(
         `expected target to end with scripts/agents.sh, got ${target}`,
       );
 
+      const updateScriptsSymlink = `${binDir}/update-scripts`;
+      assert(
+        await pathExists(updateScriptsSymlink),
+        "expected update-scripts to be symlinked in binDir",
+      );
+      assert(
+        (await Deno.lstat(updateScriptsSymlink)).isSymlink,
+        "expected update-scripts to be a symlink",
+      );
+      const updateTarget = await Deno.readLink(updateScriptsSymlink);
+      assert(
+        updateTarget.endsWith("scripts/update-scripts.sh"),
+        `expected target to end with scripts/update-scripts.sh, got ${updateTarget}`,
+      );
+
       // Clean check passes
       const checkRes = await run("bash", [
         INSTALL_SCRIPT,
@@ -1667,6 +1797,23 @@ Deno.test(
       assert(
         checkDriftRes.stderr.includes("drift: agents script is not linked at"),
         checkDriftRes.stderr,
+      );
+
+      // Remove update-scripts too -> --check also reports it
+      await Deno.remove(updateScriptsSymlink);
+      const checkDrift2Res = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--bin-dir",
+        binDir,
+        "--check",
+      ]);
+      assert(
+        checkDrift2Res.stderr.includes("drift: update-scripts script is not linked at"),
+        checkDrift2Res.stderr,
       );
     } finally {
       await Deno.remove(hooksDir, { recursive: true });
@@ -1765,8 +1912,11 @@ Deno.test(
       const settings = JSON.parse(await Deno.readTextFile(settingsPath));
       assertEquals(settings.model, "opus");
       assert(settings.skillOverrides && typeof settings.skillOverrides === "object");
+      const limits = JSON.parse(
+        await Deno.readTextFile(`${REPO_ROOT}src/session-load/limits.json`),
+      );
       const keys = Object.keys(settings.skillOverrides).sort();
-      assertEquals(keys.length, 30);
+      assertEquals(keys, [...limits.bundledSkills.skills].sort());
       for (const key of keys) {
         assertEquals(settings.skillOverrides[key], "name-only");
       }
@@ -1808,6 +1958,40 @@ Deno.test(
       await Deno.remove(hooksDir, { recursive: true });
       await Deno.remove(settingsDir, { recursive: true });
     }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh refuses install when limits.json bundledSkills.skills is invalid or length mismatches totalCount",
+  async () => {
+    await withTempWorktree(async (worktreePath) => {
+      const sandbox = await Deno.makeTempDir();
+      const hooksDir = `${sandbox}/hooks`;
+      const settingsPath = `${sandbox}/settings.json`;
+      const base = [
+        `${worktreePath}/scripts/install-hooks.sh`,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ];
+      try {
+        await Deno.writeTextFile(settingsPath, JSON.stringify({ model: "opus" }));
+        const limitsPath = `${worktreePath}/src/session-load/limits.json`;
+        const limits = JSON.parse(await Deno.readTextFile(limitsPath));
+        limits.bundledSkills.skills.pop();
+        await Deno.writeTextFile(limitsPath, JSON.stringify(limits));
+
+        const res = await run("bash", base);
+        assert(res.code !== 0, "expected install-hooks.sh to fail on invalid bundledSkills");
+        assert(
+          res.stderr.includes("expected bundledSkills.skills to be an array of length"),
+          res.stderr,
+        );
+      } finally {
+        await Deno.remove(sandbox, { recursive: true });
+      }
+    });
   },
 );
 
@@ -2367,6 +2551,474 @@ Deno.test(
     } finally {
       await Deno.remove(hooksDir, { recursive: true });
       await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+// --- Safety rules symlinks (web-jam-tools#1415) ---
+
+Deno.test(
+  "install-hooks.sh symlinks docs/safety-rules.md to agy and codex AGENTS.md, backs up pre-existing regular files, and is idempotent",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    const agyDir = `${settingsDir}/gemini`;
+    const codexDir = `${settingsDir}/codex`;
+    await Deno.mkdir(agyDir, { recursive: true });
+    await Deno.mkdir(codexDir, { recursive: true });
+    const agySafetyRulesPath = `${agyDir}/AGENTS.md`;
+    const codexSafetyRulesPath = `${codexDir}/AGENTS.md`;
+
+    try {
+      // Pre-existing regular files should be backed up
+      await Deno.writeTextFile(agySafetyRulesPath, "# Pre-existing agy rules\n");
+      await Deno.writeTextFile(codexSafetyRulesPath, "# Pre-existing codex rules\n");
+
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agy-safety-rules-path",
+        agySafetyRulesPath,
+        "--codex-safety-rules-path",
+        codexSafetyRulesPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+      assert(
+        installRes.stdout.includes(
+          "agy AGENTS.md: replaced existing file (backed up to AGENTS.md.bak-",
+        ),
+        `expected backup message for agy: ${installRes.stdout}`,
+      );
+      assert(
+        installRes.stdout.includes(
+          "codex AGENTS.md: replaced existing file (backed up to AGENTS.md.bak-",
+        ),
+        `expected backup message for codex: ${installRes.stdout}`,
+      );
+
+      // Verify backup files exist and contain pre-existing content
+      const agyBackups = [...Deno.readDirSync(agyDir)].filter((e) =>
+        e.name.startsWith("AGENTS.md.bak-")
+      );
+      assertEquals(agyBackups.length, 1);
+      assertEquals(
+        await Deno.readTextFile(`${agyDir}/${agyBackups[0].name}`),
+        "# Pre-existing agy rules\n",
+      );
+
+      const codexBackups = [...Deno.readDirSync(codexDir)].filter((e) =>
+        e.name.startsWith("AGENTS.md.bak-")
+      );
+      assertEquals(codexBackups.length, 1);
+      assertEquals(
+        await Deno.readTextFile(`${codexDir}/${codexBackups[0].name}`),
+        "# Pre-existing codex rules\n",
+      );
+
+      // Verify symlinks point to docs/safety-rules.md
+      const expectedRealTarget = await Deno.realPath(SAFETY_RULES_SRC);
+      const agyLstat = await Deno.lstat(agySafetyRulesPath);
+      assert(agyLstat.isSymlink, "expected agySafetyRulesPath to be a symlink");
+      assertEquals(await Deno.realPath(agySafetyRulesPath), expectedRealTarget);
+
+      const codexLstat = await Deno.lstat(codexSafetyRulesPath);
+      assert(codexLstat.isSymlink, "expected codexSafetyRulesPath to be a symlink");
+      assertEquals(await Deno.realPath(codexSafetyRulesPath), expectedRealTarget);
+
+      // Idempotency: re-running does not replace symlink or create additional backups
+      const secondRun = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agy-safety-rules-path",
+        agySafetyRulesPath,
+        "--codex-safety-rules-path",
+        codexSafetyRulesPath,
+      ]);
+      assertEquals(secondRun.code, 0, secondRun.stdout + secondRun.stderr);
+      assert(
+        secondRun.stdout.includes("agy AGENTS.md: ok (symlink already present)"),
+        `expected agy ok message: ${secondRun.stdout}`,
+      );
+      assert(
+        secondRun.stdout.includes("codex AGENTS.md: ok (symlink already present)"),
+        `expected codex ok message: ${secondRun.stdout}`,
+      );
+      const agyBackupsAfter = [...Deno.readDirSync(agyDir)].filter((e) =>
+        e.name.startsWith("AGENTS.md.bak-")
+      );
+      assertEquals(agyBackupsAfter.length, 1);
+      const codexBackupsAfter = [...Deno.readDirSync(codexDir)].filter((e) =>
+        e.name.startsWith("AGENTS.md.bak-")
+      );
+      assertEquals(codexBackupsAfter.length, 1);
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh --check reports drift when agy or codex safety rules symlink is missing or drifted",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    const agySafetyRulesPath = `${settingsDir}/gemini-AGENTS.md`;
+    const codexSafetyRulesPath = `${settingsDir}/codex-AGENTS.md`;
+
+    try {
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agy-safety-rules-path",
+        agySafetyRulesPath,
+        "--codex-safety-rules-path",
+        codexSafetyRulesPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Clean check passes
+      const cleanCheck = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agy-safety-rules-path",
+        agySafetyRulesPath,
+        "--codex-safety-rules-path",
+        codexSafetyRulesPath,
+        "--check",
+      ]);
+      assertEquals(cleanCheck.code, 0, cleanCheck.stdout + cleanCheck.stderr);
+      assert(cleanCheck.stdout.includes("check passed (no drift)"));
+
+      // Drift on agy: remove symlink and replace with regular file
+      await Deno.remove(agySafetyRulesPath);
+      await Deno.writeTextFile(agySafetyRulesPath, "# not a symlink\n");
+
+      const agyDriftCheck = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agy-safety-rules-path",
+        agySafetyRulesPath,
+        "--codex-safety-rules-path",
+        codexSafetyRulesPath,
+        "--check",
+      ]);
+      assert(
+        agyDriftCheck.code !== 0,
+        "expected --check to fail when agy safety rules symlink is not a link",
+      );
+      assert(
+        agyDriftCheck.stderr.includes("drift: agy safety rules file is not linked"),
+        `expected agy drift message: ${agyDriftCheck.stderr}`,
+      );
+      assert(agyDriftCheck.stderr.includes("error: drift detected"));
+
+      // Restore agy symlink and break codex symlink (remove completely)
+      await Deno.remove(agySafetyRulesPath);
+      await Deno.symlink(SAFETY_RULES_SRC, agySafetyRulesPath);
+      await Deno.remove(codexSafetyRulesPath);
+
+      const codexDriftCheck = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agy-safety-rules-path",
+        agySafetyRulesPath,
+        "--codex-safety-rules-path",
+        codexSafetyRulesPath,
+        "--check",
+      ]);
+      assert(
+        codexDriftCheck.code !== 0,
+        "expected --check to fail when codex safety rules symlink is missing",
+      );
+      assert(
+        codexDriftCheck.stderr.includes("drift: codex safety rules file is not linked"),
+        `expected codex drift message: ${codexDriftCheck.stderr}`,
+      );
+      assert(codexDriftCheck.stderr.includes("error: drift detected"));
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh with default destinations links docs/safety-rules.md to $HOME/.gemini/AGENTS.md and $HOME/.codex/AGENTS.md",
+  async () => {
+    const home = await Deno.makeTempDir();
+    try {
+      const res = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--force",
+        ],
+        { HOME: home },
+      );
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+
+      const expectedRealTarget = await Deno.realPath(SAFETY_RULES_SRC);
+      const agyRules = `${home}/.gemini/AGENTS.md`;
+      const codexRules = `${home}/.codex/AGENTS.md`;
+
+      assert(await pathExists(agyRules), "expected $HOME/.gemini/AGENTS.md to exist");
+      const agyLstat = await Deno.lstat(agyRules);
+      assert(agyLstat.isSymlink, "expected $HOME/.gemini/AGENTS.md to be a symlink");
+      assertEquals(await Deno.realPath(agyRules), expectedRealTarget);
+
+      assert(await pathExists(codexRules), "expected $HOME/.codex/AGENTS.md to exist");
+      const codexLstat = await Deno.lstat(codexRules);
+      assert(codexLstat.isSymlink, "expected $HOME/.codex/AGENTS.md to be a symlink");
+      assertEquals(await Deno.realPath(codexRules), expectedRealTarget);
+
+      // Claude Code settings.json must NOT contain safety-rules references
+      const claudeSettings = `${home}/.claude/settings.json`;
+      if (await pathExists(claudeSettings)) {
+        const content = await Deno.readTextFile(claudeSettings);
+        assert(
+          !content.includes("safety-rules"),
+          "Claude settings.json must not reference safety-rules",
+        );
+      }
+
+      // Check mode passes against the installed HOME
+      const checkRes = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--force",
+          "--check",
+        ],
+        { HOME: home },
+      );
+      assertEquals(checkRes.code, 0, checkRes.stdout + checkRes.stderr);
+      assert(checkRes.stdout.includes("check passed (no drift)"));
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "scripts/install-hooks.sh does not install retired memory-cleanup-reminder hook",
+  async () => {
+    const home = await Deno.makeTempDir();
+    try {
+      const res = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--force",
+        ],
+        { HOME: home },
+      );
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+
+      const claudeSettings = `${home}/.claude/settings.json`;
+      assert(await pathExists(claudeSettings), "settings.json should exist");
+      const content = await Deno.readTextFile(claudeSettings);
+      assert(
+        !content.includes("memory-cleanup-reminder"),
+        "settings.json must not reference memory-cleanup-reminder",
+      );
+
+      const hookFile = `${home}/.claude/hooks/memory-cleanup-reminder.sh`;
+      assert(
+        !(await pathExists(hookFile)),
+        "memory-cleanup-reminder.sh symlink should not be created",
+      );
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh sets git config --global core.hooksPath to the canonical clone's git-hooks directory, handles drift check, and leaves agent hooks untouched",
+  async () => {
+    const home = await Deno.makeTempDir();
+    try {
+      // 1. Install with redirected temp HOME
+      const res = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--force",
+        ],
+        { HOME: home },
+      );
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+
+      // Verify core.hooksPath was set in temp HOME's git config
+      const gitHooksPathRes = await run(
+        "git",
+        ["config", "--global", "--get", "core.hooksPath"],
+        { HOME: home },
+      );
+      assertEquals(
+        gitHooksPathRes.code,
+        0,
+        `Failed to get core.hooksPath: ${gitHooksPathRes.stderr}`,
+      );
+      const setHooksPath = gitHooksPathRes.stdout.trim();
+      const expectedHooksPath = await Deno.realPath(`${REPO_ROOT}git-hooks`);
+      assertEquals(await Deno.realPath(setHooksPath), expectedHooksPath);
+
+      // Verify Claude ~/.claude/hooks does NOT contain pre-push
+      const claudePrePush = `${home}/.claude/hooks/pre-push`;
+      assert(
+        !(await pathExists(claudePrePush)),
+        "pre-push must not be symlinked into ~/.claude/hooks",
+      );
+
+      // Verify agy and codex hooks do not register pre-push
+      const agyHooksFile = `${home}/.gemini/config/hooks.json`;
+      if (await pathExists(agyHooksFile)) {
+        const agyContent = await Deno.readTextFile(agyHooksFile);
+        assert(!agyContent.includes("pre-push"), "agy hooks.json must not register pre-push");
+      }
+      const codexHooksFile = `${home}/.codex/hooks.json`;
+      if (await pathExists(codexHooksFile)) {
+        const codexContent = await Deno.readTextFile(codexHooksFile);
+        assert(!codexContent.includes("pre-push"), "codex hooks.json must not register pre-push");
+      }
+
+      // 2. Drift check passes when correctly set
+      const checkClean = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--force",
+          "--check",
+        ],
+        { HOME: home },
+      );
+      assertEquals(checkClean.code, 0, checkClean.stdout + checkClean.stderr);
+      assert(checkClean.stdout.includes("check passed (no drift)"));
+
+      // 3. Drift check fails when core.hooksPath is unset
+      await run(
+        "git",
+        ["config", "--global", "--unset", "core.hooksPath"],
+        { HOME: home },
+      );
+      const checkUnset = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--force",
+          "--check",
+        ],
+        { HOME: home },
+      );
+      assert(checkUnset.code !== 0, "Drift check must fail when core.hooksPath is unset");
+      assert(
+        checkUnset.stderr.includes("drift: git config --global core.hooksPath is unset"),
+        checkUnset.stderr,
+      );
+
+      // 4. Drift check fails when core.hooksPath points elsewhere
+      await run(
+        "git",
+        ["config", "--global", "core.hooksPath", "/tmp/unrelated-hooks"],
+        { HOME: home },
+      );
+      const checkWrong = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--force",
+          "--check",
+        ],
+        { HOME: home },
+      );
+      assert(checkWrong.code !== 0, "Drift check must fail when core.hooksPath points elsewhere");
+      assert(
+        checkWrong.stderr.includes("does not point to"),
+        checkWrong.stderr,
+      );
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh registers block-production-media-change.sh on Claude Code and agy and writes the 10 joshandmariamusic Edit deny rules (web-jam-tools#1580)",
+  async () => {
+    const home = await Deno.makeTempDir();
+    try {
+      const hooksDir = `${home}/.claude/hooks`;
+      const settingsPath = `${home}/.claude/settings.json`;
+      const agyHooksPath = `${home}/.gemini/config/hooks.json`;
+      const res = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--hooks-dir",
+          hooksDir,
+          "--settings-path",
+          settingsPath,
+          "--agy-hooks-path",
+          agyHooksPath,
+        ],
+        { HOME: home },
+      );
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      const preToolGroups = settings?.hooks?.PreToolUse ?? [];
+      const hasClaudeHook = preToolGroups.some(
+        (g: { matcher?: string; hooks?: { command?: string }[] }) =>
+          g.matcher === "Bash|Edit|Write|NotebookEdit" &&
+          g.hooks?.some((h) =>
+            h.command === "$HOME/.claude/hooks/block-production-media-change.sh"
+          ),
+      );
+      assert(
+        hasClaudeHook,
+        "Expected Claude Code PreToolUse to include block-production-media-change.sh",
+      );
+
+      const denyList: string[] = settings?.permissions?.deny ?? [];
+      for (const ext of ["mp3", "wav", "m4a", "mp4", "mov", "jpg", "jpeg", "png", "webp", "gif"]) {
+        const pattern = `Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.${ext})`;
+        assert(denyList.includes(pattern), `Missing deny rule: ${pattern}`);
+      }
+
+      const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
+      const agyPreToolGroups = agyHooks?.hooks?.PreToolUse ?? [];
+      const expectedB64 = btoa("Bash|Edit|Write|NotebookEdit");
+      const expectedAgyCmd =
+        `$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${expectedB64} $HOME/.claude/hooks/block-production-media-change.sh`;
+      const hasAgyHook = agyPreToolGroups.some(
+        (g: { matcher?: string; hooks?: { command?: string }[] }) =>
+          g.matcher === ".*" && g.hooks?.some((h) => h.command === expectedAgyCmd),
+      );
+      assert(hasAgyHook, `Expected agy hooks.json to contain '${expectedAgyCmd}'`);
+    } finally {
+      await Deno.remove(home, { recursive: true });
     }
   },
 );

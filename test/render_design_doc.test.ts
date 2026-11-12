@@ -4,9 +4,9 @@
 // 1. Raw inline and block SVG rendering (AC1, AC2)
 // 2. Table column sizing and overflow prevention (AC3, AC4)
 // 3. Section navigation collapse and restore controls (AC5)
-// 4. Document version and revision date declarations in header (AC6)
+// 4. Revision table retained without a version/date subtitle
 
-import { assertEquals, assertFalse, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertFalse, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
 import {
   computeTablePagination,
@@ -249,7 +249,178 @@ function makeRowsTable(rowCount: number): string {
   return `# Pagination Test\n\n## Big Table\n\n${header}${rows}\n`;
 }
 
-Deno.test("Table pagination: a table with more than 5 rows emits the pagination script/CSS and every row is still present in the DOM", () => {
+function renderedRows(markdown: string): string[][][] {
+  return Array.from(
+    renderDesignDoc(markdown).matchAll(/<tbody>([\s\S]*?)<\/tbody>/g),
+    (body) =>
+      Array.from(
+        body[1].matchAll(/<tr>([\s\S]*?)<\/tr>/g),
+        (row) => Array.from(row[1].matchAll(/<td>([\s\S]*?)<\/td>/g), (cell) => cell[1]),
+      ),
+  );
+}
+
+for (
+  const heading of [
+    "## Revision History",
+    "## Appendix C — Decision Record",
+    "## Appendix B — Decision record",
+    "## Appendix — decision record",
+    "## Appendix — Decisions Record",
+    "## Appendix B — decisions record",
+    "## 7. Decision Log",
+    "## Decisions",
+  ]
+) {
+  Deno.test(`History ordering: ${heading} shows bottom row first`, () => {
+    assertEquals(
+      renderedRows(`${heading}\n\n| Entry |\n|---|\n| Oldest |\n| Latest |`),
+      [[["Latest"], ["Oldest"]]],
+    );
+  });
+}
+
+for (
+  const heading of [
+    "## Decisions made so far (each is written into its document with Josh's words)",
+    "## The Two Approval Gates (/design-issue)",
+    "## Plan table",
+    "## Both surfaces",
+  ]
+) {
+  Deno.test(`History ordering: ${heading} keeps file order`, () => {
+    assertEquals(
+      renderedRows(`${heading}\n\n| Entry |\n|---|\n| First |\n| Second |`),
+      [[["First"], ["Second"]]],
+    );
+  });
+}
+
+for (const heading of ["## Load-bearing premises", "## Load-bearing Premises"]) {
+  Deno.test(`History ordering: ${heading} sorts by Proved date, newest first`, () => {
+    // Dates deliberately disagree with file order; Proved is not the last column.
+    assertEquals(
+      renderedRows(`${heading}
+
+| Premise | Proved | Proof |
+|---|---|---|
+| Latest | 2026-10-12 | Verified |
+| Oldest | 2026-10-01 | Verified |
+| Middle | 2026-10-10 | Verified |`),
+      [[
+        ["Latest", "2026-10-12", "Verified"],
+        ["Middle", "2026-10-10", "Verified"],
+        ["Oldest", "2026-10-01", "Verified"],
+      ]],
+    );
+  });
+}
+
+Deno.test("Premises with equal Proved dates show bottom row first and empty dates last", () => {
+  assertEquals(
+    renderedRows(`## Load-bearing premises
+
+| Premise | Proved |
+|---|---|
+| Empty | |
+| First tied | 2026-10-10 |
+| Oldest | 2026-10-01 |
+| Second tied | 2026-10-10 |`),
+    [[
+      ["Second tied", "2026-10-10"],
+      ["First tied", "2026-10-10"],
+      ["Oldest", "2026-10-01"],
+      ["Empty", ""],
+    ]],
+  );
+});
+
+Deno.test("History ordering ends at the next heading and ignores headings in fenced examples", () => {
+  assertEquals(
+    renderedRows(`## Decisions
+
+| Entry |
+|---|
+| Old |
+| New |
+
+### Other table
+
+| Entry |
+|---|
+| First |
+| Second |
+
+\`\`\`md
+## Revision History
+\`\`\`
+
+| Entry |
+|---|
+| One |
+| Two |`),
+    [[["New"], ["Old"]], [["First"], ["Second"]], [["One"], ["Two"]]],
+  );
+});
+
+Deno.test("Premises tables without Proved keep file order; formatted dates sort normally", () => {
+  assertEquals(
+    renderedRows(`## Load-bearing premises
+
+| Entry |
+|---|
+| First |
+| Second |
+
+## Load-bearing Premises
+
+| Premise | **Proved** |
+|---|---|
+| Old | \`2026-10-01\` |
+| Empty | |
+| New | **2026-10-12** |`),
+    [
+      [["First"], ["Second"]],
+      [["New", "<strong>2026-10-12</strong>"], ["Old", "<code>2026-10-01</code>"], ["Empty", ""]],
+    ],
+  );
+});
+
+Deno.test("Pagination uses 10, 20, 30 and All with correct ranges, clamping and controls", () => {
+  for (const [size, lastPage, lastStart] of [[10, 4, 31], [20, 2, 21], [30, 2, 31]]) {
+    const first = computeTablePagination(38, 1, String(size));
+    assertEquals([first.startIdx, first.endIdx, first.statusText], [0, size, `1-${size} of 38`]);
+    assertEquals([first.prevDisabled, first.nextDisabled], [true, false]);
+    const last = computeTablePagination(38, 99, size);
+    assertEquals([last.currentPage, last.totalPages, last.startDisplay, last.endDisplay], [
+      lastPage,
+      lastPage,
+      lastStart,
+      38,
+    ]);
+    assertEquals([last.prevDisabled, last.nextDisabled], [false, true]);
+  }
+  const all = computeTablePagination(38, 99, "all");
+  assertEquals([all.currentPage, all.statusText, all.prevDisabled, all.nextDisabled], [
+    1,
+    "1-38 of 38",
+    true,
+    true,
+  ]);
+  const invalidSize = computeTablePagination(38, 1, "invalid");
+  assertEquals([invalidSize.pageSize, invalidSize.statusText], [10, "1-10 of 38"]);
+  for (const rows of [0, 1, 10]) {
+    const state = computeTablePagination(rows, 1, 10);
+    assertEquals([state.startIdx, state.endIdx, state.prevDisabled, state.nextDisabled], [
+      0,
+      rows,
+      true,
+      true,
+    ]);
+  }
+});
+
+Deno.test("Table pagination: a table with more than 10 rows emits the pagination script/CSS and every row is still present in the DOM", () => {
   const html = renderDesignDoc(makeRowsTable(25));
   const mainContent = html.split("<main>")[1]?.split("</main>")[0] ?? "";
 
@@ -263,8 +434,8 @@ Deno.test("Table pagination: a table with more than 5 rows emits the pagination 
   assertStringIncludes(html, ".table-pager-btn");
   assertStringIncludes(html, "table-pager-hidden-row");
   assertStringIncludes(html, "table-pager-size");
-  assertStringIncludes(html, "DEFAULT_PAGE_SIZE = 5");
-  assertStringIncludes(html, 'var sizeOptions = ["5", "10", "25", "All"];');
+  assertStringIncludes(html, "DEFAULT_PAGE_SIZE = 10");
+  assertStringIncludes(html, 'var sizeOptions = ["10", "20", "30", "All"];');
   assertStringIncludes(html, "@media print {");
 
   // A print stylesheet forces any JS-hidden row back to visible.
@@ -274,11 +445,11 @@ Deno.test("Table pagination: a table with more than 5 rows emits the pagination 
   );
 });
 
-Deno.test("Table pagination: the pagination initializer only activates on tables with more than 5 rows", () => {
-  const html = renderDesignDoc(makeRowsTable(5));
+Deno.test("Table pagination: the pagination initializer only activates on tables with more than 10 rows", () => {
+  const html = renderDesignDoc(makeRowsTable(10));
   // The script text itself is always emitted (it's a static asset embedded
   // once per page), so this is a source-level pin on the runtime guard that
-  // keeps it a no-op for <=5 row tables, not a DOM assertion.
+  // keeps it a no-op for <=10 row tables, not a DOM assertion.
   assertStringIncludes(html, "if (rows.length <= DEFAULT_PAGE_SIZE) return;");
 });
 
@@ -299,14 +470,36 @@ Deno.test("Sticky header and scrolling wrapper: thead cells are styled with posi
   assertStringIncludes(html, "overflow-y: auto;");
 });
 
-Deno.test("Table pagination: page navigation and position range format (e.g. '6-10 of 38')", () => {
+Deno.test("Table pagination: page navigation uses the tested pagination state", () => {
   const html = renderDesignDoc(makeRowsTable(40));
   // Verifies the position format `<start>-<end> of <total>` emitted in the pager logic
   assertStringIncludes(
     html,
-    'status.textContent = startDisplay + "-" + endDisplay + " of " + rows.length;',
+    "status.textContent = state.statusText;",
   );
   assertStringIncludes(html, "Rows per page: ");
+});
+
+Deno.test("Table pagination: embedded calculator runs independently and matches exported state", () => {
+  const html = renderDesignDoc(makeRowsTable(38));
+  const embedded = html.match(/var computePagination = ([\s\S]*?);\s*var tables =/);
+  assert(embedded, "Generated HTML must include the pagination calculator");
+
+  // Function creates a fresh scope without access to this module's imports or helpers.
+  const computeEmbedded = new Function(
+    `return (${embedded[1]});`,
+  )() as typeof computeTablePagination;
+  const cases: Parameters<typeof computeTablePagination>[] = [
+    [38, 99, "20"],
+    [38, 1, "all"],
+    [38, 2, 10],
+    [38, 0, "30"],
+    [38, 1, "invalid"],
+    [0, 1, 10],
+  ];
+  for (const args of cases) {
+    assertEquals(computeEmbedded(...args), computeTablePagination(...args));
+  }
 });
 
 Deno.test("computeTablePagination: calculates correct ranges and boundary states for 40 rows with pageSize 5", () => {
@@ -460,7 +653,7 @@ Content 2
   assertStringIncludes(html, 'layout.classList.remove("nav-collapsed")');
 });
 
-Deno.test("AC6: Document with ## Revision History table renders newest version and date in header and renders table in place", () => {
+Deno.test("renderDesignDoc: revision metadata stays in the table without a title subtitle", () => {
   // Case A: Document with ## Revision History table
   const docWithTable = `# Design Document Title
 
@@ -476,10 +669,13 @@ Section text.
 `;
   const htmlWithTable = renderDesignDoc(docWithTable);
   const mainWithTable = htmlWithTable.split("<main>")[1]?.split("</main>")[0] ?? "";
-  assertStringIncludes(mainWithTable, '<header class="doc-header">');
-  assertStringIncludes(mainWithTable, '<div class="doc-version-line">');
-  assertStringIncludes(mainWithTable, '<span class="doc-version">Version: 2.1.0</span>');
-  assertStringIncludes(mainWithTable, '<span class="doc-revised">Revised: 2026-09-02</span>');
+  assertStringIncludes(mainWithTable, "<h1>Design Document Title</h1>");
+  assertFalse(htmlWithTable.includes("doc-version"));
+  assertFalse(htmlWithTable.includes("doc-revised"));
+  assertFalse(mainWithTable.includes("Version:"));
+  assertFalse(mainWithTable.includes("Revised:"));
+  assertEquals(mainWithTable.match(/2\.1\.0/g)?.length, 1);
+  assertEquals(mainWithTable.match(/2026-09-02/g)?.length, 1);
   // Table must render in place in the body
   assertStringIncludes(mainWithTable, '<h2 id="revision-history">Revision History</h2>');
   assertStringIncludes(mainWithTable, "<th>Version</th>");
@@ -499,6 +695,24 @@ Section text.
   assertFalse(mainWithoutTable.includes("Version:"));
   assertFalse(mainWithoutTable.includes("Revised:"));
   assertStringIncludes(mainWithoutTable, "<h1>Clean Title</h1>");
+});
+
+Deno.test("renderDesignDoc: a revision table without H1 uses the title fallback without metadata", () => {
+  const html = renderDesignDoc(
+    `## Revision History
+
+| Version | Date | Summary |
+|---|---|---|
+| 1.0.0 | 2026-10-10 | Initial |
+`,
+    "Fallback title",
+  );
+  assertStringIncludes(html, "<title>Fallback title</title>");
+  assertStringIncludes(html, "<h1>Fallback title</h1>");
+  assertFalse(html.includes("doc-version"));
+  assertFalse(html.includes("doc-revised"));
+  assertStringIncludes(html, "<td>1.0.0</td>");
+  assertStringIncludes(html, "<td>2026-10-10</td>");
 });
 
 Deno.test("parseInlineMarkdown renders <br> variants as real line breaks in table cells", () => {
@@ -596,8 +810,10 @@ Deno.test("renderDesignDocFile reads markdown file and writes HTML", () => {
 
     const generatedHtml = Deno.readTextFileSync(htmlPath);
     assertStringIncludes(generatedHtml, "File Test");
-    assertStringIncludes(generatedHtml, "Version: 1.0.0");
-    assertStringIncludes(generatedHtml, "Revised: 2026-09-02");
+    assertFalse(generatedHtml.includes("doc-version"));
+    assertFalse(generatedHtml.includes("doc-revised"));
+    assertStringIncludes(generatedHtml, "<td>1.0.0</td>");
+    assertStringIncludes(generatedHtml, "<td>2026-09-02</td>");
     assertStringIncludes(generatedHtml, "nav-collapse-btn");
   } finally {
     Deno.removeSync(tempDir, { recursive: true });
@@ -649,4 +865,148 @@ Second instance
   // Lists
   assertStringIncludes(mainContent, "<ul>\n  <li>Bullet 1</li>\n  <li>Bullet 2</li>\n</ul>");
   assertStringIncludes(mainContent, "<ol>\n  <li>Numbered 1</li>\n  <li>Numbered 2</li>\n</ol>");
+});
+
+async function countNearWhitePixels(pngBytes: Uint8Array): Promise<number> {
+  const view = new DataView(pngBytes.buffer, pngBytes.byteOffset, pngBytes.byteLength);
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let colorType = 0;
+  const idatChunks: Uint8Array[] = [];
+
+  while (offset < pngBytes.length) {
+    const length = view.getUint32(offset);
+    const type = new TextDecoder().decode(pngBytes.subarray(offset + 4, offset + 8));
+    if (type === "IHDR") {
+      width = view.getUint32(offset + 8);
+      height = view.getUint32(offset + 12);
+      colorType = pngBytes[offset + 17];
+    } else if (type === "IDAT") {
+      idatChunks.push(pngBytes.subarray(offset + 8, offset + 8 + length));
+    } else if (type === "IEND") {
+      break;
+    }
+    offset += 12 + length;
+  }
+
+  const totalIdatLength = idatChunks.reduce((acc, c) => acc + c.length, 0);
+  const combinedIdat = new Uint8Array(totalIdatLength);
+  let idatOffset = 0;
+  for (const chunk of idatChunks) {
+    combinedIdat.set(chunk, idatOffset);
+    idatOffset += chunk.length;
+  }
+
+  const ds = new DecompressionStream("deflate");
+  const response = new Response(new Blob([combinedIdat]).stream().pipeThrough(ds));
+  const decompressed = new Uint8Array(await response.arrayBuffer());
+
+  const bytesPerPixel = colorType === 6 ? 4 : colorType === 2 ? 3 : 4;
+  const stride = width * bytesPerPixel;
+  let count = 0;
+
+  const prevRow = new Uint8Array(stride);
+  const currRow = new Uint8Array(stride);
+  let srcPos = 0;
+
+  for (let y = 0; y < height; y++) {
+    const filter = decompressed[srcPos++];
+    for (let i = 0; i < stride; i++) {
+      const x = decompressed[srcPos++];
+      const a = i >= bytesPerPixel ? currRow[i - bytesPerPixel] : 0;
+      const b = prevRow[i];
+      const c = i >= bytesPerPixel ? prevRow[i - bytesPerPixel] : 0;
+      let val = x;
+      if (filter === 0) val = x;
+      else if (filter === 1) val = (x + a) & 0xff;
+      else if (filter === 2) val = (x + b) & 0xff;
+      else if (filter === 3) val = (x + Math.floor((a + b) / 2)) & 0xff;
+      else if (filter === 4) {
+        const p = a + b - c;
+        const pa = Math.abs(p - a);
+        const pb = Math.abs(p - b);
+        const pc = Math.abs(p - c);
+        const pr = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+        val = (x + pr) & 0xff;
+      }
+      currRow[i] = val;
+    }
+
+    for (let x = 0; x < width; x++) {
+      const idx = x * bytesPerPixel;
+      const r = currRow[idx];
+      const g = currRow[idx + 1];
+      const b = currRow[idx + 2];
+      if (r >= 230 && g >= 230 && b >= 230) {
+        count++;
+      }
+    }
+
+    prevRow.set(currRow);
+  }
+
+  return count;
+}
+
+Deno.test("renderDesignDoc: declares color-scheme: dark so scrollbars draw dark", () => {
+  const html = renderDesignDoc("# Title\n\nContent");
+  assertStringIncludes(html, "color-scheme: dark");
+});
+
+Deno.test("Rendered Chrome check at 1600 x 1000 finds no near-white pixel", async () => {
+  let chromeBin = "";
+  for (const bin of ["google-chrome", "chromium", "chromium-browser"]) {
+    try {
+      const cmd = new Deno.Command(bin, {
+        args: ["--version"],
+        stdout: "null",
+        stderr: "null",
+      });
+      if ((await cmd.output()).success) {
+        chromeBin = bin;
+        break;
+      }
+    } catch {
+      // not available
+    }
+  }
+
+  if (!chromeBin) {
+    return;
+  }
+
+  let md = "# Sample Design Document\n\n";
+  for (let i = 0; i < 40; i++) {
+    md +=
+      `## Section ${i}\n\nThis is paragraph ${i} with enough text to make the page scroll vertically in Chrome.\n\n`;
+  }
+
+  const html = renderDesignDoc(md);
+  const tempDir = await Deno.makeTempDir({ prefix: "render-chrome-check-" });
+  try {
+    const htmlPath = path.join(tempDir, "page.html");
+    const screenshotPath = path.join(tempDir, "screenshot.png");
+    await Deno.writeTextFile(htmlPath, html);
+
+    const cmd = new Deno.Command(chromeBin, {
+      args: [
+        "--headless=new",
+        `--user-data-dir=${tempDir}/profile`,
+        `--screenshot=${screenshotPath}`,
+        "--window-size=1600,1000",
+        `file://${htmlPath}`,
+      ],
+      stdout: "null",
+      stderr: "null",
+    });
+    const output = await cmd.output();
+    assertEquals(output.success, true, "Chrome screenshot command must succeed");
+
+    const pngBytes = await Deno.readFile(screenshotPath);
+    const nearWhiteCount = await countNearWhitePixels(pngBytes);
+    assertEquals(nearWhiteCount, 0, `Expected 0 near-white pixels, found ${nearWhiteCount}`);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
 });

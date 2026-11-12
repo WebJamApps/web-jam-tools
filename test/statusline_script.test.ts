@@ -83,7 +83,7 @@ Deno.test("a Sonnet payload produces a cyan badge containing 'Sonnet'", async ()
 
 Deno.test("a Haiku payload produces a green badge containing 'Haiku'", async () => {
   const res = await runStatusline(
-    '{"model":{"id":"claude-haiku-4-5-20251001","display_name":"Haiku 4.5"}}',
+    '{"model":{"id":"claude-haiku-5-5","display_name":"Haiku 5.5"}}',
   );
   assertEquals(res.code, 0, res.stderr);
   assertStringIncludes(res.stdout, HAIKU_CODE);
@@ -94,7 +94,7 @@ Deno.test("Opus, Sonnet, and Haiku badges use three distinct ANSI color codes", 
   const [opus, sonnet, haiku] = await Promise.all([
     runStatusline('{"model":{"id":"claude-opus-5","display_name":"Opus 5"}}'),
     runStatusline('{"model":{"id":"claude-sonnet-5","display_name":"Sonnet 5"}}'),
-    runStatusline('{"model":{"id":"claude-haiku-4-5-20251001","display_name":"Haiku 4.5"}}'),
+    runStatusline('{"model":{"id":"claude-haiku-5-5","display_name":"Haiku 5.5"}}'),
   ]);
   assertNotEquals(OPUS_CODE, SONNET_CODE);
   assertNotEquals(SONNET_CODE, HAIKU_CODE);

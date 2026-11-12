@@ -4,9 +4,146 @@ Index of utilities in `scripts/`. Run from the repo root unless noted.
 
 ## Workspace utilities
 
+### `running-model`
+
+Prints exactly one model name from the author roster using the tool's session record.
+
+```sh
+deno task running-model
+```
+
+Codex reads the newest recorded turn of the session named by `CODEX_THREAD_ID`. Claude Code locates
+the transcript named by `CLAUDE_CODE_SESSION_ID` across `~/.claude/projects/` and reads its newest
+genuine assistant entry. If both IDs are set, the command exits 1 because two tools claim the
+session. An identified session that cannot be read never falls back to another tool.
+
+Only when neither ID is set does it read the newest agy hook record from
+`/tmp/agy-hook-invocations.jsonl` (or `AGY_HOOK_RECORD_PATH`). The record must name a conversation
+and its model. That hook log is shared across agy sessions: concurrent invocations can leave another
+session's record last, so the command cannot distinguish those conversations. It never uses
+model-written prose or the configured default model.
+
+A missing, unreadable, ambiguous, or unrostered result prints `Cannot tell the running model` with
+the reason on stderr and exits 1 without stdout. The command reads local files and the roster's
+shell probe only; it has no network or write permissions.
+
+### `backlog-groom:collect`
+
+Collect the eight active repos once with a single global cap on concurrent `gh` subprocesses:
+
+```sh
+deno task backlog-groom:collect --output /tmp/backlog-groom/run-20261019/snapshot.json --concurrency 6
+deno task backlog-groom:collect --help
+```
+
+The output path must be a new JSON file under `/tmp/backlog-groom`; traversal, symlink
+paths and existing destinations are refused. The task grants Deno only `gh` execution and
+scratch-directory read/write permissions. Existing `gh` authentication supplies GitHub access.
+The default cap is 6; accepted values are 1–16. No GitHub mutations occur.
+
+Schema version 1 records `owner`, `startedAt`, `completedAt`, subprocess `requests`, and one
+`repositories` entry per active repo. Each entry contains its `repo`, raw `milestones`, and
+`issues`: raw issue metadata (including body, native type/fields, labels and milestone), native
+`blockers`, `blocking`, `children`, and `parent` (explicit null when GitHub returns HTTP 404).
+Paginated responses are flattened in TypeScript from `gh api --paginate --slurp` page arrays;
+`--jq` is incompatible with `--slurp` in current gh. A valid explicit zero summary suppresses
+empty relationship reads. Missing summaries fall back to fetching, never inferred emptiness.
+GitHub currently may omit those summaries, so the fallback remains necessary.
+
+The collector validates every repository and relationship before atomically publishing a new
+file. Missing/malformed fields, failed reads and indeterminate parent lookups refuse the run;
+no partial snapshot is published. Read this snapshot for the audit, then use it for all eight
+ranking calls. Targeted follow-up reads still establish facts not stored here, such as merged
+PRs, code completion, external prerequisites and closed ancestor chains.
+
+A snapshot is evidence for one run, never an approval record. Ranking accepts only complete,
+matching version-1 snapshots started within the last hour, with valid completion timestamps.
+Recollect and reconsider affected findings when that window expires. Josh's per-item approval
+is still required for every GitHub change.
+
+### `backlog-groom:rank`
+
+Ranks one active repository's open issues and prints a batch of proposed native Priority moves. It
+reads GitHub through `gh api` by default; with `--snapshot` it validates and reuses the collected
+input with zero GitHub calls. It never applies the proposals.
+
+```sh
+deno task backlog-groom:rank --repo web-jam-tools --judgments /tmp/backlog-groom/judgments.json --snapshot /tmp/backlog-groom/run-20261019/snapshot.json --focus gig-outreach
+deno task backlog-groom:rank --repo web-jam-tools --judgments /tmp/backlog-groom/judgments.json --json
+deno task backlog-groom:rank --help
+```
+
+The caller supplies the two judgments the design assigns to the skill's model, plus a one-line
+reason per issue. Keys are issue numbers in that repository:
+
+```json
+{
+  "1351": {
+    "liveBroken": false,
+    "costlyDefect": false,
+    "reason": "Planned ranking capability",
+    "levelFromTests": "Medium"
+  }
+}
+```
+
+`levelFromTests` is required below 20 open non-Epics and for any Epic with no open child carrying a
+Priority (regardless of repository size): the caller selects it using `skills/file-issue/SKILL.md`,
+so this module does not duplicate those level tests. Missing or invalid judgments, failed GitHub reads
+and malformed responses refuse the run rather than making up facts. Pull requests are excluded;
+legacy `parked` labels do not exclude issues. Epics inherit the highest existing native Priority of
+their open children and are excluded from shares. An Epic with no open child carrying a Priority
+inherits its level from `levelFromTests`.
+
+Shares are rounded independently; the last band includes any rounding remainder. Overflow is
+measured from the current snapshot: more than three above a share proposes moving up to the excess
+count of eligible lowest-ranked issues down one level, without cascading those proposals into
+another level's count. Live broken issues stay Urgent and cannot be demoted. The JSON result
+includes the full ranking, current counts, shares, focus notices and proposals with reasons. A
+missing focus milestone skips that step and reports why.
+
+Create the input file under `/tmp/backlog-groom/`, outside every repository. That is the task's only
+permitted input directory; no user home, network or write permissions are granted to Deno. The
+GitHub subprocess authenticates through the existing `gh` setup.
+
+### `block-issue` and `unblock-issue`
+
+Change one blocked-by link that Josh or an approved plan names on existing issues, in any
+repository. `--blocker` accepts an issue number in `--repo` or `owner/repo#number` for another
+repository. Removal accepts parent, ancestor and unrelated blockers alike.
+
+```sh
+deno task block-issue --repo WebJamApps/web-jam-tools --issue 10 --blocker 20 --dry-run
+deno task unblock-issue --repo WebJamApps/web-jam-tools --issue 10 --blocker OtherOrg/widgets#20 --dry-run
+```
+
+Drop `--dry-run` to apply the named change. Success prints both issue titles and the exact opposite
+command to undo it. Dry runs print the proposed change without writing. An already present link when
+adding, an absent link when removing, failed or unreadable lookups, and GitHub refusals all exit
+non-zero; GitHub's error message is retained. Both tasks run through the existing authenticated `gh`
+CLI and grant Deno only `--allow-run=gh`.
+
+### `edit-issue.ts`
+
+Guarded edits to an existing issue. Ordinary `gh issue edit` flags pass through; native Priority
+uses the same GraphQL mutation as issue creation and is read back through REST before success.
+
+```sh
+deno task edit-issue --repo WebJamApps/web-jam-tools --issue 1329 --priority High --dry-run
+deno task edit-issue --repo WebJamApps/web-jam-tools --issue 1329 --priority High --add-label Sol
+```
+
+`--priority` accepts exactly `Urgent`, `High`, `Medium` or `Low`; invalid or missing values refuse
+before any command runs. A Priority-only edit needs no `--author`. Body replacements retain their
+author-footer, empty-body and credential guards. `--dry-run` previews the edit without GitHub calls.
+Combined edits run the pass-through edit first, then set and verify Priority, reporting both. If
+Priority fails after the other edit succeeded, the command exits nonzero; the earlier edit remains
+applied. Failed or unreadable verification also exits nonzero and does not claim a verified level.
+
 ### `skill-start-check.ts`
 
-Proves a skill still starts after its description or listing changes, on Claude Code and agy (web-jam-tools#1237).
+Proves a skill still starts after its description or listing changes, on Claude Code and agy
+(web-jam-tools#1237).
 
 ```sh
 deno task skill-start-check <skill-name> [--tool claude|agy|all]
@@ -14,8 +151,8 @@ deno task skill-start-check <skill-name> [--tool claude|agy|all]
 
 The check reads the installed skill without changing its links. If its instructions or resources
 differ from the candidate, it refuses rather than reporting a result for the installed copy. The
-harness-only `start-check.json` is excluded from that comparison. agy checks require Linux
-`setsid` and `kill` to terminate the check's process group and its descendants on timeout.
+harness-only `start-check.json` is excluded from that comparison. agy checks require Linux `setsid`
+and `kill` to terminate the check's process group and its descendants on timeout.
 
 ### `install-codex.ts`
 
@@ -55,10 +192,12 @@ Manual steps are in `~/Dropbox/web-jam-llms/Token_Savings/codex-install-manual-s
 
 ### `session-load-report.ts`
 
-Emits the session load report at Claude Code startup in tab 1 of `agents` (web-jam-tools#1234). Reads the size of every session-load part from disk across Claude Code, agy, and Codex against the canonical limits in `src/session-load/limits.json`, prints a `systemMessage` JSON line, and exits 0.
+Emits the session load report at Claude Code startup in tab 1 of `agents` (web-jam-tools#1234).
+Reads the size of every session-load part from disk across Claude Code, agy, and Codex against the
+canonical limits in `src/session-load/limits.json`, prints a `systemMessage` JSON line, and exits 0.
 
 ```sh
-deno run --allow-read --allow-env scripts/session-load-report.ts
+deno run --allow-read --allow-env --allow-run=git scripts/session-load-report.ts
 ```
 
 ### `bootstrap-project.sh`
@@ -99,8 +238,16 @@ scripts/new-agent-worktree.sh <Repo> <branch> [base]
 
 - `Repo` — sibling directory name under the workspace root (e.g. `WebJamSocketCluster`), must
   already be a git clone
-- `branch` — branch name to create for the new worktree
-- `base` — base ref to branch from (default: `dev`)
+- `branch` — branch to use for the new worktree; existing branches are never reset
+- `base` — starting ref for a new branch (default: `dev`); ignored for existing branches
+
+After fetching `origin`, the script uses the branch's existing commits when it exists remotely or
+locally. A remote branch gets a local tracking branch; an existing local branch of the same name
+must point at the same commit. If the two differ, the script refuses, prints both commits, and makes
+no worktree or local branch change. A local-only branch is used as it stands. When neither exists, a
+new branch starts from `origin/<base>`. Standard error names the case taken and says when `base` was
+ignored. An existing worktree folder is always refused; successful cases all seed the environment
+files described above.
 
 The worktree is created at `<Repo>/.claude/worktrees/<branch>` (`/` in the branch name is flattened
 to `-`). Set `WEBJAMAPPS_ROOT` to override the default workspace root (`/home/joshua/WebJamApps`).
@@ -124,24 +271,43 @@ deno task circleci-settings
 
 See [docs/circleci-project-settings.md](circleci-project-settings.md) for full documentation.
 
-### `install-git-secret-hook.sh`
+### `gitleaks.sh`
 
-Installs the push-time secret scanner (`gitleaks` pre-push hook) and shared `.gitleaks.toml`
-configuration into a target WebJamApps repository (web-jam-tools#658).
+Runs `gitleaks detect` with repository configuration and shared `.gitleaks.toml` rules
+(web-jam-tools#658, #1403).
 
-- Auto-detects Node repos (`.husky/pre-push`) vs Deno repos (`.git/hooks/pre-push`).
-- Copies or reconciles the shared `.gitleaks.toml` rules and allowlist.
-- Supports drift checking via `--check`.
+- Supports scanning a named repository via `--repo <path>` (defaults to current repository root).
+- Runs on the latest gitleaks release: uses `docker run --pull=always zricethezav/gitleaks:latest`
+  when Docker is available; falls back to an installed `gitleaks` on `PATH` when Docker is absent;
+  fails closed when neither is available.
+- Passes `--exit-code=2` (0 = clean, 2 = finding, non-zero and != 2 = failure),
+  `--ignore-gitleaks-allow`, and runs with `--source .` relative to the repository.
 
 ```bash
-# Install in current repository
-bash scripts/install-git-secret-hook.sh
+# Scan current repository
+bash scripts/gitleaks.sh
 
-# Install into a sibling repository
-bash scripts/install-git-secret-hook.sh --repo ../JaMmusic
+# Scan a target repository
+bash scripts/gitleaks.sh --repo /path/to/repo
 
-# Check for drift
-bash scripts/install-git-secret-hook.sh --check
+# Scan git history range on target repository
+bash scripts/gitleaks.sh --repo /path/to/repo --log-opts="origin/dev..HEAD"
+```
+
+### `prove-push-guard.sh`
+
+Runs the design's "Proof before any new key" on the laptop, proving that git's global `pre-push` hook
+(`git-hooks/pre-push`, installed via `scripts/install-hooks.sh` setting `core.hooksPath`) prevents
+credential leaks before they can leave the machine (web-jam-tools#1404):
+
+1. Reads global git configuration and verifies `core.hooksPath` points to this clone's `git-hooks`.
+2. Sets up a throwaway repository under `/tmp` with a local bare remote.
+3. Commits a fake Google API key built at runtime and confirms the push is refused, naming file, line, and rule ID (never the secret value).
+4. Cleans the commit and confirms clean pushes succeed.
+5. Verifies push refusal when Docker is stopped and no gitleaks program is on PATH.
+
+```bash
+bash scripts/prove-push-guard.sh
 ```
 
 ### `reaper-update.sh`
@@ -221,12 +387,13 @@ echo '{"model":{"id":"claude-opus-5","display_name":"Opus 5"}}' | scripts/status
 
 ### `update-all.sh`
 
-Master update script that updates the local AI agent CLIs and DAW tooling in sequence:
+Master update script that updates the local AI agent CLIs, DAW tooling and GitHub MCP in sequence:
 
 1. `claude update` (Anthropic Claude Code CLI)
 2. `agy update` (Google Antigravity CLI)
 3. `codex update` (OpenAI Codex CLI)
 4. `reaper-update` (Cockos REAPER digital audio workstation)
+5. `github-mcp-server` (latest Linux release, checked against its release checksums)
 
 See [docs/local-dev-setup.md](local-dev-setup.md) for full developer environment setup and
 installation steps on Linux.
@@ -266,6 +433,58 @@ installation steps on Linux.
 - `CODEX_BIN`: Path or binary name for Codex CLI (default: `codex`).
 - `REAPER_UPDATE_BIN`: Path or command for REAPER updater (default: auto-detected from PATH or
   `$SCRIPT_DIR/reaper-update.sh`).
+
+### `update-scripts.sh` (the `update-scripts` command)
+
+`scripts/update-scripts.sh` fast-forward pulls `dev` in the web-jam-tools clone (`$WJT_REPO_DIR`,
+default `~/WebJamApps/web-jam-tools`) and then runs `install-hooks.sh`, passing its arguments
+through (for example `--check`). It runs from any directory and refuses, exiting 1, unless the clone
+is on `dev`.
+
+`install-hooks.sh` symlinks it into `~/.local/bin/update-scripts`, so after the first install you
+update by typing just `update-scripts` in any terminal. For the first install after this change
+merges, confirm the clone is on `dev`:
+
+```sh
+git -C "$HOME/WebJamApps/web-jam-tools" branch --show-current
+```
+
+Continue only if that prints `dev`. Fetch the merged source before invoking the new helper, because
+an older checkout does not contain `scripts/update-scripts.sh`:
+
+```sh
+git -C "$HOME/WebJamApps/web-jam-tools" pull --ff-only origin dev
+```
+
+After the pull succeeds, run the helper by its full path to install the command:
+
+```sh
+"$HOME/WebJamApps/web-jam-tools/scripts/update-scripts.sh"
+```
+
+The `agents` command also runs it, right after `update-all.sh`, whenever it creates or restarts the
+session (not when it only attaches). A failure prints a warning and the agents still start. Override
+the command with `AGENTS_UPDATE_SCRIPTS_CMD`.
+
+### `check-snap-updates` (run by the `agents` command)
+
+`deno task check-snap-updates` warns when a snap has had an update waiting for 3 days or more.
+Ubuntu's Software Updater does not update snaps, and snapd says nothing when its own refreshes stop
+working, so a stalled update otherwise goes unseen.
+
+The `agents` command runs it right after the GitHub token check, whenever it creates or restarts the
+session (not when it only attaches). A failure prints a warning and the agents still start. Override
+the command with `AGENTS_CHECK_SNAP_UPDATES_CMD`.
+
+- It reads `snap refresh --list` and records when each snap first showed there in
+  `~/.local/state/web-jam-tools/snap-updates.json`. An update waiting for less than 3 days is normal
+  and stays silent.
+- A stuck update prints a warning and sends a desktop notification that stays until dismissed,
+  because `agents` attaches to tmux straight afterwards and covers the terminal. To clear it, run
+  `sudo snap refresh`.
+- If the check itself cannot run, it says so the same way and exits 1.
+- On a machine without snap, it does nothing. If `notify-send` is missing, only the terminal warning
+  appears.
 
 ### `install-hooks.sh` — what actually gets symlinked
 
@@ -309,8 +528,7 @@ script.
 - **Its strings are secret-scanned** with the same credential-literal check as `permissions` and
   `hooks`; a match refuses the write.
 
-**Claude Code ONLY**, like `statusLine`: it is never merged into agy's
-`hooks.json`.
+**Claude Code ONLY**, like `statusLine`: it is never merged into agy's `hooks.json`.
 
 ### `skillOverrides` (managed by `install-hooks.sh`)
 
@@ -318,18 +536,82 @@ The `skillOverrides` section of `~/.claude/settings.json` holds overrides for Cl
 skills. `scripts/install-hooks.sh` sets the 30 skills bundled with Claude Code (13 document skills
 named `anthropic-skills:<name>` and 17 built-in skills) to `name-only`, so their descriptions stop
 loading at every session open while every skill stays listed and callable by name
-(web-jam-tools#1240). Its content is the `SKILL_OVERRIDES_JSON` block in `scripts/install-hooks.sh`.
+(web-jam-tools#1240). Its content is generated by `scripts/install-hooks.sh` from the canonical list
+in `src/session-load/limits.json` (web-jam-tools#1416).
 
 - **It is replaced as a whole.** A run installs the object when it is absent and replaces it when it
   differs; no other key in `settings.json` is touched.
-- **Change it in `SKILL_OVERRIDES_JSON`, not in `settings.json`.** A hand edit to `settings.json` is
-  reported by `--check` and overwritten by the next run.
+- **Change it in `src/session-load/limits.json`, not in `settings.json`.** A hand edit to
+  `settings.json` is reported by `--check` and overwritten by the next run.
 - **The drift report names what differs.** Both `--check` and a replacing run list each key that
   differs or is missing.
 - **Its strings are secret-scanned** with the same credential-literal check as `permissions` and
   `hooks`; a match refuses the write.
 
 **Claude Code ONLY**: it is never merged into agy's `hooks.json`.
+
+### `ubuntu-health.sh`
+
+The one script that applies the Ubuntu security/efficiency design on a system: the laptop, and the
+Ubuntu in WSL on the desktop. Josh runs it with `sudo`, once per system; no agent runs it as root.
+Supporting files live in `scripts/ubuntu-health/`.
+
+```sh
+sudo scripts/ubuntu-health.sh          # apply
+scripts/ubuntu-health.sh --check       # change nothing; name every drift; exit 1 if any
+```
+
+- **Mode.** `systemd-detect-virt` printing `none` means laptop, `wsl` means WSL. Anything else, or
+  the command failing, refuses the run and names the command.
+- **Root-owned copies.** A run installs the weekly job, its sender and the script itself under
+  `/usr/local/lib/ubuntu-health/`, and the unit files under `/etc/systemd/system/`, all owned by
+  root. The weekly job runs only those copies, never a file from the repository or a home folder.
+  Running it again changes nothing that is already right. A run also writes
+  `/usr/local/lib/ubuntu-health/manifest.sha256`, a root-owned checksum of every installed file, and
+  refuses to run from the installed copy, which would record its own files as correct.
+- **Weekly timer.** `ubuntu-health-weekly.timer` runs the job Sundays at 03:00 (`Persistent=true`)
+  at idle CPU and disk priority. The job runs the installed `--check` and, when it finds anything,
+  sends one email naming the system and what to run next. A week with nothing to report sends
+  nothing. The job's log is `/var/log/ubuntu-health.log`.
+- **SSH and the firewall (laptop only).** SSH into the laptop accepts a key only and the firewall
+  admits only Tailscale. A run installs `/etc/ssh/sshd_config.d/00-ubuntu-health.conf` with
+  `PasswordAuthentication no` (named `00-` because sshd keeps the first value it reads) and restarts
+  `ssh.service` when that file changed; on a real system `sshd -t` must accept the configuration
+  first. A restart that fails (or a run that stops before it) is not forgotten: a marker file,
+  `ssh-restart-pending` beside the installed script, stays until the restart succeeds, the next
+  apply retries it, and `--check` names it meanwhile. The firewall step runs
+  `ufw allow in on
+  tailscale0`, `ufw default deny incoming` and `ufw enable`, each only when ufw
+  does not already hold it, so a second run with everything set makes no `ufw` or `ssh` change; ufw
+  asks you to confirm `ufw enable` itself. If ufw already holds a rule that admits port 22 off
+  Tailscale, apply refuses, names the rule and leaves the firewall as it was, because that rule
+  would survive every change; remove it with `ufw status numbered` and `ufw delete <number>`, then
+  run apply again. It never deletes a rule itself. In WSL both steps are skipped and the output says
+  so, because WSL runs no SSH server (Windows' own SSH server reaches it).
+- **`--check`.** Needs no `sudo`. Reports each drifted step as `DRIFT <step>: <what>` (`job-files`,
+  `unit-files`, `timer`, `email-login`, and on the laptop `ssh` and `firewall`), or `no drift`. The
+  `ssh` step names an effective `PasswordAuthentication` other than `no`, read from `sshd_config`
+  and the files it includes, and a `Match` block (anywhere in them) that sets it to anything but
+  `no`, because that can switch passwords back on for the connections it matches (an included file
+  or a directory holding included files only root can read, search or list (including directories
+  beneath wildcard path components) prints `NOTE: ... not fully checked without sudo`); it also
+  names an `ssh.service` restart still pending. Readable Include matches are still scanned when a
+  sibling directory is inaccessible, so known password drift is reported alongside the NOTE. The
+  `firewall` step names "firewall off" (`ENABLED` is not `yes` in `/etc/ufw/ufw.conf`), a missing
+  default deny, a missing `tailscale0` rule (the blanket `ufw allow in on tailscale0`; one limited
+  to a source, destination, port or protocol does not count), or a rule, logged or not, that admits
+  port 22 on any other interface; ufw's rule files are readable only by root, so without `sudo` it
+  prints `NOTE: ... not checked without sudo` for them instead of guessing. Installed files are
+  verified against `manifest.sha256`, which is how the weekly job (running the installed copy, with
+  no repository beside it) still catches a changed `weekly.sh` or `gmail-send.sh`; run from the
+  repository, it also compares each file with its repository source.
+- **Email.** `gmail-send.sh` makes the same two Gmail API requests as `src/shared/gmail_send.ts`
+  with `curl`. It reads `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN` from the
+  send-only login file `/etc/ubuntu-health/gmail-send.env`, which must be owned by root with mode
+  0600; a missing file, a wider mode or a failed token refresh sends nothing and is written to the
+  job's log.
+- **Tests.** `test/ubuntu_health.test.ts` points `UBUNTU_HEALTH_ROOT` at a temporary folder standing
+  in for `/` and puts stub commands first on `PATH`; never run the script with `sudo` while testing.
 
 ## Example scraping / data utilities
 

@@ -6,6 +6,7 @@ import { join } from "@std/path";
 import {
   archiveDoneCheckpoints,
   generateMemoryIndex,
+  isArchivable,
   parseMemoryFile,
   scanMemoryDirectory,
 } from "../src/memory-index/generator.ts";
@@ -82,7 +83,7 @@ description: unquoted: colon in description
   assert(skipReason.length > 0);
 });
 
-Deno.test("generateMemoryIndex: groups by type, sorts slugs alphabetically, formats live checkpoints", () => {
+Deno.test("generateMemoryIndex: groups by type, sorts slugs alphabetically, formats checkpoints as slug lines", () => {
   const entries = [
     {
       filename: "beta.md",
@@ -133,11 +134,36 @@ Deno.test("generateMemoryIndex: groups by type, sorts slugs alphabetically, form
   // Alpha comes before beta
   assert(output.includes("alpha · beta"));
   assert(output.includes("ref-doc"));
-  assert(
-    output.includes(
-      "- [session-checkpoint-live](session-checkpoint-live.md) — Live checkpoint desc",
-    ),
-  );
+  assert(output.includes("session-checkpoint-live"));
+  assertEquals(output.includes("- [session-checkpoint-live]"), false);
+  assertEquals(output.includes("— Live checkpoint desc"), false);
+});
+
+Deno.test("generateMemoryIndex: lists a session-checkpoint-* fixture as a slug line with no state line", () => {
+  const entries = [
+    {
+      filename: "session-checkpoint-task.md",
+      slug: "session-checkpoint-task",
+      type: "project" as const,
+      status: "live",
+      description: "Live checkpoint desc with state details",
+      isCheckpoint: true,
+    },
+    {
+      filename: "project-guidelines.md",
+      slug: "project-guidelines",
+      type: "project" as const,
+      description: "Guidelines description",
+      isCheckpoint: false,
+    },
+  ];
+
+  const output = generateMemoryIndex(entries);
+  assert(output.includes("## Project"));
+  // Sorted alphabetically: project-guidelines before session-checkpoint-task
+  assert(output.includes("project-guidelines · session-checkpoint-task"));
+  assertEquals(output.includes("- [session-checkpoint-task]"), false);
+  assertEquals(output.includes("— Live checkpoint desc with state details"), false);
 });
 
 Deno.test("generateMemoryIndex: omits section headers for empty groups", () => {
@@ -158,7 +184,19 @@ Deno.test("generateMemoryIndex: omits section headers for empty groups", () => {
   assertEquals(output.includes("## Project"), false);
 });
 
-Deno.test("archiveDoneCheckpoints: moves done checkpoints to archive directory", async () => {
+Deno.test("isArchivable: returns false so done checkpoints are not archived", () => {
+  const entry = {
+    filename: "session-checkpoint-done.md",
+    slug: "session-checkpoint-done",
+    type: "project" as const,
+    status: "done",
+    description: "Done desc",
+    isCheckpoint: true,
+  };
+  assertEquals(isArchivable(entry), false);
+});
+
+Deno.test("archiveDoneCheckpoints: does not archive done checkpoints", async () => {
   const tempDir = await Deno.makeTempDir();
   try {
     const liveCheckpoint = "session-checkpoint-live.md";
@@ -181,13 +219,22 @@ Deno.test("archiveDoneCheckpoints: moves done checkpoints to archive directory",
     const { entries } = await scanMemoryDirectory(tempDir);
     const { remaining, archivedCount } = await archiveDoneCheckpoints(tempDir, entries);
 
-    assertEquals(archivedCount, 1);
-    assertEquals(remaining.length, 2);
+    assertEquals(archivedCount, 0);
+    assertEquals(remaining.length, 3);
 
-    // Verify file moved to archive/
-    const archivePath = join(tempDir, "archive", doneCheckpoint);
-    const archiveStat = await Deno.stat(archivePath);
-    assert(archiveStat.isFile);
+    // Verify done checkpoint remains in place and was not moved to archive/
+    const donePath = join(tempDir, doneCheckpoint);
+    const doneStat = await Deno.stat(donePath);
+    assert(doneStat.isFile);
+
+    let archiveExists = false;
+    try {
+      await Deno.stat(join(tempDir, "archive"));
+      archiveExists = true;
+    } catch {
+      archiveExists = false;
+    }
+    assertEquals(archiveExists, false);
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }
@@ -330,12 +377,7 @@ Deno.test("runCli: --check mode reports skips and returns exit code 1 even when 
   }
 });
 
-// P1-6 budget check: Derived budget function (Design 1C):
-//   bytes(MEMORY.md) ≈ Σ len(slug) + group markup + live-checkpoint lines
-// Evaluates to ~6.7KB currently; the hard upper bound is the `memoryIndex` over mark in
-// src/session-load/limits.json.
-Deno.test("real memory directory index generation budget check (memoryIndex over mark)", async () => {
-  const { overMark } = (await loadLimits()).memoryIndex;
+Deno.test("real memory directory index generation succeeds on real data", async () => {
   const realDir = "/home/joshua/.claude/projects/-home-joshua/memory";
   try {
     const stat = await Deno.stat(realDir);
@@ -347,15 +389,34 @@ Deno.test("real memory directory index generation budget check (memoryIndex over
   const { entries } = await scanMemoryDirectory(realDir);
   const activeEntries = entries.filter((e) => !(e.isCheckpoint && e.status === "done"));
   const output = generateMemoryIndex(activeEntries);
+  assert(output.startsWith("# Memory Index"));
+  assert(output.includes("## "));
   const byteCount = new TextEncoder().encode(output).length;
-
-  assert(
-    byteCount <= overMark,
-    `Memory index size (${byteCount} bytes) exceeds budget of ${overMark} bytes`,
-  );
+  assert(byteCount > 0, "Generated index must not be empty");
 });
 
-Deno.test("memory-index --protect keeps a named done checkpoint out of the archive", async () => {
+Deno.test("generateMemoryIndex: completes successfully when index exceeds overMark", async () => {
+  const { overMark } = (await loadLimits()).memoryIndex;
+  const entries = [];
+  for (let i = 0; i < 300; i++) {
+    entries.push({
+      filename: `synthetic-memory-entry-slug-${i}.md`,
+      slug: `synthetic-memory-entry-slug-${i}`,
+      type: "project" as const,
+      description:
+        `Synthetic memory description for entry ${i} ensuring index byte count exceeds limit comfortably`,
+      isCheckpoint: true,
+      status: "live",
+    });
+  }
+  const output = generateMemoryIndex(entries);
+  const byteCount = new TextEncoder().encode(output).length;
+  assert(byteCount > overMark, `Byte count (${byteCount}) should exceed overMark (${overMark})`);
+  assert(output.startsWith("# Memory Index"));
+  assert(output.includes("## Project"));
+});
+
+Deno.test("memory-index retains done checkpoints in memory index as slug lines", async () => {
   const dir = await Deno.makeTempDir({ prefix: "memory-index-protect-" });
   const checkpoint = (slug: string) =>
     `---\nname: ${slug}\ndescription: d\nmetadata:\n  type: project\n  status: done\n---\n\nBody.\n`;
@@ -364,13 +425,30 @@ Deno.test("memory-index --protect keeps a named done checkpoint out of the archi
     checkpoint("session-checkpoint-kept"),
   );
   await Deno.writeTextFile(
-    join(dir, "session-checkpoint-gone.md"),
-    checkpoint("session-checkpoint-gone"),
+    join(dir, "session-checkpoint-other.md"),
+    checkpoint("session-checkpoint-other"),
   );
 
   await runCli(["--dir", dir, "--protect", "session-checkpoint-kept"]);
 
   await Deno.stat(join(dir, "session-checkpoint-kept.md"));
-  await Deno.stat(join(dir, "archive", "session-checkpoint-gone.md"));
+  await Deno.stat(join(dir, "session-checkpoint-other.md"));
+  const memoryMd = await Deno.readTextFile(join(dir, "MEMORY.md"));
+  assert(memoryMd.includes("session-checkpoint-kept · session-checkpoint-other"));
   assertEquals(await runCli(["--dir", dir, "--protect", "session-checkpoint-kept", "--check"]), 0);
+});
+
+Deno.test("runCli: --help displays truthful help text", async () => {
+  const originalLog = console.log;
+  const logged: string[] = [];
+  console.log = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const code = await runCli(["--help"]);
+    assertEquals(code, 0);
+    assert(logged.some((line) => line.includes("deprecated / no-op")));
+  } finally {
+    console.log = originalLog;
+  }
 });

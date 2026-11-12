@@ -15,8 +15,8 @@
     "github": {
       "command": "bash",
       "args": [
-        "-lc",
-        "exec docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN=\"$GH_TOKEN\" ghcr.io/github/github-mcp-server stdio"
+        "-c",
+        "set +x; if ! . \"$HOME/.bashrc\" >/dev/null 2>&1; then printf '%s\\n' 'GitHub MCP: token source could not be read.' >&2; exit 1; fi; set +x; if [ -z \"${GH_TOKEN:-}\" ]; then printf '%s\\n' 'GitHub MCP: GH_TOKEN is unavailable.' >&2; exit 1; fi; GITHUB_PERSONAL_ACCESS_TOKEN=\"$GH_TOKEN\" exec \"$HOME/.local/bin/github-mcp-server\" stdio"
       ]
     },
     "gmail": {

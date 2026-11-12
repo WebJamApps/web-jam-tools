@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# git-hooks/pre-push — web-jam-tools#1404
+# Machine-wide push-time secret guard running Docker-driven gitleaks across all repositories.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WJT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+GITLEAKS_SCRIPT="${GITLEAKS_SCRIPT:-$WJT_ROOT/scripts/gitleaks.sh}"
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+# Capture stdin once so it can be parsed and passed down to the repository's own pre-push hook
+STDIN_DATA="$(cat; printf x)"
+STDIN_DATA="${STDIN_DATA%x}"
+
+# Check if gitleaks script is present and executable before scanning
+if [ ! -f "$GITLEAKS_SCRIPT" ]; then
+  echo "🛑 PUSH REFUSED: gitleaks scanner script not found: $GITLEAKS_SCRIPT" >&2
+  exit 1
+fi
+
+if [ ! -x "$GITLEAKS_SCRIPT" ]; then
+  echo "🛑 PUSH REFUSED: gitleaks scanner script is not executable: $GITLEAKS_SCRIPT" >&2
+  exit 1
+fi
+
+ZERO_OID="0000000000000000000000000000000000000000"
+REF_RANGES=()
+
+if [ -n "$STDIN_DATA" ]; then
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    read -r _local_ref local_oid _remote_ref remote_oid <<< "$line"
+
+    # If local_oid is zero (or empty), this is a delete — scans nothing for that line
+    if [ "$local_oid" = "$ZERO_OID" ] || [ -z "$local_oid" ]; then
+      continue
+    fi
+
+    # If remote_oid is zero, this is a new ref (branch or tag) — scans <sha> --not --remotes
+    if [ "$remote_oid" = "$ZERO_OID" ] || [ -z "$remote_oid" ]; then
+      REF_RANGES+=("$local_oid --not --remotes")
+    else
+      # Existing ref updated — scans <old>..<new>
+      REF_RANGES+=("$remote_oid..$local_oid")
+    fi
+  done <<< "$STDIN_DATA"
+fi
+
+if [ "${#REF_RANGES[@]}" -gt 0 ]; then
+  ANY_FINDING=0
+  ANY_FAILURE=0
+  FAILURE_MSG=""
+
+  for range in "${REF_RANGES[@]}"; do
+    STATUS=0
+    OUT=$("$GITLEAKS_SCRIPT" --repo "$REPO_ROOT" "--log-opts=$range" 2>&1) || STATUS=$?
+    if [ "$STATUS" -eq 2 ]; then
+      ANY_FINDING=1
+      [ -n "$OUT" ] && echo "$OUT" >&2
+    elif [ "$STATUS" -ne 0 ]; then
+      ANY_FAILURE=1
+      FAILURE_MSG="$OUT"
+      [ -n "$OUT" ] && echo "$OUT" >&2
+    fi
+  done
+
+  if [ "$ANY_FINDING" -eq 1 ]; then
+    echo "🛑 PUSH REFUSED: credential detected in commit(s) being pushed." >&2
+    echo "" >&2
+    echo "The way out:" >&2
+    echo "  - Real credential: remove it, rewrite the unpushed commit (\`git commit --amend\` or an interactive rebase on the local branch) and, if it was ever valid, revoke it." >&2
+    echo "  - Deliberately fake test value: build it at runtime from pieces so no literal sits in the source, or add the fingerprint line the refusal prints to the repository's \`.gitleaksignore\`." >&2
+    exit 2
+  fi
+
+  if [ "$ANY_FAILURE" -eq 1 ]; then
+    echo "🛑 PUSH REFUSED: secret scanner failed to run" >&2
+    [ -n "$FAILURE_MSG" ] && echo "$FAILURE_MSG" >&2
+    exit 1
+  fi
+fi
+
+# Run repository's own hooks/pre-push if present and executable
+COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+if [ -n "$COMMON_DIR" ]; then
+  COMMON_DIR="$(readlink -f "$COMMON_DIR" 2>/dev/null || echo "$COMMON_DIR")"
+  REPO_HOOK="$COMMON_DIR/hooks/pre-push"
+  if [ -f "$REPO_HOOK" ] && [ -x "$REPO_HOOK" ]; then
+    THIS_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+    TARGET_HOOK="$(readlink -f "$REPO_HOOK" 2>/dev/null || echo "$REPO_HOOK")"
+    if [ "$THIS_SCRIPT" != "$TARGET_HOOK" ]; then
+      printf '%s' "$STDIN_DATA" | "$REPO_HOOK" "$@"
+      exit $?
+    fi
+  fi
+fi
+
+exit 0

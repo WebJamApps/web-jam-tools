@@ -7,6 +7,7 @@
 // (`createIssueAndVerify`).
 
 import { parseArgs } from "@std/cli/parse-args";
+import { checkDesignBody } from "../shared/design_body.ts";
 import { checkAuthorOnRoster, withFooter } from "../../hooks/lib/authored_by_footer.ts";
 import { isCodexSession, resolveSigningAuthor } from "../shared/codex_running_model.ts";
 import * as path from "@std/path";
@@ -18,8 +19,17 @@ import {
   defaultExecDeps,
   type ExecDeps,
   normalizeRepo,
+  type ParsedIssueRef,
+  parseIssueRef,
 } from "../create-issue/lib.ts";
 import { expandHome } from "./gate1.ts";
+import {
+  loadModelLabels,
+  modelLabelViolation,
+  readPlanModelLabels,
+} from "../shared/model_label_rule.ts";
+
+import { checkCriterionOrClosesCell, extractDesignHeadings } from "./lint_plan.ts";
 
 export interface PlanIssueItem {
   id?: number | string;
@@ -33,6 +43,7 @@ export interface PlanIssueItem {
   tier?: string;
   model?: string;
   modelTier?: string;
+  escalationReason?: string;
   labels?: string[] | string;
   milestone?: string | number;
   repo?: string;
@@ -49,6 +60,8 @@ export interface IssuePlanDoc {
   children?: PlanIssueItem[];
   issues?: PlanIssueItem[];
   plan?: PlanIssueItem[];
+  designDoc?: string;
+  design_doc?: string;
 }
 
 export interface FiledIssueInfo {
@@ -80,6 +93,7 @@ interface ParsedPlan {
   defaultMilestone?: string | number;
   epic?: PlanIssueItem;
   children: PlanIssueItem[];
+  designDoc?: string;
 }
 
 export function parsePlanJson(jsonText: string): ParsedPlan {
@@ -115,6 +129,7 @@ export function parsePlanJson(jsonText: string): ParsedPlan {
     const defaultMilestone = doc.milestone;
     const epic = doc.epic;
     const childrenList = doc.children || doc.issues || doc.plan || [];
+    const designDoc = doc.designDoc ?? doc.design_doc;
 
     if (!epic && childrenList.length === 0) {
       throw new Error("Plan contains no issues to file (missing epic and children/issues).");
@@ -125,6 +140,7 @@ export function parsePlanJson(jsonText: string): ParsedPlan {
       defaultMilestone,
       epic,
       children: childrenList,
+      designDoc,
     };
   }
 
@@ -149,18 +165,18 @@ export async function parsePlanFile(filePath: string): Promise<ParsedPlan> {
   return parsePlanJson(content);
 }
 
-function resolveLabels(item: PlanIssueItem): string[] {
+function resolveLabels(item: PlanIssueItem, modelLabels: ReadonlySet<string>): string[] {
   const result: string[] = [];
   const addLabel = (l: string) => {
     const trimmed = l.trim();
-    if (trimmed && !result.some((existing) => existing.toLowerCase() === trimmed.toLowerCase())) {
+    if (trimmed && !result.includes(trimmed)) {
       result.push(trimmed);
     }
   };
 
-  const tier = item.tier || item.model || item.modelTier;
-  if (tier) {
-    addLabel(tier);
+  const tier = item.tier ?? item.model ?? item.modelTier;
+  if (tier !== undefined) {
+    for (const label of readPlanModelLabels(tier, modelLabels)) addLabel(label);
   }
 
   if (item.labels) {
@@ -238,6 +254,169 @@ async function prepareBodyFile(
   return tempPath;
 }
 
+/** Resolve parents before filing, using the same epic-first, then child order as the filer. */
+function resolvePlanParents(
+  plan: ParsedPlan,
+): Array<number | string | PlanIssueItem | undefined> {
+  const available: PlanIssueItem[] = plan.epic ? [plan.epic] : [];
+  return plan.children.map((child, index) => {
+    const repo = normalizeRepo(child.repo || plan.defaultRepo);
+    const invalid = (reason: string): never => {
+      throw new Error(
+        `Cannot resolve parent ${JSON.stringify(child.parent)} for plan child ${
+          index + 1
+        } ("${child.title}"): ${reason}`,
+      );
+    };
+    const explicitId = (key: string) =>
+      available.findLast((item) => {
+        if (item.id === undefined) return false;
+        const id = String(item.id).trim().toLowerCase();
+        return id === key || id.replace(/^#/, "") === key;
+      });
+    const position = (number: number) =>
+      number >= 1 && number <= index ? plan.children[number - 1] : undefined;
+
+    let target: number | string | PlanIssueItem | undefined;
+    const parent = child.parent;
+    if (parent === undefined) {
+      target = plan.epic ?? undefined;
+    } else if (parent === null) {
+      target = undefined;
+    } else if (typeof parent === "number") {
+      target = position(parent) ?? explicitId(String(parent)) ?? parent;
+    } else if (typeof parent === "string") {
+      const trimmed = parent.trim();
+      const lower = trimmed.toLowerCase();
+      if (["none", "null", "-", ""].includes(lower)) {
+        target = undefined;
+      } else if (lower === "epic" || lower === "parent") {
+        target = plan.epic ?? invalid("the plan has no epic");
+      } else {
+        target = explicitId(lower) ??
+          available.find((item) => item.title.trim().toLowerCase() === lower);
+        if (target === undefined) {
+          // Bare numbers retain their position lookup. A repository citation
+          // always means an existing issue, after explicit IDs and titles.
+          const numeric = trimmed.match(/^#?(\d+)$/);
+          if (numeric) {
+            const number = Number(numeric[1]);
+            target = position(number) ?? number;
+          } else {
+            const reference = (() => {
+              try {
+                return parseIssueRef(trimmed, repo);
+              } catch {
+                return invalid("no preceding plan item or valid issue citation matches this value");
+              }
+            })();
+            target = `${reference.owner}/${reference.repo}#${reference.number}`;
+          }
+        }
+      }
+    } else {
+      invalid("expected an issue number, a string reference, or null");
+    }
+    available.push(child);
+    return target;
+  });
+}
+
+/**
+ * Validates that an issue body has an "## Acceptance criteria" section,
+ * and that every criterion in that section names a heading from designHeadings in double quotes
+ * or carries a backtick-quoted command.
+ * Case 11: A body with no `## Acceptance criteria` section -> refused before the first issue is filed, naming the item
+ * Case 9: Body criterion `- [ ] builds "Nope" as written` -> refused before the first issue is filed, naming the item and the line
+ * Case 10: Body criterion `- [ ] The pull request merges` -> refused the same way: neither a heading nor a command
+ */
+export function validateIssueBodyCriteria(
+  title: string,
+  body: string,
+  designHeadings: ReadonlySet<string>,
+): void {
+  const lines = body.split(/\r?\n/);
+  let inCriteria = false;
+  let criteriaLevel = 2;
+  const criteria: { text: string; lineNum: number }[] = [];
+  let currentCriterion: { text: string; lineNum: number } | null = null;
+
+  const flushCurrent = () => {
+    if (currentCriterion !== null) {
+      const trimmedText = currentCriterion.text.trim();
+      if (trimmedText.length > 0) {
+        criteria.push({ text: trimmedText, lineNum: currentCriterion.lineNum });
+      }
+      currentCriterion = null;
+    }
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const trimmed = rawLine.trim();
+
+    if (!inCriteria) {
+      const criteriaHeaderMatch = trimmed.match(/^(#{1,6})\s+Acceptance\s+criteria\b/i);
+      if (criteriaHeaderMatch) {
+        inCriteria = true;
+        criteriaLevel = criteriaHeaderMatch[1].length;
+      }
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      if (level <= criteriaLevel) {
+        flushCurrent();
+        break;
+      } else {
+        // Nested subsection within Acceptance criteria (e.g. ### Behavior)
+        flushCurrent();
+        continue;
+      }
+    }
+
+    if (trimmed === "" || trimmed.startsWith("<!--")) {
+      flushCurrent();
+      continue;
+    }
+
+    const isListItem = /^\s*(?:[-*+]|\d+[.)])\s+/.test(rawLine);
+    if (isListItem) {
+      flushCurrent();
+      currentCriterion = { text: trimmed, lineNum: i + 1 };
+    } else if (currentCriterion !== null) {
+      currentCriterion.text += " " + trimmed;
+    } else {
+      currentCriterion = { text: trimmed, lineNum: i + 1 };
+    }
+  }
+
+  flushCurrent();
+
+  if (!inCriteria || criteria.length === 0) {
+    throw new Error(
+      `Refused to file plan — issue "${title}" body has no "## Acceptance criteria" section.`,
+    );
+  }
+
+  for (const { text, lineNum } of criteria) {
+    const check = checkCriterionOrClosesCell(text, designHeadings);
+    if (!check.valid) {
+      if (check.reason === "unknown-heading") {
+        throw new Error(
+          `Refused to file plan — issue "${title}" criterion line ${lineNum} ("${text}"): names heading "${check.unknownHeading}", which does not exist in the design document.`,
+        );
+      } else {
+        throw new Error(
+          `Refused to file plan — issue "${title}" criterion line ${lineNum} ("${text}"): neither a heading nor a command.`,
+        );
+      }
+    }
+  }
+}
+
 export async function filePlan(
   options: FilePlanOptions,
 ): Promise<FilePlanResult> {
@@ -254,6 +433,24 @@ export async function filePlan(
   }
   for (const child of plan.children) {
     allItems.push({ item: child, isEpic: false });
+  }
+
+  // Validate every body, including epics and manual steps, before any issue is filed.
+  for (const { item } of allItems) {
+    const bodyPath = item.bodyFile || item.body_file || item.bodyPath;
+    let body = item.body ?? "";
+    if (bodyPath) {
+      try {
+        body = await deps.readFileText(path.resolve(expandHome(bodyPath)));
+      } catch (err) {
+        throw new Error(
+          `Refused to file plan — cannot read body file "${bodyPath}" for issue "${item.title}": ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+    await checkDesignBody(body);
   }
 
   // Pre-validate titles, Gate 2 approval tokens, and ensure explicit IDs do not collide
@@ -304,6 +501,8 @@ export async function filePlan(
   }
 
   const titleSet = new Set<string>();
+  const modelLabels = loadModelLabels();
+  const resolvedLabels = new Map<PlanIssueItem, string[]>();
   for (const { item, isEpic } of allItems) {
     if (!item.title || item.title.trim() === "") {
       throw new Error("Plan contains an issue with missing or empty title.");
@@ -316,6 +515,19 @@ export async function filePlan(
     }
     titleSet.add(normalizedTitle);
 
+    try {
+      const labels = resolveLabels(item, modelLabels);
+      const violation = modelLabelViolation(labels, modelLabels, item.escalationReason);
+      if (violation) throw new Error(violation);
+      resolvedLabels.set(item, labels);
+    } catch (error) {
+      throw new Error(
+        `Refused to file plan — ${isEpic ? "Epic" : "issue"} "${item.title}": ${
+          error instanceof Error ? error.message : error
+        }`,
+      );
+    }
+
     const repoInfo = normalizeRepo(item.repo || plan.defaultRepo);
     const approval = approvalCheck(repoInfo.full, item.title);
     if (!approval.ok) {
@@ -327,10 +539,63 @@ export async function filePlan(
     }
   }
 
+  const parentTargets = resolvePlanParents(plan);
+
   // Authored-by footer (web-jam-tools#1205) — refuse before anything is filed.
   const authorCheck = await checkAuthorOnRoster(options.author, deps.runCmd, deps.probeScriptPath);
   if (!authorCheck.ok) {
     throw new Error(`Refused to file plan — ${authorCheck.message}`);
+  }
+
+  // Validate design document and issue body acceptance criteria (web-jam-tools#1442)
+  if (!plan.designDoc || plan.designDoc.trim() === "") {
+    throw new Error(
+      'Refused to file plan — the design document is not named (missing "designDoc" field in plan).',
+    );
+  }
+
+  const rawDesignDoc = plan.designDoc.trim();
+  const resolvedDesignDoc = path.resolve(expandHome(rawDesignDoc));
+  let designDocContent: string;
+  try {
+    designDocContent = await deps.readFileText(resolvedDesignDoc);
+  } catch (err) {
+    throw new Error(
+      `Refused to file plan — design document at "${rawDesignDoc}" (${resolvedDesignDoc}) cannot be read: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+
+  const designHeadings = extractDesignHeadings(designDocContent);
+
+  for (const { item, isEpic } of allItems) {
+    if (isEpic || item.type?.toLowerCase() === "epic") continue;
+    const labels = resolvedLabels.get(item) ?? [];
+    const tier = item.tier ?? item.model ?? item.modelTier;
+    if (labels.includes("Josh") || tier === "Josh") continue;
+
+    const bodyPath = item.bodyFile || item.body_file || item.bodyPath;
+    let body: string | undefined = item.body;
+    if (bodyPath) {
+      try {
+        body = await deps.readFileText(path.resolve(expandHome(bodyPath)));
+      } catch (err) {
+        throw new Error(
+          `Refused to file plan — cannot read body file "${bodyPath}" for issue "${item.title}": ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+
+    if (body === undefined) {
+      throw new Error(
+        `Refused to file plan — issue "${item.title}" body has no "## Acceptance criteria" section.`,
+      );
+    }
+
+    validateIssueBodyCriteria(item.title, body, designHeadings);
   }
 
   if (options.dryRun) {
@@ -375,15 +640,60 @@ export async function filePlan(
     const byPosition = new Map<number, FiledIssueInfo>();
     const byTitle = new Map<string, FiledIssueInfo>();
     const byGitHubCitation = new Map<string, FiledIssueInfo>();
+    const filedNumbers = new Map<PlanIssueItem, number>();
     let filedEpic: FiledIssueInfo | undefined;
     const filedChildren: FiledIssueInfo[] = [];
+
+    // 0. Pre-validate external parent citations before filing anything (web-jam-tools#1398)
+    for (let i = 0; i < parentTargets.length; i++) {
+      const target = parentTargets[i];
+      const child = plan.children[i];
+      const childRepo = normalizeRepo(child.repo || plan.defaultRepo);
+      let targetRef: ParsedIssueRef | undefined;
+      if (typeof target === "string") {
+        targetRef = parseIssueRef(target, { owner: childRepo.owner, name: childRepo.name });
+      } else if (typeof target === "number") {
+        targetRef = parseIssueRef(target, { owner: childRepo.owner, name: childRepo.name });
+      }
+      if (targetRef) {
+        const parentQuery = `
+          query ValidateParent {
+            repository(owner: "${targetRef.owner}", name: "${targetRef.repo}") {
+              issue(number: ${targetRef.number}) { id }
+            }
+          }
+        `;
+        const res = await deps.runCmd(["gh", "api", "graphql", "-f", `query=${parentQuery}`]);
+        let parentFound = false;
+        if (res.code === 0) {
+          try {
+            const data = JSON.parse(res.stdout);
+            if (data?.data?.repository?.issue?.id ?? data?.data?.parent?.issue?.id) {
+              parentFound = true;
+            }
+          } catch {
+            // ignore
+          }
+        }
+        if (!parentFound) {
+          const refStr = typeof target === "string"
+            ? target
+            : `${targetRef.owner}/${targetRef.repo}#${targetRef.number}`;
+          throw new Error(
+            `Refused to file plan — parent issue "${refStr}" for plan child ${
+              i + 1
+            } ("${child.title}") not found`,
+          );
+        }
+      }
+    }
 
     // 1. File the Epic first if present
     if (plan.epic) {
       const epicItem = plan.epic;
       const epicRepo = normalizeRepo(epicItem.repo || plan.defaultRepo);
       const epicBodyFile = await prepareBodyFile(epicItem, tempFiles);
-      const epicLabels = resolveLabels(epicItem);
+      const epicLabels = resolvedLabels.get(epicItem)!;
       const epicMilestone = epicItem.milestone !== undefined
         ? String(epicItem.milestone)
         : plan.defaultMilestone !== undefined
@@ -396,6 +706,7 @@ export async function filePlan(
         bodyFile: epicBodyFile,
         type: epicItem.type || "Epic",
         labels: epicLabels.length > 0 ? epicLabels : undefined,
+        escalationReason: epicItem.escalationReason,
         milestone: epicMilestone,
         priority: epicItem.priority,
         author: options.author,
@@ -407,6 +718,7 @@ export async function filePlan(
       const m = resultStr.match(/#(\d+)/);
       const epicNumber = m ? parseInt(m[1], 10) : 0;
       const epicDbId = await getIssueDatabaseId(epicRepo.full, epicNumber, deps);
+      filedNumbers.set(epicItem, epicNumber);
 
       filedEpic = {
         repo: epicRepo,
@@ -437,50 +749,25 @@ export async function filePlan(
       const childItem = plan.children[i];
       const childRepo = normalizeRepo(childItem.repo || plan.defaultRepo);
       const childBodyFile = await prepareBodyFile(childItem, tempFiles);
-      const childLabels = resolveLabels(childItem);
+      const childLabels = resolvedLabels.get(childItem)!;
       const childMilestone = childItem.milestone !== undefined
         ? String(childItem.milestone)
         : plan.defaultMilestone !== undefined
         ? String(plan.defaultMilestone)
         : undefined;
 
-      // Determine parent
-      let parentNumber: number | undefined;
-      if (childItem.parent !== undefined) {
-        if (typeof childItem.parent === "number") {
-          if (byPosition.has(childItem.parent)) {
-            parentNumber = byPosition.get(childItem.parent)!.number;
-          } else if (byExplicitId.has(String(childItem.parent))) {
-            parentNumber = byExplicitId.get(String(childItem.parent))!.number;
-          } else {
-            parentNumber = childItem.parent;
-          }
-        } else if (typeof childItem.parent === "string") {
-          const pTrim = childItem.parent.trim();
-          const pLower = pTrim.toLowerCase();
-          if (pLower === "none" || pLower === "null" || pLower === "-" || pLower === "") {
-            parentNumber = undefined;
-          } else if (pLower === "epic" || pLower === "parent") {
-            parentNumber = filedEpic?.number;
-          } else if (byExplicitId.has(pLower)) {
-            parentNumber = byExplicitId.get(pLower)!.number;
-          } else if (byTitle.has(pLower)) {
-            parentNumber = byTitle.get(pLower)!.number;
-          } else {
-            const numMatch = pTrim.match(/^#?(\d+)$/);
-            if (numMatch) {
-              const numVal = parseInt(numMatch[1], 10);
-              if (byPosition.has(numVal)) {
-                parentNumber = byPosition.get(numVal)!.number;
-              } else {
-                parentNumber = numVal;
-              }
-            }
-          }
+      const parentTarget = parentTargets[i];
+      let parentOption: number | string | undefined;
+      if (typeof parentTarget === "number" || typeof parentTarget === "string") {
+        parentOption = parentTarget;
+      } else if (parentTarget) {
+        const parentNum = filedNumbers.get(parentTarget)!;
+        const parentRepo = normalizeRepo(parentTarget.repo || plan.defaultRepo);
+        if (parentRepo.full.toLowerCase() === childRepo.full.toLowerCase()) {
+          parentOption = parentNum;
+        } else {
+          parentOption = `${parentRepo.full}#${parentNum}`;
         }
-      } else if (filedEpic && childRepo.full === filedEpic.repo.full) {
-        // Default: attach child to the filed Epic if in the same repository
-        parentNumber = filedEpic.number;
       }
 
       const createOptions: CreateIssueOptions = {
@@ -489,9 +776,10 @@ export async function filePlan(
         bodyFile: childBodyFile,
         type: childItem.type || "Task",
         labels: childLabels.length > 0 ? childLabels : undefined,
+        escalationReason: childItem.escalationReason,
         milestone: childMilestone,
         priority: childItem.priority,
-        parent: parentNumber,
+        parent: parentOption,
         author: options.author,
       };
 
@@ -505,6 +793,7 @@ export async function filePlan(
       const m = resultStr.match(/#(\d+)/);
       const childNumber = m ? parseInt(m[1], 10) : 0;
       const childDbId = await getIssueDatabaseId(childRepo.full, childNumber, deps);
+      filedNumbers.set(childItem, childNumber);
 
       const filedChild: FiledIssueInfo = {
         repo: childRepo,
@@ -531,7 +820,7 @@ export async function filePlan(
 
       console.log(
         `[design:file-plan] Filed Child: ${childRepo.name}#${childNumber} "${childItem.title}"${
-          parentNumber ? ` (parent: #${parentNumber})` : ""
+          parentOption !== undefined ? ` (parent: ${parentOption})` : ""
         }`,
       );
     }

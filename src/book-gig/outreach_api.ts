@@ -1,12 +1,12 @@
 import crypto from "node:crypto";
 import type {
   BatchDispatchResult,
-  CheckRepliesResult,
   DraftFingerprintItem,
   EmailTemplate,
   Gate1ApprovalRecord,
   Gate2ApprovalRecord,
   OutreachCampaignRecord,
+  PitchEmail,
   PitchPreview,
   TargetWeekend,
 } from "./types.ts";
@@ -120,6 +120,9 @@ export interface DispatchBatchOptions extends BackendConfigOptions {
   venueNames?: Record<string, string>;
   templateType?: string;
   bookingPeriod?: string;
+  customIntro?: string;
+  customBody?: string;
+  pitches?: PitchEmail[];
   onProgress?: (progress: DispatchProgress) => void;
 }
 
@@ -202,14 +205,28 @@ export async function dispatchBatchOutreach(
     throw new BatchDispatchError(msg, aggregate, { ...context, unsentVenues: unsentVenues() });
   };
 
-  // Step 1: pre-flight the whole remaining set. Nothing is sent by this call.
-  const preflightPayload = {
+  // Preflight must check the entire approved set before any send. Carry each preview's
+  // rendering inputs alongside that set; never split it into separate approvals.
+  const pitchByVenueId = new Map((options.pitches || []).map((p) => [p.venueId, p]));
+  const venueCustomizations = options.venueIds.flatMap((venueId) => {
+    const pitch = pitchByVenueId.get(venueId);
+    const customIntro = options.customIntro ?? pitch?.customIntro;
+    const customBody = options.customBody ?? pitch?.customBody;
+    return customIntro || customBody ? [{ venueId, customIntro, customBody }] : [];
+  });
+
+  // Step 1: pre-flight for the whole set. Nothing is sent by this call.
+  const preflightPayload: Record<string, unknown> = {
     venueIds: options.venueIds,
     targetDates,
     targetWeekend: { start: options.weekend.start, end: options.weekend.end },
     templateType: options.templateType,
     bookingPeriod,
   };
+  if (options.customIntro) preflightPayload.customIntro = options.customIntro;
+  if (options.customBody) preflightPayload.customBody = options.customBody;
+  if (venueCustomizations.length > 0) preflightPayload.venueCustomizations = venueCustomizations;
+
   let preflightRes: Response;
   try {
     preflightRes = await fetchFn(`${baseUrl}/outreach/batch/preflight`, {
@@ -320,44 +337,7 @@ export async function dispatchBatchOutreach(
     }
     lastRemaining = data.remaining;
   }
-
   return aggregate;
-}
-
-/**
- * Trigger reply scan on Gmail via POST /outreach/check-replies
- */
-export async function checkGmailReplies(
-  options: BackendConfigOptions = {},
-  fetchFn: typeof fetch = fetch,
-): Promise<CheckRepliesResult> {
-  const { baseUrl, token } = await resolveBackendConfig(options);
-  const url = `${baseUrl}/outreach/check-replies`;
-
-  try {
-    const res = await fetchFn(url, {
-      method: "POST",
-      headers: buildHeaders(token),
-      body: "{}",
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      console.warn(`[book-gig] check-replies returned HTTP ${res.status}: ${errText}`);
-      return { checked: 0, matched: 0, classified: 0, bounced: 0 };
-    }
-
-    const data = await res.json();
-    return {
-      checked: data.checked ?? 0,
-      matched: data.matched ?? 0,
-      classified: data.classified ?? 0,
-      bounced: data.bounced ?? 0,
-    };
-  } catch (err) {
-    console.warn(`[book-gig] Error checking replies: ${(err as Error).message}`);
-    return { checked: 0, matched: 0, classified: 0, bounced: 0 };
-  }
 }
 
 /**

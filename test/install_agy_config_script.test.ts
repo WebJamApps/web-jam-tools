@@ -3,12 +3,76 @@
 // Tests for scripts/install-agy-config.sh symlink creation, idempotency,
 // real-file backup preservation, and credential-literal guard.
 
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { findCredentialLiteral } from "../hooks/lib/detect_credential_literal.ts";
 
 const SCRIPT_PATH = new URL("../scripts/install-agy-config.sh", import.meta.url).pathname;
 const REPO_DIR = new URL("../", import.meta.url).pathname.replace(/\/$/, "");
 const MASTER_CONFIG_PATH = `${REPO_DIR}/agy/config/mcp_config.json`;
+
+for (const scenario of ["present", "absent", "unreadable", "source-error"] as const) {
+  Deno.test(`GitHub MCP launcher keeps canary out of arguments and fails closed: ${scenario}`, async () => {
+    const dir = await Deno.makeTempDir({ prefix: "github-mcp-launch-" });
+    const canary = "synthetic-mcp-canary-not-a-credential";
+    try {
+      const binDir = `${dir}/.local/bin`;
+      await Deno.mkdir(binDir, { recursive: true });
+      // Resolve the configured shell, but never a live Docker/env/service wrapper.
+      await Deno.symlink("/bin/bash", `${binDir}/bash`);
+      const recordPath = `${dir}/record.json`;
+      // Record only this synthetic environment value, never the inherited environment.
+      await Deno.writeTextFile(
+        `${binDir}/github-mcp-server`,
+        `#!/usr/bin/python3
+import json, os, sys
+with open(os.environ["RECORD_PATH"], "w") as record:
+    json.dump({"args": sys.argv, "token": os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN")}, record)
+`,
+      );
+      await Deno.chmod(`${binDir}/github-mcp-server`, 0o755);
+      if (scenario !== "unreadable") {
+        await Deno.writeTextFile(
+          `${dir}/.bashrc`,
+          scenario === "absent"
+            ? "# No token configured\n"
+            : scenario === "source-error"
+            ? `printf '%s' '${canary}' >&2\nreturn 1\n`
+            : `export GH_TOKEN='${canary}'\nset -x\n`,
+        );
+      }
+      const config = JSON.parse(await Deno.readTextFile(MASTER_CONFIG_PATH));
+      const launcher = config.mcpServers.github as { command: string; args: string[] };
+      assertEquals(launcher.command, "bash");
+      assert(!launcher.args.some((arg) => arg.includes(canary)));
+      const output = await new Deno.Command(launcher.command, {
+        args: launcher.args,
+        clearEnv: true,
+        env: { HOME: dir, PATH: binDir, RECORD_PATH: recordPath },
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      const printed = new TextDecoder().decode(output.stdout) +
+        new TextDecoder().decode(output.stderr);
+      assert(!printed.includes(canary), "launcher must never print the canary");
+      if (scenario === "present") {
+        assertEquals(output.code, 0, printed);
+        const received = JSON.parse(await Deno.readTextFile(recordPath));
+        assertEquals(received.args, [`${binDir}/github-mcp-server`, "stdio"]);
+        assertEquals(received.token, canary);
+        assert(!received.args.some((arg: string) => arg.includes(canary)));
+      } else {
+        assertEquals(output.code, 1, printed);
+        assertStringIncludes(printed, "GitHub MCP:");
+        await assertRejects(
+          () => Deno.stat(recordPath),
+          Deno.errors.NotFound,
+        );
+      }
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+}
 
 Deno.test("master agy/config/mcp_config.json is valid JSON, contains no credentials, and defines reaper, playwright, github, gmail", async () => {
   const content = await Deno.readTextFile(MASTER_CONFIG_PATH);
@@ -207,7 +271,7 @@ Deno.test("install-agy-config.sh refuses to install and exits non-zero if master
     mcpServers: {
       github: {
         command: "docker",
-        args: ["run", "-e", "GITHUB_TOKEN=ghp_1111222233334444555566667777888899990000"], // webjam-fixture-ok
+        args: ["run", "-e", "GITHUB_TOKEN=" + "ghp_" + "1111222233334444555566667777888899990000"],
       },
     },
   };
@@ -258,7 +322,7 @@ Deno.test("install-agy-config.sh refuses to install and leaves master config unt
     mcpServers: {
       leakyTool: {
         command: "docker",
-        args: ["run", "-e", "TOKEN=ghp_1111222233334444555566667777888899990000"], // webjam-fixture-ok
+        args: ["run", "-e", "TOKEN=" + "ghp_" + "1111222233334444555566667777888899990000"],
       },
     },
   };
@@ -289,6 +353,193 @@ Deno.test("install-agy-config.sh refuses to install and leaves master config unt
       initialMasterContent,
       "Master config must remain byte-for-byte unchanged on refusal",
     );
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("install-agy-config.sh --check: linked fixture exits 0 with ok message and touches no files", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt1558-check-linked-" });
+  const destPath = `${dir}/mcp_config.json`;
+  try {
+    await Deno.symlink(MASTER_CONFIG_PATH, destPath);
+
+    const cmd = new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--check", "--mcp-config-path", destPath],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stdout, stderr } = await cmd.output();
+    const stdoutStr = new TextDecoder().decode(stdout);
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 0, stderrStr);
+    assertStringIncludes(stdoutStr, "agy: mcp_config.json: ok (already linked)");
+
+    // Assert no backup files or writes occurred
+    const entries = [...Deno.readDirSync(dir)];
+    assertEquals(entries.length, 1);
+    assertEquals(entries[0].name, "mcp_config.json");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("install-agy-config.sh --check: missing fixture exits 1 with drift message naming installer command", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt1558-check-missing-" });
+  const destPath = `${dir}/mcp_config.json`;
+  try {
+    const cmd = new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--check", "--mcp-config-path", destPath],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(stderrStr, "drift: agy mcp_config.json is missing at");
+    assertStringIncludes(stderrStr, "scripts/install-agy-config.sh");
+
+    // Assert destination was NOT created
+    await assertRejects(() => Deno.stat(destPath), Deno.errors.NotFound);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("install-agy-config.sh --check: not-symlink fixture exits 1 with drift message naming installer command", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt1558-check-notsymlink-" });
+  const destPath = `${dir}/mcp_config.json`;
+  try {
+    await Deno.writeTextFile(destPath, '{"mcpServers":{}}');
+
+    const cmd = new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--check", "--mcp-config-path", destPath],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(stderrStr, "drift: agy mcp_config.json at");
+    assertStringIncludes(stderrStr, "is not a symlink");
+    assertStringIncludes(stderrStr, "scripts/install-agy-config.sh");
+
+    // Assert real file was NOT modified or backed up
+    const entries = [...Deno.readDirSync(dir)];
+    assertEquals(entries.length, 1);
+    assertEquals(entries[0].name, "mcp_config.json");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("install-agy-config.sh --check: pointing elsewhere fixture exits 1 with drift message naming installer command", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt1558-check-elsewhere-" });
+  const destPath = `${dir}/mcp_config.json`;
+  const otherPath = `${dir}/other.json`;
+  try {
+    await Deno.writeTextFile(otherPath, "{}");
+    await Deno.symlink(otherPath, destPath);
+
+    const cmd = new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--check", "--mcp-config-path", destPath],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(stderrStr, "drift: agy mcp_config.json at");
+    assertStringIncludes(stderrStr, "points to");
+    assertStringIncludes(stderrStr, "scripts/install-agy-config.sh");
+
+    // Destination symlink was untouched
+    const lstat = await Deno.lstat(destPath);
+    assertEquals(lstat.isSymlink, true);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("install-agy-config.sh --check: unreadable fixture exits 1 with error message", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt1558-check-unreadable-" });
+  const subDir = `${dir}/unreadable-dir`;
+  const destPath = `${subDir}/mcp_config.json`;
+  try {
+    await Deno.mkdir(subDir, { recursive: true });
+    await Deno.chmod(subDir, 0o000);
+
+    const cmd = new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--check", "--mcp-config-path", destPath],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(stderrStr, "error: cannot inspect agy mcp_config.json at");
+  } finally {
+    try {
+      await Deno.chmod(subDir, 0o755);
+    } catch {
+      // ignore
+    }
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("install-agy-config.sh --check: unreadable symlink target fixture exits 1 with error message", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt1558-check-unreadable-target-" });
+  const restrictedDir = `${dir}/restricted`;
+  const destPath = `${dir}/mcp_config.json`;
+  const aliasPath = `${restrictedDir}/alias_mcp_config.json`;
+  try {
+    await Deno.mkdir(restrictedDir, { recursive: true });
+    await Deno.symlink(MASTER_CONFIG_PATH, aliasPath);
+    await Deno.symlink(aliasPath, destPath);
+
+    await Deno.chmod(restrictedDir, 0o000);
+
+    const cmd = new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--check", "--mcp-config-path", destPath],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(stderrStr, "error: cannot inspect symlink target at");
+  } finally {
+    try {
+      await Deno.chmod(restrictedDir, 0o755);
+    } catch {
+      // ignore
+    }
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("install-agy-config.sh --check: master config missing fixture exits 1 with error message", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt1558-check-nosrc-" });
+  const destPath = `${dir}/mcp_config.json`;
+  const nonExistentSrc = `${dir}/non-existent.json`;
+  try {
+    const cmd = new Deno.Command("bash", {
+      args: [
+        SCRIPT_PATH,
+        "--check",
+        "--mcp-src-path",
+        nonExistentSrc,
+        "--mcp-config-path",
+        destPath,
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assertEquals(code, 1);
+    assertStringIncludes(stderrStr, "error: cannot read master config at");
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

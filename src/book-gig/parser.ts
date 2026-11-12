@@ -36,7 +36,7 @@ export function matchesVenueFilter(venue: CandidateVenue, filterList: string[]):
  *   ["--send", "Oct 16-18 2026", "Lynchburg, VA", "--venues", "id1,id2"]
  *   ["--send", "Oct 16-18 2026", "--skip", "id3"]
  *   ["--replies", "Oct 16-18 2026"]
- *   ["--check-replies"]
+ *   ["--replies"]
  *   ["Oct", "16-18", "2026", "Lynchburg,", "VA"]
  *   ["2026-10-16", "24502"]
  */
@@ -160,7 +160,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
     } else if (lower.startsWith("--batch-id=") || lower.startsWith("--batchid=")) {
       const eqIdx = arg.indexOf("=");
       batchId = arg.slice(eqIdx + 1).trim();
-    } else if (lower === "--replies" || lower === "--check-replies") {
+    } else if (lower === "--replies") {
       mode = "replies";
     } else if (lower === "--link-gig" || lower === "--link") {
       mode = "link-gig";

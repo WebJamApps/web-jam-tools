@@ -3,6 +3,9 @@
 // and opens the HTML in Chrome on the active display (web-jam-tools#741).
 
 import * as path from "@std/path";
+import { designPathsInBody, isDesignDocFilename } from "../shared/design_body.ts";
+export { isDesignDocFilename } from "../shared/design_body.ts";
+import type { CommandRunner } from "../shared/repos.ts";
 import { renderDesignDoc } from "../../scripts/render_design_doc.ts";
 import { lintDesignDoc, presentingDay, stripCellDecoration, toLocalIsoDate } from "./lint_doc.ts";
 import { verifyCitations, type VerifyCitationsResult } from "./verify_citations.ts";
@@ -156,42 +159,40 @@ export async function defaultScreenshotImpl(
   }
 }
 
+/** Starts `bin` detached from this process. Throws when the program cannot be started. */
+function spawnDetached(bin: string, args: string[], env: Record<string, string>): void {
+  const child = new Deno.Command(bin, {
+    args,
+    env,
+    stdin: "null",
+    stdout: "null",
+    stderr: "null",
+  }).spawn();
+  child.unref();
+}
+
 /**
- * Opens the rendered HTML in Google Chrome on the active display in the background.
+ * Opens the rendered HTML in Google Chrome on the active display, without waiting for Chrome to
+ * exit. Chrome is started directly, not through a backgrounded shell command, so a missing
+ * executable throws instead of going unreported (web-jam-tools#1455).
  */
-export async function defaultOpenBrowserImpl(
+export function defaultOpenBrowserImpl(
   htmlPath: string,
   display?: string,
-  execCommand?: (
-    cmd: string,
-    env: Record<string, string>,
-  ) => Promise<{ success: boolean; code: number }>,
+  launch: (bin: string, args: string[], env: Record<string, string>) => void = spawnDetached,
 ): Promise<void> {
   const absHtmlPath = path.resolve(htmlPath);
   const activeDisplay = display || Deno.env.get("DISPLAY") || ":0";
-  const shellCmd =
-    `DISPLAY="${activeDisplay}" google-chrome "file://${absHtmlPath}" >/dev/null 2>&1 &`;
   const env = { ...Deno.env.toObject(), DISPLAY: activeDisplay };
-
-  if (execCommand) {
-    const output = await execCommand(shellCmd, env);
-    if (!output.success) {
-      throw new Error(`Failed to launch Google Chrome (exit code ${output.code})`);
-    }
-    return;
+  try {
+    launch("google-chrome", [`file://${absHtmlPath}`], env);
+  } catch (err) {
+    const reason = err instanceof Deno.errors.NotFound
+      ? "google-chrome was not found on PATH"
+      : `Failed to launch Google Chrome: ${err instanceof Error ? err.message : String(err)}`;
+    return Promise.reject(new Error(reason));
   }
-
-  const cmd = new Deno.Command("bash", {
-    args: ["-c", shellCmd],
-    env,
-    stdout: "null",
-    stderr: "null",
-  });
-
-  const output = await cmd.output();
-  if (!output.success) {
-    throw new Error(`Failed to launch Google Chrome (exit code ${output.code})`);
-  }
+  return Promise.resolve();
 }
 
 /**
@@ -466,27 +467,6 @@ export function extractTopicFromText(text: string): string {
 }
 
 /**
- * Checks if a filename is a candidate design document markdown file.
- * Excludes runbooks, walkthroughs, test logs, backups, and non-markdown files.
- */
-export function isDesignDocFilename(filename: string): boolean {
-  if (!filename) return false;
-  const lower = filename.toLowerCase();
-  if (!lower.endsWith(".md")) return false;
-  if (lower.includes(".bak") || lower.includes(".bak-")) return false;
-  if (
-    lower.includes("-manual-steps-") ||
-    lower.includes("-josh-steps-") ||
-    lower.includes("-steps-") ||
-    lower.includes("-run-") ||
-    lower.includes("manual-steps")
-  ) {
-    return false;
-  }
-  return lower.includes("-design-") || lower.endsWith("-design.md");
-}
-
-/**
  * Extracts date (YYYY-MM-DD) from filename if present.
  */
 export function extractDateFromFilename(filename: string): string | undefined {
@@ -720,7 +700,10 @@ export async function findExistingDesignDocs(
   } else {
     try {
       for await (const entry of Deno.readDir(baseDir)) {
-        if (entry.isDirectory && !entry.name.startsWith(".")) {
+        if (
+          entry.isDirectory && !entry.name.startsWith(".") &&
+          !EXCLUDED_DESIGN_FOLDERS.has(entry.name)
+        ) {
           themesToScan.push(entry.name);
         }
       }
@@ -733,6 +716,7 @@ export async function findExistingDesignDocs(
   const themeFallbackMatches: ExistingDesignDocMatch[] = [];
 
   for (const theme of themesToScan) {
+    if (EXCLUDED_DESIGN_FOLDERS.has(theme)) continue;
     const themeDir = path.join(baseDir, theme);
     // Theme-level fallback is permitted when options.theme is explicitly provided,
     // or if options.title mentions/contains the theme name.
@@ -806,12 +790,8 @@ export interface DecisionRecordEntry {
   outcome: string;
 }
 
-/**
- * Which of the two determinate states the canonical-document precondition found.
- * The third state — "cannot tell" — is never a return value; it throws
- * `DesignDocResolutionRefusal`, so it cannot be mistaken for "no document".
- */
-export type CanonicalDesignDocOutcome = "existing-document" | "no-document";
+/** A lookup resolves one document or asks Josh; filesystem failures also refuse. */
+export type CanonicalDesignDocOutcome = "existing-document" | "could-not-tell";
 
 export interface CanonicalDesignDocResolution {
   outcome: CanonicalDesignDocOutcome;
@@ -819,6 +799,8 @@ export interface CanonicalDesignDocResolution {
   root: string;
   match: ExistingDesignDocMatch | null;
   decisions: DecisionRecordEntry[];
+  reason?: string;
+  candidates?: ExistingDesignDocMatch[];
 }
 
 /**
@@ -837,9 +819,7 @@ export class DesignDocResolutionRefusal extends Error {
 
   constructor(resolutionPath: string, reason: string) {
     super(
-      `Refusing to proceed with the design run: cannot determine whether a canonical design ` +
-        `document already exists, because ${reason} at ${resolutionPath}. Fix or mount that path ` +
-        `and re-run. The run must not continue as though no design document existed.`,
+      `Refusing to proceed with the design run: could not tell — ${reason} at ${resolutionPath}.`,
     );
     this.name = "DesignDocResolutionRefusal";
     this.resolutionPath = resolutionPath;
@@ -909,7 +889,7 @@ export function parseDecisionsRecord(
 }
 
 export interface ResolveCanonicalDesignDocOptions extends FindDesignDocOptions {
-  findExistingDesignDocsImpl?: typeof findExistingDesignDocs;
+  runner?: CommandRunner;
   readTextFileImpl?: (filePath: string) => Promise<string>;
 }
 
@@ -940,81 +920,312 @@ async function assertDirectoryReadable(dirPath: string, describe: string): Promi
   }
 }
 
+export type ThemeFolderMatchResult =
+  | { outcome: "match"; folder: string }
+  | { outcome: "ambiguous"; matches: string[] }
+  | { outcome: "none" };
+
 /**
- * The canonical-document precondition for a design run (web-jam-tools#942).
- *
- * Unlike the Gate 1 refusal below — which fires late, on the act of rendering a duplicate file, and
- * so never fires at all for a run that writes no file — this resolves the topic's canonical design
- * document up front, so a run cannot put a decision to Josh without having read what the existing
- * document already settles.
- *
- * Three outcomes, all of them specified:
- *   1. a canonical document exists — returns `existing-document` with the match and its
- *      decisions-record entries, which the caller reads in full and reports;
- *   2. none exists — returns `no-document`, and the run creates a new document as before;
- *   3. it cannot tell — throws `DesignDocResolutionRefusal`, naming the path. It never
- *      degrades to outcome 2.
+ * Normalizes a theme name or folder name for fuzzy matching:
+ * lowercases and treats spaces, hyphens, and underscores as the same character.
  */
+export function normalizeThemeName(name: string): string {
+  return name.trim().toLowerCase().replace(/[\s\-_]+/g, "_");
+}
+
+/**
+ * Matches a theme name to a folder under the design-documents root.
+ * Compares the two with letter case ignored and with space, hyphen, and underscore
+ * treated as the same character. An exact match is preferred.
+ *
+ * - Condition holds (exactly one folder matches, or one matches exactly) → { outcome: "match", folder }
+ * - Ambiguous (two or more folders match and neither is exact) → { outcome: "ambiguous", matches }
+ * - Does not hold (zero folders match) → { outcome: "none" }
+ */
+export function matchThemeFolder(
+  themeName: string,
+  availableFolders: string[],
+): ThemeFolderMatchResult {
+  const normalizedTarget = normalizeThemeName(themeName);
+  const normalizedMatches = availableFolders.filter(
+    (folder) => normalizeThemeName(folder) === normalizedTarget,
+  );
+
+  if (normalizedMatches.length === 0) {
+    return { outcome: "none" };
+  }
+
+  if (normalizedMatches.length === 1) {
+    return { outcome: "match", folder: normalizedMatches[0] };
+  }
+
+  const exactMatches = normalizedMatches.filter((folder) => folder === themeName);
+  if (exactMatches.length === 1) {
+    return { outcome: "match", folder: exactMatches[0] };
+  }
+
+  return { outcome: "ambiguous", matches: [...normalizedMatches].sort() };
+}
+
+/** The read-only step-zero lookup. Only a unique path or whole topic can resolve. */
 export async function resolveCanonicalDesignDoc(
   options: ResolveCanonicalDesignDocOptions,
 ): Promise<CanonicalDesignDocResolution> {
-  const topic = options.topic || (options.title ? extractTopicFromText(options.title) : "");
+  const input = (options.topic || options.title || "").trim();
   const root = resolveDesignDocsRoot(options.dropboxDir);
-
-  if (!topic) {
-    throw new DesignDocResolutionRefusal(
+  if (!input) throw new DesignDocResolutionRefusal(root, "no topic slug could be resolved");
+  await assertDirectoryReadable(root, "the design-documents root");
+  const physicalRoot = await Deno.realPath(root);
+  let topic = normalizeTopicSlug(input);
+  let milestone = "";
+  const unsure = (
+    reason: string,
+    candidates: ExistingDesignDocMatch[] = [],
+  ): CanonicalDesignDocResolution => ({
+    outcome: "could-not-tell",
+    topic,
+    root,
+    match: null,
+    decisions: [],
+    reason,
+    candidates,
+  });
+  const resolved = async (file: string): Promise<CanonicalDesignDocResolution> => {
+    const canonical = await readableDesignPath(file, physicalRoot);
+    let content: string;
+    try {
+      content = await (options.readTextFileImpl ?? Deno.readTextFile)(canonical);
+    } catch (error) {
+      throw new DesignDocResolutionRefusal(canonical, `found but could not be read (${error})`);
+    }
+    const match = designMatch(canonical, topic);
+    return {
+      outcome: "existing-document",
+      topic,
       root,
-      `no topic slug could be resolved from ${
-        JSON.stringify(options.topic ?? options.title ?? "")
-      }, so no canonical design document could be searched for`,
-    );
+      match,
+      decisions: parseDecisionsRecord(content),
+    };
+  };
+
+  if (/^(?:\/|~\/|\.{1,2}\/)/.test(input) || input.endsWith(".md")) {
+    return await resolved(path.resolve(expandHome(input)));
   }
 
-  await assertDirectoryReadable(root, "the design-documents root");
-
-  const themes: string[] = [];
-  if (options.theme) {
-    themes.push(options.theme);
-  } else {
-    for await (const entry of Deno.readDir(root)) {
-      if (entry.isDirectory && !entry.name.startsWith(".")) {
-        themes.push(entry.name);
+  const citation = parseDesignIssueCitation(input);
+  if (citation) {
+    let issue: { title: string; body: string; milestone?: { title?: string } | null };
+    try {
+      const result = await (options.runner ?? defaultDesignIssueRunner)([
+        "issue",
+        "view",
+        citation.number,
+        "--repo",
+        citation.repo,
+        "--json",
+        "title,body,milestone",
+      ]);
+      if (result.code !== 0) throw new Error("issue body could not be read");
+      const parsed = JSON.parse(result.stdout);
+      if (typeof parsed.title !== "string" || typeof parsed.body !== "string") {
+        throw new Error("issue body could not be read");
       }
+      if (parsed.milestone != null && typeof parsed.milestone.title !== "string") {
+        throw new Error("issue milestone could not be read");
+      }
+      issue = parsed;
+    } catch {
+      return unsure(`issue body could not be read: ${input}`);
+    }
+    topic = normalizeTopicSlug(issue.title);
+    milestone = normalizeTopicSlug(issue.milestone?.title ?? "");
+    const files = new Set<string>();
+    const unreadable: string[] = [];
+    for (const expanded of designPathsInBody(issue.body)) {
+      try {
+        files.add(await readableDesignPath(expanded, physicalRoot));
+      } catch (error) {
+        files.add(expanded);
+        unreadable.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+    if (unreadable.length) {
+      return unsure(
+        unreadable.join("; "),
+        [...files].sort().map((file) => designMatch(file, topic)),
+      );
+    }
+    if (files.size === 1) return await resolved([...files][0]);
+    if (files.size > 1) {
+      return unsure(
+        "the issue names several design documents; ask Josh which one this run revises",
+        [...files].sort().map((file) => designMatch(file, topic)),
+      );
     }
   }
 
+  const folders: string[] = [];
+  for await (const entry of Deno.readDir(root)) {
+    if (
+      entry.isDirectory && !entry.name.startsWith(".") && !EXCLUDED_DESIGN_FOLDERS.has(entry.name)
+    ) {
+      folders.push(entry.name);
+    }
+  }
+  let themes = folders.sort();
+  if (options.theme) {
+    const match = matchThemeFolder(options.theme, themes);
+    if (match.outcome === "ambiguous") {
+      throw new DesignDocResolutionRefusal(
+        root,
+        `multiple theme folders match "${options.theme}" (${
+          match.matches.map((name) => `"${name}"`).join(", ")
+        })`,
+      );
+    }
+    if (match.outcome === "none") {
+      throw new DesignDocResolutionRefusal(
+        path.join(root, options.theme),
+        `the theme folder "${options.theme}" is missing or unreadable`,
+      );
+    }
+    themes = [match.folder];
+  }
+
+  const docs: ExistingDesignDocMatch[] = [];
   for (const theme of themes) {
-    await assertDirectoryReadable(path.join(root, theme), `the theme folder "${theme}"`);
+    const folder = path.join(root, theme);
+    await assertDirectoryReadable(folder, `the theme folder "${theme}"`);
+    for await (const entry of Deno.readDir(folder)) {
+      if (entry.isFile && isDesignDocFilename(entry.name)) {
+        docs.push(designMatch(path.join(folder, entry.name), topic));
+      }
+    }
   }
-
-  const finder = options.findExistingDesignDocsImpl ?? findExistingDesignDocs;
-  const matches = await finder({ topic, theme: options.theme, dropboxDir: root });
-
-  if (matches.length === 0) {
-    return { outcome: "no-document", topic, root, match: null, decisions: [] };
+  docs.sort((a, b) => a.path.localeCompare(b.path));
+  if (!citation) {
+    const exact = docs.filter((doc) => designName(doc.filename) === topic);
+    const contiguous = topic.split("-").length >= 2
+      ? docs.filter((doc) => (`-${designName(doc.filename)}-`).includes(`-${topic}-`))
+      : [];
+    const matches = exact.length ? exact : contiguous;
+    if (matches.length === 1) return await resolved(matches[0].path);
+    if (matches.length > 1) {
+      return unsure("several design documents match the whole topic", matches);
+    }
   }
+  const significant = topic.split("-").filter((word) =>
+    word.length >= 2 && !LOOKUP_STOP_WORDS.has(word)
+  );
+  const candidates = docs.filter((doc) => {
+    const name = designName(doc.filename);
+    return (milestone && name === milestone) ||
+      name.split("-").some((word) => significant.includes(word));
+  });
+  return unsure(
+    "no unique whole-topic match; ask Josh which design this is or whether it is new",
+    candidates,
+  );
+}
 
-  const match = matches[0];
-  const readTextFile = options.readTextFileImpl ?? Deno.readTextFile;
+const EXCLUDED_DESIGN_FOLDERS = new Set(["resume-records", "claude-backup", "backups"]);
+const LOOKUP_STOP_WORDS = new Set([
+  "an",
+  "as",
+  "at",
+  "be",
+  "by",
+  "in",
+  "is",
+  "it",
+  "of",
+  "on",
+  "or",
+  "to",
+  "we",
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "this",
+  "that",
+  "into",
+  "are",
+  "was",
+  "not",
+  "its",
+  "has",
+  "have",
+  "does",
+  "when",
+  "what",
+  "how",
+  "but",
+  "can",
+  "should",
+]);
 
-  let contents: string;
+function designName(filename: string): string {
+  return normalizeTopicSlug(filename.replace(/-design(?:-\d{4}-\d{2}-\d{2})?\.md$/i, ""));
+}
+
+function designMatch(file: string, topic: string): ExistingDesignDocMatch {
+  return {
+    path: file,
+    filename: path.basename(file),
+    theme: path.basename(path.dirname(file)),
+    topic,
+    isMatch: true,
+    date: extractDateFromFilename(file),
+    suggestion: formatMajorRevisionPrompt(file, topic),
+  };
+}
+
+async function readableDesignPath(file: string, root: string): Promise<string> {
+  const eligible = (candidate: string) => {
+    const parts = path.relative(root, candidate).split(path.SEPARATOR);
+    return parts.length === 2 && !EXCLUDED_DESIGN_FOLDERS.has(parts[0]) &&
+      !parts[0].startsWith(".") && isDesignDocFilename(parts[1]);
+  };
   try {
-    contents = await readTextFile(match.path);
-  } catch (err) {
+    const canonical = await Deno.realPath(file);
+    if (!eligible(canonical)) {
+      throw new Error("not a design document under the root");
+    }
+    const info = await Deno.stat(canonical);
+    if (!info.isFile || (info.mode !== null && (info.mode & 0o444) === 0)) {
+      throw new Error("not a readable design document");
+    }
+    return canonical;
+  } catch (error) {
     throw new DesignDocResolutionRefusal(
-      match.path,
-      `the canonical design document was found but could not be read (${
-        err instanceof Error ? err.message : String(err)
-      })`,
+      file,
+      `the design document is missing or unreadable (${error})`,
     );
   }
+}
 
+function parseDesignIssueCitation(input: string): { repo: string; number: string } | null {
+  const github = input.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)(?:\s|$)/);
+  if (github) return { repo: github[1], number: github[2] };
+  const citation = input.match(/^(?:([\w-]+(?:\/[\w-]+)?)\s*)?#(\d+)(?:\s|$)/);
+  if (!citation) return null;
+  const repo = citation[1] || "web-jam-tools";
+  return { repo: repo.includes("/") ? repo : `WebJamApps/${repo}`, number: citation[2] };
+}
+
+async function defaultDesignIssueRunner(args: string[]) {
+  const output = await new Deno.Command("gh", {
+    args,
+    stdout: "piped",
+    stderr: "piped",
+    signal: AbortSignal.timeout(30_000),
+  }).output();
   return {
-    outcome: "existing-document",
-    topic,
-    root,
-    match,
-    decisions: parseDecisionsRecord(contents),
+    code: output.code,
+    stdout: new TextDecoder().decode(output.stdout),
+    stderr: new TextDecoder().decode(output.stderr),
   };
 }
 
@@ -1026,8 +1237,11 @@ export function formatCanonicalDesignDocResolution(
   resolution: CanonicalDesignDocResolution,
   prefix: string,
 ): string[] {
-  if (resolution.outcome === "no-document" || !resolution.match) {
-    return [`${prefix} No existing design document found for "${resolution.topic}".`];
+  if (resolution.outcome === "could-not-tell" || !resolution.match) {
+    return [
+      `${prefix} could not tell: ${resolution.reason}`,
+      ...(resolution.candidates ?? []).map((doc) => `  ${doc.path}`),
+    ];
   }
 
   const lines = [

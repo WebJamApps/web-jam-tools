@@ -1,6 +1,6 @@
 ---
 name: design-issue
-description: Design-then-issue-plan workflow prior to filing GitHub issues. Design work runs through this skill. Never dispatches (ends at "the issues exist").
+description: Design-then-issue-plan workflow prior to filing GitHub issues. Design work runs through this skill. Never dispatches build work (ends at "the issues exist"); its end-of-run memory PR is the one exception.
 metadata:
   version: v1
   publisher: josh
@@ -12,13 +12,21 @@ metadata:
 
 Design work does not happen in plain chat. The moment a conversation turns into design — options, trade-offs, decisions worth recording — the session runs `/design-issue` and works inside it. That single rule is what lets the design machinery live in the skill instead of in memory, loading only when design is actually happening.
 
-**ABSOLUTE STANDING RULE:** The skill **NEVER dispatches.** It ends at "the issues exist". It never spawns a build agent, hands work to a lane, starts a worktree, or runs `/work-issue`.
+**ABSOLUTE STANDING RULE:** The skill **NEVER dispatches.** It ends at "the issues exist". It never spawns a build agent, hands work to a lane, starts a worktree, or runs `/work-issue`. The one named exception: Phase 4's consume pull request, which carries the skill-body edits of the memory rules Josh approved in the end-of-run table, is handed to a Sonnet subagent at the end of the run.
 
 ---
 
 ## Workflow Phases
 
-### Phase 1 — Design (Opus / Flash for simple Bug or Task)
+### The model conducting the design
+
+When Josh invokes `/design-issue` or `$design-issue` in a session, the current model conducts the design. The run does not stop, require a model switch, or ask for additional authorization merely because that model differs from a default recommendation.
+
+The defaults guide choosing a new session: Flash for a single genuinely simple Bug or Task; Opus for a Feature, Epic, multi-repository or multi-issue design, or a Bug or Task whose scope requires substantial judgment. They are recommendations for arranging work, not an eligibility list for a session Josh invokes. A concrete capability limitation is explained with the evidence that prevents progress, rather than inferred from the current model's name.
+
+The model conducting the conversation does not determine the implementation issues' model labels. Those labels follow the triage and sizing rules. The design and issue-plan approval gates, filing requirements, and prohibition on dispatching implementation still apply.
+
+### Phase 1 — Design
 
 With no argument, the skill scans all 8 active repos for open issues labeled `Needs Design` and offers them as candidates. Josh picks; the skill never picks for him.
 
@@ -26,16 +34,20 @@ With no argument, the skill scans all 8 active repos for open issues labeled `Ne
 
 **Every directive is designed before Gate 1, never narrowed and parked at Gate 2.** Every directive line in the target issue's body, and in the body of any issue the run will close or remove `Needs Design` from, is designed in full and proved before Gate 1. Narrowing a directive to a smaller reading is a decision: it goes to Josh by name before Gate 1, following the Decision-Readiness rule below, and is never written only into a Gate 2 `Needs Design` removal's "not resolved" part, where an approval of the plan would approve the cut without Josh ever seeing it (web-jam-tools#1131 "skills/design-issue: a target issue's requirement can be narrowed and parked as not resolved at Gate 2 instead of designed before Gate 1").
 
-0. **STEP ZERO — resolve the canonical design document, and read it, before any decision is put to Josh.** This is a precondition of the *run*, not of creating a file: it happens at the start of every design run (Epic, Feature, Task or Bug alike), including a run that will never write a document. Resolve the topic with `deno task design:match-design "<topic>"` (or `deno task design:candidates --epic <citation>`) to automatically scan `~/Dropbox/web-jam-llms/<Theme>/` (and adjacent theme directories) for pre-existing canonical design documents (`<topic>-design-*.md` or `<topic>-skill-design-*.md`), and act on exactly one of three outcomes:
-   - **A canonical document is resolved (exit 0).** Read it end to end — decisions-record appendix included — and state in the conversation what it already settles, before any decision is put to Josh. The run continues as a **Major Revision** to that document, updating the specification in-place rather than spawning a new standalone file: it adds or updates the document's structured revision table with one new row, reconciles the architecture, decisions and `## Both surfaces` sections in place so the document reads cohesively as though it had always been the design, and refuses outright to create a second, parallel document (`*-phase-2-design-*.md` or similar) for a topic that already has one. Gate 1 (`runGate1`) actively enforces this check in code and refuses to render or open any document that duplicates a pre-existing canonical topic. A decision the document already records is never re-asked as though it were open; where the run believes a recorded decision should change, it names that decision and says why, and Josh rules on that.
+0. **STEP ZERO — resolve the canonical design document, and read it, before any decision is put to Josh.** This is a precondition of the *run*, not of creating a file: it happens at the start of every design run (Epic, Feature, Task or Bug alike), including a run that will never write a document. Resolve the topic with `deno task design:match-design "<topic>"` (or `deno task design:candidates --epic <citation>`) to automatically scan `~/Dropbox/web-jam-llms/<Theme>/` (and adjacent theme directories) for pre-existing canonical design documents (`<topic>-design.md` or `<topic>-skill-design.md`), and act on exactly one of three outcomes:
+   - **A canonical document is resolved (exit 0).** Read it end to end — decisions-record appendix included — and state in the conversation what it already settles, before any decision is put to Josh. The run continues as a **Major Revision** to that document, updating the specification in-place rather than spawning a new standalone file: it adds or updates the document's structured revision table with one new row, reconciles the architecture, decisions and `## Both surfaces` sections in place so the document reads cohesively as though it had always been the design, and refuses outright to create a second, parallel document (`*-phase-2-design.md` or similar) for a topic that already has one. Gate 1 (`runGate1`) actively enforces this check in code and refuses to render or open any document that duplicates a pre-existing canonical topic. A decision the document already records is never re-asked as though it were open; where the run believes a recorded decision should change, it names that decision and says why, and Josh rules on that.
    - **No canonical document exists (exit 1).** Say so, and proceed to create a new design document exactly as step 1 describes. Nothing else changes for a genuinely new topic.
    - **The check cannot tell which of the two applies (exit 2).** The design-documents root or theme folder is missing, Dropbox is not mounted, a directory is unreadable, the topic cannot be resolved, or the resolved document cannot be read. **The run REFUSES and stops**, reporting the path named in the refusal. It never continues as though no document existed — a silent "no document found" and a silent "could not look" are indistinguishable to the agent, and both let a run redesign a feature that is already designed, so the check fails closed. (The design-documents root is `~/Dropbox/web-jam-llms`, overridable for a scoped run via `DESIGN_DOCS_ROOT` or `--dropbox-dir`.)
-1. **Establish the theme and milestone.** `<Theme>` matches the GitHub milestone — read the live milestone list, never assume a fixed set. **Resume rather than restart:** Resolving the canonical design document is a precondition of the run itself rather than of creating one, so every run — including one that creates no document at all — looks in the theme folder for an existing `<topic>-design-*.md` and continues from its decision record; a run that wants a fresh document says so. Otherwise create the design document at `~/Dropbox/web-jam-llms/<Theme>/<topic>-design-<YYYY-MM-DD>.md`, creating the theme folder if the milestone has none yet.
+
+   **A mechanism belongs to the design whose subject it serves.** That is never simply the document that first described it because one of its commands calls it. When a mechanism is found described in another design, the run asks which design's subject it serves. The section moves there, and the calling design keeps a one-line pointer, so nothing is said in two places. Josh, 2026-11-03, on a snap update check first written into the agent remote-access design because `agents` runs it: "the snaps update is for my ubuntu laptop not a remote access thing ... the design document for remote access does not seem appropriate to me".
+1. **Establish the theme and milestone.** `<Theme>` matches the GitHub milestone — read the live milestone list, never assume a fixed set. **Resume rather than restart:** Resolving the canonical design document is a precondition of the run itself rather than of creating one, so every run — including one that creates no document at all — looks in the theme folder for an existing `<topic>-design.md` and continues from its decision record; a run that wants a fresh document says so. Otherwise create the design document at `~/Dropbox/web-jam-llms/<Theme>/<topic>-design.md`, creating the theme folder if the milestone has none yet.
 2. **Record what Josh asked for verbatim**, and the existing ground the work sits on.
 3. **Put every decision to Josh one at a time** — applying the Decision-Readiness rule below — and write his answer into the document as he gives it, never batched at the end. An item is decided only when he rules on THAT item by name.
-4. **Verify facts rather than asserting them**, and record what was verified and how. Where a premise turns out to be false, the body records the corrected fact in present tense and the falsified premise goes in the decision-record appendix — never a "this turned out to be false" note in the body. Recording an unverified load-bearing premise is NOT sufficient to reach Gate 1 — every load-bearing premise must be resolved and proven, not merely logged as an unknown or caveat, before presenting the design for Gate 1 approval. A premise that cannot be proved from what exists — because the thing it asserts has never been measured — does not become a caveat and does not become an unchecked row: it converts the run to a measure-first run (below).
+4. **Verify facts rather than asserting them**, and record what was verified and how. Where a premise turns out to be false, the body records the corrected fact in present tense and the falsified premise goes in the decision-record appendix — never a "this turned out to be false" note in the body. Recording an unverified load-bearing premise is NOT sufficient to reach Gate 1 — every load-bearing premise must be resolved and proven, not merely logged as an unknown or caveat, before presenting the design for Gate 1 approval. A premise that cannot be proved follows the design's "Keeping worked content" and "Writing a design document" sections; where the thing it asserts has never been measured, it converts the run to a measure-first run (below).
+
+   **A premise about another program is proved along the exact call the design makes.** The proof traces the request the design will send, from its entry point to the place the answer is produced, and reads that path. A neighbouring function, a sibling endpoint or a similarly named handler proves nothing about it. Josh, 2026-11-03, on a design that said snapd labels a failed update list `dns-failure` or `network-timeout`: the labels belonged to snapd's search handler, while the check's `select=refresh` request returns earlier, through `storeUpdates`, with an unlabelled error. The design had passed Gate 1 on that false premise and had to be corrected and presented again.
 5. **Reconcile edits continuously.** Apply the Edit-Reconciliation rule after any passage replacement.
-6. **Record revision in `## Revision History` table before Gate 1 (web-jam-tools#892):** When revising an existing design document, add the `## Revision History` table if absent, and append exactly one row for that Epic or Issue before Gate 1:
+6. **Record revision in `## Revision History` table before Gate 1 (web-jam-tools#892):** When revising an existing design document, add the `## Revision History` table if absent, and append exactly one row for the design run before Gate 1:
 
    ```markdown
    ## Revision History
@@ -46,8 +58,7 @@ With no argument, the skill scans all 8 active repos for open issues labeled `Ne
    | 1.1.0 | 2026-09-02 | [issue title](url) | One line saying what this revision covers. |
    ```
 
-   - **One row per Epic or standalone Issue:** Exactly one version bump for that whole piece of work no matter how many individual decisions it contained.
-   - **Child issues of an Epic do not get their own row:** Work done under an Epic rolls up into that Epic's existing row: the summary widens by a clause if needed and the date advances to the latest revision, but the version does not bump again. A new row and new version bump happen only when a different Epic, or a standalone Issue outside any Epic, changes the document.
+   - **One row and one version bump per design run:** Every run that touches the document appends exactly one new row and bumps the version once, no matter how many individual decisions or issues it covers. A run that covers multiple Epics, or child issues alongside standalone work, still appends one row for that whole run, with every issue behind the revision linked in that row. A later change to the same document in the same run widens that row's summary by a clause and advances its date to the latest revision; it never adds a second row and never bumps the version again. The row's `Epic / Issue` cell links every Epic and issue whose work is in the revision, each by its title. A new row and a new version bump happen only when a different design run changes the document. Before presenting at Gate 1, the run reads the newest rows of every document it touched and confirms each has one row for the run. In the file, rows run oldest to newest and each new row is added at the bottom; the rendered page shows them newest first (see "The Rendered Page" below).
    - **Required columns:** `Version`, `Date`, and a summary column are required; extra columns may be present. Versions are semantic (`MAJOR.MINOR.PATCH`) and dates are ISO (`YYYY-MM-DD`). Rows run oldest to newest. Issues are linked by title rather than by bare number.
 7. **GATE 1 — stop.** Present the design with `deno task design:gate1 <doc.md>` and no other way: it checks the document, renders it to a standalone HTML file, verifies the render with a headless screenshot, opens it for Josh in his own browser session in the background on his active display, and opens the run's **Gate 1 record** for that document (see "The Gate 1 record" below). Rendering, screenshotting and opening the document by hand skips the record, so the run cannot reach Gate 2 afterwards. Present the design and wait for his explicit approval. No writes to GitHub before Gate 1.
 
@@ -74,6 +85,14 @@ The run's position at Gate 1 lives in a small record on disk rather than only in
 - **`deno task design:lint-plan <plan.md> --design-doc <doc.md>`** checks the record before Gate 2 can be presented. It **passes** when the record shows an approval of Gate 1 and the document's fingerprint still matches the approved one, printing `Gate 1 approval recorded <date>: "<reply>"`. It **refuses** when there is no record, when Gate 1 is still open, when the document changed after approval, or when `--design-doc` is omitted. When the record or the document cannot be read, it **refuses**.
 
 The agent still judges whether Josh's reply approves the design; nothing parses his wording for approval phrases, which he has ruled out. What the record adds is that the judgment is made once, explicitly, against a quoted reply that Gate 2 puts back in front of him, and that no summary can lose it.
+
+### Changing a value tools read
+
+Before Gate 1, a revision that changes a value tools or skill text read (a model label, a plan-table
+column, a body section or a file format) searches the repository for the value itself, never just
+one reader's refusal message. Each reader found becomes a `Load-bearing premises` row naming the
+file and its current behavior. The issue plan carries a fix for every reader that would refuse or
+mangle the new value, sequenced first: no plan uses the new value until those readers carry it.
 
 ### The Measure-First Run
 
@@ -105,6 +124,11 @@ A decision is not ready to put to Josh until these conditions are met:
    - **As a series:** say up front how many pieces there are. Piece one is the background and the facts; then ONE option per message with its pros and cons; then the recommendation last. Wait for Josh's word between pieces.
    - **Raised again:** a decision that comes up again is laid out in full again, never by pointing back at an earlier message and never as a one-line re-ask.
    - **Still one decision at a time**, with the options as a numbered list across the series (conditions 1 and 4 hold unchanged). This applies to decisions only; status replies and report-backs stay short (see Communication Rules in Design Mode).
+7. **A ruling already given settles what it settles.** Before putting a decision, check whether Josh's rulings in this run, or the design document's standing rules, already determine the answer. When they do, write the answer into the design and list it at Gate 1; ask only the forks nothing already settles, and irreversible actions. Josh, 2026-10-16: "Sol or Sonnet or Argon all three are eligible and i am not sure why you are giving me these choices you should have been able to figure out this answer".
+8. **Nothing new arrives with the recommendation.** Before the first piece of a decision is sent, read the code that every option and every add-on touches, including the part the recommendation would change. Anything the recommendation needs that is in no option becomes its own option or its own decision, with its own facts and costs, before the pick is asked for. Josh, 2026-10-11: "ok this is the kind of information I needed up front when I was approving option 2 not afterwards when I had already approved it, please try to do better next time".
+9. **A rule is stated as Josh ruled it.** A rule the design states (which label, which model, who reviews) carries no condition Josh did not ask for, such as "once the lane is built" or "until the label exists, use X", and no such condition is put to him as a decision. A tool he already uses is usable; anything unbuilt around it is a follow-up issue, not a precondition. When he has ruled "A or B", the design says "A or B". Josh, 2026-10-02: "i think this is sounding like beauracracy again and i am not sure why we are discussing this ? Codex is running on plus right now and I can use it if I want to use it. We will complete the issues as time/token permits, having labels that match is a very minor thing here, please stop this discussion".
+10. **A ruling goes into the design document and nothing more.** When Josh picks an option during a run, the ruling is written into the design and the run moves straight to the next decision. Any manual step the ruling implies is planned as its own `Josh` issue at Gate 2, with its runbook, and is never handed to him mid-run as "run this now", even when the option text said "today" or "now". Josh, 2026-10-28: "why am i running this now!? we are in the middle of a design-issue run!"
+11. **An option's costs include what the person must find or do by hand, tested from what they start with.** Before an option is put, the run asks where each input the option needs comes from. A measurement that assumes the person already holds the input measures the wrong thing. Josh, 2026-11-01, rejecting an option that found a map position from an address he would have had to look up himself: "disagree, i am not going to go look up addresses manually every time, so you are basically asking me to google them instead of using a google api, this is stupid".
 
 #### Failure Shapes Ruled Out:
 - **The bare fork:** Two labeled options and an "I lean 1" with nothing under either.
@@ -112,6 +136,9 @@ A decision is not ready to put to Josh until these conditions are met:
 - **The workaround recommendation:** Recommending "accept it and document it" — an option that leaves a defect in place and gives Josh a habit to remember — while the real fix sits in the list marked "not verified". A defect is reported as a defect, and the fix is checked and brought. "No design change needed" is never a reason to prefer an option.
 - **The unexplained mechanism:** A question resting on machinery Josh has never seen.
 - **The buried premise:** A question whose real subject is a fact discovered mid-answer, presented as an aside rather than the thing being decided.
+- **The late addition:** A new item introduced inside the recommendation, with facts not yet checked, instead of as its own option or decision before the pick is asked for.
+- **The unmeasured hand step:** An option measured from an input the person does not have, with the work of getting that input left out of its costs.
+- **The unasked condition:** A gate or fallback attached to a rule Josh stated plainly, or put to him as a decision of its own.
 - **The bundled question / multi-decision dump:** Asking 2–3 questions at once, appending bonus asks ("…also, want a body note?"), or attaching a backlog dump / trailing list of unresolved threads to a report-back or confirm turn.
 - **The jargon barrier & academic framing:** Using specialized academic, educational, theoretical, or institutional vocabulary (e.g. "pedagogy", "learner diagnostics", "pedagogical assessment", "fine-motor coordination", "chirality", "topological isomorphism") or framing everyday human activities as formal educational/evaluative testing instead of plain, tangible physical terms (e.g. "left-over-right vs. right-over-left", "showing someone", "kids / small hands", "looking at the knots side-by-side"). Every concept and interaction must be described in plain, everyday conversational language anyone can follow without academic pretension.
 
@@ -129,7 +156,15 @@ Replacing a paragraph is not the complete edit. An edit is finished only when th
 - Confirm the passage makes each point exactly once, contains no duplicate conclusions, and still argues in one consistent direction.
 - A patch applied without reading its neighboring paragraphs is not done.
 
-### Phase 2 — The Issue Plan (Opus / Flash)
+### Phase 2 — The Issue Plan
+
+Model-label combinations follow
+`~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`, "How the order is used".
+`design:lint-plan` reads every `Model tier` cell through `src/shared/model_label_rule.ts` and
+checks the labels alone, because the table has no escalation-reason column. `design:file-plan`
+uses the same reader, merges each row's `labels`, and checks every row (the epic included) with
+its `escalationReason` before filing anything and in `--dry-run`. Carry that reason in the filing
+JSON for any row that needs it; the create receives both the labels and the reason.
 
 7. **Propose the plan table**, applying the epic heuristic and the Flash size checklist:
 
@@ -137,12 +172,22 @@ Replacing a paragraph is not the complete edit. An edit is finished only when th
    |---|---|---|---|---|---|---|---|
 
    - **Issue Titles**: Follows `skills/file-issue/SKILL.md` item 17 ("Issue Titles for Project Manager Audience with Skill/Feature Prefix and Epic Citation").
+   - **Priority**: Stated once, owned by `/file-issue`. Each Gate 2 plan row takes its Priority level from the level tests that `/file-issue` owns (under `skills/file-issue/SKILL.md`), and this skill does not restate the tests. In a Gate 2 plan each row takes its level from those same tests, with the plan's own rows counted as issues waiting, so the rows of a plan spread over the levels in dependency order; Josh rules on each row's level with the plan. The tests say which level fits one issue; they put no limit on how many issues a level holds.
+   - **Every plan row belongs to an epic**: Every non-epic row in the plan table must name an epic or a plan row in its `Epic / child of` cell (never empty or `none`).
+   - **Cross-repository work lives in web-jam-tools**: An epic whose children sit in more than one repository, and a non-epic issue whose work spans repositories, must have its Repo cell set to `web-jam-tools`.
+   - **Every target repository carries the plan's theme milestone**: At plan-writing time the run reads each target repository's milestones (`gh api repos/WebJamApps/<repo>/milestones?state=all`). Where a repository has no milestone for the plan's theme (for example `Operations`), the plan says that milestone will be created there, with the same title and description the repositories that have it use, and never says its rows "go in with no milestone". Josh, 2026-10-29, on a plan that filed four repositories' rows with no milestone: "i do not approve this statement, add the appropriate Operations milestone there".
+   - **Closes when**: Follows "Issues filed from a design point at it" in `~/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md` — each non-epic, non-`Josh` row's `Closes when` cell names a heading the design document has in double quotes or carries a backtick-quoted command.
 
 8. **Split out manual steps as pairs**, grouped by gate position in the dependency chain. Manual documentation / UI inspection (e.g. verifying generated Markdown/HTML in Google Chrome) and live demonstration / procedure walkthroughs (e.g. executing real-world steps with a learner or external party) are distinct verification surfaces and must be split into separate standalone pairs/issues. **Issue & Document Title Rule for Manual Steps:** Never include personal names (e.g. "Josh:") in issue titles or document titles. Issue titles must be professional, action-oriented, and role-agnostic (e.g. "Manual verification: ...", "Verification: ..."), with ownership designated exclusively by the `Josh` label or assignment, never embedded as a name prefix.
 9. **Determine the dependency chain** across the planned issues and record it. Where an issue's deliverable is a pointer — "point X at Y" — the plan **names Y concretely**, because an unnamed target hides an ordering: if Y turns out to be something another planned issue creates, the two issues are not independent, and the implementer picks the target after the chain was already declared. Where a load-bearing proof requires implementation work to obtain, sequence that proof FIRST in the dependency chain — never leave it as a late acceptance criterion whose failure would invalidate everything already built on it.
 10. **List every `Needs Design` label change as its own named item** — each removal carrying its 4-part reason.
 11. **Reconcile stale issue bodies and `Needs Design` label removals together in the same run — never separately.** Removing the `Needs Design` label and rewriting the issue's stale body sections happen in the same run — never separately (striking questions the design document answers, repointing design references, and reconciling scope against the approved plan). An issue is not done being designed while its own body still asks questions the design document has answered or points at the wrong document. Use `deno task design:stale-bodies` (`web-jam-tools#746`) to find stale sections, then apply both the body rewrite and the label removal via `deno task edit-issue` — never a raw `gh issue edit` (see the token-scope note under Gate 2 below).
-12. **GATE 2 — stop.** Run `deno task design:lint-plan <plan.md> --design-doc <doc.md>` first; the plan is not presented unless it passes, and the presentation opens with the `Gate 1 approval recorded <date>: "<reply>"` line it prints. Present the plan and wait for Josh's explicit issue plan approval. No creating, editing, or labeling issues before Gate 2. Gate 2 approval of the plan authorizes the `Needs Design` label removals listed in the plan. Nothing is filed to GitHub until Gate 2 passes.
+
+    **A plan edits only open issues, and adds no row just to satisfy the checker.** A plan does not propose edits to closed issues, or rows that exist only to pass `design:lint-plan`, and it re-reads every named issue's state just before presenting Gate 2. If a change only tidies a closed issue, leave it and say so in one line. If nothing needs writing to GitHub, say Gate 2 has nothing in it rather than building a plan to have one. Josh, 2026-11-01, on a plan that edited an issue he had already closed: "not messing with it anymore, beauracracy". On a follow-up plan that only removed pointers from two closed issues: "sorry why are we editing closed issues !?".
+
+12. **GATE 2 — stop.** Run `deno task design:lint-plan <plan.md> --design-doc <doc.md>` first; the plan is not presented unless it passes, and the presentation opens with the `Gate 1 approval recorded <date>: "<reply>"` line it prints. When `deno task design:lint-plan` passes, it renders the plan to `<plan>.html` with the same renderer Gate 1 uses (`scripts/render_design_doc.ts`) and opens it in Google Chrome on the active display, as `deno task design:gate1` does; a failing plan is neither rendered nor opened. Present the plan and wait for Josh's explicit issue plan approval. No creating, editing, or labeling issues before Gate 2. Gate 2 approval of the plan authorizes the `Needs Design` label removals listed in the plan. Nothing is filed to GitHub until Gate 2 passes.
+
+   **Every new title passes the duplicate search before Gate 2.** `design:lint-plan` runs the shared title-similarity search against each row's repository's open issues and the plan's other new titles; an exact existing title names that issue and is not compared with itself. When a title trips the search, the run reads the look-alike. Where it is different work, the run rewords the title and runs the check again until it passes; Josh is not asked. Where it is the same work, the run never rewords around the search: the new row leaves the plan and the plan names the existing issue in its place. An incomplete or failed search refuses the plan. Issue creation keeps its own duplicate search because another issue can be filed after Gate 2.
 
    **Write the issue-approval token upon Gate 2 approval:** The moment Josh explicitly approves the plan table, write the issue-approval token for the planned repo and exact titles (via `scripts/write_issue_approval_token.ts`) so subsequent issue creation (via `scripts/create-issue.ts` / `deno task create-issue`, or on Claude Code `mcp__*__issue_write` and `mcp__*__sub_issue_write`) passes `hooks/require-approval-token-on-issue-write.sh` without repetitive authorization prompts:
 
@@ -164,10 +209,10 @@ Replacing a paragraph is not the complete edit. An edit is finished only when th
 
 Filing delegates to a subagent only when delegating moves the work down a tier (Opus design hands off to a Sonnet subagent; agy already on Flash files directly itself with no self-delegation). The subagent or session receives the approved plan table and the design document path. It files and reports; it builds nothing.
 
-13. **File in plan order — the epic first, then each child** — invoking `/file-issue` once per issue so the filing rules and their enforcing hook apply to every one. Before the first issue write of the filing run, state how many permission prompts filing will raise and that switching the session's permission mode for the filing silences them, for the duration, persisting nothing. Attach each child to its parent as it goes (and cite the parent Epic in the child issue body); the ordering is forced by the parent/child link.
+13. **File in plan order — the epic first, then each child** — invoking `/file-issue` once per issue so the filing rules and their enforcing hook apply to every one. Before the first issue write of the filing run, state how many permission prompts filing will raise and that switching the session's permission mode for the filing silences them, for the duration, persisting nothing. Attach each child to its parent as it goes (and cite the parent Epic in the child issue body); the ordering is forced by the parent/child link. Before the first row is filed into a repository, create the theme milestone the plan names as missing there (Phase 2, "Every target repository carries the plan's theme milestone").
 
-    **Cross-repo children.** GitHub sub-issues exist only within a single repository. Attach every same-repo child natively and do NOT restate it in the epic body — GitHub already renders that list. Name ONLY the cross-repo children in the epic body, under their own heading, and cite each as `repo#number "title"`. Never both: each child appears in exactly one place, or the epic drifts from its own child list.
-14. **Each body carries only scope, build mechanics and repo facts**, plus a pointer to the design document and the instruction to STOP if that path cannot be read. No requirement text is restated.
+    **Cross-repo children.** Attach every child, in any repository, natively as a sub-issue and do NOT restate it inside the epic body — GitHub already renders that list.
+14. **Each body follows "Issues filed from a design point at it"**, carrying only scope, build mechanics and repo facts, a pointer to the design document, and the instruction to STOP if that path cannot be read. No requirement text is restated. Each acceptance criterion names, in quotation marks, a heading the design has — for example "builds 'The header line' as written" — or carries a backtick-quoted command that must pass.
 15. **Set the native issue type on every filing call** — the parent named in the plan table's `Epic / child of` column files as `--type Epic`, and every child files as its own planned type (`Task`, `Bug` or `Feature`) via `scripts/create-issue.ts --type <Type>` or GitHub MCP `issue_write`. (Note: `gh issue create` has no `--type` flag).
 
     **Pass `--author`.** Pass your own tool and model as `--author "<tool> — <model>"` on every `deno task create-issue` call, on every `deno task design:file-plan` call, and on every body-replacing `deno task edit-issue` call (rule 11's stale-body rewrite included). Each checks the author against the author roster and writes the footer `🤖 Authored by <tool> — <model>` as the last line of the body; a missing or off-roster author refuses the call before anything is written to GitHub.
@@ -192,7 +237,9 @@ When a run finishes on Claude Code, the skill reads the memory surfaces for rule
 
 #### Memory Consumption Guard Rails:
 - **Guard rules are NEVER candidates.** A guard rule (an approval gate, a deletion guard, a credential rule, an authorization-to-spend rule) must fire in sessions that act without loading the skill. Guard rules are never offered as consume, never offered as delete, and never split; they stay in memory whole and are omitted from the table entirely.
-- **Executed by script, never by hand.** The file surgery is performed by `scripts/consume_memory_rules.ts` in `web-jam-tools` (dry-run by default, moves to trash never `rm`, byte-verifies captures against the design document appendix, strips removed slugs from `MEMORY.md`, and reports dangling links).
+- **Executed by script, never by hand.** The file surgery is performed by `scripts/consume_memory_rules.ts` in `web-jam-tools` (dry-run by default, moves to trash never `rm`, keeps a word-for-word copy of each consumed rule and checks that copy byte for byte, strips removed slugs from `MEMORY.md`, and reports dangling links).
+- **Where the copy of a consumed rule is kept.** In a file of its own beside the design document, `~/Dropbox/web-jam-llms/<Theme>/<topic>-captured-rules.md`, and never in the design document. Gate 1 approval is tied to the exact text of the design document, and Phase 4 runs after that approval, so a step of Phase 4 that wrote into the design document would leave it reading "changed since approval" with no change to the design. The captured-rules file is a record of what left memory. It is not design, it is not presented at Gate 1, and it has no approval.
+- **The end of the run ships the consumes in one step: one pull request and the memory deletions together.** `scripts/consume_memory_rules.ts` removes the memory files and keeps the copies; it never writes a skill body. Once Josh approves the table, the run hands every skill-body edit to a Sonnet subagent, which opens one pull request carrying all of them, and the run executes `scripts/consume_memory_rules.ts --delete` at the same time, without waiting for the merge. No issue is filed for either. Josh, 2026-10-28: "i just want you to dispatch this to sonnet and make the PR now, I do not want an issue filed to add the memory, this is way too much beauracracy, idiotic !" and "this should be the standard way for the end of the design-issue run, the PR is pushed up with the memory adds and the other memory is deleted all at the same time at the end of the design-issue run !"
 
 ---
 
@@ -207,7 +254,7 @@ Nothing is filed to GitHub until GATE 2 passes.
 
 A measure-first run reaches Gate 1 like any other run — only later: Gate 1 waits until the run's own measurement has reported and the document has been revised from it, since there is no design to approve until then. Gate 2 fires afterward, unchanged; it never presents the measurement as a plan-table row, because the measurement already happened inside the run, before Gate 1.
 
-A third gate — dispatch — exists as a standing rule and is not this skill's to hold, because the skill never dispatches at all.
+A third gate — dispatch — exists as a standing rule and is not this skill's to hold, because the skill never dispatches at all. The one named exception: Phase 4's consume pull request, which carries the skill-body edits of the memory rules Josh approved in the end-of-run table, is handed to a Sonnet subagent at the end of the run.
 
 ---
 
@@ -218,6 +265,8 @@ These are properties of the skill, written as explicit refusals:
 | It refuses to | Because |
 |---|---|
 | write anything to a GitHub issue before GATE 1 | the design gate is real or it is decoration |
+| create a design document whose file name carries a date | new design documents use `<topic>-design.md`; the revision table holds their dates |
+| render a version or date line under a design document's title | the revision table already holds every version and date |
 | present Gate 1 while a load-bearing assumption the design's mechanism depends on is unverified | recording an unknown is not resolving it; an unproven mechanism is not an approved design |
 | present a design at Gate 1 whose mechanism rests on measurement that has not been performed | a document waiting on evidence is not a design but a plan to go and get one; the run converts to a measure-first run, performs the measurement itself, and the design is written from what that measurement reports |
 | present an issue plan, or ask for issue-plan approval, in a measure-first run before the measurement has reported | Gate 2 cannot fire on a measurement that has not happened; the run performs the measurement first, revises the design from it, and only then presents Gate 1 and Gate 2 in the normal order |
@@ -227,7 +276,7 @@ These are properties of the skill, written as explicit refusals:
 | present Gate 1 any way other than `deno task design:gate1` | rendering and opening the document by hand skips the Gate 1 record, and the run can then never show Gate 1 was passed |
 | pass a premise row dated before the presenting day unless the Gate 1 record holds that exact row from an approval or an adoption | an old date on a row Josh never saw is a stale proof presented as current; an old date on a row he approved, unchanged, is a fact he already accepted |
 | store a document's premise rows as adopted without Josh naming that document | adoption trusts rows nobody re-checked that day, so it happens on his word, once per document, with his reply recorded |
-| create a redundant parallel design document (e.g. `*-phase-2-design-*.md`) for a feature or skill that already has a canonical design document in `~/Dropbox/web-jam-llms/<Theme>/` | fragments feature documentation across multiple files and causes architectural drift; updates must be conducted as Major Revisions to the existing canonical document in-place |
+| create a redundant parallel design document (e.g. `*-phase-2-design.md`) for a feature or skill that already has a canonical design document in `~/Dropbox/web-jam-llms/<Theme>/` | fragments feature documentation across multiple files and causes architectural drift; updates must be conducted as Major Revisions to the existing canonical document in-place |
 | put any decision to Josh before resolving the topic's canonical design document and reading it end to end, decisions-record appendix included | the refusal above guards writing a duplicate file, which a run that writes no file never trips, and it fires at the end of Phase 1, after every decision has already been put to him; the resolution is therefore a precondition of the run, checked at step zero |
 | continue a design run when the canonical-document check cannot tell whether a document exists — a missing design-documents root or theme folder, an unmounted Dropbox, an unreadable directory, an unresolvable topic, or a document that cannot be read | a silent "no document found" and a silent "could not look" are indistinguishable to the agent, and both let a run redesign an already-designed feature; the check fails closed, exiting `2` and naming the path it could not read, and the run stops rather than proceeding |
 | post design content as an issue comment, ever | comments are not a temp location |
@@ -239,12 +288,14 @@ These are properties of the skill, written as explicit refusals:
 | combine artifact/doc/UI review and live procedure walkthroughs into a single manual issue | inspecting rendered artifacts in Google Chrome and executing live procedures with learners or external parties are distinct verification surfaces with different gates and acceptance criteria |
 | hand Josh a step with no script, no exact click path, or no numbered runbook | every manual step handed to Josh (in chat or issue, pre- or post-Gate 1) requires a numbered runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md` |
 | design a mechanism that works on only one agent surface (Claude Code or agy/Antigravity) without stopping for discussion | everything designed must work on both surfaces; surface-neutral paths are deno task, gh CLI, and CI; fails when depending on Claude-only hooks, Claude memory, or mcp__* tools |
-| file a trigger-list issue without an enumerated closed case list of literal input strings — including a list that enumerates categories (e.g. "piped to an interpreter") instead of the strings a matcher will see | trigger-list work (guards, hooks, regex, matchers, filters, permission patterns) is sized by its case list, not its diff, and stays at the `Flash` default; a case list counts as closed only when every entry is a literal input string, never a category; vague criteria like "handle edge cases" and category-named criteria both fail in review — a category is an unclosed list wearing the shape of a closed one; issues must enumerate every adversarial input case as a literal string, or, where a category cannot be reduced to such a finite set at design time, be filed as `Opus`, naming the category that resisted enumeration |
+| file a trigger-list issue without an enumerated closed case list of literal input strings — including a list that enumerates categories (e.g. "piped to an interpreter") instead of the strings a matcher will see | trigger-list work (guards, hooks, regex, matchers, filters, permission patterns) is sized by its case list, not its diff, and routes to `Sol` or `Sonnet`; a case list counts as closed only when every entry is a literal input string, never a category; vague criteria like "handle edge cases" and category-named criteria both fail in review — a category is an unclosed list wearing the shape of a closed one; issues must enumerate every adversarial input case as a literal string, or, where a category cannot be reduced to such a finite set at design time, be filed as `Opus`, naming the category that resisted enumeration |
 | narrate its own revision history in prose — "what changed", "why this was withdrawn", "an earlier version said", a changelog, before/after framing | the document states the current design as though it had always been the design; superseded reasoning lives only in the decision-record appendix. Metadata about document revisions lives exclusively in the `## Revision History` table (web-jam-tools#892) |
 | record the skill's own workflow state in the body — a Status line, a gate/approval state, "nothing filed", "design complete" | that describes where the skill's process has got to, not the system being designed; gate state lives in the conversation and in the issues the run produces |
 | **dispatch — spawn a build agent, hand work to a lane, start a worktree, run `/work-issue`** | absolute standing rule |
 | offer dispatch as a next step in the same breath as reporting what it filed | same rule, quieter failure |
 | leave superseded drafts, renamed artifacts, or obsolete intermediate runbook files behind in Dropbox upon deliverable finalization | destination folders must contain only active, canonical deliverables to prevent the accumulation of stale working duplicates |
+
+The dispatch rows above carry one exception. The one named exception: Phase 4's consume pull request, which carries the skill-body edits of the memory rules Josh approved in the end-of-run table, is handed to a Sonnet subagent at the end of the run.
 
 ---
 
@@ -272,7 +323,7 @@ The heuristic only proposes. The plan table is the gate, so a wrong call is caug
 
 ### Sized for Flash
 
-Non-epic issues default to **`Flash`** as the implementation tier. Sizing is governed by the reviewer's burden in one sitting (Josh's per-sitting review burden) rather than raw file count. An issue is Flash-sized when all of these hold:
+An issue's model label comes from the triage table in `docs/ai-team-playbook.md`; the sizing checklist below keeps the size limit for everyday coding tasks (`Flash`). Sizing is governed by the reviewer's burden in one sitting (Josh's per-sitting review burden) rather than raw file count. An issue is Flash-sized when all of these hold:
 
 - one repo;
 - one layer — frontend or backend, not both;
@@ -284,13 +335,13 @@ Anything over the line is split into multiple issues, and **every split carries 
 
 ### Sized by Case List, Not Diff
 
-**Trigger-list work is sized by its case list, not its diff.** Work matching the guard/hook/regex/matcher/filter/permission-pattern trigger list (`web-jam-tools#427 "Route guard/matcher work to Sonnet, make its review execute rather than read, prove it in CI, enforce citations on GitHub writes, and stop Opus designing other lanes' fixes — A1 through A6"`) stays at the `Flash` default. The raise to `Sonnet` this rule once carried stays retired: `Flash` is the default lane and bills to Google rather than the constrained Anthropic budget. (`Sonnet` has ranked above `Flash` again since Josh's 2026-10-01 ruling, so whether to restore the raise is his separate call; this rule's routing is unchanged.) It only counts as correctly sized once its acceptance criteria enumerate every adversarial input case the fix has to handle — not the phrase "handle edge cases," the actual list. Where that list splits along tested behaviors, file one issue per behavior, each with its own closed case list. Where the fix is a single, non-decomposable change whose case list cannot be pinned down at design time, file it `Opus`-labeled instead, and say why it could not be split.
+**Trigger-list work is sized by its case list, not its diff.** Work matching the guard/hook/regex/matcher/filter/permission-pattern trigger list (`web-jam-tools#427 "Route guard/matcher work to Sonnet, make its review execute rather than read, prove it in CI, enforce citations on GitHub writes, and stop Opus designing other lanes' fixes — A1 through A6"`) is logic- and safety-heavy coding, routed to `Sol` or `Sonnet` (or both, leaving the choice to Josh at dispatch) per the triage table in `docs/ai-team-playbook.md`. It only counts as correctly sized once its acceptance criteria enumerate every adversarial input case the fix has to handle — not the phrase "handle edge cases," the actual list. Where that list splits along tested behaviors, file one issue per behavior, each with its own closed case list. Where the fix is a single, non-decomposable change whose case list cannot be pinned down at design time, file it `Opus`-labeled instead, and say why it could not be split.
 
 **A case list counts as closed only when it enumerates input strings, never categories.** The rule above tests that a list exists; this one tests that the list is finite. For matcher work the defect is always the case nobody thought of, so a criterion naming a category — "piped to an interpreter", "redirected to a file", "a quoted delimiter" — is an unclosed list wearing the shape of a closed one, and satisfies the sizing rule while proving nothing. Every case a trigger-list issue claims to cover is written as the literal input the matcher will see (`/bin/bash`, `source /dev/stdin`, `cat >> /home/j/bash-x.md`), and where a category cannot be reduced to a finite set of such strings at design time, that is the "cannot be pinned down" condition in the rule above: the issue is filed `Opus`-labeled, naming the category that could not be enumerated. A category may still be stated, but only as the heading over its enumerated strings — never as a case in its own right.
 
-**Resolver work is sized by its key space: acceptance criteria must enumerate key sources and every pairwise collision.** The rules above test whether a list of matcher inputs is finite; this one tests whether a set of resolver key sources is complete. When a deliverable resolves a reference to a target through any lookup keyed by author-supplied values — registry, index, symbol table, alias resolver — the design run must enumerate the complete set of key sources the format admits (for example, `web-jam-tools#748` admitted exactly four: 1-based position, explicit `id`, title, external `repo#N` citation). The acceptance criteria must state the collision behaviour for **every unordered pair** of those key sources, plus each source against itself (four sources yield six pairs and four self-collisions). A tier floor of **`Flash`** — the default tier, never below it — applies whenever a wrong resolution causes an irreversible external write — a GitHub edge, an email, a payment — rather than a local error, because that failure is silent and durable and review reaches it only by constructing the collision. Where the key-source set cannot be closed at design time, that is the "cannot be pinned down" condition in the trigger-list rule above: the issue is filed **`Opus`**-labeled, naming the open key space that could not be enumerated.
+**Resolver work is sized by its key space: acceptance criteria must enumerate key sources and every pairwise collision.** The rules above test whether a list of matcher inputs is finite; this one tests whether a set of resolver key sources is complete. When a deliverable resolves a reference to a target through any lookup keyed by author-supplied values — registry, index, symbol table, alias resolver — the design run must enumerate the complete set of key sources the format admits (for example, `web-jam-tools#748` admitted exactly four: 1-based position, explicit `id`, title, external `repo#N` citation). The acceptance criteria must state the collision behaviour for **every unordered pair** of those key sources, plus each source against itself (four sources yield six pairs and four self-collisions). A tier floor of `Sol` or `Sonnet` applies whenever a wrong resolution causes an irreversible external write — a GitHub edge, an email, a payment — rather than a local error, because that failure is silent and durable and review reaches it only by constructing the collision. Where the key-source set cannot be closed at design time, that is the "cannot be pinned down" condition in the trigger-list rule above: the issue is filed **`Opus`**-labeled, naming the open key space that could not be enumerated.
 
-**What in these three rules is about capability, and what is not.** The tier each rule names is the only part that tracks model capability, and it is the only part a change to the tier order touches. The enumeration discipline is tier-neutral and unchanged: a case list is closed only when every entry is a literal input string, a resolver's key sources and every pairwise collision are enumerated, and neither requirement gets easier because a stronger model is running. The `Opus` escalations are not capability raises either — they fire on a specific, checkable condition, that the case list or key space could not be closed at design time, which is a statement about the problem rather than about who is implementing it. The resolver floor is about consequence: a wrong resolution that causes an irreversible external write fails silently and durably, so that work is held at the default tier and never routed below it.
+**What in these three rules is about capability, and what is not.** The tier each rule names is the only part that tracks model capability, and it is the only part a change to the tier order touches. The enumeration discipline is tier-neutral and unchanged: a case list is closed only when every entry is a literal input string, a resolver's key sources and every pairwise collision are enumerated, and neither requirement gets easier because a stronger model is running. The `Opus` escalations are not capability raises either — they fire on a specific, checkable condition, that the case list or key space could not be closed at design time, which is a statement about the problem rather than about who is implementing it. The resolver floor is about consequence: a wrong resolution that causes an irreversible external write fails silently and durably, so that work is held at `Sol` or `Sonnet` and never routed below it.
 
 ### Closeable, Always
 
@@ -379,7 +430,7 @@ When `/design-issue` resolves an existing issue into paired implementation and J
 
 **Finding.** With no argument the skill scans all 8 active repos for open `Needs Design` issues and offers them as candidates.
 
-**Adding — automatic, inside one guard rail.** The skill may add the label to an existing issue too under-specified to plan against, and to a follow-up it knowingly defers to a later design run. It may never add it to anything in the approved plan's executable set. A deferred stub still needs exactly one model label to pass `hooks/require-model-label-on-issue-create.sh`, so it goes out as `Opus` + `Needs Design`.
+**Adding — automatic, inside one guard rail.** The skill may add the label to an existing issue too under-specified to plan against, and to a follow-up it knowingly defers to a later design run. It may never add it to anything in the approved plan's executable set. A deferred stub still needs model labels allowed by the tier-order design cited above; for this open-ended design work it goes out as `Opus` + `Needs Design`, with an escalation reason.
 
 **Removing — never automatic, and the ask carries its reason.** Only Josh can say that a design is completed or not. Removing the `Needs Design` label and rewriting the issue's stale body sections happen in the same run — never separately (striking questions the design document answers, repointing design references, and reconciling scope). Use `deno task design:stale-bodies` (`web-jam-tools#746`) to find stale sections. The plan presented at Gate 2 lists every `Needs Design` label to be removed, each with its 4 parts, every time:
 
@@ -399,14 +450,14 @@ Gate 2 approval of the plan authorizes those removals, executed in the filing ph
 ### Where Design Documents Live
 
 ```
-~/Dropbox/web-jam-llms/<Theme>/<topic>-design-<YYYY-MM-DD>.md
+~/Dropbox/web-jam-llms/<Theme>/<topic>-design.md
 ```
 
 `<Theme>` matches the GitHub milestone. Read the live milestone list from GitHub before creating. Create the theme folder if the milestone has none yet.
 
 ### Document Lifecycle & Reference Instructions
 
-- **No automatic lifecycle for design documents.** The skill never archives, moves or deletes a design document, and neither does `/memory-cleanup`. Design documents (`<topic>-design-<YYYY-MM-DD>.md`) are permanent architectural records until Josh deletes them. A missing design document is a normal state, not drift.
+- **No automatic lifecycle for design documents.** The skill never archives, moves or deletes a design document, and neither does `/memory-cleanup`. Design documents (`<topic>-design.md`) are permanent architectural records until Josh deletes them. A missing design document is a normal state, not drift.
 - **Instruction for issues pointing at doc.** Every issue pointing at a design document carries the instruction to **STOP and say so if the path cannot be read** — never to reconstruct requirements from the issue body, from comments, or from guesswork.
 - **Distinction between permanent design documents and working deliverables:** While design documents are preserved as permanent historical records, working deliverables, guides, and runbooks evolve across design and implementation and require active cleanup to avoid leaving superseded drafts behind.
 
@@ -415,31 +466,23 @@ Gate 2 approval of the plan authorizes those removals, executed in the filing ph
 - **Prune Superseded Working Drafts:** When deliverables, guides, or runbooks are renamed, restructured, or unified during design or implementation (e.g. `shoelace-guide-granny-knots.md` → `shoelace-tying-guide.md`, or merging standalone runbooks into a unified guide), agents MUST actively delete the superseded intermediate drafts (`.md` and `.html`) from `~/Dropbox/web-jam-llms/<Theme>/` rather than leaving stale duplicates.
 - **Post-Completion Folder Audit:** Before declaring deliverables complete or closing a parent Epic, agents MUST audit the target destination folder in `~/Dropbox/web-jam-llms/<Theme>/` to ensure only the active, canonical final deliverables remain, preventing the accumulation of stale working files.
 
+### The Rendered Page
+
+A design document is two files: the text file agents write and edit, and the page `scripts/render_design_doc.ts` builds from it, which is what Josh reads in Chrome. Gate 1 approval is tied to the text file.
+
+**The history tables show newest first on the page.** Three tables hold a document's history: the revision table, the premises table and the decision record. In the text file each is written oldest first, and a new row is added at the bottom. On the page each is shown newest first:
+
+- **The revision table** — the document's structured revision table — is shown bottom row first.
+- **The premises table** — the table under the `Load-bearing premises` heading — is sorted by its `Proved` date, newest first; rows with the same date are shown bottom row first.
+- **The decision record** — the table under a heading that contains `Decision record`, `Decisions record`, `Decision log` or, as the whole heading, `Decisions`, in any capitalisation — is shown bottom row first.
+
+Every other table is shown in the order the file holds it. A table whose order means something other than time — the gates, the tier order, the rows of a Gate 2 plan — therefore reads the way it was written. The text files are not rewritten, and the document checker keeps requiring the revision table to run oldest to newest in the file.
+
+**Every table is paged.** A table with more than 10 rows shows 10 rows at a time, with a control under it offering 10, 20, 30 and all, a previous and a next button, and a count of the rows shown. A table with 10 rows or fewer has no control. With the history tables shown newest first, the first page of each is its latest ten rows. Printing the page prints every row.
+
 ### Writing Style
 
-- **The document states what the thing IS.** Present tense, design first. A reader who has never seen the conversation should be able to read it top to bottom and know what is being built.
-- **The decision history goes in an appendix**, as one row per decision with its outcome — never interleaved with the design. This also binds the document's OWN revision narration: where the design changed direction, the body records the CURRENT design as though it had always been the design, and the abandoned alternative goes in the appendix as the rejected option of the decision that rejected it — never narrated in prose in the body. Revision metadata belongs exclusively in the `## Revision History` table, not in body prose (web-jam-tools#892).
-- **The document never records the skill's own process state.** That describes where the `/design-issue` run has got to, not the system being designed; that state lives in the conversation and in the issues the run produces, per the phrasings ruled out under "What It Refuses to Do" above.
-- **Never a bare label in the body.** No "per D-7" or "R-39"; labels exist so the decision table has stable row names, and nowhere else.
-- **Josh's own words are preserved where they are load-bearing** — his ruling is the authority, and a paraphrase is weaker than his actual sentence.
-- **A design document proves its own premises, and the gate will not open without them.** Every design document carries a `## Load-bearing premises` section: one row per premise the design depends on, naming what was checked and what it showed. The document checker fails a document that omits the section, and fails any row whose proof is empty or hedged. Gate 1's presentation states that every row in that table is proven, so a hedge moved out of the document and into the conversation stands beside a table that contradicts it. The gate task refuses to render or open a document whose checker run does not pass, so the checker cannot be bypassed by invoking the gate directly. A premise that cannot be proved does not become a caveat: either the mechanism resting on it leaves the design, or the work that would settle it is sequenced first and the mechanism is designed after it reports.
-- **Every premise row carries a `Proved` date; an earlier date passes only on an exact stored-row match.** The `## Load-bearing premises` table carries a `Proved` column — an ISO `YYYY-MM-DD` date recording when that row's proof was last actually run, matched by column name rather than position. A row dated the presenting day passes. An earlier-dated row passes only when its premise, proof and date exactly match a row stored in the document's Gate 1 record from an approval or an adoption, after trimming the white space around each cell; case and internal spacing matter, row order does not, and carried rows never expire. A new or changed row needs its proof run again and the presenting day's date. Missing or malformed dates fail. With no stored rows an earlier-dated row fails; when a record exists and cannot be read or parsed, the checker refuses and names its path. `deno task design:gate1` prints the fresh and carried row counts and the date of the approval or adoption the carried rows come from.
-- **A design document carries no GitHub issue/PR citation outside the `## Revision History` table or a verbatim quote.** A design document records how the system works and what was decided — never GitHub issue/PR history: not a bug's status, not "(closed)"/"(since closed)", not a review-round or "fixed by" narrative. Issue and PR history already lives in GitHub and git, and a second copy of it in a design document only goes stale. The two places a citation (`repo#N`, `owner/repo#N`, bare `#N`, or a `github.com/.../issues|pull/N` URL) may still appear are the `## Revision History` table, which is a version-to-issue map rather than a status narrative, and a verbatim quote of Josh's own words, which is never paraphrased to remove what he typed. `deno task design:lint-doc` fails a document carrying a citation anywhere else, naming the line and the citation.
-- **Gate 1 also runs `deno task design:verify-citations` before it renders or opens anything.** This reads every issue or pull request the document cites and fails the run on a title that has drifted from what's quoted. It does NOT require a closed citation to be acknowledged as closed — a citation living anywhere that acknowledgement would apply is already a `design:lint-doc` failure under the rule above, so there is no location left where an unacknowledged closed citation could legitimately sit. Both checks are required — a passing `design:lint-doc` run alone is not enough.
-- **Consolidation happens BEFORE Gate 1, never after.** During the conversation the document accretes as decisions are made. Before GATE 1 the skill rewrites it into design-first shape. Josh never reviews a working draft.
-- **Pre-Gate-1 test:** a reader who has never seen the conversation must not be able to tell, from the body, that the design ever said anything different, or that any approval workflow exists.
-- **Every design document carries a `## Both surfaces` section**, stating for each mechanism it designs how that mechanism works on each surface (Claude Code and agy/Antigravity). `deno task design:lint-doc` fails a document that omits it.
-
-**Standard Document Shape:**
-1. What it is — one section, opening directly with what the thing is. No status block, no preamble of any kind.
-2. Revision history — when revising an existing document (`## Revision History` table with Version, Date, Epic / Issue, Summary).
-3. The workflow.
-4. The gates, and what the thing refuses to do.
-5. The rules that shape its output.
-6. Both surfaces — stating for each mechanism how it works on Claude Code and agy/Antigravity.
-7. Load-bearing premises — proving every premise the design depends on.
-8. Where things live; what stays out of scope.
-9. Appendices — rules absorbed, what Josh asked for verbatim, the decision record.
+Follows the design's "Writing a design document" section in `~/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md`, which defines the writing rules, the document's shape, and the "Next steps" section.
 
 ---
 
@@ -447,14 +490,16 @@ Gate 2 approval of the plan authorizes those removals, executed in the filing ph
 
 | Phase / Scope | Tier | Why |
 |---|---|---|
-| Simple `Bug` or `Task` Design | Flash | Contained judgment about one repo's own behavior; cost-effective default |
-| Complex Design (`Feature`, `Epic`, multi-repo, multi-issue, or arguable scope) | Opus | Architectural reasoning and deep system judgment; the reason the skill exists |
+| Invoked Design Session | Current model | Invocation authorizes the current model; does not stop, require a model switch, or ask for additional authorization merely because it differs from a default recommendation |
+| Simple `Bug` or `Task` Design (recommended default) | Flash | Recommended default for choosing a new session: contained judgment about one repo's own behavior |
+| Complex Design (`Feature`, `Epic`, multi-repo, multi-issue, or arguable scope) (recommended default) | Opus | Recommended default for choosing a new session: architectural reasoning and deep system judgment |
 | Filing (Opus design run) | Sonnet subagent | Mechanical, but bodies must be self-contained and correctly cited |
 | Filing (agy / Flash design run) | Flash (session) | Already on Flash — files directly itself (no self-delegation to save a cold start) |
 
 ### Design Tiers
-- **`Flash` is the default design tier for a single genuinely simple `Bug` or `Task`.** A one-issue Bug or Task design is a contained judgment about one repo's own behavior.
-- **`Opus` keeps everything else:** new `Feature` issues, `Epic` designs, cross-repo work, multi-issue plans with dependency chains, and any `Bug` or `Task` whose scope is arguable.
+- **Defaults remain recommendations; invocation authorizes the current model:** When Josh invokes `/design-issue` or `$design-issue` in a session, the current model conducts the design. The run does not stop, require a model switch, or ask for additional authorization merely because that model differs from a default recommendation. Defaults guide choosing a new session, not an eligibility list for a session Josh invokes.
+- **`Flash` is the recommended default design tier for a single genuinely simple `Bug` or `Task`.** A one-issue Bug or Task design is a contained judgment about one repo's own behavior.
+- **`Opus` is the recommended default for complex design:** new `Feature` issues, `Epic` designs, cross-repo work, multi-issue plans with dependency chains, or any `Bug` or `Task` whose scope requires substantial judgment.
 
 ### Delegation Rules for Filing
 - Filing delegates to a subagent **only when delegating moves the work down a tier**.
@@ -469,4 +514,32 @@ Gate 2 approval of the plan authorizes those removals, executed in the filing ph
 - Maintaining dependency or `Blocked` state after filing — `/backlog-groom` is the maintainer of record for that drift.
 - Tracking live priority after filing — native Priority field owns it.
 - Archiving or deleting design documents — Josh alone.
+
+## Rules moved from AGENTS.md
+
+These rules apply to this skill's kind of work only, so they live here instead of in the
+always-loaded `AGENTS.md`.
+
+11. **Plan Table Dependency Key Namespacing & Pre-Validation:** In plan filing tools
+    (`deno task design:file-plan` / `src/design-issue/file_plan.ts`), dependency-resolution
+    registries must store 1-based position indices, explicit plan `id`s, issue titles, and external
+    GitHub issue citations in separate lookup namespaces with strict resolution precedence (explicit
+    ID -> 1-based position -> title -> external issue number). Plans must be pre-validated before
+    issue creation to reject ambiguous collisions (such as an explicit `id` conflicting with a
+    different item's position index, duplicate `id`s across items, or duplicate titles across items)
+    so incorrect `blocked_by` edges are never created on GitHub.
+
+  - **Designed Issues with Paired Manual Steps Become Parent Epics**: When `/design-issue` resolves
+    an existing issue into paired implementation and Josh manual verification tasks, convert the
+    target designed issue into native type `Epic` (via GraphQL `updateIssue` with the repo's `Epic`
+    `issueTypeId`), file the executable coding work as a child `Task` sub-issue attached under that
+    Epic, and file the paired `Josh` manual verification task as a child `Task` sub-issue attached
+    under that same Epic (natively linked via `blocked_by` dependency to the coding child, without the `Blocked` label).
+
+- **Executable Multi-Agent Runbooks & Accurate Tab Indexing**: When authoring manual verification
+  runbooks targeting multi-agent tmux environments (`scripts/agents.sh`), ensure tab indices match
+  the authoritative script layout (Tab 1: Claude Code, Tab 2: Codex, Tab 3: agy). Provide explicit
+  operational navigation instructions (such as detaching with `Ctrl-b d` or using an outside
+  terminal) after commands that attach to tmux sessions (`agents --restart`) before executing
+  background pane capture or verification checks.
 

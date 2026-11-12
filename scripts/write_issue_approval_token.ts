@@ -23,7 +23,9 @@
  * web-jam-tools#808: the CLI invocation below refuses to write at all unless
  * hooks/lib/check_token_write_authorization.ts's decision 21 check passes — the most recent
  * own-session, non-sidechain user turn must have invoked /design-issue or /file-issue, and the
- * invocation must not itself be a dispatched subagent's own turn. See resolveWriteContext() below
+ * invocation must not itself be a dispatched subagent's own turn. web-jam-tools#1054 (D-35) adds a
+ * second way in: Josh's latest reply follows the agent showing every exact --title and does not open
+ * with a refusal word, with no slash command needed. See resolveWriteContext() below
  * for how the transcript to check is located on each surface. The exported buildApprovalToken/
  * writeApprovalToken/writeApprovalTokenSync functions themselves stay unchanged and unauthorized —
  * they are the mechanical "write this already-authorized token" primitives the CLI block calls
@@ -39,6 +41,7 @@
 
 import { dirname } from "@std/path";
 import { parseArgs } from "@std/cli/parse-args";
+import { readCodexTypedSession } from "../hooks/lib/codex_session_reader.ts";
 import {
   type ApprovalToken,
   defaultTokenPath,
@@ -49,6 +52,7 @@ import {
 import {
   conversationIdFromTranscriptPath,
   loadTranscript,
+  readTranscriptFile,
   type TranscriptEntry,
 } from "../hooks/lib/select_transcript_entry.ts";
 import {
@@ -237,8 +241,10 @@ export interface ResolvedWriteContext {
  */
 export async function resolveClaudeCodeWriteContext(
   sessionId: string,
+  strict = false,
 ): Promise<ResolvedWriteContext | null> {
   if (!sessionId) return null;
+  if (strict && !isSafeSessionId(sessionId)) return null;
   const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "/home/joshua";
   const projectsDir = `${home}/.claude/projects`;
   let matchPath: string | null = null;
@@ -248,9 +254,11 @@ export async function resolveClaudeCodeWriteContext(
       const candidate = `${projectsDir}/${projectEntry.name}/${sessionId}.jsonl`;
       try {
         await Deno.stat(candidate);
+        if (strict && matchPath) return null;
         matchPath = candidate;
-        break;
-      } catch {
+        if (!strict) break;
+      } catch (error) {
+        if (strict && !(error instanceof Deno.errors.NotFound)) return null;
         continue;
       }
     }
@@ -258,7 +266,9 @@ export async function resolveClaudeCodeWriteContext(
     return null;
   }
   if (!matchPath) return null;
-  const entries = await loadTranscript(matchPath);
+  const entries = strict
+    ? await readTranscriptFile(matchPath, null, true)
+    : await loadTranscript(matchPath);
   return {
     entries,
     ownConversationId: sessionId,
@@ -289,7 +299,9 @@ export async function resolveClaudeCodeWriteContext(
  * isSubagentInvocation is therefore decided from outside the transcript, by
  * isAntigravitySubagentConversation().
  */
-export async function resolveAntigravityWriteContext(): Promise<ResolvedWriteContext | null> {
+export async function resolveAntigravityWriteContext(
+  strict = false,
+): Promise<ResolvedWriteContext | null> {
   const recordPath = Deno.env.get("AGY_HOOK_RECORD_PATH") || "/tmp/agy-hook-invocations.jsonl";
   let text: string;
   try {
@@ -303,16 +315,25 @@ export async function resolveAntigravityWriteContext(): Promise<ResolvedWriteCon
     try {
       parsed = JSON.parse(lines[i]);
     } catch {
+      if (strict) return null;
       continue;
     }
-    if (!parsed || typeof parsed !== "object") continue;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      if (strict) return null;
+      continue;
+    }
     const rec = parsed as Record<string, unknown>;
     const conversationId = typeof rec.conversationId === "string" ? rec.conversationId : "";
     const transcriptPath = typeof rec.transcriptPath === "string" ? rec.transcriptPath : "";
-    if (!conversationId || !transcriptPath) continue;
+    if (!conversationId || !transcriptPath) {
+      if (strict) return null;
+      continue;
+    }
     let entries: TranscriptEntry[];
     try {
-      entries = await loadTranscript(transcriptPath);
+      entries = strict
+        ? await readTranscriptFile(transcriptPath, null, true)
+        : await loadTranscript(transcriptPath);
     } catch {
       return null;
     }
@@ -411,21 +432,42 @@ export async function resolveWriteContext(
     };
   }
 
+  if (Deno.env.get("CODEX_THREAD_ID")) {
+    const session = await readCodexTypedSession();
+    if (options.sessionId !== session.threadId) {
+      throw new Error("Approval token session id does not match CODEX_THREAD_ID");
+    }
+    const call = session.latestSkillCall;
+    return {
+      // Only a real typed skill is adapted; plain prose never becomes a filing invocation.
+      entries: call
+        ? [{ type: "user", message: { role: "user", content: `/${call.name} ${call.arguments}` } }]
+        : [],
+      ownConversationId: session.threadId,
+      isSubagentInvocation: false,
+    };
+  }
+
   const claudeCode = await resolveClaudeCodeWriteContext(options.sessionId);
   if (claudeCode) return claudeCode;
 
   const antigravity = await resolveAntigravityWriteContext();
-  if (antigravity) return antigravity;
+  if (antigravity && antigravity.ownConversationId === options.sessionId) return antigravity;
 
   return { entries: [], ownConversationId: null, isSubagentInvocation: false };
 }
 
 /** Runs the decision 21 authorization check for one CLI invocation. Exported for testing. */
 export async function authorizeWrite(
-  options: { sessionId: string; transcriptPath?: string; conversationId?: string },
+  options: {
+    sessionId: string;
+    transcriptPath?: string;
+    conversationId?: string;
+    titles?: readonly string[];
+  },
 ): Promise<TokenWriteAuthorizationResult> {
   const context = await resolveWriteContext(options);
-  return checkTokenWriteAuthorization(context);
+  return checkTokenWriteAuthorization({ ...context, titles: options.titles });
 }
 
 if (import.meta.main) {
@@ -458,7 +500,7 @@ if (import.meta.main) {
 
 Options:
   -s, --session-id <id>     Session ID that received plan-gate approval (defaults to
-                            $CLAUDE_CODE_SESSION_ID, $CLAUDE_SESSION_ID, or $SESSION_ID)
+                            $CODEX_THREAD_ID, $CLAUDE_CODE_SESSION_ID, $CLAUDE_SESSION_ID, or $SESSION_ID)
   -r, --repo <owner/repo>   Target repository (e.g. WebJamApps/web-jam-tools)
   -t, --title <title>       Approved issue title (can be repeated)
   --titles <list|json>      Approved titles as JSON array or comma-separated list
@@ -474,6 +516,7 @@ Options:
     }
 
     const sessionId = args["session-id"] ||
+      Deno.env.get("CODEX_THREAD_ID") ||
       Deno.env.get("CLAUDE_CODE_SESSION_ID") ||
       Deno.env.get("CLAUDE_SESSION_ID") ||
       Deno.env.get("SESSION_ID") ||
@@ -533,7 +576,7 @@ Options:
     // were a working proof-of-concept of that). These env vars are never read from --help, never
     // documented for normal use, and a real invocation never sets them — same seam convention as
     // STATUSLINE_DOWNSTREAM_CMD in docs/scripts.md. Real invocations always go through
-    // resolveClaudeCodeWriteContext/resolveAntigravityWriteContext auto-discovery below.
+    // the surface-specific auto-discovery in resolveWriteContext above.
     const testTranscriptPath = Deno.env.get(
       "WRITE_ISSUE_APPROVAL_TOKEN_TEST_TRANSCRIPT_PATH",
     );
@@ -544,6 +587,7 @@ Options:
       sessionId,
       transcriptPath: testTranscriptPath || undefined,
       conversationId: testConversationId || undefined,
+      titles,
     });
     if (!authorization.ok) {
       console.error(`Refused to write approval token: ${authorization.reason}`);

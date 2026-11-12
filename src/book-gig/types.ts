@@ -78,6 +78,12 @@ export interface CandidateVenue {
   bookingNotes?: string;
   contactNotes?: string;
   priorContactNotes?: string;
+  touches?: Array<{
+    type?: string;
+    date?: string | Date;
+    note?: string;
+    [key: string]: unknown;
+  }>;
   priorGigs?: unknown[];
   outreachEligible?: boolean;
   bookingStatus?: string;
@@ -149,6 +155,8 @@ export interface PitchEmail {
   htmlBody?: string;
   templateType?: string;
   templateStage?: string;
+  customIntro?: string;
+  customBody?: string;
 }
 
 export interface BatchDispatchSkipped {
@@ -162,13 +170,6 @@ export interface BatchDispatchResult {
   sent: number;
   skipped: BatchDispatchSkipped[];
   records: unknown[];
-}
-
-export interface CheckRepliesResult {
-  checked: number;
-  matched: number;
-  classified: number;
-  bounced: number;
 }
 
 export interface OutreachSuggestion {
@@ -204,7 +205,6 @@ export interface OutreachCampaignRecord {
 }
 
 export interface RepliesTrackingResult {
-  checkReplies: CheckRepliesResult;
   pendingReplies: OutreachCampaignRecord[];
   campaigns: OutreachCampaignRecord[];
   targetWeekend?: TargetWeekend;

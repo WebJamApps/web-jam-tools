@@ -40,6 +40,8 @@
 import {
   ASSIGN_RE,
   findHeredocMarker,
+  readInterpreterHeredocs,
+  readInterpreterScript,
   resolveThroughWrappers,
   splitOnOperators,
   splitShellTokens,
@@ -224,10 +226,17 @@ function perlInPlaceFiles(args: string[]): string[] {
 
 /** Inline code passed to an interpreter by flag (`-c`, `-e`, `-p`) or `deno eval`, or null. */
 function inlineCode(name: string, args: string[]): string | null {
-  if (name === "deno") {
-    return args[0] === "eval" ? nonOptionArgs(args.slice(1)).join(" ") : null;
+  const canonical = name === "nodejs"
+    ? "node"
+    : /^python\d+(?:\.\d+)*$/.test(name)
+    ? "python3"
+    : name;
+  const invocation = readInterpreterScript([canonical, ...args]);
+  if (invocation) {
+    return invocation.script?.kind === "inline" ? invocation.script.code : null;
   }
-  const codeFlags = name.startsWith("python") ? ["-c"] : ["-e", "-E", "-p", "--eval", "--print"];
+  if (name === "deno") return null;
+  const codeFlags = ["-e", "-E", "-p", "--eval", "--print"];
   const parts: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -363,7 +372,11 @@ export function splitHeredocs(command: string): Split {
     const words = splitShellTokens(line.replace(/[|;&()]/g, " ")).map((w) =>
       w.split("/").pop() ?? w
     );
-    if (words.some((w) => SCRIPT_INTERPRETER.test(w))) scripts.push(body.join("\n"));
+    const shared = readInterpreterHeredocs(line);
+    const legacy = words.some((w) =>
+      SCRIPT_INTERPRETER.test(w) && !["python", "python3", "node", "deno"].includes(w)
+    );
+    if (shared.length || legacy) scripts.push(body.join("\n"));
     else if (words.some((w) => SHELLS.has(w))) shell.push(...body);
     i = j;
   }

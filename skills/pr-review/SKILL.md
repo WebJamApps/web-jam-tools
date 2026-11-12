@@ -14,9 +14,19 @@ This skill provides a systematic pipeline for automated cross-model pull request
 
 Cross-model review ensures fresh perspective and catches model-specific blind spots before Josh does final human review and merge.
 
-Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work). Over all seven model labels (`Haiku`, `Luna`, `Flash`, `Sol`, `Astra`, `Sonnet`, `Opus`): a reviewer on the author's rung or a higher one is accepted, except that Opus never reviews Opus work, and every lower one is rejected, with Sol, Astra and Sonnet on one rung. Equal rank does not override a more specific eligibility rule (e.g. Sol does not review Sol; Opus or Josh reviews Astra). Reviewer eligibility depends on the named model, its contributions, and the reviewer-tier rules. A conversation can contain implementation by one model and review by another. Switching to an eligible different model allows the review to run in that conversation without requiring delegation. Astra may review Sol-authored work, including a Sol fix from the same conversation, if Astra has not contributed implementation or fixes. The reviewer must also pass the independent named-model eligibility checks below.
+**Direct named requests authorize the current reviewer (Josh, 2026-10-28).** When Josh directly
+invokes `/pr-review` or `$pr-review` with a PR number or URL
+(typed by Josh in the session, not passed on by an agent or script), perform that review in the
+current session. Do not ask him to confirm the reviewer pairing, require a model switch, or delegate
+merely because the current model differs from a default reviewer, ranks below an author, or the author's
+named model (for example, Gemini Argon) has no entry in the tier table. His direct invocation is the
+reviewer-selection authorization. Establish the actual reviewer and contributors, preserve the ban
+on reviewing the current model's own contributions, and keep the duplicate-review and head-SHA
+posting guards. A missing tier-table entry is not an unknown contributor identity.
 
-**Tier order (weakest to strongest): Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus.** Josh ruled
+For automatic reviewer selection, reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work). Over all seven model labels (`Haiku`, `Luna`, `Flash`, `Sol`, `Astra`, `Sonnet`, `Opus`): a reviewer on the author's rung or a higher one is accepted, except that Opus never reviews Opus work, and every lower one is rejected, with Sol, Astra and Sonnet on one rung. Equal rank does not override a more specific eligibility rule (e.g. Sol does not review Sol; Opus or Josh reviews Astra). Reviewer eligibility depends on the named model, its contributions, and, for automatic selection, the reviewer-tier rules. A conversation can contain implementation by one model and review by another. Switching to an eligible different model allows the review to run in that conversation without requiring delegation. Astra may review Sol-authored work, including a Sol fix from the same conversation, if Astra has not contributed implementation or fixes in the review range. The reviewer must also pass the independent named-model eligibility checks below.
+
+**Tier order (weakest to strongest): Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus.** Josh ruled
 on 2026-10-01 that Sonnet 5.5 ranks above Gemini 3.8 Flash (High); that ruling, not a benchmark,
 is the basis for this order. (Superseded history: on 2026-09-05 Flash was ranked above Sonnet 5
 on contamination-resistant long-horizon coding, DeepSWE v1.1, where Gemini 3.8 Flash at high effort
@@ -26,7 +36,7 @@ ambiguous diff is.
 
 ### Cross-Model Review Pairing Matrix
 
-This matrix is a ceiling for the legacy labels it names; the seven-label default reviewers and eligibility rules below govern reviewer selection.
+This matrix is a ceiling for automatic selection of the legacy labels it names; the seven-label default reviewers and eligibility rules below govern automatic reviewer selection.
 
 | Reviewer | Reviews |
 |---|---|
@@ -47,43 +57,54 @@ The default reviewers across the seven model labels:
 | Astra | Opus or Josh |
 | Opus | Josh |
 
-The reviewer choices are Flash for Haiku and Luna authors, Sol for a Flash author, Sonnet, Astra, or Opus for a Sol author, and Sol for a Sonnet author (Opus only when Josh names the pull request); Opus or Josh reviews Astra, and Josh reviews Opus.
+For automatic selection, the reviewer choices are Flash for Haiku and Luna authors, Sol for a Flash author, Sonnet, Astra, or Opus for a Sol author, and Sol for a Sonnet author (Opus only when Josh names the pull request); Opus or Josh reviews Astra, and Josh reviews Opus.
 
-### Sol Reviews on Codex & Recording-Day Rules
+### Sol Reviews on Codex
 
 - Sol reviews of Flash and Sonnet pull requests run through `/pr-review` (typed `$pr-review` in Codex).
-- On a recording day or for any pull request Josh names, Sonnet reviews a Flash pull request instead, and a Sonnet pull request waits for Sol or goes to Opus when Josh names it.
 - Astra is never picked as a reviewer unless Josh names it.
 - An unattended Sol review launch passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`.
 
 **Ceiling rule (never a schedule):**
-The matrix is a **ceiling on who MAY review whose work, never a schedule.** Opus reviewing a Sonnet
+For automatic selection, the matrix is a **ceiling on who MAY review whose work, never a schedule.** Opus reviewing a Sonnet
 or Flash PR happens only when Josh deems that specific PR critical enough for an Opus review —
 his decision, per PR, not automatic. Nothing in this skill or its auto-detect mode may auto-dispatch
 an Opus review off this matrix.
 
 ### Named-Model Eligibility & Contributions within a Conversation
 
-A named model is the model identity, such as Sol, Astra, Sonnet, or Opus. Versions and reasoning-effort settings within one named model do not create a different identity. Every Flash session shares the Flash identity for the self-review comparison; the reviewer-tier constraints still apply. Surface names and session IDs do not establish a model change.
+A named model is the model identity, such as Sol, Astra, Sonnet, or Opus. Versions and reasoning-effort settings within one named model do not create a different identity. Every Flash session shares the Flash identity for the self-review comparison; the reviewer-tier constraints apply to automatic selection. Surface names and session IDs do not establish a model change.
 
 **Contributions within a conversation:**
 - **A model never reviews its own contribution.** The restriction follows the named model that wrote or pushed the implementation or fix, rather than disqualifying every model that uses the conversation. A switch to a higher model permits review in the same session; writing or pushing a commit earlier in the conversation is not by itself a reason to refuse. Merely reading the code, discussing it, or posting a review does not count as writing a fix.
-- **Astra may review Sol-authored work, including a Sol fix in the same session.** This is Josh's explicit permitted model escalation even though Sol and Astra share a scheduling rung. Astra may review directly in that conversation if Astra has not contributed implementation or fixes. Sol must not review its own Sol fix, and switching to a lower model does not make that work eligible. Check every author on the PR, not just its original footer.
-- **Versions and reasoning effort:** A model that writes or pushes a fix cannot review that contribution simply by changing its version, reasoning effort, or switching away and back. Preserve the contribution history when determining eligibility; do not assume only the last active model matters. Separate sessions remain subject to the reviewer choices and tier rules; a new session does not bypass restrictions on Astra or Opus work.
-- **Opus or Josh reviews Astra's work, including Astra's fixes to Sol's code.** Returning to Sol, selecting Sonnet at the same tier, or opening another Astra session does not replace that reviewer choice. An eligible Opus reviewer can review the resulting PR when Josh names it.
-- **Opus never reviews Opus work.** The matrix has no Opus-reviews-Opus row and none is implied: a different Opus session is not an independent reviewer. If Opus itself authors a commit or fix on the PR, the PR has no model reviewer, because the tier rule also rules out every lower tier; Josh reviews it.
+- **Astra may review Sol-authored work, including a Sol fix in the same session.** This is Josh's explicit permitted model escalation even though Sol and Astra share a scheduling rung. Astra may review directly in that conversation if Astra has not contributed implementation or fixes in the review range. Sol must not review its own Sol fix, and switching to a lower model does not make that work eligible. Check every author in the review range, not just the PR's original footer.
+- **Versions and reasoning effort:** A model that writes or pushes a fix cannot review that contribution simply by changing its version, reasoning effort, or switching away and back. Preserve the contribution history when determining eligibility; do not assume only the last active model matters. Separate sessions remain subject to the contribution checks and, for automatic selection, the reviewer choices and tier rules; a new session alone does not authorize a different pairing.
+- **Opus or Josh reviews Astra's work, including Astra's fixes to Sol's code.** This is the automatic-selection rule. Returning to Sol, selecting Sonnet at the same tier, or opening another Astra session alone does not authorize that pairing. Josh's direct named invocation supplies reviewer-selection authorization as described above.
+- **Opus never reviews Opus work.** The matrix has no Opus-reviews-Opus row and none is implied: a different Opus session is not an independent reviewer. If Opus itself authors a commit or fix in the review range, automatic selection has no model reviewer, because the tier rule also rules out every lower tier; Josh reviews it or directly invokes another named model.
+
+**Reviewing another model's fixes to a pull request you wrote:**
+Eligibility is judged against the commits a review covers. A re-review covers the commits that arrived since the newest automated review; use that review's commit SHA as the exclusive start and the captured current head SHA as the inclusive end. A model that wrote earlier commits may review this later range when it wrote or pushed none of the contributions in it. A first review covers every commit, so the model that wrote the pull request is never its first reviewer.
+
+Apply the named-model rules to every contributor in that range and the reviewer-tier rules when selecting a reviewer automatically. Earlier contributions outside it do not disqualify the reviewer. The review states the commit range it covers and that the earlier commits are outside it; the previous review still stands for those earlier commits. If a commit in the range is the reviewer's own, it does not review. If it cannot establish who wrote a commit in the range, it names that commit and asks Josh; it does not guess.
+
+**A pull request rebased after its last review:**
+A rebase replays a pull request's commits onto a newer base, giving each of them a new ID, so the commit the newest automated review covered is no longer an ancestor of the head. The reviewer does not stop or ask about the range. It reviews the whole pull request as it stands against its base, and its review says in one line that the branch was rebased after the review at that commit and that this review therefore covers the whole pull request.
+
+Eligibility is then judged as for a first review, over the authors of every commit on the pull request. A rebase keeps each commit's author, so the models that wrote the work are still the ones named. A reviewer ineligible for the whole pull request says so and names the reviewer choices that are eligible, as it does for any other range. The rebased-away commit stays readable through GitHub, but nothing in this rule depends on it.
 
 **Establishing identity and authorship:**
-Use the active model information supplied by the surface, this conversation's model history, and explicit model-selection statements from Josh. A Sol attribution on an earlier commit does not mean the current reviewer is Sol: use the active session's model and Josh's explicit correction; never infer active identity from the earlier author. Identify contributions from the conversation and PR attribution, including fix commits. A PR's original author footer alone is insufficient when another model has added fixes. On Codex, the established lookup is this session's latest `turn_context.payload.model` in its rollout JSONL, identified by `session_meta.id`. Claude Code and Antigravity use their active model information and conversation history; Josh's explicit identification can resolve a missing model name.
+Use the active model information supplied by the surface, this conversation's model history, and explicit model-selection statements from Josh. A Sol attribution on an earlier commit does not mean the current reviewer is Sol: use the active session's model and Josh's explicit correction; never infer active identity from the earlier author. Identify contributions in the review range from the conversation and PR attribution, including fix commits. A PR's original author footer alone is insufficient when another model has added fixes. A fix-pr comment lists the commits it pushed and ends with `🤖 Fixed by <tool> — <model>`; use that signed comment to establish the author of those fix commits. On Codex, the established lookup is this session's latest `turn_context.payload.model` in its rollout JSONL, identified by `session_meta.id`. Claude Code and Antigravity use their active model information and conversation history; Josh's explicit identification can resolve a missing model name.
 
 **Three eligibility outcomes:**
-1. **Proceeding when eligible**: When the current model is eligible, perform the requested review directly in this conversation without requiring a fresh session, redundant permission, or delegation.
-2. **Refusing when ineligible**: When the current model is ineligible, post nothing, explain the applicable rule to Josh in chat, and leave reviewer selection to Josh.
-3. **Refusing (failing closed) when undetermined**: If the current identity or a relevant contributor cannot be established, state exactly what is missing and ask Josh. Do not guess, claim no eligible reviewer exists merely because this model is ineligible, or create a subagent to get around the uncertainty.
+1. **Proceeding when eligible**: When Josh directly invokes a named review, reviewer selection is already authorized. Otherwise establish tier eligibility through automatic selection. Perform the review directly in this conversation without requiring a fresh session, redundant permission, or delegation, provided the independent contribution checks pass.
+2. **Refusing when ineligible**: If the current model contributed to the review range, post nothing and explain the self-review restriction. For automatic selection, also refuse pairings that fail the tier rules. Do not use an automatic-selection refusal to re-ask authorization for Josh's direct named request.
+3. **Refusing (failing closed) when undetermined**: If the actual current identity or a relevant contributor cannot be established, state exactly what is missing and ask Josh. A known author missing from the tier table does not trigger this outcome for a direct named request. Do not guess, claim no eligible reviewer exists merely because this model is ineligible, or create a subagent to get around the uncertainty.
 
 ### Worked Conversation Sequences
 
-The skill's worked cases cover these concrete sequences and required results:
+The skill's worked cases cover these concrete sequences and required results. Model selection in
+these cases is automatic unless Josh directly invokes a named review; such an invocation authorizes
+the pairing while preserving self-review, actual-identity, duplicate-review and head-SHA checks.
 
 | Conversation sequence | Required result |
 |---|---|
@@ -100,23 +121,31 @@ The skill's worked cases cover these concrete sequences and required results:
 | Opus writes or fixes → another Opus session selected | No model reviewer; Josh reviews |
 | Sonnet writes → Flash selected | Refuse because the reviewer tier is lower |
 | Sol writes → Astra selected → same head already reviewed | Apply the existing duplicate-review rule |
+| Sol writes → another model reviews → Luna fixes → Josh asks Sol to review | Sol reviews the commits since that review and says its review covers only them |
+| Sol writes → another model reviews → Sol and Luna both fix → Sol review requested | Sol does not review; one commit in the range is its own |
+| Sol writes → no review yet → Luna fixes → Sol review requested | Sol does not review; a first review covers every commit, Sol's included |
+| Sonnet writes → another model reviews → Sol fixes → Flash selected | Refuse because the reviewer ranks below the author of a commit in the range |
+| Reviewed → branch rebased → review requested | The reviewer reviews the whole pull request and says the rebase is why; eligibility covers every commit on it |
+| Sol writes → another model reviews → Luna fixes → branch rebased → Sol review requested | Sol does not review; the whole-PR review covers Sol's own commits, so Sol names the eligible reviewer choices |
+| A commit since the last review has no author the reviewer can establish | Name the commit and ask Josh; do not guess |
 | Contributor identity cannot be established | Explain the missing information and ask Josh; do not guess or delegate automatically |
 
 ## Trigger & Invocation
 
-- **Named mode**: `/pr-review <Repo>#<pr-num>` (e.g. `/pr-review web-jam-tools#363` or `https://github.com/WebJamApps/web-jam-tools/pull/363`).
-- **Model-switch in same conversation**: Switching to an eligible different model allows the review to run directly in that conversation without requiring delegation. When the new model is eligible (e.g. Sol writes → Josh switches to Astra → `/pr-review`), it performs the review in place. When ineligible, it explains the applicable rule and leaves reviewer selection to Josh.
+- **Named mode**: `/pr-review <Repo>#<pr-num>` (e.g. `/pr-review web-jam-tools#363` or `https://github.com/WebJamApps/web-jam-tools/pull/363`). Josh's direct invocation authorizes the current reviewer as described under Purpose & Model Pairing; no additional pairing confirmation is needed.
+- **Model-switch in same conversation**: Switching to an eligible different model allows the review to run directly in that conversation without requiring delegation. Josh's direct named invocation authorizes the selected model's pairing; the independent self-review and actual-identity checks still apply.
 - **Auto-detect mode**: `/pr-review` (with no arguments).
   - Sweeps open draft/ready PRs across all eight active WebJamApps repositories (see the canonical repo list: `ACTIVE_REPOS` in [`src/shared/repos.ts`](../../src/shared/repos.ts)).
   - Matches candidate PRs based on the active reviewer's model tier per the pairing matrix:
-    - **Sonnet (`Claude Code — Sonnet 5.5`)**: matches PRs authored by `Gemini Flash` or `Claude Haiku 4.5`.
-    - **Flash (`Gemini Flash`)**: matches PRs authored by `Claude Haiku 4.5` only. It does not match Sonnet PRs — Sonnet ranks above it.
+    - **Sonnet (`Claude Code — Sonnet 5.5`)**: matches PRs authored by `Gemini Flash` or `Claude Haiku 5.5`.
+    - **Flash (`Gemini Flash`)**: matches PRs authored by `Claude Haiku 5.5` only. It does not match Sonnet PRs — Sonnet ranks above it.
     - **Opus (`Claude Opus`)**: does NOT auto-detect candidates; Opus reviews are strictly manual/named mode per Josh's instruction.
     - Sonnet-authored PRs have no reviewer in auto-detect mode and receive an Opus review only when Josh explicitly names the PR for that review.
     - Matching inspects the author footer attribution (`🤖 Work by ...` or `--author` string) using the `ROSTER` spellings from `scripts/create-draft-pr.sh`. These roster spellings are deliberately unversioned — they identify the PR's author tier, not the model checkpoint that ran, so they stay as written here even as the underlying Gemini version moves:
       - `Gemini Flash` (e.g. `Antigravity — Gemini Flash` / `agy — Gemini Flash`). A pull request signed `Gemini Flash (High)` before the medium level was retired keeps its footer and is read as a Flash author.
       - `Claude Sonnet 5.5` (e.g. `Claude Code — Sonnet 5.5` / `Claude Code — Claude Sonnet 5.5`)
-      - `Claude Haiku 4.5` (e.g. `Claude Code — Haiku 4.5` / `Claude Code — Claude Haiku 4.5`)
+      - `Claude Haiku 5.5` (e.g. `Claude Code — Haiku 5.5` / `Claude Code — Claude Haiku 5.5`)
+    - **Older Haiku footers:** A pull request already signed `Claude Haiku 4.5` keeps its footer and is read as a Haiku author; the current roster is used only when signing new work.
   - Determines review status for each candidate PR using the head-SHA comparison from Step 1's "Already-Reviewed Check":
     - Compares the commit SHA of the newest automated review (`reviews | map(select((.body // "") | test("(?i)## PR Review Summary"))) | last | .commit.oid`) against the PR's current head commit SHA (`commits | last | .oid`).
     - If equal (`head_sha == last_review_sha`), mark as `reviewed at current head`. Already-reviewed PRs are included in the pick-list rather than filtered out.
@@ -151,28 +180,42 @@ worktree is only needed when a pasted test-evidence block has to be reproduced.
 
 **Reviewer eligibility is checked first.** Right after item 1's fetch, and before the diff is read,
 apply the named-model eligibility rules under "Purpose & Model Pairing" above:
-- Establish the active named model and all models responsible for implementation and fixes on the PR
+- Recognize Josh's direct named invocation as reviewer-selection authorization before applying
+  automatic tier selection. Do not stop or ask for another confirmation because of a default
+  reviewer mismatch, a lower reviewer tier, or a known author absent from the tier table.
+- Establish the review range from item 1's fetched reviews and commits: only automated reviews carrying
+  the `## PR Review Summary` header set its start. Use the newest such review's `.commit.oid` as
+  `last_review_sha` and the current head as `head_sha`; the range is `last_review_sha..head_sha`.
+  With no earlier automated review, the range is every PR commit. If the current head is already
+  reviewed, post nothing as item 2 requires. If the start cannot be established as an ancestor of
+  the captured head (for example after a rebase), the reviewer does not stop or ask about the range:
+  it reviews the whole pull request as it stands against its base, states in one line that the branch
+  was rebased after the review at that commit and that this review therefore covers the whole pull
+  request, and judges eligibility as for a first review over the authors of every commit on the pull
+  request.
+- Establish the active named model and all models responsible for implementation and fixes in that range
   (from current surface/session model information, Josh's explicit model selection or correction,
-  conversation history, and item 1's `commits` list which carries each commit's `authors`).
+  conversation history, item 1's `commits` list which carries each commit's `authors`, and signed
+  fix-pr comments in its `comments` list).
   Never infer the active reviewer model from the PR author's footer or an earlier commit attribution.
-- Stop if the active model contributed implementation or pushed any fix to the PR (a model never
+- Stop if the active model contributed implementation or pushed any fix in the review range (a model never
   reviews its own contribution; versions, reasoning effort, or switching away and back do not bypass
   this). A switch to a higher eligible model within the conversation may review earlier work by
   another model.
 - Permit Astra to review Sol-authored work, including a Sol fix from this same conversation, when
-  Astra has not contributed implementation or fixes.
-- Stop if the PR carries Astra contributions (implementation or fixes) and the active model is not Opus
+  Astra has not contributed implementation or fixes in the review range.
+- For automatic selection only: Stop if the review range carries Astra contributions (implementation or fixes) and the active model is not Opus
   (Opus or Josh reviews Astra's work).
-- Stop if any commit names an Opus author or co-author (Opus never reviews Opus work; Josh reviews).
-- Stop if the active model ranks below any contributor's tier (tier rule).
+- For automatic selection only: Stop if any commit in the review range names an Opus author or co-author (Opus never reviews Opus work; Josh reviews).
+- For automatic selection only: Stop if the active model ranks below any contributor's tier in the review range (tier rule).
 - Stop and ask Josh if contributor or active model identity cannot be established (fail closed; do
-  not guess or delegate automatically).
+  not guess or delegate automatically). For an unknown author, name the commit in the review range.
 On a stop, post no review, tell Josh why the current model is ineligible or what information is
 missing, and leave reviewer selection to Josh. Session continuity alone never blocks review.
 
-1. Fetch PR details, metadata, mergeability, reviews, and commits:
+1. Fetch PR details, metadata, mergeability, reviews, commits, and fix comments:
    ```sh
-   gh pr view <pr-num> --repo WebJamApps/<Repo> --json number,title,body,author,headRefName,baseRefName,state,isDraft,mergeable,mergeStateStatus,reviews,commits
+   gh pr view <pr-num> --repo WebJamApps/<Repo> --json number,title,body,author,headRefName,baseRefName,state,isDraft,mergeable,mergeStateStatus,reviews,commits,comments
    ```
 2. **Already-Reviewed Check**:
    - Filter `reviews` for automated reviews carrying the `## PR Review Summary` header:
@@ -182,7 +225,8 @@ missing, and leave reviewer selection to Josh. Session continuity alone never bl
      ```
    - Compare the commit SHA of the newest automated review (`last_review_sha` from `.commit.oid`) against the PR's current head commit SHA (`head_sha` from `.commits | last | .oid`).
    - If equal (and a prior automated review exists at that SHA), stop and report to Josh that the PR was already reviewed at that SHA with no new commits, and post NO review comment.
-   - If new commits exist after the newest review (or if the PR has no prior automated reviews), proceed with the review. When re-reviewing after new commits, state that the review evaluates the delta since the previous review.
+   - If new commits exist after the newest review and `last_review_sha` is an ancestor of `head_sha`, proceed when eligible for that range (`last_review_sha..head_sha`). When re-reviewing after new commits, state the exclusive start SHA and inclusive head SHA and that earlier commits are outside the review; their previous review still stands.
+   - If `last_review_sha` is not an ancestor of `head_sha` (for example after a rebase), proceed with a whole-PR review against the base branch as established above, stating in one line that the branch was rebased after the review at `<last_review_sha>` and that this review therefore covers the whole pull request (without stating an incremental range or excluding earlier commits).
    - **Record `head_sha`** from the query above (e.g. as `HEAD_SHA`) — this is the commit the diff
      fetched in item 4 below reflects, and every finding in this review is composed against it.
      Step 3 passes this same value back to `deno task post-pr-review --head-sha` (web-jam-tools#825)
@@ -204,6 +248,18 @@ missing, and leave reviewer selection to Josh. Session continuity alone never bl
    ```sh
    gh pr diff <pr-num> --repo WebJamApps/<Repo>
    ```
+   For an incremental re-review (where `last_review_sha` is an ancestor of `head_sha`), fetch the diff
+   for the captured range instead:
+   ```sh
+   gh api repos/WebJamApps/<Repo>/compare/<last_review_sha>...<head_sha> -H 'Accept: application/vnd.github.diff'
+   ```
+   Limit findings and the review verdict to this range. Earlier code may be read as context for
+   changed callers and contracts; it remains outside the review.
+   For a re-review after a rebase (where `last_review_sha` is not an ancestor of `head_sha`), do not
+   fetch the `compare` diff; use the whole-PR diff (`gh pr diff <pr-num>`) so the review evaluates the
+   rebased pull request as it stands against its base branch, and evaluate findings and the review
+   verdict across the whole pull request. Step 3 still posts with the captured `head_sha` so a moved
+   branch cannot receive stale findings.
 5. If the PR references a GitHub issue (e.g., `Closes #N` or `Part of #N`), fetch the issue description and acceptance criteria:
    ```sh
    gh issue view <issue-num> --repo WebJamApps/<Repo>
@@ -382,7 +438,10 @@ afterward.
    - **Icon meaning**: A 🛑 icon marks an unresolved problem that blocks merge, and nothing else. Narration, context, notes on which commits arrived, and a previously-reported finding that has since been fixed never carry 🛑 — a fixed finding is reported with ✅ (see "Changes Since Last Review" below), because it is no longer a problem. A 🟡 icon marks a non-blocking finding about the artifact being merged; a 🔵 icon marks a cosmetic PR/issue-body prose nit, which never blocks merge either.
    - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. This initial post never includes CircleCI here; a CircleCI failure (or unresolved-at-cap status) surfaces as a new Must Fix line in Step 4's failure follow-up, posted only when CircleCI does not pass. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
      - Exception: `Version bump check (PR branches only)` failing (or unresolved) is never listed here — Step 4 item 5's carve-out reports it under Suggestions instead of under `### 🛑 Must Fix Items`, whether it fails alone or alongside another job.
-   - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it. A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
+   - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it.
+     - **Incremental re-review (ancestor case)**: State `last_review_sha..head_sha` (exclusive start, inclusive end) and that earlier commits are outside this review and retain their previous review.
+     - **Rebased PR (non-ancestor case)**: State in one line that the branch was rebased after the review at `<last_review_sha>` and that this review therefore covers the whole pull request against its base (rather than stating an incremental range or excluding earlier commits).
+     A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
    - **Checklist Verification**: Status of mergeability, Snyk audits, scope, semver bump, package-lock engine alignment, test plan, architectural audits, and guardrails. The initial post never carries a CircleCI row, and no later post ever restates this checklist — when CircleCI fails, Step 4's follow-up reports that failure alone rather than reprinting these rows. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **Snyk**: ✅ ...`).
      The **Semver Bump** row is an exception to that icon pairing: since a version-bump finding is a Suggestion, not a Must Fix (Step 2 item 5), that row is prefixed 🟡 whenever the version has fallen behind `origin/dev` or was gratuitously double-bumped, and prefixed ✅ otherwise — it is never prefixed with the Must-Fix stop-sign icon.
      The **Guardrails** and **Scope** rows are exceptions too. Guardrails is prefixed 🟡 when its only finding is raw `any` in a test file (Step 2 item 9); Scope is prefixed 🟡 when its only finding is leftover debug output in a test file (Step 2 item 4). Each is prefixed 🛑 when it has any other finding of its own, and ✅ otherwise.
@@ -396,7 +455,7 @@ afterward.
    - **Nits** (`### 🔵 Nits`): Cosmetic, non-blocking findings about the PR's own description or a linked issue's body — the Step 2 item 11 class ("Issue Body & PR Body Prose (Never a Must Fix)"): stale, incomplete, or drifted Summary, Non-goals, acceptance-criteria wording, "Files changed" lists, and "How to test locally" / test-plan narration. **Placed directly beneath `### 🟡 Suggestions`** in the post body, as the last section. Prefix each nit line with 🔵. If none, render `### Nits` with `✅ None`.
      - **Scope, exactly**: this section holds the Step 2 item 11 body-prose class and nothing else. A finding about the code, the tests, or the version field is a Suggestion (or a Must Fix), not a Nit.
      - **Never a merge blocker**: like a Suggestion, a Nit never produces `**🛑 Changes Requested**` on its own, and it is never restated in Step 4's follow-up post. On a re-review, a Nit that has since been edited away is reported once with ✅ under `### Changes Since Last Review`, exactly like any other fixed finding.
-     - **Fixed by editing text, not by pushing code**: a Nit is cleared with `gh pr edit --body` or an issue-body edit, which is precisely why it does not share a section with findings that require a commit.
+     - **Fixed by editing text, not by pushing code**: a Nit about a PR description is cleared by the author rerunning `scripts/create-draft-pr.sh --update` and one about an issue body with `deno task edit-issue`, which is precisely why it does not share a section with findings that require a commit.
    - **Reviewer line** (web-jam-tools#1193 "skills/pr-review: name the reviewing agent and model in every review comment, and refuse to post without it"): the **final element of every review post**, after `### 🔵 Nits` (or, in a Step 4 follow-up, after the last section), on a line of its own: `🤖 Reviewed by <tool> — <model>` (an em dash with a space on each side), e.g. `🤖 Reviewed by Claude Code — Claude Opus 5.5` or `🤖 Reviewed by Antigravity — Gemini Flash (High)`. It is not a section and carries no heading. `<tool>` and `<model>` name the agent surface and the model **actually running this review** — never copied from the PR's own `🤖 Work by …` author footer, which names whoever wrote the code. Every agent posts through the same GitHub account, so this line is the only thing that shows who reviewed.
 
    **Example — initial post (post #1), re-review with one remaining blocker and two now-fixed
@@ -426,7 +485,7 @@ afterward.
    - 🟡 Version bump — `deno.json`'s version does not strictly exceed `origin/dev`'s current tip (Step 2 item 5).
 
    ### 🔵 Nits
-   - 🔵 The PR body's "How to test locally" block names a worktree path that no longer exists — fix with `gh pr edit --body`; no commit needed.
+   - 🔵 The PR body's "How to test locally" block names a worktree path that no longer exists — fix by rerunning `scripts/create-draft-pr.sh --update`; no commit needed.
 
    🤖 Reviewed by Claude Code — Claude Opus 5.5
    ````
@@ -599,6 +658,37 @@ This binds the reviewing model AND the session relaying the review to Josh:
 
 The reviewing model reports; it does not apply the fix itself. It names the defect, says plainly that it blocks merge, and the fix goes back to the PR's own lane on the PR's own branch.
 
+## Rules moved from AGENTS.md
+
+These rules apply to this skill's kind of work only, so they live here instead of in the
+always-loaded `AGENTS.md`.
+
+- **GitHub CLI `gh pr view --json reviews` Schema**: In GitHub CLI (`gh`), review commit SHAs are
+  located at `.commit.oid` (e.g. `.reviews[].commit.oid`), NOT at a top-level `.commit_id`. When
+  querying reviews via `gh pr view --json reviews`, always extract `.commit.oid` to obtain the
+  commit SHA.
+
+- **Distinguishing Automated vs. Manual PR Reviews**: When inspecting PR reviews to determine
+  whether an automated review (e.g. `/pr-review`) has already evaluated a PR, do not treat any
+  review at the head SHA as an automated review. Because both human and bot reviews may post under
+  the developer's identity, always filter reviews by their signature header (e.g.,
+  `## PR Review Summary`) to avoid incorrectly skipping automated reviews due to ad-hoc human review
+  comments.
+
+- **Audit Execution Order & Conditional Phrasing Alignment**: When updating workflow execution order
+  or precedence (such as deferring status check evaluation to the end of an audit pipeline), audit
+  all downstream checklist items and rules to remove or reconcile stale conditional pre-requisite
+  phrasing (e.g. "When CI is green...") that assumed the earlier evaluation order.
+
+- **PR Review Findings Scope & Exclusion of Git Mechanics Trivia**: In PR reviews, the
+  `### 🟡 Suggestions` section is strictly reserved for actionable code-quality, design, or test
+  improvements directly tied to the modified code in the diff. Never include process lectures, git
+  mechanics commentary, or speculative workflow heads-ups (such as predicting cross-PR version
+  collisions against other open PR branches). If an actual version collision occurs, it is evaluated
+  deterministically as a Suggestion, not a Must Fix (Step 2 item 5), when the PR's own version fails
+  to strictly exceed `origin/dev`; CircleCI's version-bump gate still blocks the merge.
+
+
 ## Description Detail & Triggers
 
-Cross-model PR review pipeline where reviewer tier is never below author tier (Sonnet reviews Flash/Haiku; Flash reviews Haiku; Opus reviews Sonnet/Flash on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).
+Cross-model PR review pipeline where automatic reviewer selection never goes below author tier (Sonnet reviews Flash/Haiku; Flash reviews Haiku; Opus reviews Sonnet/Flash on Josh's per-PR call). Josh's direct named invocation authorizes the current reviewer; self-review and posting guards remain in place. Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).

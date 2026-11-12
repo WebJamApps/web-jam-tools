@@ -12,12 +12,8 @@
 // body with a read-only `gh issue view`, and fails closed when a body cannot be read.
 //
 // Canonical vocabularies are read from source at runtime, never hardcoded:
-//   - Model tiers: `skills/fix-labels/labels.yaml`, via the existing loader in
-//     `../fix-labels/diff.ts` (`loadSchema` + `computeModelLabels`) -- read-only, that module is
-//     never modified here. The `Josh` label (used as the Model tier value for manual rows per
-//     `skills/design-issue/SKILL.md` "Manual Steps & Verification Pairs") is not `modelTier: true`
-//     in the schema, so it is looked up by name and added to the allowed tier set only when it is
-//     actually present in `labels.yaml`.
+//   - Model tiers: `skills/fix-labels/model-labels.json`, through the shared label rule.
+//     Tests may inject a labels.yaml-shaped schema; Josh denotes a manual row.
 //   - Repos: `ACTIVE_REPOS` in `../shared/repos.ts` -- read-only, that module is never
 //     modified here.
 
@@ -30,7 +26,23 @@ import {
   type Schema,
 } from "../fix-labels/diff.ts";
 import { ACTIVE_REPOS } from "../shared/repos.ts";
-import { expandHome } from "./gate1.ts";
+import {
+  loadModelLabels,
+  modelLabelViolation,
+  readPlanModelLabels,
+} from "../shared/model_label_rule.ts";
+import {
+  type CommandRunner,
+  DUPLICATE_MIN_SHARED_TOKENS,
+  fetchOpenIssueTitles,
+  findSimilarOpenIssues,
+  formatCandidates,
+  type OpenIssueSummary,
+  runGhCommand,
+  tokenizeTitle,
+} from "../../hooks/lib/detect_duplicate_issue.ts";
+import { defaultOpenBrowserImpl, expandHome, resolveHtmlPath } from "./gate1.ts";
+import { renderDesignDocFile } from "../../scripts/render_design_doc.ts";
 import { type Gate1StatusResult, type Gate1StatusType, getGate1Status } from "./gate1_record.ts";
 import {
   type MalformedPlanTableRow,
@@ -73,19 +85,27 @@ export interface LintPlanResult {
 }
 
 export interface LintPlanOptions {
-  /** Canonical model-tier vocabulary source. `lintPlanTableFile` defaults this to loading
-   * `labels.yaml` when omitted; `validatePlanTable` instead treats an omitted schema as an
+  /** Test model-tier vocabulary source. `lintPlanTableFile` defaults to the generated
+   * model-label sidecar when omitted; `validatePlanTable` treats an omitted vocabulary as an
    * explicit opt-out that skips tier validation entirely. A schema that IS provided but yields
    * an empty vocabulary is treated as a degraded `labels.yaml` and throws (see
    * `resolveTierVocabulary`), rather than silently passing every tier. */
   schema?: Schema;
+  /** Explicit vocabulary for tests; production reads the generated model-label sidecar. */
+  modelLabels?: ReadonlySet<string>;
   /** Canonical active-repo vocabulary. Defaults to `ACTIVE_REPOS`. */
   activeRepos?: readonly string[];
   /** Reads an issue's body for the `Needs Design` removal check. Defaults to a read-only
    * `gh issue view`; tests inject a stub. Throws when the body cannot be read. */
   fetchIssueBody?: IssueBodyFetcher;
+  /** Read-only gh runner for the shared open-issue title listing; tests inject a stub. */
+  runGh?: CommandRunner;
   /** Canonical design document path to check Gate 1 approval against. */
   designDocPath?: string;
+  /** In-memory design document markdown for checking Closes when headings without disk reads. */
+  designDocMarkdown?: string;
+  /** Explicit design document headings set for checking Closes when headings. */
+  designHeadings?: ReadonlySet<string>;
   /** Gate 1 state directory override (for testing). */
   stateDir?: string;
 }
@@ -95,6 +115,7 @@ export interface LintPlanOptions {
 export type IssueBodyFetcher = (repo: string, number: number) => Promise<string>;
 
 // Column indices resolved from PLAN_TABLE_HEADER (never hardcoded against reordering).
+const COL_NUM = PLAN_TABLE_HEADER.indexOf("#");
 const COL_TITLE = PLAN_TABLE_HEADER.indexOf("Proposed title");
 const COL_EPIC = PLAN_TABLE_HEADER.indexOf("Epic / child of");
 const COL_TIER = PLAN_TABLE_HEADER.indexOf("Model tier");
@@ -163,23 +184,125 @@ const WALKTHROUGH_KEYWORDS = [
   /\bexternal\s+part(y|ies)\b/i,
 ];
 
-/** A cross-repo child's `Epic / child of` cell must cite its parent as `repo#number "title"`
- * (the same citation shape the standing hard rule requires everywhere else) so it is unambiguous
- * which repo's epic it belongs to. */
-const REPO_NUMBER_TITLE_CITATION = /[\w.\-/]+#\d+\s+"[^"]+"/;
-
-/** Finds the plan table's own epic row: the one row whose `Epic / child of` cell is a "missing"
- * value (`-`, blank, etc.) meaning "this row has no parent". Returns `undefined` when zero or more
- * than one such row exists, since the epic cannot be unambiguously identified either way -- a flat
- * set of standalone issues legitimately has several "no parent" rows, and cross-repo-child
- * citation checking (the one check that needs "the epic's repo") is skipped rather than guessed. */
-function findEpicRow(rows: PlanTableRow[]): PlanTableRow | undefined {
-  const candidates = rows.filter((r) => isMissingValue(stripMdMarkers(r.cells[COL_EPIC])));
-  return candidates.length === 1 ? candidates[0] : undefined;
-}
-
 function normalizeRepoCell(cell: string): string {
   return stripMdMarkers(cell).replace(/^WebJamApps\//i, "").trim();
+}
+
+/** Determines if a child row cites or belongs to a potential parent/epic row. */
+function isChildOfRow(
+  child: PlanTableRow,
+  parent: PlanTableRow,
+  allRows: PlanTableRow[],
+): boolean {
+  if (child === parent) return false;
+  const childEpicCell = stripMdMarkers(child.cells[COL_EPIC]).trim();
+  if (
+    isMissingValue(childEpicCell) ||
+    childEpicCell.toLowerCase() === "none" ||
+    childEpicCell.toLowerCase() === "epic"
+  ) {
+    return false;
+  }
+
+  const parentNum = stripMdMarkers(parent.cells[COL_NUM]).trim();
+  const parentPos = String(allRows.indexOf(parent) + 1);
+  const targetNums = new Set([parentNum, parentPos].filter(Boolean));
+
+  const numMatch = childEpicCell.match(/^(?:row|epic)\s*#?\s*(\d+)\b/i) ??
+    childEpicCell.match(/^#?(\d+)$/);
+  if (numMatch && targetNums.has(numMatch[1])) {
+    return true;
+  }
+
+  const parentTitle = stripMdMarkers(parent.cells[COL_TITLE]).trim().toLowerCase();
+  if (parentTitle && childEpicCell.toLowerCase() === parentTitle) {
+    return true;
+  }
+
+  // An external issue number is not a plan position. Match a qualified citation
+  // by its repository and quoted title instead of comparing its number to COL_NUM.
+  const citation = childEpicCell.match(
+    /^(?:epic\s+)?((?:[a-z0-9_.-]+\/)?[a-z0-9_.-]+)#\d+\s+"([^"]+)"$/i,
+  );
+  if (citation) {
+    return normalizeRepoCell(citation[1]).toLowerCase() ===
+        normalizeRepoCell(parent.cells[COL_REPO]).toLowerCase() &&
+      citation[2].trim().toLowerCase() === parentTitle;
+  }
+
+  return false;
+}
+
+/** Determines if a row represents an Epic row: its own `Epic / child of` cell says `Epic`, or
+ * another row names it as its parent. A word in the title or any other cell never makes a row an
+ * epic ("Epics, repositories and sub-issues", web-jam-tools#1455). */
+function isEpicRow(row: PlanTableRow, allRows: PlanTableRow[]): boolean {
+  const epicCell = stripMdMarkers(row.cells[COL_EPIC]).trim().toLowerCase();
+  if (epicCell === "epic") return true;
+
+  if (allRows.some((other) => isChildOfRow(other, row, allRows))) {
+    return true;
+  }
+
+  return false;
+}
+
+function checkEpicBelonging(
+  rows: PlanTableRow[],
+  violations: PlanTableViolation[],
+): void {
+  for (const row of rows) {
+    if (isEpicRow(row, rows)) continue;
+    const raw = row.cells[COL_EPIC];
+    const stripped = stripMdMarkers(raw).trim();
+    const lower = stripped.toLowerCase();
+    if (
+      isMissingValue(stripped) ||
+      lower === "none" ||
+      lower === "standalone issue"
+    ) {
+      violations.push({
+        rule: "row-missing-epic",
+        line: row.line,
+        column: "Epic / child of",
+        message:
+          `The plan needs an epic for this row: the row names no epic ("${raw}") -- every non-epic plan row must name its epic`,
+      });
+    }
+  }
+}
+
+function checkCrossRepoEpic(
+  rows: PlanTableRow[],
+  violations: PlanTableViolation[],
+): void {
+  for (const row of rows) {
+    if (!isEpicRow(row, rows)) continue;
+    const children = rows.filter((r) => isChildOfRow(r, row, rows));
+    const epicRepo = normalizeRepoCell(row.cells[COL_REPO]);
+    const childRepos = new Set(
+      children.map((c) => normalizeRepoCell(c.cells[COL_REPO])).filter(Boolean),
+    );
+    // A child in a repository other than the epic's own makes the work cross-repository, so the
+    // epic's repository counts with its children's.
+    const spanned = new Set([
+      ...childRepos,
+      ...(children.length > 0 && epicRepo ? [epicRepo] : []),
+    ]);
+    if (spanned.size > 1) {
+      if (epicRepo !== "web-jam-tools") {
+        violations.push({
+          rule: "cross-repo-epic-not-in-web-jam-tools",
+          line: row.line,
+          column: "Repo",
+          message:
+            `Cross-repository work lives in web-jam-tools: this epic row and its children span more than one repository (${
+              Array.from(spanned).join(", ")
+            }), so its Repo must be "web-jam-tools" (found "${epicRepo}")`,
+        });
+      }
+    }
+  }
 }
 
 /** Validates every well-formed row of a parsed Gate 2 plan table. Parser-level malformed rows
@@ -196,10 +319,14 @@ export function validatePlanTable(
     violations.push(malformedRowViolation(bad));
   }
 
-  const canonicalTiers = resolveTierVocabulary(options.schema);
+  const canonicalTiers = options.modelLabels
+    ? [...options.modelLabels]
+    : resolveTierVocabulary(options.schema);
   const activeRepos = options.activeRepos ?? ACTIVE_REPOS;
-  const epicRow = findEpicRow(rows);
-  const epicRepo = epicRow ? normalizeRepoCell(epicRow.cells[COL_REPO]) : undefined;
+  const designHeadings = options.designHeadings ??
+    (options.designDocMarkdown !== undefined
+      ? extractDesignHeadings(options.designDocMarkdown)
+      : undefined);
 
   for (const row of rows) {
     checkMissingAndTier(row, canonicalTiers, violations);
@@ -207,13 +334,14 @@ export function validatePlanTable(
     checkRepo(row, activeRepos, violations);
     checkTests(row, violations);
     checkTitlePersonalName(row, violations);
+    if (designHeadings !== undefined) {
+      checkClosesWhen(row, rows, designHeadings, violations);
+    }
   }
 
   checkJoshPairingAndComposite(rows, violations);
-
-  if (epicRow && epicRepo) {
-    checkCrossRepoChildren(rows, epicRow, epicRepo, violations);
-  }
+  checkEpicBelonging(rows, violations);
+  checkCrossRepoEpic(rows, violations);
 
   return violations;
 }
@@ -257,13 +385,20 @@ function checkMissingAndTier(
     });
     return;
   }
-  const tier = stripMdMarkers(raw);
-  if (canonicalTiers.length > 0 && !canonicalTiers.includes(tier)) {
+  if (canonicalTiers.length === 0) return;
+  try {
+    const vocabulary = new Set(canonicalTiers.filter((name) => name !== "Josh"));
+    const labels = readPlanModelLabels(raw, vocabulary);
+    const violation = modelLabelViolation(labels, vocabulary, undefined, false);
+    if (violation) throw new Error(violation);
+  } catch (error) {
     violations.push({
       rule: "tier-unknown",
       line: row.line,
       column: "Model tier",
-      message: `Model tier "${tier}" is not in labels.yaml's canonical model-tier vocabulary`,
+      message: `Model tier "${stripMdMarkers(raw)}": ${
+        error instanceof Error ? error.message : error
+      }`,
     });
   }
 }
@@ -394,30 +529,131 @@ function checkJoshPairingAndComposite(
   }
 }
 
-/** A child row whose own Repo differs from the epic's Repo must cite its parent as
- * `repo#number "title"` in its `Epic / child of` cell -- an unqualified reference like "Epic #1"
- * is ambiguous once the child is filed in a different repository than the epic. */
-function checkCrossRepoChildren(
-  rows: PlanTableRow[],
-  epicRow: PlanTableRow,
-  epicRepo: string,
+/**
+ * Extracts headings from Markdown text (ignoring fenced code blocks).
+ * Headings match as written, ignoring case and leading '#' marks.
+ */
+export function extractDesignHeadings(markdown: string): Set<string> {
+  const headings = new Set<string>();
+  let inFence = false;
+  let fenceMarker = "";
+  for (const rawLine of markdown.split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1][0];
+      if (!inFence) {
+        inFence = true;
+        fenceMarker = marker;
+      } else if (marker === fenceMarker) {
+        inFence = false;
+        fenceMarker = "";
+      }
+      continue;
+    }
+    if (inFence) continue;
+    const match = rawLine.match(/^\s*#{1,6}\s+(.+?)\s*$/);
+    if (match) {
+      const text = match[1].replace(/\s+#+\s*$/, "").trim().toLowerCase();
+      if (text.length > 0) {
+        headings.add(text);
+      }
+    }
+  }
+  return headings;
+}
+
+export interface CriterionHeadingCheckResult {
+  valid: boolean;
+  reason?: "unknown-heading" | "neither-heading-nor-command";
+  unknownHeading?: string;
+}
+
+/**
+ * Validates a Closes when cell or an issue body acceptance criterion against design headings.
+ * Each criterion/cell must name a design heading in double quotes or carry a backtick-quoted command.
+ * Any double-quoted heading must exist in designHeadings (matched case-insensitively).
+ */
+export function checkCriterionOrClosesCell(
+  text: string,
+  designHeadings: ReadonlySet<string>,
+): CriterionHeadingCheckResult {
+  const quotedHeadings: string[] = [];
+  let hasCommand = false;
+
+  const tokenRegex = /`([^`\n]+)`|"([^"\n]*)"/g;
+  for (const match of text.matchAll(tokenRegex)) {
+    if (match[1] !== undefined) {
+      if (match[1].trim().length > 0) {
+        hasCommand = true;
+      }
+    } else if (match[2] !== undefined) {
+      quotedHeadings.push(match[2].trim());
+    }
+  }
+
+  for (const heading of quotedHeadings) {
+    if (heading === "" || !designHeadings.has(heading.toLowerCase())) {
+      return {
+        valid: false,
+        reason: "unknown-heading",
+        unknownHeading: heading,
+      };
+    }
+  }
+
+  if (quotedHeadings.length === 0 && !hasCommand) {
+    return {
+      valid: false,
+      reason: "neither-heading-nor-command",
+    };
+  }
+
+  return { valid: true };
+}
+
+function checkClosesWhen(
+  row: PlanTableRow,
+  allRows: PlanTableRow[],
+  designHeadings: ReadonlySet<string>,
   violations: PlanTableViolation[],
 ): void {
-  for (const row of rows) {
-    if (row === epicRow) continue;
-    const epicChildCell = row.cells[COL_EPIC];
-    if (isMissingValue(stripMdMarkers(epicChildCell))) continue; // not a child of anything
+  // Case 5: an epic closes when its children close
+  if (isEpicRow(row, allRows)) return;
+  // Case 6: a manual step (Josh)
+  const tier = stripMdMarkers(row.cells[COL_TIER]).trim();
+  if (tier === "Josh") return;
 
-    const childRepo = normalizeRepoCell(row.cells[COL_REPO]);
-    if (!childRepo || childRepo === epicRepo) continue;
+  const raw = row.cells[COL_CLOSES];
+  const rowNum = stripMdMarkers(row.cells[COL_NUM]).trim() || String(allRows.indexOf(row) + 1);
 
-    if (!REPO_NUMBER_TITLE_CITATION.test(epicChildCell)) {
+  if (isMissingValue(raw)) {
+    violations.push({
+      rule: "closes-when-missing",
+      line: row.line,
+      column: "Closes when",
+      message: `Row ${rowNum}: Closes when cell is missing ("${raw}")`,
+    });
+    return;
+  }
+
+  const check = checkCriterionOrClosesCell(raw, designHeadings);
+  if (!check.valid) {
+    if (check.reason === "unknown-heading") {
       violations.push({
-        rule: "cross-repo-child-uncited",
+        rule: "closes-when-unknown-heading",
         line: row.line,
-        column: "Epic / child of",
-        message: `Child row's repo ("${childRepo}") differs from the epic's ("${epicRepo}") ` +
-          `but "Epic / child of" ("${epicChildCell}") is not cited as repo#number "title"`,
+        column: "Closes when",
+        message:
+          `Row ${rowNum}: Closes when cell names heading "${check.unknownHeading}", which the design document does not have`,
+      });
+    } else if (check.reason === "neither-heading-nor-command") {
+      violations.push({
+        rule: "closes-when-neither-heading-nor-command",
+        line: row.line,
+        column: "Closes when",
+        message:
+          `Row ${rowNum}: Closes when cell "${raw.trim()}" names neither a heading nor a command`,
       });
     }
   }
@@ -524,7 +760,9 @@ export async function checkGate1ApprovalRecord(
 
 /** Reads a design document from disk, parses its Gate 2 plan table, validates every cell, and
  * checks its `Needs Design` label removals against the removed issues' own bodies. Also verifies
- * Gate 1 disk record when `options.designDocPath` is provided. */
+ * Gate 1 disk record when `options.designDocPath` is provided.
+ *
+ * Checks each new plan title against open issues and the plan's other new titles. */
 export async function lintPlanTableFile(
   filePath: string,
   options?: LintPlanOptions,
@@ -535,10 +773,37 @@ export async function lintPlanTableFile(
     throw new Error(`No Gate 2 plan table found in ${filePath}`);
   }
 
-  const schema = options?.schema ?? await loadCanonicalSchema();
-  const violations = validatePlanTable(parsed, { schema, activeRepos: options?.activeRepos });
+  let designHeadings: ReadonlySet<string> | undefined = options?.designHeadings;
+  if (!designHeadings && options?.designDocMarkdown !== undefined) {
+    designHeadings = extractDesignHeadings(options.designDocMarkdown);
+  }
+  if (
+    !designHeadings &&
+    options?.designDocPath !== undefined &&
+    options.designDocPath.trim() !== ""
+  ) {
+    try {
+      const absDocPath = path.resolve(expandHome(options.designDocPath.trim()));
+      const designMarkdown = await Deno.readTextFile(absDocPath);
+      designHeadings = extractDesignHeadings(designMarkdown);
+    } catch {
+      // checkGate1ApprovalRecord will record any unreadable design doc violation
+    }
+  }
+
+  const violations = validatePlanTable(parsed, {
+    schema: options?.schema,
+    modelLabels: options?.modelLabels ?? (options?.schema ? undefined : loadModelLabels()),
+    activeRepos: options?.activeRepos,
+    designHeadings,
+  });
   violations.push(
     ...await checkNeedsDesignRemovals(markdown, options?.fetchIssueBody ?? ghIssueBody),
+    ...await checkDuplicatePlanTitles(
+      parsed.rows,
+      options?.runGh ?? runGhCommand,
+      options?.activeRepos ?? ACTIVE_REPOS,
+    ),
   );
 
   let gate1Approval: LintPlanResult["gate1Approval"];
@@ -567,6 +832,73 @@ export async function lintPlanTableFile(
     violations,
     gate1Approval,
   };
+}
+
+/** Reuse the issue-creation search before Gate 2, including comparisons within the plan. */
+async function checkDuplicatePlanTitles(
+  rows: PlanTableRow[],
+  runner: CommandRunner,
+  activeRepos: readonly string[],
+): Promise<PlanTableViolation[]> {
+  const searchable = rows.map((row) => ({
+    row,
+    title: row.cells[COL_TITLE].trim(),
+    repo: normalizeRepoCell(row.cells[COL_REPO]),
+  })).filter(({ title, repo }) =>
+    !isMissingValue(title) && activeRepos.includes(repo) &&
+    tokenizeTitle(title).length >= DUPLICATE_MIN_SHARED_TOKENS
+  );
+  const issuesByRepo = new Map<string, OpenIssueSummary[] | null>();
+  const violations: PlanTableViolation[] = [];
+  for (const { row, repo } of searchable) {
+    if (issuesByRepo.has(repo)) continue;
+    const issues = await fetchOpenIssueTitles(`WebJamApps/${repo}`, runner);
+    issuesByRepo.set(repo, issues);
+    if (issues === null) {
+      violations.push({
+        rule: "duplicate-title-search-failed",
+        line: row.line,
+        column: "Proposed title",
+        message:
+          `Duplicate-title search could not run or finish for WebJamApps/${repo}; refusing the plan.`,
+      });
+    }
+  }
+
+  // An exact existing title identifies an already-filed issue, not a new plan title.
+  const newRows = searchable.filter(({ title, repo }) => {
+    const issues = issuesByRepo.get(repo);
+    return issues !== null && issues !== undefined &&
+      !issues.some((issue) => issue.title === title);
+  });
+  for (const { row, title, repo } of newRows) {
+    const openMatches = findSimilarOpenIssues(title, issuesByRepo.get(repo)!);
+    const planMatches = findSimilarOpenIssues(
+      title,
+      newRows.filter((other) => other.row !== row).map((other) => ({
+        number: other.row.line,
+        title: other.title,
+      })),
+    );
+    const matches: string[] = [];
+    if (openMatches.length > 0) matches.push(formatCandidates(`WebJamApps/${repo}`, openMatches));
+    for (const candidate of planMatches) {
+      const other = newRows.find((entry) => entry.row.line === candidate.number)!;
+      // Unfiled rows have no GitHub number; never present their positions as issue citations.
+      matches.push(`plan row ${other.row.cells[0]} (${other.repo}) "${candidate.title}"`);
+    }
+    if (matches.length > 0) {
+      violations.push({
+        rule: "duplicate-title",
+        line: row.line,
+        column: "Proposed title",
+        message: `New title "${title}" resembles ${
+          matches.join(", ")
+        }. Read each look-alike before revising the plan.`,
+      });
+    }
+  }
+  return violations;
 }
 
 // --- Needs Design removals: "Not resolved" must never narrow the issue's own directive ---
@@ -735,9 +1067,14 @@ export interface LintPlanCliOptions {
   errorLog?: (msg: string) => void;
   schema?: Schema;
   fetchIssueBody?: IssueBodyFetcher;
+  runGh?: CommandRunner;
   activeRepos?: string[];
   stateDir?: string;
   designDoc?: string;
+  noOpen?: boolean;
+  display?: string;
+  openBrowserImpl?: (htmlPath: string, display?: string) => Promise<void>;
+  renderDesignDocFileImpl?: (inputPath: string, outputPath: string) => void;
 }
 
 /**
@@ -751,8 +1088,8 @@ export async function runLintPlanCli(
   const errorLog = options?.errorLog ?? console.error;
 
   const flags = parseArgs(args, {
-    boolean: ["help", "json"],
-    string: ["doc", "design-doc", "design_doc", "state-dir", "state_dir"],
+    boolean: ["help", "json", "no-open", "no_open"],
+    string: ["doc", "design-doc", "design_doc", "state-dir", "state_dir", "display"],
     alias: {
       h: "help",
       j: "json",
@@ -760,6 +1097,8 @@ export async function runLintPlanCli(
     default: {
       help: false,
       json: false,
+      "no-open": false,
+      no_open: false,
     },
   });
 
@@ -775,13 +1114,18 @@ Validates the Gate 2 plan table's cell values in a design document:
   - out-of-range priorities (Urgent/High/Medium/Low only)
   - a Josh-labeled manual row with no paired agent row
   - a composite Josh-labeled manual row (doc review + live walkthrough)
-  - a cross-repo child not cited as repo#number "title"
+  - a non-epic row that names no epic ("" or "none")
+  - an epic row whose children sit in more than one repository when its repo is not web-jam-tools
   - a Tests cell with no statement of what proves the issue
+  - new titles resembling open issues in their row's repository or other new
+    plan titles; an incomplete or failed title listing refuses the plan
   - a "Needs Design label removals" item whose "Not resolved" part quotes or
     narrows a directive line of that issue's own body (read with gh; a body
     that cannot be read fails the check)
 
-Report-only. Writes nothing; its only GitHub call is a read-only gh issue view.
+When validation passes, renders <plan>.html and opens it in Google Chrome.
+
+Report-only validation. GitHub calls only read issue bodies and open titles with gh.
 
 Arguments:
   <plan.md>               Path to markdown file containing the plan table
@@ -789,6 +1133,8 @@ Arguments:
 Options:
   --design-doc <path>     Canonical design document path to verify Gate 1 approval
   --doc <path>            Explicit plan document path
+  --display <display>     X11 display to open browser on (defaults to $DISPLAY or :0)
+  --no-open               Skip opening <plan>.html in Google Chrome
   -j, --json              Output result as JSON
   -h, --help              Show this help message
 `);
@@ -822,10 +1168,30 @@ Options:
     const result = await lintPlanTableFile(docPath, {
       schema: options?.schema,
       fetchIssueBody: options?.fetchIssueBody,
+      runGh: options?.runGh,
       activeRepos: options?.activeRepos,
       designDocPath,
       stateDir,
     });
+
+    if (result.valid) {
+      const htmlPath = resolveHtmlPath(result.docPath);
+      const renderFile = options?.renderDesignDocFileImpl ?? renderDesignDocFile;
+      renderFile(result.docPath, htmlPath);
+
+      const noOpen = flags["no-open"] || flags.no_open || options?.noOpen;
+      if (!noOpen) {
+        const openBrowser = options?.openBrowserImpl ?? defaultOpenBrowserImpl;
+        const display = (typeof flags.display === "string" ? flags.display : undefined) ||
+          options?.display;
+        try {
+          await openBrowser(htmlPath, display);
+        } catch (browserErr) {
+          const msg = browserErr instanceof Error ? browserErr.message : String(browserErr);
+          errorLog(`[design:lint-plan] Warning: Chrome could not be opened: ${msg}`);
+        }
+      }
+    }
 
     if (flags.json) {
       log(JSON.stringify(result, null, 2));

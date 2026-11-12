@@ -23,7 +23,7 @@ Deno.test("extractDirectCommandHookScripts extracts Claude and agy direct comman
 
   // Must include Claude Code SessionStart hooks
   assert(direct.has("notes-sync-reminder.sh"));
-  assert(direct.has("memory-cleanup-reminder.sh"));
+  assert(!direct.has("memory-cleanup-reminder.sh"));
   assert(direct.has("backlog-groom-reminder.sh"));
   assert(direct.has("backup-refusal-reminder.sh"));
   assert(direct.has("hook-install-drift-reminder.sh"));
@@ -53,6 +53,7 @@ Deno.test("extractDirectCommandHookScripts extracts Claude and agy direct comman
   assert(direct.has("require-approval-token-on-issue-write.sh"));
   assert(direct.has("block-backend-mutation.sh"));
   assert(direct.has("block-private-folder-read.sh"));
+  assert(direct.has("block-production-media-change.sh"));
   assert(direct.has("scan-output-for-secrets.sh"));
 
   // Must include agy direct command wrapper
@@ -72,9 +73,11 @@ Deno.test("getGitTrackedModes reads tracked modes from git index", async () => {
   assertExists(modes.get("block-agy-gmail-send-delete.sh"));
   assertExists(modes.get("opus-delegation-gate.sh"));
   assertExists(modes.get("prune-permission-allows-on-session-end.sh"));
+  assertExists(modes.get("run_hook.sh"));
 
   // Direct commands are tracked as 100755
   assertEquals(modes.get("prune-permission-allows-on-session-end.sh"), "100755");
+  assertEquals(modes.get("run_hook.sh"), "100755");
 
   // agy-model-guard and block-agy-gmail-send-delete are tracked as 100644 (bash-invoked)
   assertEquals(modes.get("agy-model-guard.sh"), "100644");

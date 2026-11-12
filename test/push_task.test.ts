@@ -23,11 +23,25 @@ import {
   evaluatePush,
   getCurrentBranch,
   type GitRunner,
-  runPush,
+  runPush as pushWithContext,
 } from "../scripts/push.ts";
+import {
+  checkFixRun,
+  githubRepository,
+  latestTypedSkillCall,
+  parseFixPrReference,
+  type PullRequestState,
+} from "../hooks/lib/fix_run.ts";
+import { resolveFixRun } from "../scripts/push.ts";
+
+// Existing policy tests have no user invocation and never inspect this workstation's sessions.
+const runPush: typeof pushWithContext = (args, cwd, options) =>
+  pushWithContext(args, cwd, { readSkillCall: () => Promise.resolve(null), ...options });
 
 const SCRIPT_PATH = new URL("../scripts/push.ts", import.meta.url).pathname;
 const SHARED_CONFIG_PATH = new URL("../deno.json", import.meta.url).pathname;
+
+const fixBody = (author: string) => `Fixed formatting.\n\n🤖 Fixed by ${author}\n`;
 
 interface FixtureEnv {
   tempDir: string;
@@ -36,6 +50,254 @@ interface FixtureEnv {
   git: (args: string[]) => Promise<string>;
   cleanup: () => Promise<void>;
 }
+
+for (const surface of ["claude", "agy", "codex"] as const) {
+  Deno.test(`${surface}: comment checks run before pushing, and successful pushes post recorded signatures`, async () => {
+    const fixture = await createFixFixture(surface);
+    const comment = `${fixture.repoDir}/c ' retry.md`;
+    const signature = surface === "codex"
+      ? "Codex — GPT-6 Luna"
+      : surface === "claude"
+      ? "Claude Code — Claude Opus"
+      : "agy — Gemini Flash";
+    try {
+      await fixture.writeSession([fixCall.text]);
+      const args = ["--fix-comment", comment];
+      const help = await runDenoTaskPush(["--help"], fixture.repoDir, true, fixture.shellEnv);
+      assertEquals(help.code, 0, help.stderr);
+      assertStringIncludes(help.stdout, "--fix-comment");
+      const initial = await Deno.readTextFile(fixture.sessionPath);
+      const initialRecord = surface === "agy" ? await Deno.readTextFile(fixture.recordPath) : "";
+      for (
+        const body of [
+          "",
+          "🤖 Fixed by Claude Code — Claude Opus",
+          "Fixed formatting.",
+          `${fixBody(signature)}extra text`,
+          `## PR Review Summary\n${fixBody(signature)}`,
+          `${fixBody(signature)}${fixBody(signature)}`,
+        ]
+      ) {
+        await Deno.writeTextFile(comment, body);
+        const before = await fixture.git(["ls-remote", "origin"]);
+        const result = await runDenoTaskPush(args, fixture.repoDir, true, fixture.shellEnv);
+        assertEquals(result.code, 1, result.stderr);
+        assertStringIncludes(result.stderr, "Refused (fix-comment)");
+        assertEquals(await fixture.git(["ls-remote", "origin"]), before);
+        assertEquals(await remoteRefs(fixture.bareDir), "refs/heads/dev\nrefs/heads/main");
+      }
+      await Deno.writeTextFile(comment, fixBody("Codex — GPT"));
+      const recordedFile = surface === "agy" ? fixture.recordPath : fixture.sessionPath;
+      const recordedText = surface === "agy" ? initialRecord : initial;
+      const slug = surface === "codex"
+        ? "gpt-6-luna"
+        : surface === "claude"
+        ? "claude-opus-5-5"
+        : "gemini-3.8-flash-high";
+      for (const model of ["missing-model", "gpt-6-sol"]) {
+        const damaged = model === "missing-model"
+          ? recordedText.replace(`"${slug}"`, "null")
+          : recordedText.replace(slug, model);
+        await Deno.writeTextFile(recordedFile, damaged);
+        const before = await fixture.git(["ls-remote", "origin"]);
+        const result = await runDenoTaskPush(args, fixture.repoDir, true, fixture.shellEnv);
+        assertEquals(result.code, 1, result.stderr);
+        assertEquals(await fixture.git(["ls-remote", "origin"]), before);
+        assertStringIncludes(
+          result.stderr,
+          model === "missing-model" ? recordedFile : "roster entry",
+        );
+      }
+      await Deno.writeTextFile(recordedFile, recordedText);
+      await Deno.remove(comment);
+      const missing = await runDenoTaskPush(args, fixture.repoDir, true, fixture.shellEnv);
+      assertEquals(missing.code, 1);
+      assertStringIncludes(missing.stderr, comment);
+
+      await Deno.writeTextFile(comment, fixBody("Codex — GPT"));
+      const result = await runDenoTaskPush(args, fixture.repoDir, true, fixture.shellEnv);
+      assertEquals(result.code, 0, result.stderr);
+      assertEquals(
+        await Deno.readTextFile(fixture.shellEnv.PUSH_TEST_COMMENT_OUTPUT),
+        fixBody(signature),
+      );
+      assertEquals(await Deno.readTextFile(comment), fixBody(signature));
+      assertEquals(
+        (await fixture.git(["ls-remote", "origin", "refs/heads/probe-branch"])).split(/\s+/)[0],
+        await fixture.git(["rev-parse", "HEAD"]),
+      );
+
+      // The remote has changed even if the subsequent post fails. Retry only that signed file.
+      await Deno.writeTextFile(`${fixture.repoDir}/file.txt`, "next fix\n");
+      await fixture.git(["commit", "-qam", "next fix"]);
+      const failed = await runDenoTaskPush(args, fixture.repoDir, true, {
+        ...fixture.shellEnv,
+        PUSH_TEST_POST_EXIT: "1",
+      });
+      assertEquals(failed.code, 1);
+      assertStringIncludes(failed.stderr, "Push landed, but the fix comment was not posted");
+      const remote = await fixture.git(["ls-remote", "origin"]);
+      assertStringIncludes(remote, await fixture.git(["rev-parse", "HEAD"]));
+      const retry = failed.stderr.trim().split("\n").at(-1)!;
+      assertStringIncludes(retry, "post-pr-comment --repo");
+      const retried = await new Deno.Command("bash", {
+        args: ["-c", retry],
+        cwd: fixture.repoDir,
+        env: fixture.shellEnv,
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      assertEquals(retried.code, 0, new TextDecoder().decode(retried.stderr));
+      assertEquals(await fixture.git(["ls-remote", "origin"]), remote);
+      assertEquals(
+        await Deno.readTextFile(fixture.shellEnv.PUSH_TEST_COMMENT_OUTPUT),
+        fixBody(signature),
+      );
+      assertEquals(await Deno.readTextFile(fixture.shellEnv.PUSH_TEST_TRACE), "post\npost\npost\n");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+}
+
+for (const surface of ["claude", "codex"] as const) {
+  Deno.test(`${surface}: only this session's helpers started since the typed call may sign`, async () => {
+    const fixture = await createFixFixture(surface);
+    const comment = `${fixture.repoDir}/c.md`;
+    const childId = "12345678-1234-5678-abcd-123456789abd";
+    const parentAuthor = surface === "claude" ? "Claude Code — Claude Opus" : "Codex — GPT-6.1 Sol";
+    const helperAuthor = surface === "claude"
+      ? "Claude Code — Claude Haiku 5.5"
+      : "Codex — GPT-6 Luna";
+    const outsider = surface === "claude"
+      ? "Claude Code — Claude Sonnet 5.5"
+      : "Codex — GPT-6 Astra";
+    try {
+      await fixture.writeSession([fixCall.text]);
+      if (surface === "codex") {
+        await Deno.writeTextFile(
+          fixture.sessionPath,
+          (await Deno.readTextFile(fixture.sessionPath)).replace("gpt-6-luna", "gpt-6.1-sol"),
+        );
+      }
+      const helperPath = surface === "claude"
+        ? `${fixture.sessionPath.slice(0, -6)}/subagents/agent-${childId}.jsonl`
+        : `${fixture.shellEnv.CODEX_HOME}/sessions/rollout-${childId}.jsonl`;
+      await Deno.mkdir(helperPath.slice(0, helperPath.lastIndexOf("/")), { recursive: true });
+      const child = (
+        timestamp: string,
+        model = surface === "claude" ? "claude-haiku-5-5" : "gpt-6-luna",
+        parent = fixtureThread,
+      ) =>
+        (surface === "claude"
+          ? [
+            {
+              type: "user",
+              timestamp,
+              isSidechain: true,
+              message: { role: "user", content: "Do the fix" },
+            },
+            { type: "assistant", isSidechain: true, message: { role: "assistant", model } },
+          ]
+          : [
+            {
+              type: "session_meta",
+              timestamp,
+              payload: {
+                id: childId,
+                thread_source: "subagent",
+                parent_thread_id: parent,
+                source: { subagent: { thread_spawn: { parent_thread_id: parent } } },
+              },
+            },
+            { type: "turn_context", payload: { model } },
+          ]).map((entry) => JSON.stringify(entry)).join("\n") + "\n";
+      for (const author of [helperAuthor, parentAuthor, outsider]) {
+        await Deno.writeTextFile(helperPath, child("2026-10-13T01:01:00Z"));
+        await Deno.writeTextFile(comment, fixBody(author));
+        const before = await fixture.git(["ls-remote", "origin"]);
+        const result = await runDenoTaskPush(
+          ["--fix-comment", comment],
+          fixture.repoDir,
+          true,
+          fixture.shellEnv,
+        );
+        assertEquals(result.code, author === outsider ? 1 : 0, result.stderr);
+        if (author === outsider) {
+          assertStringIncludes(result.stderr, "neither the session model nor a helper");
+          assertEquals(await fixture.git(["ls-remote", "origin"]), before);
+        } else {
+          assertEquals(
+            await Deno.readTextFile(fixture.shellEnv.PUSH_TEST_COMMENT_OUTPUT),
+            fixBody(author),
+          );
+        }
+      }
+      await Deno.writeTextFile(helperPath, child("2026-10-13T00:01:00Z"));
+      await Deno.writeTextFile(comment, fixBody(helperAuthor));
+      assertEquals(
+        (await runDenoTaskPush(["--fix-comment", comment], fixture.repoDir, true, fixture.shellEnv))
+          .code,
+        0,
+      );
+      assertEquals(await Deno.readTextFile(comment), fixBody(parentAuthor));
+      for (
+        const [timestamp, model] of [["bad date", "gpt-6-luna"], [
+          "2026-10-13T01:01:00Z",
+          "unknown-model",
+        ]]
+      ) {
+        await Deno.writeTextFile(helperPath, child(timestamp, model));
+        await Deno.writeTextFile(comment, fixBody(helperAuthor));
+        const before = await fixture.git(["ls-remote", "origin"]);
+        const result = await runDenoTaskPush(
+          ["--fix-comment", comment],
+          fixture.repoDir,
+          true,
+          fixture.shellEnv,
+        );
+        assertEquals(result.code, 1);
+        assertEquals(await fixture.git(["ls-remote", "origin"]), before);
+      }
+      if (surface === "codex") {
+        await Deno.writeTextFile(helperPath, child("2026-10-13T01:01:00Z", "gpt-6-luna", childId));
+        await Deno.writeTextFile(comment, fixBody(outsider));
+        assertEquals(
+          (await runDenoTaskPush(
+            ["--fix-comment", comment],
+            fixture.repoDir,
+            true,
+            fixture.shellEnv,
+          )).code,
+          0,
+        );
+        assertEquals(await Deno.readTextFile(comment), fixBody(parentAuthor));
+      }
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+}
+
+Deno.test("a failed or throwing push never posts a validated fix comment", async () => {
+  for (const throws of [false, true]) {
+    let posted = false;
+    const code = await runPush(["--fix-comment", "c.md"], undefined, {
+      branch: "probe-branch",
+      readSkillCall: () => Promise.resolve(fixCall),
+      runGit: () => Promise.resolve({ code: 0, stdout: `https://github.com/${targetRepo}.git` }),
+      lookupPullRequest: () => Promise.resolve(targetPr),
+      prepareComment: () => Promise.resolve(),
+      spawnPush: () => throws ? Promise.reject(new Error("push failed")) : Promise.resolve(1),
+      postComment: () => {
+        posted = true;
+        return Promise.resolve(0);
+      },
+    });
+    assertEquals(code, 1);
+    assertEquals(posted, false);
+  }
+});
 
 async function createFixtureRepo(): Promise<FixtureEnv> {
   const tempDir = await Deno.makeTempDir({ prefix: "push-task-test-" });
@@ -116,6 +378,7 @@ async function runDenoTaskPush(
   args: string[],
   cwd: string,
   sharedConfig = false,
+  fixtureEnv: Record<string, string> = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const cmd = new Deno.Command(Deno.execPath(), {
     args: [
@@ -126,6 +389,13 @@ async function runDenoTaskPush(
       ...args,
     ],
     cwd,
+    env: {
+      CODEX_THREAD_ID: "",
+      CLAUDE_CODE_SESSION_ID: "",
+      WJT_SURFACE: "codex",
+      WJT_UNATTENDED: "",
+      ...fixtureEnv,
+    },
     stdin: "null",
     stdout: "piped",
     stderr: "piped",
@@ -692,3 +962,476 @@ Deno.test("runPush: returns 1 when spawning the push fails", async () => {
   });
   assertEquals(code, 1);
 });
+
+const targetRepo = "WebJamApps/web-jam-tools";
+const targetPr: PullRequestState = {
+  number: 1318,
+  state: "OPEN",
+  headRefName: "probe-branch",
+  headRepository: { nameWithOwner: targetRepo },
+  isCrossRepository: false,
+};
+const fixCall = {
+  name: "fix-pr",
+  arguments: "web-jam-tools#1318",
+  text: "/fix-pr web-jam-tools#1318",
+};
+const activeFix = { kind: "active" as const, pullRequest: { repo: targetRepo, number: 1318 } };
+
+Deno.test("fix run resolves supported PR names and GitHub push remotes", () => {
+  for (
+    const args of [
+      "1318",
+      "web-jam-tools#1318",
+      `${targetRepo}#1318`,
+      "https://github.com/WebJamApps/web-jam-tools/pull/1318 also run checks",
+    ]
+  ) {
+    assertEquals(parseFixPrReference(args, targetRepo), { repo: targetRepo, number: 1318 });
+  }
+  for (
+    const args of ["", "0", "-1", "9007199254740993", "please fix 1318", "1318suffix", "foo#0"]
+  ) {
+    assertEquals(parseFixPrReference(args, targetRepo), null);
+  }
+  for (
+    const remote of [
+      "https://github.com/WebJamApps/web-jam-tools.git",
+      "git@github.com:WebJamApps/web-jam-tools.git",
+      "ssh://git@github.com/WebJamApps/web-jam-tools",
+    ]
+  ) {
+    assertEquals(githubRepository(remote), targetRepo);
+  }
+  for (
+    const remote of [
+      "https://other.host/WebJamApps/web-jam-tools.git",
+      "https://user:password@github.com/WebJamApps/web-jam-tools.git",
+      "/tmp/origin.git",
+      `https://github.com/${targetRepo}.git\nhttps://github.com/${targetRepo}.git`,
+    ]
+  ) {
+    assertEquals(githubRepository(remote), null);
+  }
+});
+
+Deno.test("typed call ignores agent text and keeps plain replies, but a new skill ends it", () => {
+  const human = (text: string) => ({
+    type: "user",
+    origin: { kind: "human" },
+    message: { role: "user", content: text },
+  });
+  const ctx = {
+    entries: [human(fixCall.text), human("also bump the version")],
+    ownConversationId: "session",
+    isSubagentInvocation: false,
+  };
+  const agentEntries = [
+    { type: "assistant", message: { role: "assistant", content: "/pr-review" } },
+    { type: "user", isMeta: true, message: { role: "user", content: "/pr-review" } },
+    { ...human("/pr-review"), origin: { kind: "task-notification" } },
+    { ...human("/pr-review"), isSidechain: true },
+    { type: "user", message: { role: "user", content: "/pr-review" } },
+  ];
+  for (const entry of agentEntries) {
+    assertEquals(latestTypedSkillCall({ ...ctx, entries: [...ctx.entries, entry] }), fixCall);
+  }
+  assertEquals(
+    latestTypedSkillCall({ ...ctx, entries: [...ctx.entries, human("/pr-review")] })?.name,
+    "pr-review",
+  );
+  assertEquals(latestTypedSkillCall({ ...ctx, isSubagentInvocation: true }), null);
+  assertEquals(latestTypedSkillCall({ ...ctx, ownConversationId: null }), null);
+  assertEquals(
+    latestTypedSkillCall({
+      ...ctx,
+      entries: [human(
+        "<command-message>fix-pr</command-message><command-name>/fix-pr</command-name>" +
+          "<command-args>web-jam-tools#1318</command-args>",
+      )],
+    })?.arguments,
+    fixCall.arguments,
+  );
+});
+
+Deno.test("active fix requires a comment and preserves every forbidden push form", () => {
+  for (const args of [[], ["--force-with-lease"]]) {
+    const result = evaluatePush(args, "probe-branch", activeFix);
+    assertEquals(result.rule, "missing-fix-comment");
+    assertStringIncludes(result.reason, "--fix-comment");
+  }
+  for (
+    const args of [["--fix-comment", "c.md"], ["--force-with-lease", "--fix-comment", "c.md"], [
+      "--fix-comment",
+      "c.md",
+      "--force-with-lease",
+    ]]
+  ) {
+    assertEquals(evaluatePush(args, "probe-branch", activeFix).outcome, "allowed");
+    assertEquals(evaluatePush(args, "probe-branch").rule, "fix-comment-outside-run");
+  }
+  for (
+    const args of [
+      ["--fix-comment"],
+      ["--fix-comment", ""],
+      ["--fix-comment", "--force-with-lease"],
+      ["--fix-comment", "c.md", "--fix-comment", "d.md"],
+      ["--force-with-lease", "--force-with-lease"],
+    ]
+  ) {
+    assertEquals(evaluatePush(args, "probe-branch", activeFix).outcome, "refused");
+  }
+  for (const flag of ["--force", "-f", "--delete", "-d", ":probe", "--mirror", "--prune"]) {
+    assertEquals(
+      evaluatePush([flag, "--fix-comment", "c.md"], "probe-branch", activeFix).outcome,
+      "refused",
+    );
+  }
+  for (const branch of ["main", "dev", "+dev", null]) {
+    assertEquals(
+      evaluatePush(["--force-with-lease", "--fix-comment", "c.md"], branch, activeFix).outcome ===
+        "allowed",
+      false,
+    );
+  }
+});
+
+Deno.test("fix run binds state, number, branch and repository including fork refusal", () => {
+  for (
+    const changes of [
+      { state: "CLOSED" },
+      { state: "MERGED" },
+      { number: 1322 },
+      { headRefName: "another-branch" },
+      { isCrossRepository: true },
+      { headRepository: null },
+      { headRepository: { nameWithOwner: "other/web-jam-tools" } },
+    ]
+  ) {
+    assertEquals(
+      checkFixRun(fixCall, targetRepo, "probe-branch", { ...targetPr, ...changes }).kind,
+      "refused",
+    );
+  }
+  assertEquals(
+    checkFixRun(fixCall, "WebJamApps/JaMmusic", "probe-branch", targetPr).kind,
+    "refused",
+  );
+  assertEquals(checkFixRun(fixCall, targetRepo, "probe-branch", null).kind, "none");
+});
+
+Deno.test("resolution failure never grants a fix run or falls back to another typed session", async () => {
+  const deps = {
+    readSkillCall: () => Promise.resolve(fixCall),
+    runGit: () => Promise.resolve({ code: 0, stdout: `https://github.com/${targetRepo}.git` }),
+    lookupPullRequest: () => Promise.resolve(targetPr),
+  };
+  assertEquals(await resolveFixRun("probe-branch", undefined, deps), activeFix);
+  for (
+    const failed of [
+      { readSkillCall: () => Promise.reject(new Error("record unavailable")) },
+      { runGit: () => Promise.reject(new Error("git unavailable")) },
+      { runGit: () => Promise.resolve({ code: 1, stdout: "" }) },
+      { lookupPullRequest: () => Promise.reject(new Error("GitHub unavailable")) },
+      { lookupPullRequest: () => Promise.resolve(null) },
+    ]
+  ) {
+    assertEquals(await resolveFixRun("probe-branch", undefined, { ...deps, ...failed }), {
+      kind: "none",
+    });
+  }
+  let spawned = false;
+  const code = await runPush(["--force-with-lease", "--fix-comment", "c.md"], undefined, {
+    branch: "probe-branch",
+    ...deps,
+    prepareComment: () => Promise.resolve(),
+    postComment: () => Promise.resolve(0),
+    confirmForce: () => {
+      throw new Error("active fix must never ask");
+    },
+    spawnPush: (args) => {
+      assertEquals(args.at(-1), "refs/heads/probe-branch:refs/heads/probe-branch");
+      spawned = true;
+      return Promise.resolve(0);
+    },
+  });
+  assertEquals(code, 0);
+  assertEquals(spawned, true);
+});
+
+const fixtureThread = "12345678-1234-5678-abcd-123456789abc";
+type Surface = "claude" | "agy" | "codex";
+
+async function createFixFixture(surface: Surface) {
+  const fixture = await createFixtureRepo();
+  const userHome = `${fixture.tempDir}/home`;
+  const toolsDir = `${fixture.tempDir}/bin`;
+  const codexHome = `${userHome}/.codex`;
+  const sessionPath = surface === "codex"
+    ? `${codexHome}/sessions/rollout-${fixtureThread}.jsonl`
+    : surface === "claude"
+    ? `${userHome}/.claude/projects/probe/${fixtureThread}.jsonl`
+    : `${userHome}/.gemini/brain/${fixtureThread}/.system_generated/logs/transcript_full.jsonl`;
+  await Deno.mkdir(sessionPath.slice(0, sessionPath.lastIndexOf("/")), { recursive: true });
+  await Deno.mkdir(toolsDir);
+  const realGit = (Deno.env.get("PATH") ?? "").split(":").map((dir) => `${dir}/git`).find(
+    (path) => {
+      try {
+        return Deno.statSync(path).isFile;
+      } catch {
+        return false;
+      }
+    },
+  );
+  if (!realGit) throw new Error("git not found for local fixture");
+  const quotedGit = `'${realGit.replaceAll("'", "'\\''")}'`;
+  // Only repository discovery is stubbed; the push itself goes to the fixture's real bare origin.
+  await Deno.writeTextFile(
+    `${toolsDir}/git`,
+    '#!/bin/sh\nif [ "$1" = remote ] && [ "$2" = get-url ]; then\n' +
+      '  printf "%s\\n" "$PUSH_TEST_REMOTE"\n  exit 0\nfi\n' + `exec ${quotedGit} "$@"\n`,
+  );
+  await Deno.writeTextFile(
+    `${toolsDir}/gh`,
+    '#!/bin/sh\nif [ "$1" = pr ] && [ "$2" = comment ]; then\n' +
+      '  printf "post\\n" >> "$PUSH_TEST_TRACE"\n' +
+      '  while [ "$#" -gt 0 ]; do\n' +
+      '    if [ "$1" = --body-file ]; then cat "$2" > "$PUSH_TEST_COMMENT_OUTPUT"; break; fi\n' +
+      '    if [ "$1" = --body ]; then printf "%s" "$2" > "$PUSH_TEST_COMMENT_OUTPUT"; break; fi\n' +
+      "    shift\n  done\n" +
+      '  if [ "$PUSH_TEST_POST_EXIT" != 0 ]; then echo "comment unavailable" >&2; fi\n' +
+      '  exit "$PUSH_TEST_POST_EXIT"\nfi\n' +
+      'printf "%s\\n" "$PUSH_TEST_PR"\nexit "${PUSH_TEST_GH_EXIT:-0}"\n',
+  );
+  await Deno.chmod(`${toolsDir}/git`, 0o755);
+  await Deno.chmod(`${toolsDir}/gh`, 0o755);
+  const recordPath = `${fixture.tempDir}/agy-record.jsonl`;
+  const shellEnv = {
+    HOME: userHome,
+    CODEX_HOME: codexHome,
+    CODEX_THREAD_ID: surface === "codex" ? fixtureThread : "",
+    CLAUDE_CODE_SESSION_ID: surface === "claude" ? fixtureThread : "",
+    AGY_HOOK_RECORD_PATH: recordPath,
+    AGY_CONVERSATION_ID: surface === "agy" ? fixtureThread : "",
+    AGY_MODEL_NAME: surface === "agy" ? "gemini-3.8-flash-high" : "",
+    AGY_TRANSCRIPT_PATH: surface === "agy" ? sessionPath : "",
+    WJT_SURFACE: surface,
+    PATH: `${toolsDir}:${Deno.env.get("PATH") ?? ""}`,
+    PUSH_TEST_REMOTE: `https://github.com/${targetRepo}.git`,
+    PUSH_TEST_PR: JSON.stringify(targetPr),
+    PUSH_TEST_GH_EXIT: "0",
+    PUSH_TEST_POST_EXIT: "0",
+    PUSH_TEST_TRACE: `${fixture.tempDir}/post-trace`,
+    PUSH_TEST_COMMENT_OUTPUT: `${fixture.tempDir}/posted-comment.md`,
+    FORCED_PR_AUTHOR: "",
+  };
+  const writeSession = async (texts: string[], helper = false, damaged = false) => {
+    const records = surface === "codex"
+      ? [
+        {
+          type: "session_meta",
+          timestamp: "2026-10-13T00:00:00Z",
+          payload: {
+            id: fixtureThread,
+            source: helper ? "exec" : "cli",
+            originator: helper ? "codex_exec" : "codex-tui",
+            thread_source: "user",
+            parent_thread_id: null,
+          },
+        },
+        { type: "turn_context", payload: { model: "gpt-6-luna" } },
+        ...texts.map((text) => ({
+          type: "response_item",
+          timestamp: "2026-10-13T01:00:00Z",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text }],
+          },
+        })),
+      ]
+      : surface === "claude"
+      ? [
+        ...texts.map((text) => ({
+          type: "user",
+          timestamp: "2026-10-13T01:00:00Z",
+          origin: { kind: "human" },
+          isSidechain: helper,
+          message: { role: "user", content: text },
+        })),
+        { type: "assistant", message: { role: "assistant", model: "claude-opus-5-5" } },
+      ]
+      : texts.map((text, step_index) => ({
+        type: "USER_INPUT",
+        timestamp: "2026-10-13T01:00:00Z",
+        source: "USER_EXPLICIT",
+        step_index,
+        content: `<USER_REQUEST>${text}</USER_REQUEST>`,
+      }));
+    await Deno.writeTextFile(
+      sessionPath,
+      records.map((record) => JSON.stringify(record)).join("\n") + "\n" + (damaged ? "{torn" : ""),
+    );
+    if (surface === "agy") {
+      await Deno.writeTextFile(
+        recordPath,
+        JSON.stringify({
+          conversationId: fixtureThread,
+          transcriptPath: sessionPath,
+          modelName: "gemini-3.8-flash-high",
+        }) + "\n",
+      );
+      const parent = `${userHome}/.gemini/brain/parent/.system_generated/subagents`;
+      await Deno.mkdir(parent, { recursive: true });
+      const childFile = `${parent}/${fixtureThread}.json`;
+      if (helper) await Deno.writeTextFile(childFile, "{}");
+      else {try {
+          await Deno.remove(childFile);
+        } catch (error) {
+          if (!(error instanceof Deno.errors.NotFound)) throw error;
+        }}
+    }
+  };
+  await Deno.writeTextFile(
+    `${fixture.repoDir}/c.md`,
+    "Fixed formatting.\n\n🤖 Fixed by Codex — GPT\n",
+  );
+  return { ...fixture, shellEnv, writeSession, sessionPath, recordPath };
+}
+
+for (const surface of ["claude", "agy", "codex"] as const) {
+  Deno.test(`${surface}: real Deno task pushes a rebased branch only for the closed fix-run case list`, async () => {
+    const fixture = await createFixFixture(surface);
+    try {
+      await fixture.git(["push", "-q", "-u", "origin", "probe-branch"]);
+      await Deno.writeTextFile(`${fixture.repoDir}/file.txt`, "rebased probe\n");
+      await fixture.git(["commit", "-qam", "changed probe"]);
+      // The remote stays at its original probe commit, while local HEAD replaces it.
+      await fixture.git(["reset", "--soft", "HEAD~1"]);
+      await fixture.git(["commit", "--amend", "-qm", "rebased probe"]);
+      const forceArgs = ["--force-with-lease", "--fix-comment", "c.md"];
+      const cases = [
+        { texts: [fixCall.text], args: forceArgs, ok: true },
+        {
+          texts: ["/fix-pr https://github.com/WebJamApps/web-jam-tools/pull/1318"],
+          args: forceArgs,
+          ok: true,
+        },
+        { texts: ["/fix-pr 1318"], args: forceArgs, ok: true },
+        { texts: [fixCall.text, "also bump the version"], args: forceArgs, ok: true },
+        { texts: [fixCall.text], args: ["--fix-comment", "c.md"], ok: true },
+        { texts: [fixCall.text], args: ["--force-with-lease"], rule: "missing-fix-comment" },
+        { texts: [fixCall.text], args: [], rule: "missing-fix-comment" },
+        { texts: [fixCall.text, "/pr-review"], args: forceArgs, rule: "fix-comment-outside-run" },
+        {
+          texts: [fixCall.text, "/fix-pr web-jam-tools#1322"],
+          args: forceArgs,
+          rule: "fix-run-mismatch",
+        },
+        { texts: ["/fix-pr JaMmusic#1318"], args: forceArgs, rule: "fix-run-mismatch" },
+        {
+          texts: ["/work-issue web-jam-tools#1317"],
+          args: ["--force-with-lease"],
+          rule: "force-with-lease-confirmation",
+        },
+        {
+          texts: ["/work-issue web-jam-tools#1317"],
+          args: ["--fix-comment", "c.md"],
+          rule: "fix-comment-outside-run",
+        },
+        { texts: [fixCall.text], args: forceArgs, helper: true, rule: "fix-comment-outside-run" },
+        {
+          texts: [fixCall.text],
+          args: ["--force-with-lease"],
+          helper: true,
+          rule: "force-with-lease-confirmation",
+        },
+        { texts: [fixCall.text], args: forceArgs, damaged: true, rule: "fix-comment-outside-run" },
+        {
+          texts: [fixCall.text],
+          args: forceArgs,
+          pr: { ...targetPr, state: "CLOSED" },
+          rule: "fix-run-mismatch",
+        },
+        {
+          texts: [fixCall.text],
+          args: forceArgs,
+          pr: { ...targetPr, state: "MERGED" },
+          rule: "fix-run-mismatch",
+        },
+        {
+          texts: [fixCall.text],
+          args: forceArgs,
+          pr: { ...targetPr, headRefName: "other" },
+          rule: "fix-run-mismatch",
+        },
+        {
+          texts: [fixCall.text],
+          args: forceArgs,
+          pr: { ...targetPr, isCrossRepository: true },
+          rule: "fix-run-mismatch",
+        },
+        {
+          texts: [fixCall.text],
+          args: ["--force-with-lease"],
+          ghExit: "1",
+          rule: "force-with-lease-confirmation",
+        },
+        {
+          texts: [fixCall.text],
+          args: forceArgs,
+          unattended: "1",
+          rule: "fix-comment-outside-run",
+        },
+        ...["--force", "--delete", ":probe"].map((flag) => ({
+          texts: [fixCall.text],
+          args: [flag, "--fix-comment", "c.md"],
+          rule: flag === "--force"
+            ? "plain-force"
+            : flag === "--delete"
+            ? "branch-deletion"
+            : "colon-refspec",
+        })),
+      ];
+      let caseIndex = 0;
+      for (const item of cases) {
+        caseIndex++;
+        await fixture.writeSession(
+          item.texts,
+          "helper" in item && item.helper,
+          "damaged" in item && item.damaged,
+        );
+        if ("ok" in item && item.ok) {
+          await Deno.writeTextFile(`${fixture.repoDir}/file.txt`, `case ${caseIndex}\n`);
+          await fixture.git(["commit", "-qam", `case ${caseIndex}`]);
+        }
+        const before = await fixture.git(["ls-remote", "origin"]);
+        const result = await runDenoTaskPush(item.args, fixture.repoDir, true, {
+          ...fixture.shellEnv,
+          PUSH_TEST_PR: JSON.stringify("pr" in item ? item.pr : targetPr),
+          PUSH_TEST_GH_EXIT: "ghExit" in item ? item.ghExit ?? "0" : "0",
+          WJT_UNATTENDED: "unattended" in item ? item.unattended ?? "" : "",
+        });
+        const allowed = "ok" in item && item.ok;
+        assertEquals(result.code, allowed ? 0 : 1, `case ${caseIndex}: ${result.stderr}`);
+        if (allowed) {
+          assertEquals(result.stderr.includes("Force-push feature branch"), false);
+          const remote = await fixture.git(["ls-remote", "origin", "refs/heads/probe-branch"]);
+          assertEquals(remote.split(/\s+/)[0], await fixture.git(["rev-parse", "HEAD"]));
+        } else {
+          assertStringIncludes(result.stderr, `Refused (${"rule" in item ? item.rule : ""})`);
+          assertEquals(await fixture.git(["ls-remote", "origin"]), before);
+        }
+      }
+      if (surface === "codex") {
+        await fixture.writeSession(["$fix-pr web-jam-tools#1318", "yes"]);
+        assertEquals(
+          (await runDenoTaskPush(forceArgs, fixture.repoDir, true, fixture.shellEnv)).code,
+          0,
+        );
+      }
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+}

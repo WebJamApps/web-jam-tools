@@ -23,7 +23,8 @@ table — this skill does not repeat it), use the matching section below.
 Flash work is executed by the Antigravity CLI (`agy`) via the wrapper script
 `~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh`. Dispatch is
 **GitHub-issues-only** — the task must already exist as a GitHub issue labeled
-`Flash` before you dispatch it. (A queue-file entry point — appending a line to
+for its tier under the triage table in `docs/ai-team-playbook.md` (everyday coding
+labeled `Flash`) before you dispatch it. (A queue-file entry point — appending a line to
 `~/Dropbox/web-jam-llms/agy-tasks.txt` — used to exist as a shortcut for quick
 tasks with no issue; Josh retired it and deleted the file, since it let a
 session dispatch work with no durable record — see web-jam-tools#249. A quick
@@ -61,10 +62,10 @@ By default, `handle-agy-tasks.sh` checks out the created feature branch into the
 ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless --no-land "web-jam-tools#567"
 ```
 
-**Dispatching `agy` via a thin Haiku subagent (Claude Code):**
-In Claude Code sessions, rather than running `handle-agy-tasks.sh` directly in a blocking Bash tool call in the main session, dispatch the script via a thin Haiku subagent (`Agent` tool with `model: "haiku"`). This offloads the long-running command execution and allows Josh to see status and progress in the session UI.
+**Dispatching `agy` via a thin subagent on Haiku (Claude Code):**
+In Claude Code sessions, rather than running `handle-agy-tasks.sh` directly in a blocking Bash tool call in the main session, dispatch the script via a thin subagent on Haiku (`Agent` tool with `model: "haiku"`). This offloads the long-running command execution and allows Josh to see status and progress in the session UI.
 
-- **Strict constraint — dispatch-and-report only:** The Haiku subagent wrapper exists strictly to run the dispatch command, wait for it to exit, and report the result (exit status, stdout summary, and PR URL) back to the parent session. It is **forbidden** from reading or analyzing the issue, modifying code files, running tests/linters, or reviewing the resulting PR. `handle-agy-tasks.sh` and the child `agy` instance handle the entire task lifecycle; performing task work in the wrapper duplicates effort and pays twice for the same tokens.
+- **Strict constraint — dispatch-and-report only:** The subagent wrapper exists strictly to run the dispatch command, wait for it to exit, and report the result (exit status, stdout summary, and PR URL) back to the parent session. It is **forbidden** from reading or analyzing the issue, modifying code files, running tests/linters, or reviewing the resulting PR. `handle-agy-tasks.sh` and the child `agy` instance handle the entire task lifecycle; performing task work in the wrapper duplicates effort and pays twice for the same tokens.
 
 Example subagent prompt for Haiku agy dispatch:
 
@@ -81,9 +82,9 @@ Strict rules:
 ```
 
 **Default Tier & Bidirectional Delegation Flexibility:**
-Josh defaults to **`Flash`** (`Gemini Flash`) as the primary interactive model tier in `agy`. Delegation is flexible and works in both directions:
+The model tier for a task comes from the triage table in `docs/ai-team-playbook.md` (where everyday coding defaults to `Flash` / `Gemini Flash` in `agy`). Delegation is flexible and works in both directions:
 - **Handoff on "Go" (`Flash` → `Flash`)**: When discussing an issue interactively on `Flash`, once requirements and steps are aligned and Josh gives the go-ahead ("go", "proceed", "start", "work issue #X"), the session does the work itself or hands contained coding tasks to a subagent at the same level (`handle-agy-tasks.sh`, or `invoke_subagent` where `Model: "flash"` runs as `gemini-3.8-flash-tiered` and passes the model guard, or `Model: "inherit"`). Trivial edits go to Luna or Haiku (a `Haiku` subagent, or a Luna handoff since Luna is outside agy's picker).
-- **Delegating up** (tier order: Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus; see `docs/ai-team-playbook.md`): Delegate logic- and safety-heavy coding to `Sol` or `Sonnet`, and open-ended design to `Opus`. `Flash` handles everyday coding on Google's allowance; `Astra` is kept for REAPER recording.
+- **Delegating up** (tier order: Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus; see `docs/ai-team-playbook.md`): Delegate logic- and safety-heavy coding to `Sol` or `Sonnet`, and open-ended design to `Opus`. `Flash` handles everyday coding on Google's allowance; `Astra` is kept for REAPER recording.
 
 **Setting explicit model chains via `AGY_MODELS`:**
 The default fallback chain runs `Gemini 3.8 Flash (High)`. To target a specific tier directly, set `AGY_MODELS`:
@@ -118,8 +119,8 @@ what makes headless dispatch reliable, not the one-shot call.
 
 ## 2. Per-tier subagent prompt templates (Haiku / Sonnet / Opus)
 
-On Claude Code, dispatch these via the `Agent` tool (`model: "haiku"` / omit for session default /
-`model: "opus"`). A fresh subagent has none of this session's context, so the
+On Claude Code, dispatch these via the `Agent` tool (`model: "haiku"` or `model: "sonnet"` — never `opus`,
+and the model is never omitted). A fresh subagent has none of this session's context, so the
 prompt must be self-contained: repo path, branch, commit format, the version-bump
 rule, and an explicit report-back list. Fill in the placeholders; don't paste them
 literally.
@@ -172,11 +173,6 @@ PR attribution & conventions:
   web-jam-tools, do NOT go looking for it inside the target repo; a past agent
   wrongly concluded it "doesn't exist" because it searched the wrong repo):
     ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "<tool> — <the model actually doing the work>"
-- If you must fall back to `gh pr create --draft --base dev` directly, the PR
-  body MUST end with the line `🤖 Work by <tool> — <model>`, naming the model
-  that actually did the work — NEVER the generic "🤖 Generated with Claude
-  Code" tagline. Josh tracks per-model PR quality via this footer; a miss here
-  is a real regression (it happened on web-jam-back#892, 2026-07-02).
 - Commit trailers (`Co-Authored-By:`) name the model actually doing the work,
   not a different one.
 - **One semver version bump per PR, on the first commit only** — `deno.json` for
@@ -264,11 +260,11 @@ silently skip all of that at the moment it matters most:
   finalize below. This preserves every create-time guard (draft + base dev,
   author-roster check, `Closes #NNN`, attribution footer, raw-HTML-tag check)
   at the moment the checkpoint PR is born.
-- **Cadence updates — plain edits, not the script.** Every checklist tick and
-  "Decisions / blockers" line after that is `gh pr edit <num> --body-file
-  <path>` — these are lightweight status pokes, not a finished deliverable
-  description, so they don't need to clear the script's content guards; that's
-  what finalize is for.
+- **Cadence updates — `create-draft-pr.sh --update` on the SAME PR.** Every
+  checklist tick and "Decisions / blockers" line after that is written by
+  rerunning `create-draft-pr.sh --update` with the updated checklist as
+  `--summary-file` (never a plain `gh pr edit`), so every version of the
+  description passes the same checks.
 - **Finalize — `create-draft-pr.sh --update` on the SAME PR**, with the REAL
   `--summary` / `--test-plan` / `--test-evidence` / `--author` (and `--part-of`
   if applicable) — replacing the checkpoint scaffolding with bulleted `##
@@ -308,11 +304,11 @@ Rules:
   one file/function/flow), STOP and report the ambiguity instead of guessing.
 - If this involves a code change: work on branch claude/<issue#>-<slug> off latest
   dev. Commit with a clear message ending exactly:
-    Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>
+    Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
   Follow the "Dispatch checkpoint" subsection above for the whole PR lifecycle:
   open the checkpoint draft PR early (right after branch + first commit + push,
   via create-draft-pr.sh CREATE mode), keep it updated at each of the two
-  triggers via `gh pr edit`, and finalize the SAME PR at the end via
+  triggers via create-draft-pr.sh `--update`, and finalize the SAME PR at the end via
   create-draft-pr.sh `--update` — never open a second PR. (Skip this
   checkpoint step entirely for a pure research/lookup task that creates no
   branch.)
@@ -322,7 +318,7 @@ Rules:
   a shared BE/FE contract.
 
 <Mandatory PR attribution & conventions block from above, filled in for
-"Claude Code — Haiku 4.5">
+"Claude Code — Haiku 5.5">
 
 Report back:
 - What you found/changed, bulleted
@@ -352,7 +348,7 @@ Rules:
 - Follow the "Dispatch checkpoint" subsection above for the whole PR lifecycle:
   open the checkpoint draft PR early (right after branch + first commit + push,
   via create-draft-pr.sh CREATE mode per that subsection's recipe), keep it
-  updated at each of the two triggers via `gh pr edit`, and finalize the SAME
+  updated at each of the two triggers via create-draft-pr.sh `--update`, and finalize the SAME
   PR at the end via create-draft-pr.sh **--update** — never open a second PR.
   (Skip entirely if this is a follow-up commit to an already-open checkpoint
   PR — just keep updating it, and let whichever dispatch finishes the work run
@@ -406,7 +402,7 @@ Rules:
 - Follow the "Dispatch checkpoint" subsection above for the whole PR lifecycle:
   open the checkpoint draft PR early (right after branch + first commit + push,
   via create-draft-pr.sh CREATE mode per that subsection's recipe), keep it
-  updated at each of the two triggers via `gh pr edit`, and finalize the SAME
+  updated at each of the two triggers via create-draft-pr.sh `--update`, and finalize the SAME
   PR at the end via create-draft-pr.sh **--update** — never open a second PR.
   (Skip entirely if this is a follow-up commit to an already-open checkpoint
   PR — just keep updating it, and let whichever dispatch finishes the work run
@@ -447,6 +443,38 @@ Report back:
 - Don't invent a version-bump command — WebJamApps repos bump `package.json`
   "version" (or `deno.json` for web-jam-tools) by hand, once per PR (see the
   `one-semver-bump-per-pr` memory).
+
+## Rules moved from AGENTS.md
+
+These rules apply to this skill's kind of work only, so they live here instead of in the
+always-loaded `AGENTS.md`.
+
+7. **Multi-Repo Dispatch Target Repo Override:** `scripts/handle-agy-tasks.sh` supports
+   `--repo <Name>` and `AGY_TARGET_REPO=<Name>` to dispatch an issue filed in one repository (e.g.
+   `web-jam-tools#505`) against a different target working repository (e.g. `JaMmusic`), setting
+   `REPO_DIR` and worktree paths to that target repo while keeping the branch name derived from the
+   issue.
+
+8. **Non-UI Task Land Opt-Out (`--no-land`):** `scripts/handle-agy-tasks.sh` supports `--no-land` to
+   skip checking the feature branch out into the developer's main repository clone after PR
+   creation, keeping non-UI work (backend, docs, tooling, config) from moving the local checkout
+   away from `dev`.
+
+- **Sliding Window Quota Preservation:** Google Antigravity (`agy`) tracks model token usage on a
+  rolling 5-hour sliding window. To avoid triggering 3+ hour rate limit resets during long or
+  multi-repo tasks:
+  - Keep command outputs compact: avoid printing thousands of lines of raw test logs directly into
+    main turn outputs.
+  - Redirect large multi-line summaries, test plans, and evidence to temporary files in /tmp/
+    (`--summary-file`, `--test-plan-file`, `--test-evidence-file`) when calling
+    `create-draft-pr.sh`.
+  - Delegate mechanical sub-tasks or heavy lookups to cheaper subagents (`Haiku`, or a `Flash`
+    subagent at the same level) when operating interactively on `Flash`.
+  - **Handoff on "Go":** Once requirements and implementation steps are aligned interactively on
+    `Flash`, and Josh says go ("go", "proceed", "start"), an agy session on Flash does the work
+    itself or hands it to a subagent at the same level (`invoke_subagent`, model `flash`) for
+    contained execution work (coding, running test suites, branch/PR creation).
+
 
 ## Description Detail & Triggers
 

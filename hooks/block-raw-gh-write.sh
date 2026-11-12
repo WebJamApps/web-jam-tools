@@ -25,8 +25,16 @@ input=$(cat)
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
 [ -z "$cmd" ] && exit 0
 
+NOTE_FILE=$(mktemp)
+trap 'rm -f "$NOTE_FILE"' EXIT
+
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-message=$(CMD_FOR_PY="$cmd" deno run --no-config --allow-env "$HOOK_DIR/lib/check_raw_gh_write.ts" 2>/dev/null) || true
+message=$(CMD_FOR_PY="$cmd" "$HOOK_DIR/lib/run_hook.sh" --group workflow --name block-raw-gh-write --note-file "$NOTE_FILE" deno run --no-config --allow-env "$HOOK_DIR/lib/check_raw_gh_write.ts")
+
+if [ -s "$NOTE_FILE" ]; then
+  cat "$NOTE_FILE"
+  exit 0
+fi
 
 if [ -n "$message" ]; then
   echo "$message" >&2

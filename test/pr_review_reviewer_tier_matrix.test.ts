@@ -1,7 +1,7 @@
 // test/pr_review_reviewer_tier_matrix.test.ts — web-jam-tools#1135
 //
 // Reviewer-tier rule and default reviewers matrix test across all seven model labels:
-// Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus
+// Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus
 //
 // A reviewer on the author's rung or a higher one is accepted, except Opus on Opus;
 // every lower one is rejected. Session eligibility is a separate prerequisite.
@@ -51,8 +51,8 @@ function isReviewerAccepted(
 
 // Independent expected outcomes; never compute these from the rungs being checked.
 const ACCEPTED_REVIEWERS: Record<ModelLabel, readonly ModelLabel[]> = {
-  Haiku: ["Haiku", "Luna", "Flash", "Sol", "Astra", "Sonnet", "Opus"],
-  Luna: ["Luna", "Flash", "Sol", "Astra", "Sonnet", "Opus"],
+  Haiku: ["Haiku", "Flash", "Sol", "Astra", "Sonnet", "Opus"],
+  Luna: ["Luna", "Haiku", "Flash", "Sol", "Astra", "Sonnet", "Opus"],
   Flash: ["Flash", "Sol", "Astra", "Sonnet", "Opus"],
   Sol: ["Sol", "Astra", "Sonnet", "Opus"],
   Astra: ["Sol", "Astra", "Sonnet", "Opus"],
@@ -123,8 +123,8 @@ Deno.test("default reviewers: checks the skill's table across all seven model la
 
 Deno.test("reviewer matrices detect changed rungs and default-reviewer table cells", async () => {
   const text = await Deno.readTextFile("skills/pr-review/SKILL.md");
-  const changedRungs = documentedRungs(text.replace("Haiku → Luna", "Luna → Haiku"));
-  assertThrows(() => assertEquals(isReviewerAccepted(changedRungs, "Haiku", "Luna"), true));
+  const changedRungs = documentedRungs(text.replace("Luna → Haiku", "Haiku → Luna"));
+  assertThrows(() => assertEquals(isReviewerAccepted(changedRungs, "Haiku", "Luna"), false));
   for (const [author, defaultCell] of Object.entries(DEFAULT_REVIEWERS)) {
     const authorsCell = author === "Haiku" || author === "Luna" ? "Haiku, Luna" : author;
     const changed = text.replace(
@@ -136,7 +136,7 @@ Deno.test("reviewer matrices detect changed rungs and default-reviewer table cel
   }
 });
 
-Deno.test("skills/pr-review/SKILL.md states reviewer-tier rule, default reviewers, and Codex/recording rules", async () => {
+Deno.test("skills/pr-review/SKILL.md states reviewer-tier rule, default reviewers, and Codex rules", async () => {
   const text = await Deno.readTextFile("skills/pr-review/SKILL.md");
 
   // Rule over all seven labels with Sol, Astra, Sonnet on one rung
@@ -148,18 +148,16 @@ Deno.test("skills/pr-review/SKILL.md states reviewer-tier rule, default reviewer
   // Reconciled reviewer choices stated in prose
   assertStringIncludes(
     text,
-    "The reviewer choices are Flash for Haiku and Luna authors, Sol for a Flash author, Sonnet, Astra, or Opus for a Sol author, and Sol for a Sonnet author (Opus only when Josh names the pull request); Opus or Josh reviews Astra, and Josh reviews Opus.",
+    "For automatic selection, the reviewer choices are Flash for Haiku and Luna authors, Sol for a Flash author, Sonnet, Astra, or Opus for a Sol author, and Sol for a Sonnet author (Opus only when Josh names the pull request); Opus or Josh reviews Astra, and Josh reviews Opus.",
   );
 
-  // Sol reviews on Codex & recording-day rules
+  // Sol reviews on Codex
   assertStringIncludes(
     text,
     "Sol reviews of Flash and Sonnet pull requests run through `/pr-review` (typed `$pr-review` in Codex).",
   );
-  assertStringIncludes(
-    text,
-    "On a recording day or for any pull request Josh names, Sonnet reviews a Flash pull request instead, and a Sonnet pull request waits for Sol or goes to Opus when Josh names it.",
-  );
+  assertFalse(text.includes("On a recording day"));
+  assertFalse(text.includes("Recording-Day Rules"));
   assertStringIncludes(
     text,
     "Astra is never picked as a reviewer unless Josh names it.",
@@ -167,6 +165,34 @@ Deno.test("skills/pr-review/SKILL.md states reviewer-tier rule, default reviewer
   assertStringIncludes(
     text,
     "An unattended Sol review launch passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`.",
+  );
+
+  // Direct named request authorization
+  assertStringIncludes(
+    text,
+    "**Direct named requests authorize the current reviewer (Josh, 2026-10-28).**",
+  );
+  assertStringIncludes(
+    text,
+    "typed by Josh in the session, not passed on by an agent or script",
+  );
+  assertStringIncludes(
+    text,
+    "A missing tier-table entry is not an unknown contributor identity.",
+  );
+
+  // Automatic-selection scoping on Step 1 stop bullets
+  assertStringIncludes(
+    text,
+    "- For automatic selection only: Stop if the review range carries Astra contributions",
+  );
+  assertStringIncludes(
+    text,
+    "- For automatic selection only: Stop if any commit in the review range names an Opus author or co-author",
+  );
+  assertStringIncludes(
+    text,
+    "- For automatic selection only: Stop if the active model ranks below any contributor's tier in the review range",
   );
 });
 

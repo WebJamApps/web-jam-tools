@@ -1,4 +1,4 @@
-import nodemailer from "npm:nodemailer@^10.0.6";
+import { sendEmail } from "../shared/gmail_send.ts";
 
 export interface UptimeCheckConfig {
   name: string;
@@ -182,39 +182,6 @@ export function formatHeartbeatEmail(results: CheckResult[]): {
   return { subject, text, html };
 }
 
-export interface MailTransporter {
-  sendMail(options: {
-    from: string;
-    to: string;
-    subject: string;
-    text: string;
-    html: string;
-  }): Promise<unknown>;
-}
-
-function getTransporter(
-  env: Record<string, string | undefined>,
-  transporterOverride?: MailTransporter,
-): MailTransporter {
-  const gmailUser = env.GMAIL_USER;
-  const gmailAppPassword = env.GMAIL_APP_PASSWORD;
-
-  if (!gmailUser || !gmailAppPassword) {
-    throw new Error(
-      "Missing required environment variables GMAIL_USER or GMAIL_APP_PASSWORD",
-    );
-  }
-
-  return transporterOverride ??
-    (nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: gmailUser,
-        pass: gmailAppPassword,
-      },
-    }) as unknown as MailTransporter);
-}
-
 export const DEFAULT_ALERT_RECIPIENTS = [
   "joshua.v.sherman@gmail.com",
   "chemmariasherman@gmail.com",
@@ -222,38 +189,32 @@ export const DEFAULT_ALERT_RECIPIENTS = [
 
 export async function sendAlertEmail(
   failedResults: CheckResult[],
-  env: Record<string, string | undefined> = Deno.env.toObject(),
-  transporterOverride?: MailTransporter,
-  recipients: string[] = DEFAULT_ALERT_RECIPIENTS,
+  recipientsOrFetch: string[] | typeof fetch = DEFAULT_ALERT_RECIPIENTS,
+  fetchFn: typeof fetch = fetch,
 ): Promise<unknown> {
-  const gmailUser = env.GMAIL_USER!;
-  const transporter = getTransporter(env, transporterOverride);
-  const { subject, text, html } = formatAlertEmail(failedResults);
-
-  return await transporter.sendMail({
-    from: `"Uptime Monitor" <${gmailUser}>`,
-    to: recipients.join(", "),
-    subject,
-    text,
-    html,
-  });
+  let recipients = DEFAULT_ALERT_RECIPIENTS;
+  let customFetch = fetchFn;
+  if (typeof recipientsOrFetch === "function") {
+    customFetch = recipientsOrFetch;
+  } else if (Array.isArray(recipientsOrFetch)) {
+    recipients = recipientsOrFetch;
+  }
+  const { subject, html } = formatAlertEmail(failedResults);
+  return await sendEmail(recipients, subject, html, customFetch);
 }
 
 export async function sendHeartbeatEmail(
   results: CheckResult[],
-  env: Record<string, string | undefined> = Deno.env.toObject(),
-  transporterOverride?: MailTransporter,
-  recipients: string[] = DEFAULT_ALERT_RECIPIENTS,
+  recipientsOrFetch: string[] | typeof fetch = DEFAULT_ALERT_RECIPIENTS,
+  fetchFn: typeof fetch = fetch,
 ): Promise<unknown> {
-  const gmailUser = env.GMAIL_USER!;
-  const transporter = getTransporter(env, transporterOverride);
-  const { subject, text, html } = formatHeartbeatEmail(results);
-
-  return await transporter.sendMail({
-    from: `"Uptime Monitor" <${gmailUser}>`,
-    to: recipients.join(", "),
-    subject,
-    text,
-    html,
-  });
+  let recipients = DEFAULT_ALERT_RECIPIENTS;
+  let customFetch = fetchFn;
+  if (typeof recipientsOrFetch === "function") {
+    customFetch = recipientsOrFetch;
+  } else if (Array.isArray(recipientsOrFetch)) {
+    recipients = recipientsOrFetch;
+  }
+  const { subject, html } = formatHeartbeatEmail(results);
+  return await sendEmail(recipients, subject, html, customFetch);
 }

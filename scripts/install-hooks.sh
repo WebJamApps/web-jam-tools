@@ -57,7 +57,7 @@
 # never removes or reorders any existing permissions.deny entry (hand-added
 # or from a previous run).
 #
-# Usage: scripts/install-hooks.sh [--hooks-dir PATH] [--settings-path PATH] [--agy-hooks-path PATH] [--codex-hooks-path PATH] [--bin-dir PATH] [--force]
+# Usage: scripts/install-hooks.sh [--hooks-dir PATH] [--settings-path PATH] [--agy-hooks-path PATH] [--agy-settings-path PATH] [--codex-hooks-path PATH] [--bin-dir PATH] [--force]
 #   --hooks-dir PATH       Symlink hooks into PATH instead of $HOME/.claude/hooks
 #                           (also settable via CLAUDE_HOOKS_DIR). Mainly for testing
 #                           the symlink step without touching the real hooks dir.
@@ -77,6 +77,8 @@
 #                           unless --hooks-dir is ALSO passed (web-jam-tools#273).
 #   --agy-hooks-path PATH  Merge agy hooks into PATH instead of $HOME/.gemini/config/hooks.json
 #                           (also settable via AGY_HOOKS_PATH).
+#   --agy-settings-path PATH Merge agy settings into PATH instead of $HOME/.gemini/antigravity-cli/settings.json
+#                           (also settable via AGY_SETTINGS_PATH; web-jam-tools#1320).
 #   --codex-hooks-path PATH Register the Codex startup check in PATH (also
 #                           settable via CODEX_HOOKS_PATH). Defaults to
 #                           $CODEX_HOME/hooks.json or $HOME/.codex/hooks.json;
@@ -84,7 +86,8 @@
 #                           alongside that isolated settings file.
 #   --agents-md-path PATH  Merge rules pointer into PATH instead of $HOME/.agents/AGENTS.md
 #                           (also settable via AGENTS_MD_PATH).
-#   --bin-dir PATH         Symlink CLI scripts into PATH instead of $HOME/.local/bin
+#   --bin-dir PATH         Symlink CLI scripts (agents, update-scripts) into PATH instead of
+#                           $HOME/.local/bin
 #                           (also settable via BIN_DIR; web-jam-tools#1174).
 #   --force                 Required to link into the default hooks destination when
 #                           this script is running from inside a git worktree (see
@@ -94,6 +97,9 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOOKS_SRC="$REPO_DIR/hooks"
 STAMP="$(date +%Y%m%d-%H%M%S)"
+
+CANONICAL_GIT_HOOKS="$REPO_DIR/git-hooks"
+GIT_HOOKS_PATH_EXPLICIT=0
 
 SETTINGS_PATH_EXPLICIT=0
 if [ -n "${CLAUDE_SETTINGS_PATH:-}" ]; then
@@ -111,6 +117,14 @@ else
   AGY_HOOKS_PATH="$HOME/.gemini/config/hooks.json"
 fi
 
+AGY_SETTINGS_PATH_EXPLICIT=0
+if [ -n "${AGY_SETTINGS_PATH:-}" ]; then
+  AGY_SETTINGS_PATH="$AGY_SETTINGS_PATH"
+  AGY_SETTINGS_PATH_EXPLICIT=1
+else
+  AGY_SETTINGS_PATH="$HOME/.gemini/antigravity-cli/settings.json"
+fi
+
 CODEX_HOOKS_PATH_EXPLICIT=0
 if [ -n "${CODEX_HOOKS_PATH:-}" ]; then
   CODEX_HOOKS_PATH_EXPLICIT=1
@@ -125,6 +139,24 @@ if [ -n "${AGENTS_MD_PATH:-}" ]; then
 else
   AGENTS_MD_PATH="$HOME/.agents/AGENTS.md"
 fi
+
+AGY_SAFETY_RULES_PATH_EXPLICIT=0
+if [ -n "${AGY_SAFETY_RULES_PATH:-}" ]; then
+  AGY_SAFETY_RULES_PATH="$AGY_SAFETY_RULES_PATH"
+  AGY_SAFETY_RULES_PATH_EXPLICIT=1
+else
+  AGY_SAFETY_RULES_PATH="$HOME/.gemini/AGENTS.md"
+fi
+
+CODEX_SAFETY_RULES_PATH_EXPLICIT=0
+if [ -n "${CODEX_SAFETY_RULES_PATH:-}" ]; then
+  CODEX_SAFETY_RULES_PATH="$CODEX_SAFETY_RULES_PATH"
+  CODEX_SAFETY_RULES_PATH_EXPLICIT=1
+else
+  CODEX_SAFETY_RULES_PATH="${CODEX_HOME:-$HOME/.codex}/AGENTS.md"
+fi
+
+SAFETY_RULES_SRC="$REPO_DIR/docs/safety-rules.md"
 
 # HOOKS_DEST_IS_DEFAULT tracks whether HOOKS_DEST is still the real, live
 # destination (as opposed to a caller-supplied override via --hooks-dir or
@@ -155,7 +187,7 @@ fi
 # each into the literal command string "$HOME/.claude/hooks/<name>" (expanded
 # by the shell that runs the hook, not by this installer — matches the style
 # of the hooks already wired into settings.json).
-SESSION_START_HOOKS=(notes-sync-reminder.sh memory-cleanup-reminder.sh backlog-groom-reminder.sh backup-refusal-reminder.sh hook-install-drift-reminder.sh permission-wildcard-drift-reminder.sh)
+SESSION_START_HOOKS=(notes-sync-reminder.sh backlog-groom-reminder.sh backup-refusal-reminder.sh hook-install-drift-reminder.sh permission-wildcard-drift-reminder.sh business-deadline-reminder.sh)
 
 # SessionEnd hooks this installer keeps registered in settings.json (web-jam-tools#818).
 # Same flat, no-matcher shape as SESSION_START_HOOKS and STOP_HOOKS — SessionEnd
@@ -190,7 +222,7 @@ PRE_TOOL_USE_HOOKS=(
   "Bash::fmt-push-guard.sh"
   "Bash::block-agy-non-flash-model.sh"
   "Bash|Edit|Write::block-human-only-credentials.sh"
-  "Edit|Write::feature-branch-guard.sh"
+  "Bash|Edit|Write::feature-branch-guard.sh"
   "mcp__(gmail|claude_ai_Gmail)__.*::haiku-only-gmail-gate.sh"
   "Bash|mcp__.*__issue_write::require-model-label-on-issue-create.sh"
   "Write|Edit|NotebookEdit::block-out-of-tree-write.sh"
@@ -199,6 +231,7 @@ PRE_TOOL_USE_HOOKS=(
   "Bash::block-raw-gh-write.sh"
   "Bash::block-backend-mutation.sh"
   "Bash::block-private-folder-read.sh"
+  "Bash|Edit|Write|NotebookEdit::block-production-media-change.sh"
   "Bash|(?:mcp__.*__)?(issue_write|pull_request_review_write|add_comment_to_pending_review|add_reply_to_pull_request_comment|update_issue_comment|add_issue_comment)::check-issue-citation-on-write.sh"
 )
 
@@ -214,11 +247,10 @@ POST_TOOL_USE_HOOKS=(
 
 # agy-ONLY PreToolUse hooks (web-jam-tools#432) — never wired into Claude
 # Code's settings.json, only into AGY_HOOKS_PATH (via the shim below). Both
-# depend on agy-native payload fields (raw, unprefixed MCP tool names;
-# `modelName`) that Claude Code's hook payload doesn't carry, so they would
-# either misfire or never fire there.
+# are surface-specific: Gmail safety adapts raw/prefixed local tool names,
+# and the model guard consumes agy's `modelName` field.
 AGY_ONLY_PRE_TOOL_USE_HOOKS=(
-  "send_email|delete_email|batch_delete_emails::block-agy-gmail-send-delete.sh"
+  "mcp__gmail__.*|send_email|draft_email|read_email|search_emails|modify_email|delete_email|list_email_labels|batch_modify_emails|batch_delete_emails|create_label|update_label|delete_label|get_or_create_label|create_filter|list_filters|get_filter|delete_filter|create_filter_from_template|download_attachment::block-agy-gmail-send-delete.sh"
   ".*::agy-model-guard.sh"
 )
 
@@ -337,6 +369,18 @@ DENY_RULES=(
   'Edit(//home/joshua/Dropbox/WebJamApps/**)'
   'Read(//home/joshua/Dropbox/web-jam-llc/**)'
   'Edit(//home/joshua/Dropbox/web-jam-llc/**)'
+
+  # Production media in joshandmariamusic Edit deny rules (web-jam-tools#1580)
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.mp3)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.wav)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.m4a)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.mp4)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.mov)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.jpg)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.jpeg)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.png)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.webp)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.gif)'
 
   # Heroku hard denies (R-12 & Part G)
   'Bash(heroku config:get *)'
@@ -685,6 +729,11 @@ while [ $# -gt 0 ]; do
       AGY_HOOKS_PATH_EXPLICIT=1
       shift 2
       ;;
+    --agy-settings-path)
+      AGY_SETTINGS_PATH="$2"
+      AGY_SETTINGS_PATH_EXPLICIT=1
+      shift 2
+      ;;
     --codex-hooks-path)
       CODEX_HOOKS_PATH="$2"
       CODEX_HOOKS_PATH_EXPLICIT=1
@@ -695,9 +744,24 @@ while [ $# -gt 0 ]; do
       AGENTS_MD_PATH_EXPLICIT=1
       shift 2
       ;;
+    --agy-safety-rules-path)
+      AGY_SAFETY_RULES_PATH="$2"
+      AGY_SAFETY_RULES_PATH_EXPLICIT=1
+      shift 2
+      ;;
+    --codex-safety-rules-path)
+      CODEX_SAFETY_RULES_PATH="$2"
+      CODEX_SAFETY_RULES_PATH_EXPLICIT=1
+      shift 2
+      ;;
     --bin-dir)
       BIN_DIR="$2"
       BIN_DIR_IS_DEFAULT=0
+      shift 2
+      ;;
+    --canonical-git-hooks-path)
+      CANONICAL_GIT_HOOKS="$2"
+      GIT_HOOKS_PATH_EXPLICIT=1
       shift 2
       ;;
     --force)
@@ -741,6 +805,10 @@ if [ "$AGY_HOOKS_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; 
   AGY_HOOKS_PATH="$(dirname "$SETTINGS_PATH")/hooks.json"
 fi
 
+if [ "$AGY_SETTINGS_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
+  AGY_SETTINGS_PATH="$(dirname "$SETTINGS_PATH")/antigravity-cli-settings.json"
+fi
+
 if [ "$CODEX_HOOKS_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
   CODEX_HOOKS_PATH="$(dirname "$SETTINGS_PATH")/codex-hooks.json"
 fi
@@ -749,7 +817,16 @@ if [ "$AGENTS_MD_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; 
   AGENTS_MD_PATH="$(dirname "$SETTINGS_PATH")/AGENTS.md"
 fi
 
+if [ "$AGY_SAFETY_RULES_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
+  AGY_SAFETY_RULES_PATH="$(dirname "$SETTINGS_PATH")/gemini-AGENTS.md"
+fi
+
+if [ "$CODEX_SAFETY_RULES_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
+  CODEX_SAFETY_RULES_PATH="$(dirname "$SETTINGS_PATH")/codex-AGENTS.md"
+fi
+
 [ -d "$HOOKS_SRC" ] || { echo "error: $HOOKS_SRC not found" >&2; exit 1; }
+[ -e "$SAFETY_RULES_SRC" ] || { echo "error: $SAFETY_RULES_SRC not found" >&2; exit 1; }
 
 # --- Secret-scan gate (web-jam-tools#339) ---
 # Runs BEFORE any settings file is written or checked against. Fails closed (exit 1).
@@ -840,6 +917,18 @@ AGY_PROMPT_WATCH_DEST="$HOOKS_DEST/agy-prompt-watch.sh"
 # shellcheck disable=SC2016
 AGY_PROMPT_WATCH_COMMAND='$HOME/.claude/hooks/agy-prompt-watch.sh'
 
+# Haiku effort comes from the same versioned settings the agents launcher reads.
+# Only its effort is merged; settings for other models and unrelated keys are preserved.
+MODEL_SETTINGS_JSON="$(jq -ce '.modelSettings | select(type == "object")' "$REPO_DIR/scripts/claude-settings.json")"
+merge_model_settings_args=("$MODEL_SETTINGS_JSON")
+
+# --- agy-skill-run.sh (web-jam-tools#1319, web-jam-tools#1320) ---
+[ -e "$REPO_DIR/scripts/agy-skill-run.sh" ] || { echo "error: $REPO_DIR/scripts/agy-skill-run.sh not found" >&2; exit 1; }
+AGY_SKILL_RUN_DEST="$HOOKS_DEST/agy-skill-run.sh"
+# shellcheck disable=SC2016
+AGY_SKILL_RUN_HOOK_COMMAND='$HOME/.claude/hooks/agy-skill-run-hook.sh'
+AGY_SKILL_RUN_ALLOW_ENTRY="command(/home/joshua/.claude/hooks/agy-skill-run.sh)"
+
 # --- autoMode (web-jam-tools#1189 follow-up) ---
 # The "autoMode" section of Claude Code's settings.json (auto-mode classifier:
 # environment prose, allow, soft_deny; "$defaults" keeps the built-in rules).
@@ -906,44 +995,24 @@ AUTO_MODE_JSON=${AUTO_MODE_JSON//__HOME__/"$AUTO_MODE_HOME"}
 AUTO_MODE_JSON=${AUTO_MODE_JSON//__REPOS_DIR__/"$AUTO_MODE_REPOS_DIR"}
 merge_auto_mode_args=("$AUTO_MODE_JSON")
 
-# skillOverrides (web-jam-tools#1240) — sets the 30 skills bundled with
-# Claude Code (13 document skills and 17 built-in ones) to names only, so
-# their descriptions stop loading at every session open while remaining listed
-# and callable by name. Claude Code ONLY: agy and Codex have no such setting.
-read -r -d '' SKILL_OVERRIDES_JSON <<'SKILL_OVERRIDES_JSON_EOF' || true
-{
-  "anthropic-skills:built-in-browser": "name-only",
-  "anthropic-skills:chrome-browser": "name-only",
-  "anthropic-skills:computer-use": "name-only",
-  "anthropic-skills:deep-research": "name-only",
-  "anthropic-skills:docs": "name-only",
-  "anthropic-skills:docx": "name-only",
-  "anthropic-skills:google-workspace": "name-only",
-  "anthropic-skills:import-memory": "name-only",
-  "anthropic-skills:morning": "name-only",
-  "anthropic-skills:pdf": "name-only",
-  "anthropic-skills:pptx": "name-only",
-  "anthropic-skills:skill-creator": "name-only",
-  "anthropic-skills:xlsx": "name-only",
-  "artifact-capabilities": "name-only",
-  "artifact-design": "name-only",
-  "artifact-diagramming": "name-only",
-  "claude-api": "name-only",
-  "claude-in-chrome": "name-only",
-  "code-review": "name-only",
-  "dataviz": "name-only",
-  "fewer-permission-prompts": "name-only",
-  "init": "name-only",
-  "keybindings-help": "name-only",
-  "loop": "name-only",
-  "plugin-authoring": "name-only",
-  "run": "name-only",
-  "schedule": "name-only",
-  "security-review": "name-only",
-  "simplify": "name-only",
-  "update-config": "name-only"
-}
-SKILL_OVERRIDES_JSON_EOF
+# skillOverrides (web-jam-tools#1240, web-jam-tools#1416) — sets the 30 skills
+# bundled with Claude Code (13 document skills and 17 built-in ones) to names
+# only, so their descriptions stop loading at every session open while
+# remaining listed and callable by name. Claude Code ONLY: agy and Codex have no
+# such setting. Dynamically generated from src/session-load/limits.json so
+# limits.json is the single source of truth.
+SKILL_OVERRIDES_JSON=$(deno eval --no-config '
+  const limits = JSON.parse(await Deno.readTextFile(Deno.args[0]));
+  const skills = limits.bundledSkills?.skills;
+  const expectedCount = limits.bundledSkills?.totalCount;
+  if (!Array.isArray(skills) || skills.length !== expectedCount) {
+    throw new Error(
+      `expected bundledSkills.skills to be an array of length ${expectedCount}, got ${Array.isArray(skills) ? skills.length : typeof skills}`,
+    );
+  }
+  const overrides = Object.fromEntries(skills.map(s => [s, "name-only"]));
+  console.log(JSON.stringify(overrides, null, 2));
+' "$REPO_DIR/src/session-load/limits.json")
 merge_skill_overrides_args=("$SKILL_OVERRIDES_JSON")
 
 # --- agy-side PreToolUse/PostToolUse args (web-jam-tools#432, matcher-by-
@@ -1002,6 +1071,8 @@ for entry in "${PRE_TOOL_USE_HOOKS[@]}" "${AGY_ONLY_PRE_TOOL_USE_HOOKS[@]}"; do
 done
 # agy-native: registered directly under matcher ".*" without agy-hook-shim.sh (web-jam-tools#1212).
 merge_agy_pre_tool_use_args+=(".*::$AGY_PROMPT_WATCH_COMMAND")
+# agy-skill-run: registered directly under matcher ".*" without agy-hook-shim.sh, last (web-jam-tools#1319, web-jam-tools#1320).
+merge_agy_pre_tool_use_args+=(".*::$AGY_SKILL_RUN_HOOK_COMMAND")
 
 merge_agy_post_tool_use_args=()
 for entry in "${POST_TOOL_USE_HOOKS[@]}"; do
@@ -1020,6 +1091,37 @@ merge_allow_args=("${ALLOW_RULES[@]}")
 # Use the stable installed hook location, including --hooks-dir overrides.
 [ -e "$HOOKS_SRC/codex-reaper-startup-check.sh" ] || { echo "error: $HOOKS_SRC/codex-reaper-startup-check.sh not found" >&2; exit 1; }
 CODEX_REAPER_HOOK_DEST="$HOOKS_DEST/codex-reaper-startup-check.sh"
+
+read_agy_permissions() {
+  local target_settings="$1"
+  local out=""
+  out=$(deno run --no-config --allow-read="$target_settings" "$REPO_DIR/scripts/agy-permissions.ts" read-settings "$target_settings" 2>/dev/null) || return 3
+
+  if ! command -v agy >/dev/null 2>&1; then
+    printf '%s\n' "$out"
+    return 0
+  fi
+
+  if [ "$target_settings" = "$HOME/.gemini/antigravity-cli/settings.json" ]; then
+    if ! out=$(agy -p "/permissions" 2>/dev/null); then
+      return 1 # agy command failed
+    fi
+  else
+    local tmp_h
+    tmp_h=$(mktemp -d /tmp/agy-perm-check-XXXXXX)
+    mkdir -p "$tmp_h/.gemini/antigravity-cli"
+    if [ -e "$target_settings" ]; then
+      cp "$target_settings" "$tmp_h/.gemini/antigravity-cli/settings.json"
+    fi
+    local status=0
+    out=$(HOME="$tmp_h" agy -p "/permissions" 2>/dev/null) || status=$?
+    rm -rf "$tmp_h"
+    if [ "$status" -ne 0 ]; then
+      return 1 # agy command failed
+    fi
+  fi
+  printf '%s\n' "$out" | deno run --no-config "$REPO_DIR/scripts/agy-permissions.ts" parse-cli 2>/dev/null
+}
 
 if [ "$CHECK_MODE" = "1" ]; then
   DRIFT=0
@@ -1061,20 +1163,103 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
+  if [ ! -L "$AGY_SKILL_RUN_DEST" ] || [ "$(readlink -f "$AGY_SKILL_RUN_DEST")" != "$(readlink -f "$REPO_DIR/scripts/agy-skill-run.sh")" ]; then
+    echo "drift: agy-skill-run script is not linked at $AGY_SKILL_RUN_DEST" >&2
+    DRIFT=1
+  fi
+
   if [ "$HOOKS_DEST_IS_DEFAULT" = "1" ] || [ "$BIN_DIR_IS_DEFAULT" = "0" ]; then
     AGENTS_DEST="$BIN_DIR/agents"
     if [ ! -L "$AGENTS_DEST" ] || [ "$(readlink -f "$AGENTS_DEST")" != "$(readlink -f "$REPO_DIR/scripts/agents.sh")" ]; then
       echo "drift: agents script is not linked at $AGENTS_DEST" >&2
       DRIFT=1
     fi
+
+    UPDATE_SCRIPTS_DEST="$BIN_DIR/update-scripts"
+    if [ ! -L "$UPDATE_SCRIPTS_DEST" ] || [ "$(readlink -f "$UPDATE_SCRIPTS_DEST")" != "$(readlink -f "$REPO_DIR/scripts/update-scripts.sh")" ]; then
+      echo "drift: update-scripts script is not linked at $UPDATE_SCRIPTS_DEST" >&2
+      DRIFT=1
+    fi
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}" "--model-settings" "${merge_model_settings_args[@]}"; then
     DRIFT=1
   fi
 
   if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"; then
     DRIFT=1
+  fi
+
+  # Check that agy-skill-run hook is registered last in agy hooks file (web-jam-tools#1320)
+  if [ -e "$AGY_HOOKS_PATH" ]; then
+    hook_order_status=0
+    hook_order_msg=$(deno eval --no-config '
+      let data;
+      try {
+        data = JSON.parse(await Deno.readTextFile(Deno.args[0]));
+      } catch {
+        console.log("cannot_parse");
+        Deno.exit(2);
+      }
+      const pre = data?.hooks?.PreToolUse;
+      if (!Array.isArray(pre) || pre.length === 0) {
+        console.log("missing");
+        Deno.exit(1);
+      }
+      const allHooks = [];
+      for (const item of pre) {
+        for (const h of item.hooks || []) {
+          if (h && typeof h.command === "string") {
+            allHooks.push(h.command);
+          }
+        }
+      }
+      const target = "$HOME/.claude/hooks/agy-skill-run-hook.sh";
+      const registrations = pre.filter((entry) => entry.hooks?.some((h) => h?.command === target));
+      if (registrations.length && (registrations.length !== 1 || registrations[0].matcher !== ".*")) {
+        console.log("not_last");
+        Deno.exit(1);
+      }
+      const lastHook = allHooks[allHooks.length - 1];
+      if (lastHook !== target) {
+        if (allHooks.includes(target)) {
+          console.log("not_last");
+        } else {
+          console.log("missing");
+        }
+        Deno.exit(1);
+      }
+      console.log("ok");
+    ' "$AGY_HOOKS_PATH" 2>/dev/null) || hook_order_status=$?
+
+    if [ "$hook_order_status" -eq 2 ] || [ "$hook_order_msg" = "cannot_parse" ]; then
+      echo "error: cannot parse agy hooks file $AGY_HOOKS_PATH" >&2
+      DRIFT=1
+    elif [ "$hook_order_msg" = "missing" ]; then
+      echo "drift: agy-skill-run hook is missing from agy hooks file $AGY_HOOKS_PATH" >&2
+      DRIFT=1
+    elif [ "$hook_order_status" -ne 0 ] || [ "$hook_order_msg" = "not_last" ]; then
+      echo "drift: agy-skill-run hook is not last in agy hooks file $AGY_HOOKS_PATH" >&2
+      DRIFT=1
+    fi
+  else
+    echo "drift: agy hooks file $AGY_HOOKS_PATH does not exist" >&2
+    DRIFT=1
+  fi
+
+  # Check agy allow-list entry (web-jam-tools#1320)
+  agy_perm_out=""
+  agy_perm_status=0
+  agy_perm_out=$(read_agy_permissions "$AGY_SETTINGS_PATH") || agy_perm_status=$?
+
+  if [ "$agy_perm_status" -ne 0 ]; then
+    echo "error: cannot read agy permissions (cannot tell: agy -p \"/permissions\" failed or unreadable)" >&2
+    DRIFT=1
+  else
+    if ! printf '%s\n' "$agy_perm_out" | grep -Fx "$AGY_SKILL_RUN_ALLOW_ENTRY" >/dev/null 2>&1; then
+      echo "drift: agy allow-list entry $AGY_SKILL_RUN_ALLOW_ENTRY is missing" >&2
+      DRIFT=1
+    fi
   fi
 
   if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-agents-md-pointer.ts" "$AGENTS_MD_PATH" "--check"; then
@@ -1083,6 +1268,30 @@ if [ "$CHECK_MODE" = "1" ]; then
 
   if ! deno run --allow-read="$CODEX_HOOKS_PATH" "$REPO_DIR/scripts/merge-codex-reaper-hook.ts" "$CODEX_HOOKS_PATH" "$CODEX_REAPER_HOOK_DEST" --check; then
     DRIFT=1
+  fi
+
+  # Check agy safety rules link (web-jam-tools#1415)
+  if [ ! -L "$AGY_SAFETY_RULES_PATH" ] || [ "$(readlink -f "$AGY_SAFETY_RULES_PATH")" != "$(readlink -f "$SAFETY_RULES_SRC")" ]; then
+    echo "drift: agy safety rules file is not linked at $AGY_SAFETY_RULES_PATH" >&2
+    DRIFT=1
+  fi
+
+  # Check Codex safety rules link (web-jam-tools#1415)
+  if [ ! -L "$CODEX_SAFETY_RULES_PATH" ] || [ "$(readlink -f "$CODEX_SAFETY_RULES_PATH")" != "$(readlink -f "$SAFETY_RULES_SRC")" ]; then
+    echo "drift: codex safety rules file is not linked at $CODEX_SAFETY_RULES_PATH" >&2
+    DRIFT=1
+  fi
+
+  # Check git config --global core.hooksPath (web-jam-tools#1404)
+  if [ "$HOOKS_DEST_IS_DEFAULT" = "1" ] || [ "$GIT_HOOKS_PATH_EXPLICIT" = "1" ]; then
+    current_hooks_path="$(git config --global --get core.hooksPath 2>/dev/null || true)"
+    if [ -z "$current_hooks_path" ]; then
+      echo "drift: git config --global core.hooksPath is unset" >&2
+      DRIFT=1
+    elif [ "$(readlink -f "$current_hooks_path" 2>/dev/null || echo "$current_hooks_path")" != "$(readlink -f "$CANONICAL_GIT_HOOKS" 2>/dev/null || echo "$CANONICAL_GIT_HOOKS")" ]; then
+      echo "drift: git config --global core.hooksPath ($current_hooks_path) does not point to $CANONICAL_GIT_HOOKS" >&2
+      DRIFT=1
+    fi
   fi
 
   if [ "$DRIFT" -ne 0 ]; then
@@ -1193,8 +1402,21 @@ else
   echo "agy-prompt-watch.sh: linked (new)"
 fi
 
+# --- agy-skill-run script symlink (web-jam-tools#1319, web-jam-tools#1320) ---
+if [ -L "$AGY_SKILL_RUN_DEST" ] && [ "$(readlink -f "$AGY_SKILL_RUN_DEST")" = "$(readlink -f "$REPO_DIR/scripts/agy-skill-run.sh")" ]; then
+  echo "agy-skill-run.sh: ok (already linked)"
+elif [ -e "$AGY_SKILL_RUN_DEST" ] || [ -L "$AGY_SKILL_RUN_DEST" ]; then
+  mv "$AGY_SKILL_RUN_DEST" "$AGY_SKILL_RUN_DEST.bak-$STAMP"
+  ln -s "$REPO_DIR/scripts/agy-skill-run.sh" "$AGY_SKILL_RUN_DEST"
+  echo "agy-skill-run.sh: linked (previous version backed up to agy-skill-run.sh.bak-$STAMP)"
+else
+  ln -s "$REPO_DIR/scripts/agy-skill-run.sh" "$AGY_SKILL_RUN_DEST"
+  echo "agy-skill-run.sh: linked (new)"
+fi
+
 # --- CLI tools symlink (~/.local/bin/agents, web-jam-tools#1174) ---
-# Symlinks scripts/agents.sh into $BIN_DIR/agents (~/.local/bin/agents by default).
+# Symlinks scripts/agents.sh into $BIN_DIR/agents (~/.local/bin/agents by default)
+# and scripts/update-scripts.sh into $BIN_DIR/update-scripts.
 # Only linked when targeting the real default destination (HOOKS_DEST_IS_DEFAULT=1)
 # or when an explicit --bin-dir/BIN_DIR override is provided, keeping sandboxed
 # hook tests from touching the real ~/.local/bin.
@@ -1211,6 +1433,18 @@ if [ "$HOOKS_DEST_IS_DEFAULT" = "1" ] || [ "$BIN_DIR_IS_DEFAULT" = "0" ]; then
     ln -s "$REPO_DIR/scripts/agents.sh" "$AGENTS_DEST"
     echo "agents: linked (new)"
   fi
+
+  UPDATE_SCRIPTS_DEST="$BIN_DIR/update-scripts"
+  if [ -L "$UPDATE_SCRIPTS_DEST" ] && [ "$(readlink -f "$UPDATE_SCRIPTS_DEST")" = "$(readlink -f "$REPO_DIR/scripts/update-scripts.sh")" ]; then
+    echo "update-scripts: ok (already linked)"
+  elif [ -e "$UPDATE_SCRIPTS_DEST" ] || [ -L "$UPDATE_SCRIPTS_DEST" ]; then
+    mv "$UPDATE_SCRIPTS_DEST" "$UPDATE_SCRIPTS_DEST.bak-$STAMP"
+    ln -s "$REPO_DIR/scripts/update-scripts.sh" "$UPDATE_SCRIPTS_DEST"
+    echo "update-scripts: linked (previous version backed up to update-scripts.bak-$STAMP)"
+  else
+    ln -s "$REPO_DIR/scripts/update-scripts.sh" "$UPDATE_SCRIPTS_DEST"
+    echo "update-scripts: linked (new)"
+  fi
 fi
 
 # The merge logic itself lives in its own file (web-jam-tools#265) so it can
@@ -1220,11 +1454,93 @@ fi
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}" "--model-settings" "${merge_model_settings_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
+
+# Ensure agy-skill-run hook is registered last in agy hooks file (web-jam-tools#1320)
+deno eval --no-config '
+  let data;
+  try {
+    data = JSON.parse(await Deno.readTextFile(Deno.args[0]));
+  } catch (err) {
+    console.error("error: cannot parse agy hooks file", Deno.args[0], err);
+    Deno.exit(1);
+  }
+  if (!data.hooks) data.hooks = {};
+  if (!Array.isArray(data.hooks.PreToolUse)) data.hooks.PreToolUse = [];
+  const pre = data.hooks.PreToolUse;
+  const target = "$HOME/.claude/hooks/agy-skill-run-hook.sh";
+  for (const item of pre) {
+    if (Array.isArray(item.hooks)) {
+      item.hooks = item.hooks.filter((h) => h?.command !== target);
+    }
+  }
+  data.hooks.PreToolUse = pre.filter((entry) => !Array.isArray(entry.hooks) || entry.hooks.length > 0);
+  data.hooks.PreToolUse.push({ matcher: ".*", hooks: [{ type: "command", command: target }] });
+  await Deno.writeTextFile(Deno.args[0], JSON.stringify(data, null, 2) + "\n");
+' "$AGY_HOOKS_PATH"
+
+# Add agy allow-list entry (web-jam-tools#1320)
+agy_check_perms=""
+if ! agy_check_perms=$(read_agy_permissions "$AGY_SETTINGS_PATH"); then
+  echo "error: cannot read agy permissions (cannot tell: agy -p \"/permissions\" failed or unreadable)" >&2
+  exit 1
+fi
+
+if ! printf '%s\n' "$agy_check_perms" | grep -Fx "$AGY_SKILL_RUN_ALLOW_ENTRY" >/dev/null 2>&1; then
+  if [ -e "$AGY_SETTINGS_PATH" ]; then
+    cp "$AGY_SETTINGS_PATH" "$AGY_SETTINGS_PATH.bak-$STAMP"
+  fi
+  deno run --no-config --allow-read="$AGY_SETTINGS_PATH" --allow-write="$(dirname "$AGY_SETTINGS_PATH")" "$REPO_DIR/scripts/agy-permissions.ts" add-allow "$AGY_SETTINGS_PATH" "$AGY_SKILL_RUN_ALLOW_ENTRY"
+else
+  echo "agy settings.json: ok (allow-list entry already present)"
+fi
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-agents-md-pointer.ts" "$AGENTS_MD_PATH"
 
 # The worktree guard above has run before this or any other installer write.
 deno run --allow-read="$CODEX_HOOKS_PATH" --allow-write="$(dirname "$CODEX_HOOKS_PATH")" "$REPO_DIR/scripts/merge-codex-reaper-hook.ts" "$CODEX_HOOKS_PATH" "$CODEX_REAPER_HOOK_DEST"
+
+# --- Safety rules file symlinks (web-jam-tools#1415) ---
+# Link docs/safety-rules.md into agy's and Codex's global rules locations:
+# ~/.gemini/AGENTS.md and ~/.codex/AGENTS.md.
+mkdir -p "$(dirname "$AGY_SAFETY_RULES_PATH")"
+if [ -L "$AGY_SAFETY_RULES_PATH" ] && [ "$(readlink -f "$AGY_SAFETY_RULES_PATH")" = "$(readlink -f "$SAFETY_RULES_SRC")" ]; then
+  echo "agy AGENTS.md: ok (symlink already present)"
+elif [ -e "$AGY_SAFETY_RULES_PATH" ] || [ -L "$AGY_SAFETY_RULES_PATH" ]; then
+  mv "$AGY_SAFETY_RULES_PATH" "$AGY_SAFETY_RULES_PATH.bak-$STAMP"
+  ln -s "$SAFETY_RULES_SRC" "$AGY_SAFETY_RULES_PATH"
+  echo "agy AGENTS.md: replaced existing file (backed up to $(basename "$AGY_SAFETY_RULES_PATH").bak-$STAMP)"
+else
+  ln -s "$SAFETY_RULES_SRC" "$AGY_SAFETY_RULES_PATH"
+  echo "agy AGENTS.md: created symlink"
+fi
+
+mkdir -p "$(dirname "$CODEX_SAFETY_RULES_PATH")"
+if [ -L "$CODEX_SAFETY_RULES_PATH" ] && [ "$(readlink -f "$CODEX_SAFETY_RULES_PATH")" = "$(readlink -f "$SAFETY_RULES_SRC")" ]; then
+  echo "codex AGENTS.md: ok (symlink already present)"
+elif [ -e "$CODEX_SAFETY_RULES_PATH" ] || [ -L "$CODEX_SAFETY_RULES_PATH" ]; then
+  mv "$CODEX_SAFETY_RULES_PATH" "$CODEX_SAFETY_RULES_PATH.bak-$STAMP"
+  ln -s "$SAFETY_RULES_SRC" "$CODEX_SAFETY_RULES_PATH"
+  echo "codex AGENTS.md: replaced existing file (backed up to $(basename "$CODEX_SAFETY_RULES_PATH").bak-$STAMP)"
+else
+  ln -s "$SAFETY_RULES_SRC" "$CODEX_SAFETY_RULES_PATH"
+  echo "codex AGENTS.md: created symlink"
+fi
+
+# --- Global core.hooksPath setting (web-jam-tools#1404) ---
+# Sets git config --global core.hooksPath to the canonical clone's git-hooks directory.
+if [ "$HOOKS_DEST_IS_DEFAULT" = "1" ] || [ "$GIT_HOOKS_PATH_EXPLICIT" = "1" ]; then
+  mkdir -p "$CANONICAL_GIT_HOOKS"
+  if [ -f "$CANONICAL_GIT_HOOKS/pre-push" ]; then
+    chmod +x "$CANONICAL_GIT_HOOKS/pre-push"
+  fi
+  current_hooks_path="$(git config --global --get core.hooksPath 2>/dev/null || true)"
+  if [ -n "$current_hooks_path" ] && [ "$(readlink -f "$current_hooks_path" 2>/dev/null || echo "$current_hooks_path")" = "$(readlink -f "$CANONICAL_GIT_HOOKS" 2>/dev/null || echo "$CANONICAL_GIT_HOOKS")" ]; then
+    echo "core.hooksPath: ok (already set to $CANONICAL_GIT_HOOKS)"
+  else
+    git config --global core.hooksPath "$CANONICAL_GIT_HOOKS"
+    echo "core.hooksPath: set to $CANONICAL_GIT_HOOKS"
+  fi
+fi

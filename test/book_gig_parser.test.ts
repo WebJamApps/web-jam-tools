@@ -69,6 +69,13 @@ Deno.test("parseBookGigArgs: parses explicit flags and options", () => {
   assertEquals(res2.weekend?.year, 2026);
   assertEquals(res2.location, undefined);
 
+  const res2Bare = parseBookGigArgs(["--replies"]);
+  assertEquals(res2Bare.mode, "replies");
+  assertEquals(res2Bare.weekend, undefined);
+
+  const resRetiredCheckReplies = parseBookGigArgs(["--check-replies"]);
+  assertEquals(resRetiredCheckReplies.mode, "preview");
+
   // --no-open and venue filters
   const res3 = parseBookGigArgs([
     "--send",

@@ -285,6 +285,7 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(byName.get("Flash")?.repos, "all");
   const modelTierNames = schema.labels.filter((l) => l.modelTier).map((l) => l.name).sort();
   assertEquals(modelTierNames, [
+    "Argon",
     "Astra",
     "Fable",
     "Flash",
@@ -294,8 +295,7 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     "Sol",
     "Sonnet",
   ]);
-  assertEquals(byName.get("parked")?.hex, "C2C2C2");
-  assertEquals(byName.get("parked")?.description, "Parked issue — work on hold until unparked");
+  assertEquals(byName.get("parked"), undefined);
   assertEquals(byName.get("Josh")?.hex, "795548");
   assertEquals(
     byName.get("Josh")?.description,
@@ -359,6 +359,11 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     "financial",
     "health-wellness",
     "politics",
+    "Operations",
+    "Other-Projects",
+    "collegelutheran",
+    "songwriting",
+    "token-savings",
   ]);
   const accessControlsTopic = schema.milestoneTopics.find(
     (t) => t.name === "Access Controls",
@@ -374,21 +379,28 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   const backupRestoreTopic = schema.milestoneTopics.find((t) => t.name === "backup-restore");
   assertEquals(backupRestoreTopic?.repos, ["web-jam-tools"]);
   const timShermanMusicTopic = schema.milestoneTopics.find((t) => t.name === "timshermanmusic");
-  assertEquals(timShermanMusicTopic?.repos, ["web-jam-back", "JaMmusic", "WebJamSocketCluster"]);
+  assertEquals(timShermanMusicTopic?.repos, [
+    "web-jam-back",
+    "JaMmusic",
+    "WebJamSocketCluster",
+    "TimShermanMusic",
+  ]);
   const aiMisbehavesTopic = schema.milestoneTopics.find(
     (t) => t.name === "AI Misbehaves",
   );
-  assertEquals(aiMisbehavesTopic?.repos, ["web-jam-tools"]);
+  assertEquals(aiMisbehavesTopic?.repos, ["web-jam-tools", "JaMmusic"]);
+  const promoteGigsTopic = schema.milestoneTopics.find((t) => t.name === "promote-gigs");
+  assertEquals(promoteGigsTopic?.repos, [
+    "JaMmusic",
+    "web-jam-back",
+    "WebJamSocketCluster",
+    "web-jam-tools",
+    "CollegeLutheran",
+  ]);
 
-  // web-jam-tools#287: the six new topics each carry exactly the same four
-  // repos (not `all`) — JaMmusic, web-jam-back, WebJamSocketCluster, and
-  // web-jam-tools — matching the convention already used for
-  // `Access Controls` and `AI Misbehaves` (each asserted its own repo
-  // scope above). (venue-mining was dropped 2026-09-17)
   const fourRepoTopicNames = [
     "song-recordings",
     "set-lists",
-    "promote-gigs",
     "financial",
     "health-wellness",
     "politics",
@@ -401,6 +413,36 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
       `expected "${name}" to be scoped to exactly the 4 booking-epic repos`,
     );
   }
+
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "Operations")?.repos,
+    [
+      "web-jam-tools",
+      "JaMmusic",
+      "web-jam-back",
+      "WebJamSocketCluster",
+      "CollegeLutheran",
+      "AppersonAuto",
+      "TimShermanMusic",
+      "HenricksonForSalem",
+    ],
+  );
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "Other-Projects")?.repos,
+    ["web-jam-tools", "JaMmusic", "web-jam-back", "AppersonAuto", "HenricksonForSalem"],
+  );
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "collegelutheran")?.repos,
+    ["web-jam-tools", "CollegeLutheran"],
+  );
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "songwriting")?.repos,
+    ["web-jam-tools"],
+  );
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "token-savings")?.repos,
+    ["web-jam-tools"],
+  );
 });
 
 Deno.test("Luna, Sol, Astra: missing labels are proposed with canonical values for every active repo", async () => {
@@ -866,4 +908,20 @@ Deno.test("main: returns 1 and reports a scan failure loudly, never swallowing i
     assertEquals(logs, []);
     assert(errors[0].includes("scan failed"));
   });
+});
+
+Deno.test("retired parked label proposes deletion with blast radius rather than recreation", async () => {
+  const schema = await loadSchema(LABELS_YAML_PATH);
+  const runner = makeFakeRunner({ JaMmusic: [{ name: "parked", color: "C2C2C2" }] }, {
+    "JaMmusic::parked": 3,
+  });
+  const drift = await scanRepo(schema, "JaMmusic", runner);
+  const parked = findByName(drift, "parked");
+  assertEquals(parked?.action, "delete");
+  assertEquals(parked?.blastRadius, 3);
+  assertEquals(parked?.kind, "non-canonical");
+  assertEquals(
+    classifyRepoDrift(schema, "JaMmusic", []).some((item) => item.name === "parked"),
+    false,
+  );
 });

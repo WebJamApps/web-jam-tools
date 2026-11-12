@@ -56,3 +56,47 @@ deno task monitor:cron
 To add new targets or modify check parameters:
 - Edit `DEFAULT_TARGETS` in `src/uptime/monitor.ts`.
 - To adjust the cron schedule frequency or heartbeat time, edit the cron strings in `src/uptime/cron.ts`.
+
+## Deno Deploy CLI & Runtime Rules (moved from AGENTS.md)
+
+## Deno Deploy CLI & Runtime Rules
+
+- **Root Directory Positional Argument**: Always pass `.` (workspace root) as the positional root
+  argument to `deno deploy` (e.g. `deno deploy . --config deno.uptime.json --prod`). NEVER pass an
+  individual file path like `src/uptime/cron.ts` as the positional root argument because Deno Deploy
+  will set `/tmp/build/src` as the working directory, isolating it from root project files
+  (`deno.json`, `./monitor.ts`) and causing builds to hang or fail looking for dependencies.
+- **Entrypoint Configuration in Isolated Configs**: Entrypoint and app metadata must be configured
+  inside isolated `deno.<service>.json` config files (e.g. `deno.uptime.json`,
+  `deno.devotional.json`) under
+  `"deploy": { "org": "webjamapps", "app": "...", "entrypoint": "...", "exclude": [...] }` and
+  passed via `--config deno.<service>.json`. Do NOT pass `--entrypoint` to `deno deploy` (without
+  `create`), as `--entrypoint` is only a subcommand flag for `deno deploy create`.
+- **Deno Deploy Dynamic Containers Require `Deno.serve`**: In dynamic mode
+  (`--runtime-mode dynamic`), entrypoint scripts must include a `Deno.serve` listener guarded by
+  `import.meta.main` (e.g.
+  `if (import.meta.main && typeof Deno !== "undefined" && typeof Deno.serve === "function") Deno.serve(...)`).
+  Without `Deno.serve`, scripts containing only `Deno.cron` exit immediately after top-level
+  execution, causing Deno Deploy to report `The revision failed`.
+- **Token Security**: `DENO_DEPLOY_TOKEN` secrets are permanently masked in Deno Console and
+  CircleCI (`xxxxn9p8`). To align local CLI and CircleCI tokens, generate a fresh token in Deno
+  Console (`https://console.deno.com/account/tokens`), export locally
+  (`export DENO_DEPLOY_TOKEN="..."`), and update CircleCI via `circleci envvar create`.
+- **Pre-Push Formatting Check**: ALWAYS run `deno task fmt` AND verify `deno task fmt:check` passes
+  100% green before pushing EVERY commit (including minor test additions, bug fixes, or
+  documentation updates). Pushing without running `deno task fmt` can cause subtle formatting drift
+  (such as trailing newlines or quote style changes) that breaks CircleCI's strict `Format check`
+  gate.
+
+- **Endpoint Test Coverage & Coverage Gate**: When adding or updating HTTP endpoint routes or branch
+  logic in Deno modules (e.g. `src/uptime/cron.ts`), always export testable handler functions (like
+  `handleHttpReq`) and add corresponding unit tests in `test/*.test.ts` covering endpoints and error
+  paths. Uncovered HTTP endpoints lower module line coverage and can cause overall repository
+  coverage to drop below CircleCI's strict 90% line-coverage threshold
+  (`[coverage] FAIL: all-files line coverage < 90% threshold`).
+- **Uptime Test Endpoint Protection & Exact Secret Key Matching**: Test endpoints on the uptime
+  monitoring service (`/test-check` and `/test-heartbeat`) must strictly guard execution against an
+  exact matching `x-test-key` HTTP header configured via `UPTIME_TEST_KEY`. Any missing, empty, or
+  mismatched header, query parameter fallback (`?key=...`), case variation, or execution attempt
+  when `UPTIME_TEST_KEY` is unset or empty must fail closed with HTTP 404 Not Found and perform no
+  action.

@@ -197,9 +197,24 @@ IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 # a PR opened with `gh pr create` (no footer, or any other author) still fails.
 pr_author_for_model() {
   local model="$1"
-  # Gemini Flash runs at high effort only, so the effort suffix is dropped too: the roster
-  # names the model, "Gemini Flash" (web-jam-tools#1202). A "(Medium)" suffix is kept so the
-  # roster refuses it.
+  case "$model" in
+    gemini-*-flash-high|gemini-*-flash-tiered)
+      printf 'agy — Gemini Flash'
+      return 0
+      ;;
+    gemini-4-argon-high)
+      printf 'agy — Gemini Argon'
+      return 0
+      ;;
+    claude-sonnet-5-5-high)
+      printf 'agy — Claude Sonnet 5.5'
+      return 0
+      ;;
+  esac
+  # agy models (Gemini Flash, Gemini Argon, Claude Sonnet 5.5) run at high effort only, so the
+  # "(High)" effort suffix is dropped too: the roster names the model ("Gemini Flash",
+  # "Gemini Argon", "Claude Sonnet 5.5", web-jam-tools#1202, web-jam-tools#1465). A "(Low)" or
+  # "(Medium)" suffix is kept so the roster refuses it.
   printf 'agy — %s' "$(printf '%s' "$model" | sed -E 's/^([[:alpha:]]+)[[:space:]]+[0-9]+(\.[0-9]+)*[[:space:]]+/\1 /; s/[[:space:]]+\(High\)$//')"
 }
 
@@ -751,11 +766,13 @@ Rules:
   repos use "npm run test:lint" / "npm run test:unit").
 - Do not switch branches and do not add new dependencies.
 - $LOCAL_TESTING_INSTRUCTIONS
-- Before opening the PR (web-jam-tools#239, web-jam-tools#867): on Antigravity (agy) sessions, run
-  the \`/learn\` slash command in this session if available, then commit whatever changes it makes
-  to AGENTS.md onto THIS SAME branch as its own commit (e.g. "chore: fold /learn updates into
-  AGENTS.md") — do not open a separate PR or defer it to a follow-up step. If \`/learn\` makes no
-  changes or is running on a non-Antigravity surface (e.g. Claude Code), that's fine; just continue.
+- Before opening the PR (web-jam-tools#239, web-jam-tools#867, web-jam-tools#1610): on Antigravity (agy) sessions, run
+  the \`/learn\` slash command in this session if available, which writes the task's lessons into the rules file
+  of the repository worked in. Move each lesson that applies to one area, word for word, into that area's rules file
+  (e.g. \`docs/rules/<area>.md\`), creating the file and its pointer line when the area has none; a lesson that applies
+  everywhere stays in the rules file. Then commit the resulting changes onto THIS SAME branch as its own commit
+  (e.g. "chore: fold /learn updates into rules") — do not open a separate PR or defer it to a follow-up step. If
+  \`/learn\` makes no changes or is running on a non-Antigravity surface (e.g. Claude Code), that's fine; just continue.
 - When lint and tests are green, finish by opening a draft PR — run:
     ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "agy — <the model you are running as>" \\
       --summary-file /tmp/pr-summary.md --test-plan-file /tmp/pr-test-plan.md --test-evidence-file /tmp/pr-test-evidence.md
@@ -1079,7 +1096,7 @@ else
   # switch models mid-session via /model, this stays pinned to the launch
   # model — re-run with AGY_MODELS set to the new model (or export
   # FORCED_PR_AUTHOR yourself) before finishing, if you do switch.
-  export FORCED_PR_AUTHOR="agy — $ACTIVE_MODEL"
+  export FORCED_PR_AUTHOR="$(pr_author_for_model "$ACTIVE_MODEL")"
   agy_env_args
   env -i "${AGY_ENV_ARGS[@]}" "$AGY" --model "$ACTIVE_MODEL" -i "$PROMPT"
 fi

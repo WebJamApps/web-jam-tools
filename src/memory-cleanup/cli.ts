@@ -26,18 +26,18 @@ export async function runCli(args: string[]): Promise<number> {
       "Usage: deno task memory-cleanup:scan [--dir <path>] [--shared-dir <path>] [--dropbox-dir <path>]",
     );
     console.log(
-      "Runs the deterministic Phase 1 mechanical checks for /memory-cleanup surfaces 1, 6, and 10.",
+      "Runs the deterministic Phase 1 mechanical checks for /memory-cleanup surfaces 1, 6, and 8.",
     );
     console.log("Prints one JSON object on stdout. Read-only — never writes anything.");
     return 0;
   }
 
   const surface1Dir = expandHome(flags.dir || "~/.claude/projects/-home-joshua/memory");
-  const surface10Dir = expandHome(flags["shared-dir"] || "~/.claude/shared-memory");
+  const surface8Dir = expandHome(flags["shared-dir"] || "~/.claude/shared-memory");
   const dropboxDir = expandHome(flags["dropbox-dir"] || "~/Dropbox/web-jam-llms");
   const surface6Paths = DEFAULT_QUEUE_FILENAMES.map((name) => `${dropboxDir}/${name}`);
 
-  const result = await runMemoryCleanupScan({ surface1Dir, surface10Dir, surface6Paths });
+  const result = await runMemoryCleanupScan({ surface1Dir, surface8Dir, surface6Paths });
   console.log(JSON.stringify(result, null, 2));
 
   const hasError = result.surfaces.some(

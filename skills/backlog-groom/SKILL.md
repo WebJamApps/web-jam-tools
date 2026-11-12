@@ -7,14 +7,40 @@ description: Audit all 8 active WebJamApps repos for model-label drift, native d
 
 Audits all 8 active WebJamApps repositories for backlog drift, label hygiene, dependency alignment, issue spec executability, untyped issues, milestone coverage drift, and stale/completed issues.
 
+Josh types `/backlog-groom` (or on Codex `$backlog-groom`).
+Josh can name a focus milestone for that run: `/backlog-groom focus <milestone>` (and on Codex `$backlog-groom focus <milestone>`, e.g. `/backlog-groom focus gig-outreach` and `$backlog-groom focus gig-outreach`). The focus milestone is passed to the ranking for that run only.
+
 **Strict Interactive Gate:** This skill NEVER makes unilateral edits on GitHub. It writes its findings to `~/Dropbox/web-jam-llms/backlog-groom-report.md`, presents a numbered table of findings to Josh in chat, and **WAITS for explicit per-item approval** before executing any label edits, issue edits, or closures on GitHub.
 
-## Execution Model
+## Which Model Does the Run
 
-- **Delegated Scan & Analysis:** Step 1 (Scan & Collect) and Step 2 (Analyze & Categorize) MUST be delegated to a single subagent running on **Flash** or **Haiku** to conserve token quota.
-- **Per-surface delegation:** On Claude Code, dispatch that subagent with `Agent(model: "haiku")`. On agy / Antigravity, dispatch it with `invoke_subagent(TypeName: "self", Role: "Backlog Groom Scanner", Model: "inherit")` on Flash.
-- **Report & Summary Output:** The delegated subagent performs all cross-repo `gh` lookup calls, writes the detailed report to `~/Dropbox/web-jam-llms/backlog-groom-report.md`, and returns ONLY the final findings table, per-repo untyped summary ratios, and per-repo missing milestone summary ratios back to the primary session.
-- **Primary Session Presentation:** The primary session renders the findings table to Josh and handles interactive approval and execution.
+The primary session always starts one audit helper so Josh can keep chatting. The helper owns
+reading, checking, the report, and approved edits; it does not repeat this dispatch step.
+
+| Tool | The session is on | Who does the run |
+|---|---|---|
+| Claude Code | Opus | a Sonnet helper the session starts |
+| Claude Code | Sonnet | a Sonnet helper the session starts |
+| Claude Code | Haiku | a Haiku helper the session starts |
+| agy | Flash | a Flash helper the session starts |
+| Codex | Astra | a Sol helper the session starts |
+| Codex | Sol | a Sol helper the session starts |
+| Codex | Luna | a Luna helper the session starts |
+
+The primary runs `deno task running-model` to learn its model from the session record, never
+from its own account of itself. If detection cannot tell, start a Sonnet helper on Claude Code
+or a Sol helper on Codex; agy starts a Flash helper. Helpers run at high effort.
+
+Use the surface's native background child mechanism: Claude Code `Agent` with the table's
+`model`, Codex `collaboration.spawn_agent` with the table's model named in the request, or agy
+`invoke_subagent` with `Model: "flash"`. On Codex, when specifying a different model, provide a
+self-contained task with `fork_turns: "none"`. Pass this skill, the requested focus milestone,
+the report path, and the strict per-item approval gate. Do not run a blocking CLI in the primary
+session as a substitute for a background helper. If the native mechanism is unavailable,
+report that limitation; do not silently do the audit inline.
+
+The primary starts the helper, shares brief progress, shows Josh the returned numbered findings,
+and passes his per-item approvals back to that same helper. The helper makes only approved edits.
 
 ## Repositories in Scope (8)
 
@@ -32,8 +58,8 @@ Audits all 8 active WebJamApps repositories for backlog drift, label hygiene, de
 The audit inspects every open issue across all 8 repositories against six core categories:
 
 ### 1. Model-Label Drift
-- **Missing Model Label:** Issue has no model-tier label (`Haiku`, `Sonnet`, `Opus`, `Fable`, `Flash`, `Flash Low`) assigned.
-- **Multiple Model Labels:** Issue carries more than one model-tier label simultaneously (e.g. both `Sonnet` and `Flash`).
+- **Missing or Misaligned Model Label:** Issue has no model-tier label from `skills/fix-labels/model-labels.json` (unless it is a `Josh` manual step) or carries a label that differs from the triage table in `docs/ai-team-playbook.md`. The skill compares each open coding issue's label with the triage table and proposes a relabel per issue, asking Josh per item. It does not apply `Flash` by default.
+- **Multiple Model Labels:** Report two or more model labels as drift only when they are not the allowed pair in `~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`, "How the order is used". The allowed pair is valid and must not be reduced to one label.
 - **Retired / Deprecated Labels:** Issue carries retired or non-canonical model labels (e.g. old `Flash-lane`, `GPT-4`, `Claude-2` or mismatched tier spellings).
 
 ### 2. Native Dependencies & Blocked Label Drift
@@ -53,7 +79,7 @@ The audit inspects every open issue across all 8 repositories against six core c
   - `"as discussed in"` / `"per the discussion"`
   - `"in the epic"` / `"see epic for details"`
   - `"as noted below"` (without explicit inline specs)
-- **`Needs Design` Awareness:** For Epics or sub-issues that are not fully designed yet or require design clarification, recommend applying the canonical `Needs Design` status label or triaging/re-labeling to `Opus` for human design clarification rather than forcing immediate execution.
+- **`Needs Design` Awareness:** Missing a separate design document alone does not make a self-contained small task non-executable. Propose this label for unresolved design decisions or an incomplete executable spec, with per-item approval. For Epics or sub-issues that are not fully designed yet or require design clarification, recommend applying the canonical `Needs Design` status label or triaging/re-labeling to `Opus` for human design clarification rather than forcing immediate execution.
 
 ### 4. Native Issue Types, Epic & Untyped Issue Detection
 - **Untyped Issue Detection:** Flag every OPEN issue with an unset native `Type` field (i.e. native `Type` is missing/null/empty). Report the per-repo untyped ratio (e.g. "web-jam-tools: 38 of 44 open issues untyped") and provide suggested native types (`Task`, `Bug`, `Feature`, `Epic`) for each untyped issue based on context.
@@ -66,27 +92,45 @@ The audit inspects every open issue across all 8 repositories against six core c
 - **Stale Issues:** Open issues untouched for extended periods with no activity, pending external feedback, or superseded by newer architectural changes.
 
 ### 6. Milestone Coverage Drift
-- **Missing Milestone Detection:** Flag every OPEN, non-`parked` issue whose native GitHub `milestone` field is null.
+- **Missing Milestone Detection:** Flag every OPEN issue whose native GitHub `milestone` field is null.
 - **Suggested Milestone Heuristics (in priority order):**
   1. If the issue is a native sub-issue of an Epic that already has a Milestone assigned, suggest that parent Epic's Milestone.
   2. Otherwise, match the issue's title and body theme against the titles and descriptions of the repo's open Milestones.
   3. If no Epic parent exists and no clear theme match exists, suggest `"no fitting milestone — leave unassigned"` rather than guessing.
 
+### 7. Priority
+
+The level each issue carries, checked against the spread with a focus milestone named for the run:
+- **Seventh Check (Priority):** Evaluates open issues against target level shares and calls the ranking entry point `deno task backlog-groom:rank` (via `deno task backlog-groom:rank --repo <repo> --judgments <file.json> [--snapshot <snapshot.json>] [--focus <milestone>]`), reading judgments stored in `/tmp/backlog-groom`.
+- **Focus Argument:** Takes `focus <milestone>` in the call (`/backlog-groom focus gig-outreach`, and `$backlog-groom focus gig-outreach` on Codex) and passes it to the ranking for that run only.
+- **One Batch per Repository:** Proposed Priority moves are shown as one batch for each repository.
+- **Where Rules Live (No Restatement):** The skill does not restate the level tests, the shares or the ranking:
+  - what each Priority level means is in "Priority Levels" in `~/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md` (the design-issue and file-issue design);
+  - the shares, the ranking, and the focus are in "The Priority check" in `~/Dropbox/web-jam-llms/Token_Savings/backlog-groom-design.md` (the backlog-groom design).
+- **Model Judgment on Two Facts & Small-Repo Input Contract:** The model doing the run judges the two facts no GitHub field records:
+  1. something live is broken, exposed or losing data;
+  2. it is a defect that costs something every time it is hit.
+  The model hands the ranking a yes or a no for each (as `liveBroken` and `costlyDefect` booleans in the judgments JSON), and gives its reason in one line beside every move it proposes (as `reason`). For repositories below the 20 open non-Epic issue floor, and for any Epic with no open child carrying a Priority (regardless of repository size), the judgments JSON must also supply `levelFromTests` (Urgent, High, Medium, or Low) determined from the canonical level tests `/file-issue` owns (and `levelFromTests` must be Urgent when `liveBroken` is true). The input schema and example are documented in `docs/scripts.md` under `### backlog-groom:rank` and CLI help (`deno task backlog-groom:rank --help`).
+- **Setting Approved Levels:** Sets approved levels with `deno task edit-issue --priority <Level>` and reads back the set value.
+
 ---
 
 ## Workflow & Execution Steps
 
-### Step 1: Scan & Collect (Delegated to Subagent)
-1. Fetch all open issues for each of the 8 repos using `gh issue list` and `gh api`.
-2. Retrieve native `Priority`, `Type`, `issue_field_values`, and native dependencies (`blocked_by` API) for candidate issues.
-3. Exclude issues marked with the gray `parked` label (these are intentionally parked by Josh and skipped).
+The helper selected by the table in "Which Model Does the Run" performs Steps 1–3 and the approved actions in Step 5. The primary session presents the findings and receives Josh's approvals, then passes only those approvals back to that helper.
 
-### Step 2: Analyze & Categorize (Delegated to Subagent)
+### Step 1: Scan & Collect
+1. Run `deno task backlog-groom:collect --output /tmp/backlog-groom/<unique-run>/snapshot.json` once. The bounded-concurrency collector reads all eight repos, issue bodies, native `Priority`, `Type`, `issue_field_values`, milestones, parent/children and dependencies. It publishes only a complete validated timestamped snapshot; failures refuse the run. See `docs/scripts.md` for the schema and freshness contract.
+2. Read that snapshot for the audit instead of repeating per-issue reads. Follow up with targeted read-only GitHub/code checks only where the snapshot cannot prove completion, external prerequisites, or referenced closed ancestors. Never infer satisfied external prerequisites from missing data.
+3. Include every open issue, including legacy `parked` labels. That retired label's deletion belongs to `/fix-labels`, with its own blast radius and per-item approval.
+
+### Step 2: Analyze & Categorize
 1. Evaluate each issue against the 6 audit categories above.
-2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash`", "Remove redundant `Blocked` label (native dependencies govern blocking)", "Remove `Blocked` label & reconcile body (replace gating prose with satisfied prerequisite note and preserve unproven preconditions)", "Remove self-blocking dependency via deno task unblock-issue --repo <repo> --issue <n> --blocker <m>", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
+2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Apply label `Sol` per triage table", "Remove redundant `Blocked` label (native dependencies govern blocking)", "Remove `Blocked` label & reconcile body (replace gating prose with satisfied prerequisite note and preserve unproven preconditions)", "Remove self-blocking dependency via deno task unblock-issue --repo <repo> --issue <n> --blocker <m>", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
 3. Calculate per-repo untyped issue ratios (e.g. "web-jam-tools: 38 of 44 open issues untyped") and missing milestone ratios (e.g. "web-jam-tools: 12 of 44 open issues have no milestone").
+4. For Priority, the model doing the run judges the two facts no GitHub field records (something live is broken; a defect that costs something every time it is hit), hands the ranking a yes or a no for each, and gives its reason in one line beside every move it proposes (with `liveBroken`, `costlyDefect`, and a one-line `reason`). For repositories below the 20-issue floor, and for any Epic with no open child carrying a Priority (regardless of repository size), it also supplies `levelFromTests` from the canonical level tests `/file-issue` owns. The judgments JSON is stored in `/tmp/backlog-groom` (following the input schema in `docs/scripts.md` and `deno task backlog-groom:rank --help`), calling `deno task backlog-groom:rank --repo <repo> --judgments <file.json> --snapshot /tmp/backlog-groom/<unique-run>/snapshot.json [--focus <milestone>]`. Ranking reuses the collected snapshot without GitHub rereads. It refuses snapshots over one hour old; recollect and reconsider affected findings before requesting approval. Snapshots are evidence for this run, never approval records.
 
-### Step 3: Write Report File (Delegated to Subagent)
+### Step 3: Write Report File
 Write the full audit report to `~/Dropbox/web-jam-llms/backlog-groom-report.md` (replacing any existing file). Include an ISO timestamp, summary counts, untyped ratios, and missing milestone ratios per repo, and detailed findings.
 
 ### Step 4: Present Findings Table in Chat (Primary Session)
@@ -94,7 +138,7 @@ Render a clear, numbered Markdown table in chat along with per-repo untyped rati
 
 | # | Repo | Issue | Category | Finding / Drift | Proposed Action |
 |---|------|-------|----------|-----------------|-----------------|
-| 1 | JaMmusic | #102 | Model Label Drift | Missing model label | Apply `Flash` label |
+| 1 | JaMmusic | #102 | Model Label Drift | Missing model label (screens/styling) | Apply `Flash` label per triage table |
 | 2 | JaMmusic | #1243 | Dependency Drift | Labeled `Blocked` & body says "do not start", but blocker web-jam-back#990 "Add PATCH /venue/:id (the honest verb for our partial-merge update)" is CLOSED | Remove `Blocked` label & reconcile body (note web-jam-back#990 closed; preserve deploy step) |
 | 3 | CollegeLutheran | #88 | Spec Quality | Body relies on "see comment for details" | Recommend spec inline edit or `Needs Design` |
 | 4 | web-jam-tools | #380 | Untyped Issue | Native Type is unset | Set native Type to `Task` |
@@ -102,11 +146,13 @@ Render a clear, numbered Markdown table in chat along with per-repo untyped rati
 | 6 | web-jam-tools | #753 | Self-Blocking Dependency | Issue is blocked by its parent #737 | Remove self-blocking dependency via `deno task unblock-issue --repo WebJamApps/web-jam-tools --issue 753 --blocker 737` |
 
 If no drift is found across all repos, report that the backlog is 100% clean.
+Proposed Priority moves are shown as one batch for each repository.
 
 ### Step 5: Await Explicit Approval & Execute
 - **STOP and wait for Josh's response.**
 - Accept selective approvals (e.g., "approve 1, 2", "all except 3", "yes to all").
-- Execute ONLY approved actions on GitHub via `gh issue edit --milestone "<name>"`, `gh issue edit`, `gh label`, etc.
+- Execute ONLY approved actions on GitHub through the guarded commands: `deno task edit-issue` for a label, a milestone, or a body (and its `--priority <Level>` flag for a Priority level), and `deno task unblock-issue` for a dependency that blocks an issue on its own parent.
+- Before executing an approved item, re-read its relevant current issue values and prerequisites. If changed facts invalidate the proposal, return the revised item for approval. A snapshot never substitutes for this check.
 - Never touch unapproved items.
 
 ## Description Detail & Triggers

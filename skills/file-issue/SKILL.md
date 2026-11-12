@@ -13,7 +13,7 @@ metadata:
 ## Execution model
 
 This is mechanical-with-light-judgment (search for duplicates, write acceptance criteria that
-close cleanly, pick one label from the model-tier list in `skills/fix-labels/labels.yaml`) — run it
+close cleanly, choose model labels under the tier-order design cited below) — run it
 on the cheapest tier that reliably gets the judgment calls right, per surface:
 
 - **Claude Code:** **Sonnet**. Don't default to Opus/Fable for a fresh `/file-issue` invocation.
@@ -26,12 +26,11 @@ issue rather than switching.
 
 ## Why a skill AND a hook
 
-`hooks/require-model-label-on-issue-create.sh` (web-jam-tools#265) is a hard gate: it denies any
-`gh issue create` or MCP `issue_write` create call that doesn't carry exactly one label from
-`skills/fix-labels/labels.yaml`'s `modelTier: true` entries — read at runtime from the generated
-sidecar `skills/fix-labels/model-labels.json` (not restated here; that list drifts every time a
-model tier is added or retired, so `labels.yaml` is the only place it lives), since the hook is
-bash/python and can't parse YAML in CI.
+Allowed model-label combinations are set by
+`~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`, "How the order is used".
+The filing tools apply that rule through `src/shared/model_label_rule.ts`, reading the vocabulary
+from `skills/fix-labels/model-labels.json`. The issue-create hook keeps its own check while the
+guard freeze stands; a parity test verifies that it agrees with the shared rule.
 That hook closes the silent-omission hole — it cannot judge whether the
 label is the *right* one, whether the body cites its references correctly, whether a duplicate
 already exists, or whether the acceptance criteria actually let the issue close. This skill is the
@@ -72,14 +71,10 @@ that's what following this skill prevents.
    comment on, or attempt to reuse it — see the Closed Issues Are Immutable rule below.
 2. **Choose the model label deliberately, not as an afterthought.** This is the thing
    web-jam-tools#265 exists because of: web-jam-tools#263 shipped with only a `bug` label and no
-   model label, because the label was going to be "added later."    Decide the label as part of
-    deciding what the issue IS — before you write the body — from:
-    - `Flash` — full-stack coding (FE, BE, APIs, tooling), contained refactoring, multi-file feature edits, and interactive work across all repos (Josh's default tier for interactive work; fast, cost-effective Sonnet alternative).
-    - `Haiku` — mechanical/one-off: lookups, scans, single-file/one-field edits, typo/data fixes, running tests/builds and reporting the result.
-    - `Sonnet` — major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases (top-tier software engineering model; ranks above Flash per Josh's 2026-10-01 ruling, though Flash stays the default lane).
-    - `Opus` — top-tier architectural design, complex tech-lead judgment, spec/requirements alignment, and reviewing complex subagent outputs.
-    - `Fable` — retired/dormant; do not apply to new issues (kept in the schema for
-      delete-protection only, per `skills/fix-labels/labels.yaml`).
+   model label, because the label was going to be "added later." Decide the label as part of
+   deciding what the issue IS — before you write the body — using the triage table in
+   `docs/ai-team-playbook.md` (and under "Triage: which label an issue gets" in the tier-order design
+   cited above). That table owns routing by kind of work; do not keep another list here.
 
    **A prompt that hands filing to another agent never names the label.** A session that sends a
    subagent to file an issue tells it to choose the label under this rule, and names the default
@@ -91,7 +86,7 @@ that's what following this skill prevents.
    of the Gate 2 plan table are that case: Josh rules on each row's tier with the plan, so the
    filing agent applies the tier the row carries.
 
-   **Tier is not a function of diff size.** The bullets above describe the *kind* of thinking a
+   **Tier is not a function of diff size.** The tier-order design describes the *kind* of thinking a
    task needs, not how many files it touches. A one-file, twenty-line change can be `Opus` work,
    and a ten-file change can be `Flash` work. Before settling on a tier, ask what the task
    would **fail** on rather than how big it is. If the hard part is any of these, it is `Opus`
@@ -112,7 +107,7 @@ that's what following this skill prevents.
    See item 15 below for the three-outcome specification and model floor governing any guard, gate, or permission check.
 
    When genuinely unsure between two tiers, say so in the issue body rather than guessing — but
-   still pick one label, since the hook requires exactly one. **`Sonnet` and `Opus` require an
+   choose labels allowed by the tier-order design cited above. **`Sonnet` and `Opus` require an
    explicit escalation reason** — `--escalation-reason` on the CLI, `escalation_reason` in the
    MCP `issue_write` input — before `hooks/lib/check_model_label_on_issue_create.ts`
    (`ESCALATION_LABELS`, web-jam-tools#709 "Guard denies issue-create carrying Sonnet/Opus model
@@ -131,8 +126,11 @@ that's what following this skill prevents.
    "read the comment first", "read comment first", "as discussed above", "as discussed in",
    "per the discussion", "in the epic", "see the epic"). Anyone (human or AI model) picking up an
    issue must be able to execute it directly from the issue body without hunting through issue
-   comments or parent epic threads for requirements. Sub-issues derived from an Epic must have their
-   full requirements authored directly in the sub-issue body first before creation. Note: Native issue
+   comments or parent epic threads for requirements. An issue filed from a Gate-1-approved design
+   stands alone through its pointer to that design and the instruction to stop if the path cannot
+   be read, per "Issues filed from a design point at it"; every other issue, including a sub-issue
+   of an Epic with no design, has its full requirements authored directly in its body before
+   creation. Note: Native issue
    type `Epic` (which is orthogonal to model labels) is exempt from this check on edit paths (`gh issue edit`
    or MCP update), allowing Epics to reference comments or sub-issues as discussion evolves.
 5. **Require Native Issue Type via MCP or `create-issue.ts`.** Every new issue creation MUST explicitly specify a
@@ -150,6 +148,16 @@ that's what following this skill prevents.
 10. **Set Native Priority Field via MCP or `create-issue.ts`, Never via `gh issue create` / `gh issue edit` — Then Verify It by Reading It Back.** Set the native `Priority` field (`Urgent`,
     `High`, `Medium`, `Low`) via GitHub MCP `issue_write` → `issue_fields` (or `set_issue_field`, or `scripts/create-issue.ts --priority <Level>`). `gh issue create`
     and `gh issue edit` cannot set native fields; never attempt to set native Priority through them. `scripts/create-issue.ts` sets it with a `gh api graphql` `updateIssueFieldValue` mutation, then re-reads the issue and exits with an error on a Priority mismatch — so a successful `create-issue.ts --priority` run is already verified and needs no second read-back. **Reading the field:** a `gh api graphql` query for it fails under the pinned `GH_TOKEN` (`INSUFFICIENT_SCOPES ... requires ... read:project`); that error means the wrong tool was used, not that Priority is unverifiable. The REST read `gh api repos/<owner>/<repo>/issues/<n> --jq '.issue_field_values'` works under that same token on both surfaces, as does the GitHub MCP read below. (On Claude Code the claude.ai GitHub connector authenticates separately from the pinned token; on agy the `github` MCP server runs on the pinned `GH_TOKEN` itself.)
+    - **Choose Priority from the level tests (Medium is the default).** A Priority level says when to work an issue. The filing agent picks the first level with a test that fits, reading from the top:
+
+      | Level | Means | Fits when any one of these is true |
+      |---|---|---|
+      | Urgent | Work this first | Something live is broken, exposed or losing data. Other open issues are waiting on it and nothing open blocks it. Josh says it is urgent. |
+      | High | Work this next | It is a defect that costs something every time it is hit: a wrong result, wasted tokens, an extra review round. |
+      | Low | When there is time | It is nice to have, and nothing waits on it. |
+      | Medium | Planned work | Nothing above fits. This is the default. |
+
+      Whether other open issues are waiting on an issue is read from GitHub's native dependency links, never from body prose. In a Gate 2 plan each row takes its level from the same tests, with the plan's own rows counted as issues waiting, so the rows of a plan spread over the levels in dependency order; Josh rules on each row's level with the plan.
     - **A write response is never confirmation.** After creating the issue, read back the filed issue's Priority using the REST read `gh api repos/<owner>/<repo>/issues/<n> --jq '.issue_field_values'` (or on Claude Code, `mcp__claude_ai_GitHub_MCP__issue_read` for the one issue this run filed, or `mcp__claude_ai_GitHub_MCP__list_issues` with `fields: ["number","title","field_values"]`), and compare it against the value set. Only that read confirms the field landed.
     - **Missing or mismatched → set, then re-read.** If the read-back shows Priority missing or different from what was intended, set it again and re-read to confirm before reporting.
     - **Report it, don't report success over it.** A missing or mismatched Priority is reported to Josh explicitly — citing the issue as `repo#number "title"` with the expected and actual values — and the run does not report the filing as complete while it is unverified.
@@ -169,7 +177,8 @@ that's what following this skill prevents.
     - Runtime upgrades must be LTS only, without exception (e.g. Node/Deno LTS releases only).
     - Any vulnerability or upgrade implicated by the issue's own edited files is addressed directly in that work.
 14. **Hook and Skill Issues Must Target Both Claude Code and agy/Antigravity.**
-    - Any issue about a **hook** (a script under `hooks/`) or a **skill** (a directory under `skills/`) must declare it targets **both** agent surfaces — Claude Code and agy/Antigravity — unless Josh has explicitly approved a single-surface exception for that specific issue *in this filing session*, with approval recorded in the issue body.
+    - Any issue about a **hook** (a script under `hooks/`) or a **skill** (a directory under `skills/`) must declare it targets **both** agent surfaces — Claude Code and agy/Antigravity — unless Josh has explicitly approved a single-surface exception for that specific issue *in this filing session*, with approval recorded in the issue body, or the work is provably Claude-Code-only under one of the three single-surface exemptions below.
+    - **Single-surface exemptions (Claude Code only):** Work on a path under `~/.claude/`, work on a Claude Code settings file, or work on a hook that the installers register on Claude Code alone is provably Claude-Code-only, so it is exempt without Josh's approval. The issue names which of the three made it exempt and, for a hook, shows where it is registered. Where a hook is registered cannot be established, it is not exempt (fails closed). A hook that agy or Codex also registers is never exempt, whatever its event: agy runs PreToolUse and PostToolUse hooks and a Stop entry, and Codex runs SessionStart, PreToolUse, PostToolUse and Stop hooks; such hook work always needs Josh's explicit per-issue approval, recorded in the issue body.
     - **Surfaces must be named in `## What this builds`.** The section opening the body must state what is being built for each surface, not just once for both (e.g. not "updates the hook" but "updates the hook in Claude Code and adds the agy variant").
     - **Structural change: one acceptance criterion per surface, naming the installer.** A new, renamed, or deleted skill or hook, or an existing hook whose event or matcher registration changed, requires an installer to reach either surface. A brand-new `hooks/lib/*.ts` module consumed by an already-installed hook is **not** a new hook under this bullet — see the content-only bullet below. The `## Acceptance criteria` section must carry a separate, distinct criterion checking each surface: Claude Code (`scripts/install-hooks.sh` for hooks; `scripts/install-skills.ts` for skills) and agy (`scripts/install-hooks.sh` on agy side; same for skills). `## How to test locally` must name both `scripts/install-hooks.sh` and `scripts/install-skills.ts` as part of the verification steps, so the implementing agent installs and checks both surfaces rather than one.
     - **Content-only change: one acceptance criterion per surface, naming the resolution check, not an installer.** A content-only change to a file that is already installed — a skill body, a new or existing supporting file inside an already-installed skill directory (e.g. adding `skills/fix-labels/labels.yaml` to the already-installed `fix-labels` skill), a hook script's contents, or a new or existing shared `hooks/lib/*.ts` module consumed by an already-installed hook — needs no installer: `git pull` on `dev` makes it live on both surfaces (see `docs/scripts.md` for the mechanism; do not restate it here). For a **skill**, `~/.claude/skills/<skill>` and `~/.gemini/config/plugins/webjam-tasks/skills/<skill>` are two genuinely distinct symlinks, so the `## Acceptance criteria` section asserts, per surface, that the installed symlink still resolves into the canonical clone. For a **hook or a `hooks/lib/*.ts` module**, there is only one hook symlink (`~/.claude/hooks/<hook>.sh`) — agy reaches it through that same Claude Code symlink via `hooks/agy-hook-shim.sh`, not a second symlink of its own — so the two per-surface criteria must NOT be the same assertion written twice: the Claude Code criterion asserts `~/.claude/hooks/<hook>.sh` resolves into the canonical clone — except for a hook listed in `scripts/install-hooks.sh`'s `AGY_ONLY_PRE_TOOL_USE_HOOKS` array (`hooks/agy-model-guard.sh`, `hooks/block-agy-gmail-send-delete.sh`), which is symlinked into `~/.claude/hooks/` like every other hook but is deliberately never registered in Claude Code's `settings.json`, because it depends on agy-native payload fields Claude Code's hook payload does not carry (`docs/agy-hooks.md` § "agy-only hooks"); for those, asserting only that the symlink resolves would be a true statement implying a Claude-Code-side effect that cannot occur, so the Claude Code criterion instead asserts that fact plainly: the hook has no Claude Code `settings.json` registration, and the content change has no Claude-Code-side effect. Never invent a Claude Code registration for an agy-only hook to satisfy this criterion. The agy criterion depends on which event the hook (or the hook consuming the `hooks/lib/*.ts` module) is registered under, checked against `scripts/install-hooks.sh`'s own `PRE_TOOL_USE_HOOKS`/`POST_TOOL_USE_HOOKS`/`AGY_ONLY_PRE_TOOL_USE_HOOKS` vs. `SESSION_START_HOOKS`/`STOP_HOOKS` arrays: for a `PreToolUse` or `PostToolUse` hook, which carries a `~/.gemini/config/hooks.json` shim registration, the agy criterion asserts that registration still targets that same `$HOME/.claude/hooks/` path — that registration, not a second symlink, is what makes the agy criterion distinct; for a `SessionStart` or `Stop` hook, `~/.gemini/config/hooks.json` carries no registration for it at all and never can — `scripts/merge-hooks-into-settings.ts --forbid-lifecycle-hooks` refuses one there because registering either lifecycle event silently disables agy's entire hooks config (`docs/agy-hooks.md` finding 9) — so the agy criterion asserts that fact plainly: the hook has no `~/.gemini/config/hooks.json` registration, and the content change has no agy-side effect. Never invent an agy-side path or registration for a `SessionStart`/`Stop` hook to satisfy this criterion. `## How to test locally` names that resolution check rather than an installer.
@@ -235,11 +244,23 @@ match the `--title` passed to `deno task create-issue` below EXACTLY** — the t
 titles, so any mismatch (even punctuation or casing) means the create-issue call is denied even
 though a token exists.
 
-The writer authorizes itself off `hooks/lib/check_token_write_authorization.ts`'s check that the
-most recent own-session, non-sidechain user turn invoked `/file-issue` or `/design-issue` — run it
-outside that context (a different session, or after other turns intervened) and it refuses. That
-refusal is the gate working as designed, not a bug to route around: get Josh's fresh `/file-issue`
-(or `/design-issue`) invocation first rather than looking for a workaround.
+The writer authorizes itself off `hooks/lib/check_token_write_authorization.ts`, which accepts
+either of two things in this session's own, non-sidechain transcript: a user turn that invoked
+`/file-issue` or `/design-issue` (with no other skill invoked since), or Josh's latest reply
+approving in chat — it follows an agent turn that showed every exact `--title` and does not open
+with `no`, `nope`, `nah`, `don't`, `do not`, `stop`, `never`, `cancel`, `hold off`, `wait` or `not yet`
+(any run of spaces or a line break between the two words of `do not`, `hold off` and `not yet` counts
+as the same refusal). A title is shown only when it appears whole: on a line of its own (a list item
+or heading), in a table cell, or in quotes, backticks or bold right after a plain `Title:` / `Proposed title:` label's colon
+(`Proposed title: "..."`) — the whole displayed field is compared, so a shortened or embedded part of
+a longer title does not count (a quoted or backticked span inside a longer title is that title's
+content, whatever punctuation surrounds it), and neither does a title in the middle of a sentence,
+quoted or not.
+The titles may be spread over several of your messages in that turn, each title in one message.
+Run it outside that context (a different session, titles not shown to Josh first, or a subagent's
+own turn) and it refuses. That refusal is the gate working as designed, not a bug to route around:
+show Josh the exact titles and get his reply, or get his fresh `/file-issue` (or `/design-issue`)
+invocation, rather than looking for a workaround.
 
 Running this writer step is not a bypass of the approval gate: `hooks/lib/check_issue_approval_token.ts`
 still independently validates session, repo, title, and expiry at `deno task create-issue` time,
@@ -268,18 +289,14 @@ deno task create-issue \
 
 - Require native type (`Task`, `Bug`, `Feature`, `Epic`) via `scripts/create-issue.ts --type <Type>` or GitHub MCP `issue_write` (`"type": "<Type>"`).
 - Specify `--milestone "<name>"` when an open repo Milestone matches the scope. If no open Milestone fits, explicitly note "no fitting milestone — leaving unassigned" in chat or body.
-- Exactly **one** label from the six model labels above — the hook denies zero or two-plus.
+- Choose model labels according to the tier-order design cited above. `deno task create-issue`
+  checks them before any create, including in `--dry-run`.
 - For `Sonnet` or `Opus`, also supply `--escalation-reason "<why the tier above is not needed>"`
-  (CLI) or `escalation_reason: "<...>"` (MCP `issue_write`) — on Claude Code,
-  `hooks/lib/check_model_label_on_issue_create.ts` denies the create without it
-  (`ESCALATION_LABELS`, web-jam-tools#709 "Guard denies issue-create carrying Sonnet/Opus model
-  label without an explicit escalation justification"). On agy/Antigravity, `deno task
-  create-issue` has no hook mechanism of its own — `src/create-issue/lib.ts`'s `parseArgs` only
-  reads the flag into `options.escalationReason` and `createIssueAndVerify()` never validates it,
-  so this field is unguarded on that path. Wherever it is checked, the reason must compare against
-  the tier above, not just justify the tier chosen.
+  (CLI) or `escalation_reason: "<...>"` (MCP `issue_write`). The shared check and the hook refuse
+  a missing or blank reason. The create task records the reason in the issue body. The reason
+  must compare against the tier above, not just justify the tier chosen.
 - Set dependencies natively: When an issue depends on another GitHub issue, set native GitHub `blocked_by` dependencies via `--blocked-by <issue>` (e.g. `scripts/create-issue.ts --blocked-by <issue_num>`) ONLY and do NOT add the `Blocked` label (native dependencies clear automatically on close). Note: A `--blocked-by` value that matches the issue's parent or ancestor is refused at parse time.
-- Add non-model status labels (`Needs Design`, `Josh`, `parked`, ...) alongside the model label freely; the hook only checks that exactly one *model* label is present, not that it's the only label. Apply the `Blocked` label ONLY for external, non-GitHub blockers (credentials, vendor delays, assets from Josh, physical prerequisites; web-jam-tools#725).
+- Add non-model status labels (`Needs Design`, `Josh`, ...) alongside the model labels freely; the shared check applies the tier-order design to the model labels. A `Josh` manual step may carry no model label. Apply the `Blocked` label ONLY for external, non-GitHub blockers (credentials, vendor delays, assets from Josh, physical prerequisites; web-jam-tools#725).
 - Set native `Priority` field (`Urgent`, `High`, `Medium`, `Low`) via `scripts/create-issue.ts --priority <Level>`.
 - Attach parent issue link via `scripts/create-issue.ts --parent <parent_issue_number>`.
 - Pass your own tool and model as `--author "<tool> — <model>"` (for example `--author "Claude Code — Opus"` or `--author "agy — Gemini Flash"`) on every `deno task create-issue` call, and on every `deno task edit-issue` call that replaces the body with `--body` or `--body-file`. The task checks the author against the author roster in `scripts/create-draft-pr.sh` (the same check `create-draft-pr.sh` and `deno task post-pr-comment` run) and ends the body with one footer line, `🤖 Authored by <tool> — <model>`, naming the model that wrote the content. A missing author, one not on the roster, or a roster check that cannot run refuses the call and files or edits nothing. The footer names who wrote the content, so after you rewrite a body it names you in place of the earlier author. A raw `gh issue create` or a connector `issue_write` create is denied by the issue-create hook unless its body already ends with that footer, so file through `deno task create-issue`.
@@ -310,6 +327,32 @@ Every artifact Josh reads — issue **title AND body**, PR **title AND descripti
 - Before handing an issue to a subagent, re-read its body and confirm it matches the current decision; if it doesn't, fix the body FIRST, then dispatch.
 
 **Origin (2026-07-29, the milestone migration):** the design moved topics from a native `Area` issue field to Milestones. Opus amended the design via a comment and renamed WebJamApps/web-jam-tools#301, but left the issue BODY still specifying "read the native `Area` field" with `field.Area:` search qualifiers and an acceptance criterion "correctly derives Area from the native Area field". Josh: *"we decided on Milestone this is NOT ACCURATE !"* The body was then rewritten. Same session, same root defect: relying on a supplement instead of correcting the source.
+
+## Rules moved from AGENTS.md
+
+These rules apply to this skill's kind of work only, so they live here instead of in the
+always-loaded `AGENTS.md`.
+
+- **Native Issue Field Updates & Issue Creation**: When updating native issue fields or
+  relationships in GitHub:
+  - **Priority Field**: Set via GraphQL mutation
+    `updateIssueFieldValue(input: { issueId, issueField: { fieldId: "IFSS_kgDOADumRA", singleSelectOptionId } })`.
+    Option global node IDs for `WebJamApps`: Urgent (`IFSSO_kgDOAGhNuA`), High (`IFSSO_kgDOAGhNuQ`),
+    Medium (`IFSSO_kgDOAGhNug`), Low (`IFSSO_kgDOAGhNuw`).
+  - **Type Field**: Set via GraphQL mutation `updateIssue(input: { id: issueId, issueTypeId })` with
+    `issueTypeId` resolved from `repository.issueTypes`.
+  - **Parent Issue Link**: Set via GraphQL mutation
+    `addSubIssue(input: { issueId: parentNodeId, subIssueId: childNodeId })`.
+  - **Helper Script**: Always use `scripts/create-issue.ts` (or `deno task create-issue`), which
+    automates creation, labels, milestone, native Type, Priority, parent link, and attribute
+    verification in one place.
+
+  - **Manual Step Issue & Document Title Rule**: Never prefix issue titles or runbook document
+    titles with personal names (e.g. do NOT name an issue "Josh: ..."). Use professional,
+    action-oriented titles like `Manual verification: ...` or `Verification: ...`. Ownership and
+    responsibility are designated exclusively by the `Josh` label or assignees, never by embedding a
+    personal name in the issue or document title.
+
 
 ## Description Detail & Triggers
 

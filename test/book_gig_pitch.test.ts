@@ -1,16 +1,31 @@
-// test/book_gig_pitch.test.ts — Unit tests for /book-gig pitch stage resolution and rendering
-
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import {
+  DEFAULT_TEMPLATES,
   detectConversationContext,
   formatNextGigDate,
+  renderCustomHtml,
   renderPitch,
+  renderPitchesFromBackend,
+  resolveConversationIntro,
   resolveIntroHtml,
   resolveVenueStage,
   synthesizeCustomBodyHook,
   validateVoiceRules,
+  verificationOptionsFromTweaks,
+  verifyBatchAgainstTemplates,
 } from "../src/book-gig/pitch.ts";
-import type { CandidateVenue, EmailTemplate, TargetWeekend } from "../src/book-gig/types.ts";
+import {
+  BatchDispatchError,
+  computeDraftFingerprint,
+  dispatchBatchOutreach,
+} from "../src/book-gig/outreach_api.ts";
+import { Gate2ReviewSession } from "../src/book-gig/gate2.ts";
+import type {
+  CandidateVenue,
+  EmailTemplate,
+  PitchEmail,
+  TargetWeekend,
+} from "../src/book-gig/types.ts";
 
 Deno.test("resolveVenueStage: resolves to cold when relationshipStage is set but no linked past gig exists", () => {
   // Venue with relationshipStage: "returning" but reason.lastGigDate unset
@@ -111,45 +126,110 @@ Deno.test("resolveVenueStage: resolves to cold by default when neither past gig 
   assertEquals(resolveVenueStage(venue), "cold");
 });
 
-Deno.test("detectConversationContext: detects phone, in-person, general, or null context cleanly", () => {
-  // Phone conversation
+Deno.test("detectConversationContext: selects opener from touches and ignores notes words (D-68, #995)", () => {
+  // 1. Venue with a call touch (phone opener)
   assertEquals(
     detectConversationContext({
-      _id: "v_phone",
-      name: "Phone Venue",
-      contactNotes: "Spoke with manager on phone call last Tuesday",
+      _id: "v_call_touch",
+      name: "Call Venue",
+      touches: [{ type: "call", date: "2026-05-09" }],
     }),
     "phone",
   );
 
-  // In-person conversation
+  // 2. Venue with a visit touch (in-person opener)
   assertEquals(
     detectConversationContext({
-      _id: "v_inperson",
-      name: "In Person Venue",
-      bookingNotes: "Connected in person at the brewery",
+      _id: "v_visit_touch",
+      name: "Visit Venue",
+      touches: [{ type: "visit", date: "2026-05-09" }],
     }),
     "in-person",
   );
 
-  // General conversation
+  // 3. Venue with neither touch type but notes text containing "called" or "phone"
+  // (Hamlet Vineyards defect regression: legacy metadata or notes text must NOT select conversation opener)
   assertEquals(
     detectConversationContext({
-      _id: "v_gen",
-      name: "General Conversation Venue",
-      priorContactNotes: "Had an earlier conversation about fall music dates",
-    }),
-    "general",
-  );
-
-  // Phone number label only (not a conversation)
-  assertEquals(
-    detectConversationContext({
-      _id: "v_num",
-      name: "Number Venue",
-      notes: "Phone: (540) 555-1234. Nice outdoor patio.",
+      _id: "v_hamlet_vineyards",
+      name: "Hamlet Vineyards",
+      notes: "Date called: 2026-05-09. Spoke with manager on phone.",
+      contactNotes: "Called Dave to check fall availability",
+      bookingNotes: "Phone: (540) 555-1234",
+      priorContactNotes: "visited the venue last Saturday",
+      touches: [],
     }),
     null,
+  );
+
+  // Also null when touches is undefined or carries non-conversation touch types
+  assertEquals(
+    detectConversationContext({
+      _id: "v_hamlet_vineyards_no_touches",
+      name: "Hamlet Vineyards",
+      notes: "Date called: 2026-05-09",
+    }),
+    null,
+  );
+  assertEquals(
+    detectConversationContext({
+      _id: "v_email_only",
+      name: "Email Only Venue",
+      notes: "called last month",
+      touches: [{ type: "email", date: "2026-07-22" }],
+    }),
+    null,
+  );
+
+  // 4. Venue with both a call and a visit touch:
+  // Resolves deterministically by most recent touch date
+  assertEquals(
+    detectConversationContext({
+      _id: "v_both_visit_newer",
+      name: "Both Touches - Visit Newer",
+      touches: [
+        { type: "call", date: "2026-04-10" },
+        { type: "visit", date: "2026-06-01" },
+      ],
+    }),
+    "in-person",
+  );
+
+  assertEquals(
+    detectConversationContext({
+      _id: "v_both_call_newer",
+      name: "Both Touches - Call Newer",
+      touches: [
+        { type: "visit", date: "2026-04-10" },
+        { type: "call", date: "2026-06-01" },
+      ],
+    }),
+    "phone",
+  );
+
+  // When dates are tied or absent, deterministically picks the latest recorded touch in the array
+  assertEquals(
+    detectConversationContext({
+      _id: "v_both_same_date",
+      name: "Both Touches - Same Date",
+      touches: [
+        { type: "call", date: "2026-05-01" },
+        { type: "visit", date: "2026-05-01" },
+      ],
+    }),
+    "in-person",
+  );
+
+  assertEquals(
+    detectConversationContext({
+      _id: "v_both_no_date",
+      name: "Both Touches - No Date",
+      touches: [
+        { type: "visit" },
+        { type: "call" },
+      ],
+    }),
+    "phone",
   );
 });
 
@@ -275,7 +355,7 @@ Deno.test("renderPitch: generates dynamic warm returning phrasing and subject li
   assertEquals(validateVoiceRules(pitch.body).valid, true);
 });
 
-Deno.test("renderPitch: generates tailored phone conversation intro when notes indicate spoken phone call", () => {
+Deno.test("renderPitch: generates tailored phone conversation intro when touches include call", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -294,6 +374,7 @@ Deno.test("renderPitch: generates tailored phone conversation intro when notes i
     email: "booking@samplepub.com",
     contactName: "Dave",
     contactNotes: "Spoke with manager on phone call last Tuesday about booking",
+    touches: [{ type: "call" }],
   };
 
   const pitch = renderPitch(venue, weekend);
@@ -307,7 +388,7 @@ Deno.test("renderPitch: generates tailored phone conversation intro when notes i
   assertEquals(validateVoiceRules(pitch.body).valid, true);
 });
 
-Deno.test("renderPitch: generates tailored in-person conversation intro when notes indicate connecting in person", () => {
+Deno.test("renderPitch: generates tailored in-person conversation intro when touches include visit", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -326,6 +407,7 @@ Deno.test("renderPitch: generates tailored in-person conversation intro when not
     email: "booking@samplepub.com",
     contactName: "Sarah",
     bookingNotes: "Connected in person at the pub last weekend",
+    touches: [{ type: "visit" }],
   };
 
   const pitch = renderPitch(venue, weekend);
@@ -365,7 +447,7 @@ Deno.test("renderPitch: falls back to cold template when no notes or prior gigs 
   assertEquals(validateVoiceRules(pitch.body).valid, true);
 });
 
-Deno.test("synthesizeCustomBodyHook: avoids duplicate conversation follow-up sentence when conversation intro is active", () => {
+Deno.test("synthesizeCustomBodyHook: notes do not produce conversation reference with or without conversation intro (D-68, #995)", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -382,7 +464,7 @@ Deno.test("synthesizeCustomBodyHook: avoids duplicate conversation follow-up sen
     notes: "Spoke with owner: booked through summer, follow up in October",
   };
 
-  // With conversation intro active: avoids duplicate "Following up on our earlier conversation"
+  // With conversation intro active: mentions checking back, no conversation follow-up sentence
   const hookWithIntro = synthesizeCustomBodyHook(venue, weekend, { hasConversationIntro: true });
   assertStringIncludes(
     hookWithIntro,
@@ -390,11 +472,15 @@ Deno.test("synthesizeCustomBodyHook: avoids duplicate conversation follow-up sen
   );
   assertEquals(hookWithIntro.includes("Following up on our earlier conversation"), false);
 
-  // Without conversation intro active: retains full follow-up hook
+  // Without conversation intro active: still mentions checking back, and does NOT claim earlier conversation
   const hookWithoutIntro = synthesizeCustomBodyHook(venue, weekend, {
     hasConversationIntro: false,
   });
-  assertStringIncludes(hookWithoutIntro, "Following up on our earlier conversation");
+  assertStringIncludes(
+    hookWithoutIntro,
+    "You mentioned checking back around this time for open dates",
+  );
+  assertEquals(hookWithoutIntro.includes("Following up on our earlier conversation"), false);
 });
 
 Deno.test("detectConversationContext: does not trigger in-person context for website or social media visits", () => {
@@ -425,12 +511,32 @@ Deno.test("detectConversationContext: does not trigger in-person context for web
     null,
   );
 
-  // But legitimate in-person visits DO trigger
+  // Notes mentioning in-person visits without touches do NOT trigger in-person
+  assertEquals(
+    detectConversationContext({
+      _id: "v_inperson_notes_only",
+      name: "Real Visit Venue",
+      notes: "visited the venue last Saturday",
+    }),
+    null,
+  );
+
+  assertEquals(
+    detectConversationContext({
+      _id: "v_inperson_notes_them",
+      name: "Them Visit Venue",
+      notes: "visited them to introduce our duo",
+    }),
+    null,
+  );
+
+  // But structured visit touches DO trigger in-person
   assertEquals(
     detectConversationContext({
       _id: "v_inperson_real",
       name: "Real Visit Venue",
       notes: "visited the venue last Saturday",
+      touches: [{ type: "visit" }],
     }),
     "in-person",
   );
@@ -440,6 +546,7 @@ Deno.test("detectConversationContext: does not trigger in-person context for web
       _id: "v_inperson_them",
       name: "Them Visit Venue",
       notes: "visited them to introduce our duo",
+      touches: [{ type: "visit" }],
     }),
     "in-person",
   );
@@ -511,6 +618,7 @@ Deno.test("renderPitch: combines returning stage with conversation context in in
     email: "booking@rivertaphouse.com",
     contactName: "Sam",
     contactNotes: "Called manager on the phone to check on fall availability",
+    touches: [{ type: "call" }],
     reason: { lastGigDate: "2025-08-10" },
   };
   const phonePitch = renderPitch(phoneVenue, weekend);
@@ -531,6 +639,7 @@ Deno.test("renderPitch: combines returning stage with conversation context in in
     email: "booking@rivertaphouse.com",
     contactName: "Sam",
     bookingNotes: "Stopped by and met in person to discuss dates",
+    touches: [{ type: "visit" }],
     reason: { lastGigDate: "2025-08-10" },
   };
   const inPersonPitch = renderPitch(inPersonVenue, weekend);
@@ -541,24 +650,27 @@ Deno.test("renderPitch: combines returning stage with conversation context in in
   );
   assertEquals(validateVoiceRules(inPersonPitch.body).valid, true);
 
-  // General + returning
-  const genVenue: CandidateVenue = {
-    _id: "v_ret_gen",
+  // Notes without touches + returning -> gets default returning opener, notes text never selects an opener (D-68)
+  const notesVenue: CandidateVenue = {
+    _id: "v_ret_notes",
     name: "River Taphouse",
     city: "Salem",
     usState: "VA",
     email: "booking@rivertaphouse.com",
     contactName: "Sam",
-    notes: "Had an earlier conversation about fall dates",
+    notes: "Had an earlier conversation about fall dates, called on phone last week",
     reason: { lastGigDate: "2025-08-10" },
   };
-  const genPitch = renderPitch(genVenue, weekend);
-  assertEquals(genPitch.templateStage, "returning");
+  const notesPitch = renderPitch(notesVenue, weekend);
+  assertEquals(notesPitch.templateStage, "returning");
   assertStringIncludes(
-    genPitch.body,
-    "Following up on our earlier conversation — it's always great playing for you guys at River Taphouse, and we'd love to return on October 16–18, 2026.",
+    notesPitch.body,
+    "It's Josh from \"Josh and Maria\" — Maria and I really enjoyed our last show at River Taphouse, and we'd love to come back.",
   );
-  assertEquals(validateVoiceRules(genPitch.body).valid, true);
+  assertEquals(notesPitch.body.includes("Following up on our earlier conversation"), false);
+  assertEquals(notesPitch.body.includes("Following up on our recent phone conversation"), false);
+  assertEquals(notesPitch.body.includes("Following up on connecting in person"), false);
+  assertEquals(validateVoiceRules(notesPitch.body).valid, true);
 });
 
 Deno.test("renderPitch: generates distinct type-appropriate returning phrasing for Originals and MidRangeCafeBar", () => {
@@ -738,3 +850,544 @@ Deno.test("resolveIntroHtml: upcoming gets the same conversation intros as cold,
     }
   }
 });
+
+Deno.test("renderPitch: notes mentioning spoke with, contacted, or 2027 do not produce conversation reference without structured touches", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  // 1. Spoke with manager in notes, but empty touches[] -> no conversation reference
+  const spokeVenue: CandidateVenue = {
+    _id: "v_spoke_notes",
+    name: "Spoke Venue",
+    email: "booking@spokevenue.com",
+    contactName: "Dave",
+    notes: "Spoke with manager about live music dates",
+    touches: [],
+  };
+  const spokePitch = renderPitch(spokeVenue, weekend);
+  assertEquals(spokePitch.body.includes("Following up on our earlier conversation"), false);
+  assertEquals(spokePitch.body.includes("Following up on our recent phone conversation"), false);
+  assertEquals(spokePitch.body.includes("Following up on connecting in person"), false);
+  assertEquals(validateVoiceRules(spokePitch.body).valid, true);
+
+  // 2. Follow up / 2027 in notes, empty touches[] -> mentions checking back, but NO conversation reference
+  const followUpVenue: CandidateVenue = {
+    _id: "v_followup_notes",
+    name: "Followup Venue",
+    email: "booking@followup.com",
+    contactName: "Sarah",
+    notes: "Follow up in 2027; booked through end of year",
+    touches: [],
+  };
+  const followUpPitch = renderPitch(followUpVenue, weekend);
+  assertStringIncludes(
+    followUpPitch.body,
+    "You mentioned checking back around this time for open dates — we'd love to see if we can get on the calendar for October 16–18, 2026.",
+  );
+  assertEquals(followUpPitch.body.includes("Following up on our earlier conversation"), false);
+  assertEquals(followUpPitch.body.includes("Following up on our recent phone conversation"), false);
+  assertEquals(followUpPitch.body.includes("Following up on connecting in person"), false);
+  assertEquals(validateVoiceRules(followUpPitch.body).valid, true);
+
+  // 3. Exact Hamlet Vineyards regression: legacy "Date called:" note and email exchange, empty touches[]
+  const hamletVenue: CandidateVenue = {
+    _id: "v_hamlet_regression",
+    name: "Hamlet Vineyards",
+    email: "va@hamletvineyards.com",
+    contactName: "Liza Crowder",
+    notes:
+      "Type of gig: Vineyard\nComments: Sent pitch email regarding Sunday afternoons 2026-05-09\nStatus (sheet): [S]\nDate called: 2026-05-09\nNotes: Sent pitch email regarding Sunday afternoons to va@hamletvineyards.com on 2026-05-09.\n\n[2026-07-22] Liza Crowder: 2026 music calendar is fully booked. Reconnect for 2027 season.",
+    touches: [],
+  };
+  const hamletPitch = renderPitch(hamletVenue, weekend);
+  assertEquals(hamletPitch.body.includes("Following up on our earlier conversation"), false);
+  assertEquals(hamletPitch.body.includes("Following up on our recent phone conversation"), false);
+  assertEquals(hamletPitch.body.includes("Following up on connecting in person"), false);
+  assertEquals(validateVoiceRules(hamletPitch.body).valid, true);
+});
+
+Deno.test("renderPitchesFromBackend: forwards touch-based conversation opener as customIntro to canonical preview renderer", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const capturedRequests: Array<{ url: string; query: Record<string, string> }> = [];
+
+  const mockFetch: typeof fetch = (input) => {
+    const urlStr = typeof input === "string" ? input : (input as Request).url;
+    const urlObj = new URL(urlStr);
+    const query: Record<string, string> = {};
+    for (const [k, v] of urlObj.searchParams.entries()) {
+      query[k] = v;
+    }
+    capturedRequests.push({ url: urlStr, query });
+
+    const venueIds = (query.venueIds || "").split(",").filter(Boolean);
+    const results = venueIds.map((id) => {
+      let bodyHtml = "<p>Hi there,</p><p>Acoustic Duo</p>";
+      if (query.customIntro) {
+        bodyHtml = renderCustomHtml(query.customIntro);
+      }
+      return {
+        venueId: id,
+        venueName: `Venue ${id}`,
+        subject:
+          `Performance Inquiry: Josh and Maria — Acoustic Duo for October 2026 — Venue ${id}`,
+        body: bodyHtml,
+      };
+    });
+
+    return Promise.resolve(
+      new Response(JSON.stringify(results), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  };
+
+  const callVenue: CandidateVenue = {
+    _id: "venue-call",
+    name: "Call Brewery",
+    email: "booking@callbrewery.com",
+    contactName: "Dave",
+    touches: [{ type: "call" }],
+  };
+
+  const visitVenue: CandidateVenue = {
+    _id: "venue-visit",
+    name: "Visit Tavern",
+    email: "booking@visittavern.com",
+    contactName: "Sarah",
+    touches: [{ type: "visit" }],
+  };
+
+  const noTouchVenue1: CandidateVenue = {
+    _id: "venue-notouch-1",
+    name: "Quiet Pub",
+    email: "booking@quietpub.com",
+    notes: "Date called: 2026-05-09. Spoke with manager on phone.",
+    touches: [],
+  };
+
+  const noTouchVenue2: CandidateVenue = {
+    _id: "venue-notouch-2",
+    name: "Still Pub",
+    email: "booking@stillpub.com",
+    touches: [],
+  };
+
+  const pitches = await renderPitchesFromBackend(
+    [callVenue, visitVenue, noTouchVenue1, noTouchVenue2],
+    weekend,
+    {},
+    mockFetch,
+  );
+
+  assertEquals(pitches.length, 4);
+
+  // 1. Call venue gets its own preview request with the phone opener forwarded as customIntro
+  const callReq = capturedRequests.find((r) => r.query.venueIds === "venue-call");
+  assertEquals(Boolean(callReq), true);
+  assertEquals(callReq!.query.customIntro?.includes("Hi Dave,"), true);
+  assertEquals(
+    callReq!.query.customIntro?.includes("Following up on our recent phone conversation"),
+    true,
+  );
+  assertEquals(
+    callReq!.query.customIntro?.includes("acoustic set at Call Brewery"),
+    true,
+  );
+
+  // 2. Visit venue gets its own preview request with the in-person opener forwarded as customIntro
+  const visitReq = capturedRequests.find((r) => r.query.venueIds === "venue-visit");
+  assertEquals(Boolean(visitReq), true);
+  assertEquals(visitReq!.query.customIntro?.includes("Hi Sarah,"), true);
+  assertEquals(
+    visitReq!.query.customIntro?.includes("Following up on connecting in person"),
+    true,
+  );
+  assertEquals(
+    visitReq!.query.customIntro?.includes("acoustic set at Visit Tavern"),
+    true,
+  );
+
+  // 3. No-touch venues are batched together with no customIntro forwarded
+  const noTouchReq = capturedRequests.find((r) =>
+    r.query.venueIds?.includes("venue-notouch-1") && r.query.venueIds?.includes("venue-notouch-2")
+  );
+  assertEquals(Boolean(noTouchReq), true);
+  assertEquals(noTouchReq!.query.customIntro, undefined);
+
+  // 4. Rendered pitch email objects preserve the phone/visit opener in body and fields
+  const callPitch = pitches.find((p) => p.venueId === "venue-call");
+  assertStringIncludes(callPitch!.body, "Following up on our recent phone conversation");
+  assertEquals(
+    callPitch?.customIntro?.includes("Following up on our recent phone conversation"),
+    true,
+  );
+
+  const visitPitch = pitches.find((p) => p.venueId === "venue-visit");
+  assertStringIncludes(visitPitch!.body, "Following up on connecting in person");
+  assertEquals(visitPitch?.customIntro?.includes("Following up on connecting in person"), true);
+
+  const noTouchPitch = pitches.find((p) => p.venueId === "venue-notouch-1");
+  assertEquals(noTouchPitch!.body.includes("Following up on our recent phone conversation"), false);
+  assertEquals(noTouchPitch!.body.includes("Following up on connecting in person"), false);
+  assertEquals(noTouchPitch!.body.includes("Following up on our earlier conversation"), false);
+  assertEquals(noTouchPitch?.customIntro, undefined);
+
+  // 5. Verification options accurately resolve customIntro for call/visit venues
+  const vOpts = verificationOptionsFromTweaks(
+    [callVenue, visitVenue, noTouchVenue1, noTouchVenue2],
+    undefined,
+    weekend,
+    DEFAULT_TEMPLATES,
+  );
+  assertEquals(Boolean(vOpts["venue-call"]?.customIntro), true);
+  assertEquals(Boolean(vOpts["venue-visit"]?.customIntro), true);
+  assertEquals(vOpts["venue-notouch-1"], undefined);
+  assertEquals(vOpts["venue-notouch-2"], undefined);
+});
+
+Deno.test("resolveConversationIntro: returns plain-text intro for call and visit, and undefined when no context", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const callVenue: CandidateVenue = {
+    _id: "v_call_direct",
+    name: "Call Brewery",
+    contactName: "Dave",
+    touches: [{ type: "call" }],
+  };
+  const callIntro = resolveConversationIntro(callVenue, weekend);
+  assertEquals(
+    callIntro,
+    "Hi Dave,\n\nFollowing up on our recent phone conversation — wanted to check if October 16–18, 2026 might work for an acoustic set at Call Brewery.",
+  );
+
+  const visitVenue: CandidateVenue = {
+    _id: "v_visit_direct",
+    name: "Visit Tavern",
+    contactName: "Sarah",
+    touches: [{ type: "visit" }],
+  };
+  const visitIntro = resolveConversationIntro(visitVenue, weekend);
+  assertEquals(
+    visitIntro,
+    "Hi Sarah,\n\nFollowing up on connecting in person — wanted to check if October 16–18, 2026 might work for an acoustic set at Visit Tavern.",
+  );
+
+  const noTouchVenue: CandidateVenue = {
+    _id: "v_none_direct",
+    name: "Plain Pub",
+    touches: [],
+  };
+  assertEquals(resolveConversationIntro(noTouchVenue, weekend), undefined);
+});
+
+Deno.test("renderPitchesFromBackend: returning call venue with apostrophes and ampersands passes template verification with escaped HTML", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const returningVenueWithAmp: CandidateVenue = {
+    _id: "venue-mac-bobs",
+    name: "Mac & Bob's Restaurant",
+    email: "booking@macandbobs.com",
+    contactName: "Dave",
+    touches: [{ type: "call" }],
+    reason: { lastGigDate: "2026-01-10" },
+    venueType: "PubFestivalBrewery",
+  };
+
+  // Mock backend GET /outreach/preview:
+  // Mirrors buildPitchEmail / renderCustomHtml which escapes & to &amp; and ' to &#39;.
+  const mockFetch: typeof fetch = (input) => {
+    const urlStr = typeof input === "string" ? input : (input as Request).url;
+    const urlObj = new URL(urlStr);
+    const customIntro = urlObj.searchParams.get("customIntro") || "";
+    const renderedIntro = renderCustomHtml(customIntro);
+
+    const template = DEFAULT_TEMPLATES.find(
+      (t) => t.type === "PubFestivalBrewery" && t.stage === "returning",
+    )!;
+    const bodyResolved = template.bodyHtml!
+      .replaceAll("[Booking Period]", "October 2026")
+      .replaceAll("[Target Dates]", "October 16–18, 2026")
+      .replace("[Custom Body]\n", "");
+    const body = `${renderedIntro}\n${bodyResolved}`;
+
+    const results = [
+      {
+        venueId: "venue-mac-bobs",
+        venueName: "Mac & Bob's Restaurant",
+        subject: "Back at Mac & Bob's Restaurant this October 2026? — Josh & Maria",
+        body,
+      },
+    ];
+
+    return Promise.resolve(
+      new Response(JSON.stringify(results), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  };
+
+  const pitches = await renderPitchesFromBackend(
+    [returningVenueWithAmp],
+    weekend,
+    { templates: DEFAULT_TEMPLATES },
+    mockFetch,
+  );
+
+  assertEquals(pitches.length, 1);
+  const pitch = pitches[0];
+  assertEquals(pitch.customIntro !== undefined, true);
+  assertStringIncludes(pitch.customIntro!, "Following up on our recent phone conversation");
+  // Backend preview rendered with escaped it&#39;s, we&#39;d, &amp;
+  assertStringIncludes(pitch.htmlBody || "", "it&#39;s");
+  assertStringIncludes(pitch.htmlBody || "", "we&#39;d");
+  assertStringIncludes(pitch.htmlBody || "", "Mac &amp; Bob&#39;s Restaurant");
+
+  // 1. With effective generated intros passed to verificationOptionsFromTweaks:
+  const verificationOpts = verificationOptionsFromTweaks(
+    [returningVenueWithAmp],
+    undefined,
+    weekend,
+    DEFAULT_TEMPLATES,
+  );
+  assertEquals(Boolean(verificationOpts["venue-mac-bobs"]?.customIntro), true);
+
+  const verificationResult = verifyBatchAgainstTemplates(
+    pitches,
+    [returningVenueWithAmp],
+    weekend,
+    DEFAULT_TEMPLATES,
+    verificationOpts,
+  );
+  assertEquals(verificationResult.valid, true);
+  assertEquals(verificationResult.violations.length, 0);
+
+  // 2. Proving the regression: without weekend passed (old behavior omitting customIntro),
+  // template verification fails due to unescaped HTML comparison.
+  const oldOpts = verificationOptionsFromTweaks([returningVenueWithAmp]);
+  assertEquals(oldOpts["venue-mac-bobs"], undefined);
+  const failedResult = verifyBatchAgainstTemplates(
+    pitches,
+    [returningVenueWithAmp],
+    weekend,
+    DEFAULT_TEMPLATES,
+    oldOpts,
+  );
+  assertEquals(failedResult.valid, false);
+  assertEquals(failedResult.violations.length, 1);
+  assertStringIncludes(
+    failedResult.violations[0].reason,
+    "Rendered body diverges from stored template",
+  );
+});
+
+// The server requires the whole remaining Gate 1/Gate 2 set before any send,
+// then checks each rendered fingerprint using the inputs persisted at preflight.
+for (const mutation of ["none", "missing-opener", "changed-body", "venue-subset"]) {
+  Deno.test(`mixed-venue preview/approval/dispatch contract: ${mutation}`, async () => {
+    const weekend: TargetWeekend = {
+      start: "2026-10-16",
+      end: "2026-10-18",
+      rawText: "Oct 16-18 2026",
+      label: "October 16–18, 2026",
+      year: 2026,
+      month: 10,
+      days: [16, 17, 18],
+    };
+    const candidates: CandidateVenue[] = [
+      { _id: "call", name: "Call Brewery", contactName: "Dave", touches: [{ type: "call" }] },
+      { _id: "visit", name: "Visit Tavern", contactName: "Sarah", touches: [{ type: "visit" }] },
+      { _id: "standard", name: "Standard Venue", notes: "Date called: 2026-05-09", touches: [] },
+      { _id: "tweak", name: "Tweaked Venue", touches: [] },
+    ].map((c) => ({ ...c, email: c._id + "@example.com", venueType: "PubFestivalBrewery" }));
+    const venueIds = candidates.map((c) => c._id!);
+    const approved = new Map<string, string>();
+    const preflightCalls: Record<string, unknown>[] = [];
+    const sendCalls: Record<string, unknown>[] = [];
+    const persisted = new Map<string, PitchEmail>();
+    const sent: string[] = [];
+    const reply = (data: unknown, status = 200) =>
+      Promise.resolve(new Response(JSON.stringify(data), { status }));
+    const render = (
+      venueId: string,
+      slots: { customIntro?: string; customBody?: string } = {},
+    ): PitchEmail => {
+      const venue = candidates.find((c) => c._id === venueId)!;
+      // Simulate the server's custom-slot renderer, which does not infer conversation
+      // context. The companion backend regression exercises the real renderer and mailer.
+      const intro = slots.customIntro
+        ? renderCustomHtml(slots.customIntro)
+        : `<p>Hi ${venue.contactName || "there"},</p><p>Default opener.</p>`;
+      const htmlBody = `${intro}\n<p>Booking for ${weekend.label}.</p>\n${
+        slots.customBody ? renderCustomHtml(slots.customBody) : ""
+      }`;
+      return {
+        venueId,
+        venueName: venue.name,
+        to: venue.email!,
+        subject: `Inquiry: ${venue.name}`,
+        body: htmlBody,
+        htmlBody,
+      };
+    };
+    const fingerprint = (pitch: PitchEmail) =>
+      computeDraftFingerprint({ subject: pitch.subject, body: pitch.htmlBody! });
+
+    const mockFetch: typeof fetch = (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/outreach/preview") {
+        const slots = {
+          customIntro: url.searchParams.get("customIntro") || undefined,
+          customBody: url.searchParams.get("customBody") || undefined,
+        };
+        return reply(
+          url.searchParams.get("venueIds")!.split(",").map((id) => {
+            const pitch = render(id, slots);
+            return {
+              venueId: id,
+              venueName: pitch.venueName,
+              subject: pitch.subject,
+              body: pitch.htmlBody,
+            };
+          }),
+        );
+      }
+      if (url.pathname === "/outreach/approval/draft-fingerprints") {
+        if (!init?.method || init.method === "GET") {
+          return reply({ message: "No approval found" }, 404);
+        }
+        const body = JSON.parse(init.body as string);
+        for (const item of body.draftFingerprints) approved.set(item.venueId, item.fingerprint);
+        return reply({ ...body, _id: "gate2-record" });
+      }
+      if (url.pathname === "/outreach/batch/preflight") {
+        const body = JSON.parse(init?.body as string);
+        preflightCalls.push(body);
+        const actualSet = new Set(body.venueIds);
+        if (actualSet.size !== venueIds.length || !venueIds.every((id) => actualSet.has(id))) {
+          return reply({ message: "Gate 1 venue-set approval does not match batch venueIds" }, 403);
+        }
+        if (approved.size !== actualSet.size) {
+          return reply({ message: "Gate 2 venue set mismatch" }, 403);
+        }
+        const customizations: Array<
+          { venueId: string; customIntro?: string; customBody?: string }
+        > = body.venueCustomizations || [];
+        for (const id of body.venueIds) {
+          const slots = customizations.find((c) => c.venueId === id) || {};
+          const pitch = render(id, slots);
+          if (fingerprint(pitch) !== approved.get(id)) {
+            return reply({ message: "Gate 2 draft fingerprint mismatch: " + id }, 403);
+          }
+          persisted.set(id, pitch);
+        }
+        return reply({ dispatchId: "mixed-dispatch", venueCount: venueIds.length });
+      }
+      if (url.pathname === "/outreach/batch") {
+        const body = JSON.parse(init?.body as string);
+        sendCalls.push(body);
+        assertEquals(body, { dispatchId: "mixed-dispatch" });
+        // Simulate a time-limited send: all copy has passed preflight before the first call.
+        assertEquals(persisted.size, venueIds.length);
+        const id = venueIds[sent.length];
+        assertEquals(fingerprint(persisted.get(id)!), approved.get(id));
+        sent.push(id);
+        return reply({
+          sent: 1,
+          remaining: venueIds.length - sent.length,
+          skipped: [],
+          records: [{ venueId: id }],
+        });
+      }
+      throw new Error("Unexpected request: " + url);
+    };
+    const config = { backendUrl: "https://test.local", token: "test-token" };
+    const pitches = await renderPitchesFromBackend(candidates, weekend, {
+      ...config,
+      tweaks: [{ venueId: "tweak", customBody: "My son lives nearby." }],
+    }, mockFetch);
+    assertEquals(pitches.length, 4);
+    assertStringIncludes(pitches[0].customIntro!, "phone conversation");
+    assertStringIncludes(pitches[1].customIntro!, "connecting in person");
+    assertEquals(pitches[2].customIntro, undefined);
+    assertEquals(pitches[3].customBody, "My son lives nearby.");
+    const session = new Gate2ReviewSession({
+      weekend,
+      candidates,
+      pitches,
+      fetchFn: mockFetch,
+      backendConfig: config,
+    });
+    await session.approveWholeBatch({
+      approver: "Josh",
+      batchId: "mixed-batch",
+      explicitApproval: true,
+    });
+    assertEquals(approved.size, 4);
+
+    if (mutation === "missing-opener") pitches[1].customIntro = undefined;
+    if (mutation === "changed-body") pitches[3].customBody = "Changed after approval.";
+    const options = {
+      ...config,
+      weekend,
+      venueIds: mutation === "venue-subset" ? venueIds.slice(0, 2) : venueIds,
+      pitches,
+    };
+    if (mutation === "none") {
+      const result = await dispatchBatchOutreach(options, mockFetch);
+      assertEquals(result.sent, 4);
+      assertEquals(sent, venueIds);
+      assertEquals(sendCalls.length, 4);
+    } else {
+      const err = await assertRejects(
+        () => dispatchBatchOutreach(options, mockFetch),
+        BatchDispatchError,
+      );
+      assertEquals(err.stage, "preflight");
+      assertEquals(err.partialResult.sent, 0);
+      assertEquals(sendCalls.length, 0);
+    }
+    assertEquals(preflightCalls.length, 1);
+    if (mutation !== "venue-subset") assertEquals(preflightCalls[0].venueIds, venueIds);
+    if (mutation === "none") {
+      assertEquals(preflightCalls[0].venueCustomizations, [
+        { venueId: "call", customIntro: pitches[0].customIntro },
+        { venueId: "visit", customIntro: pitches[1].customIntro },
+        { venueId: "tweak", customBody: pitches[3].customBody },
+      ]);
+    }
+  });
+}

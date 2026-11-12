@@ -11,19 +11,4 @@
 set -euo pipefail
 
 HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-
-DENO_BIN="${DENO_BIN:-}"
-if [ -z "$DENO_BIN" ]; then
-  if command -v deno >/dev/null 2>&1; then
-    DENO_BIN="deno"
-  elif [ -x "$HOME/.deno/bin/deno" ]; then
-    DENO_BIN="$HOME/.deno/bin/deno"
-  elif [ -x "/usr/local/bin/deno" ]; then
-    DENO_BIN="/usr/local/bin/deno"
-  else
-    DENO_BIN="deno"
-  fi
-fi
-
-"$DENO_BIN" run --allow-read --allow-env "$HOOK_DIR/lib/check_permission_wildcard_drift.ts" "$@" || exit 0
-exit 0
+exec "$HOOK_DIR/lib/run_hook.sh" --group workflow --name permission-wildcard-drift-reminder deno run --allow-read --allow-env "$HOOK_DIR/lib/check_permission_wildcard_drift.ts" "$@"

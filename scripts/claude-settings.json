@@ -1,4 +1,7 @@
 {
+  "modelSettings": {
+    "claude-haiku-5-5": { "effortLevel": "high" }
+  },
   "hooks": {
     "Notification": [
       {
@@ -26,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "deno run --allow-read --allow-env $HOME/WebJamApps/web-jam-tools/scripts/session-load-report.ts"
+            "command": "deno run --allow-read --allow-env --allow-run=git $HOME/WebJamApps/web-jam-tools/scripts/session-load-report.ts"
           }
         ]
       }

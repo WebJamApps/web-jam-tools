@@ -1,6 +1,6 @@
 ---
 name: drive-cleanup
-description: Analyze Google Drive for duplicates, misplaced files, and phone-authored bridge files awaiting merge, reporting findings in a table and waiting for approval before executing. Use when cleaning up Google Drive or when a session-start drive cleanup reminder appears.
+description: Analyze Google Drive for duplicates, misplaced files, and phone-authored bridge files awaiting merge, reporting findings in a table and waiting for approval before executing. Use when cleaning up Google Drive.
 ---
 
 # drive-cleanup
@@ -19,7 +19,7 @@ Authoritative storage split:
 
 The Drive originals of `claude-opus-tasks.txt` were trashed 2026-05-21 — they had no readers. The Drive `MariaParty/` folder was also trashed 2026-05-21 (project complete; no Sonnet involvement). Only the 4-file JMM mirror remains as a Drive snapshot — phone Sonnet consults it. (Cross-AI rules moved from the old `SHARED.md` Drive snapshot to `web-jam-tools/docs/cross-ai-rules.md`, read directly from GitHub — no Drive mirror needed.)
 
-## Phase 1 — Analyze (deterministic pre-pass first; Haiku only for the remainder)
+## Phase 1 — Analyze (deterministic pre-pass first; cheap tier (Haiku / Flash) only for the remainder)
 
 **Step 1 — run the deterministic rclone pre-pass (no model, no MCP calls):**
 
@@ -33,14 +33,18 @@ prints a report with a reconciliation line, a **Proposed actions** list (each wi
 exact `rclone` command), an **Ambiguous** list, and `### Status: CLEAN` or
 `ACTIONS_PROPOSED`. It is read-only — it proposes, never executes.
 
-- **If `Status: CLEAN`** → say `Drive is clean — no actions needed.`, write the stamp (see
-  **Triggering**), and **STOP**. Do NOT spawn a subagent and do NOT make a single
-  Drive API call. This is the zero-token path for clean days.
+- **If `Status: CLEAN`** → say `Drive is clean — no actions needed.`, and **STOP**. Do NOT spawn a
+  subagent and do NOT make a single Drive API call. This is the zero-token path for clean days.
 - **Otherwise** → Step 2, for the Ambiguous remainder only.
 
 **Step 2 — Classify ONLY the pre-pass's Ambiguous list:**
 
-Classify ambiguous items using a subagent or direct execution: on Claude Code, spawn via the `Agent` tool (`model: "haiku"`); on Antigravity, use `invoke_subagent`; on Codex, execute directly. Read file content via `rclone cat gdrive:"<path>"` to bucket
+Classify ambiguous items using a cheap subagent or direct execution:
+- **Claude Code surface:** `Agent` tool with `model: "haiku"`.
+- **Antigravity (`agy`) surface:** `invoke_subagent` with `Model: "flash"`.
+- **Codex surface:** execute directly.
+
+Read file content via `rclone cat gdrive:"<path>"` to bucket
 each one (canonical / known folder / finding / leave-alone), returns its verdicts as text,
 and **writes, edits, trashes, moves NOTHING**. The parent then assembles the **combined**
 Phase-2 table: the pre-pass's proposed actions (already exact, with `rclone` commands +
@@ -113,7 +117,7 @@ Lead with the Phase-1 **count reconciliation** line (every root item classified 
 
 End with explicit prompt: **"Approve these actions? Reply yes / no / specific numbers (e.g., 1,3)."**
 
-If Phase 1 found NOTHING, say exactly: `Drive is clean — no actions needed.` Do not proceed to Phase 3 — but still write the stamp file (see **Triggering**) so the daily reminder clears.
+If Phase 1 found NOTHING, say exactly: `Drive is clean — no actions needed.` Do not proceed to Phase 3.
 
 ## Phase 3 — Execute (only after explicit approval)
 
@@ -123,8 +127,10 @@ commands the pre-pass emitted** rather than remote Drive API calls — fewer
 round-trips, and the paths/IDs are already resolved. **Bridge-file text merges into the
 Dropbox queue files stay with the model** (queue lines must stay unambiguous and wrapped at
 120 cols — see the bridge steps below). If `gdrive:` is ever read-only, fall back to
-the Drive MCP tools for execution (on Claude Code, `mcp__google-drive__*`) and note it in the
-run summary.
+the Drive MCP tools for execution:
+- **Claude Code surface:** `mcp__google-drive__*`
+- **Antigravity (`agy`) surface:** Google Drive MCP tools (`call_mcp_tool` with `ServerName: "google-drive"`)
+and note it in the run summary.
 
 ### Bridge actions (`for-opus-*.txt`, legacy `claude-opus-tasks-*.txt`)
 
@@ -151,9 +157,13 @@ Workflow when detected:
 
 1. Download both: the root copy AND the folder copy.
 2. `diff` them to confirm the root copy is genuinely a revision (not an accidental re-upload of an older version).
-3. If the root copy is newer/revised: overwrite the folder copy with the root copy's content using `rclone copyto` (e.g. `rclone copyto gdrive:"<root-path>" gdrive:"<folder-path>"`).
+3. If the root copy is newer/revised: overwrite the folder copy with the root copy's content using `rclone copyto` (e.g. `rclone copyto gdrive:"<root-path>" gdrive:"<folder-path>"`). If executing via Drive MCP tools instead of rclone:
+   - **Claude Code surface:** `mcp__google-drive__updateTextFile` against the folder copy's file id.
+   - **Antigravity (`agy`) surface:** `call_mcp_tool` with `ServerName: "google-drive"`, updating the folder copy.
 4. Re-download the folder copy and verify the bytes match the root copy.
-5. Trash the root copy via `rclone delete --drive-use-trash gdrive:"<root-path>"`.
+5. Trash the root copy via `rclone delete --drive-use-trash gdrive:"<root-path>"`. If executing via Drive MCP tools instead of rclone:
+   - **Claude Code surface:** `mcp__google-drive__deleteItem` against the root copy's file id.
+   - **Antigravity (`agy`) surface:** `call_mcp_tool` with `ServerName: "google-drive"`, trashing the root copy.
 6. If the diff shows the root copy is OLDER than the folder copy (rare — would mean Sonnet uploaded a stale revision), surface to Josh; don't overwrite. The folder copy is authoritative when it's newer.
 
 Surface in Phase 2 as: `Sonnet re-upload of <filename>: root copy (modified <date>) vs folder copy (modified <date>) — propose update folder copy with root content + trash root.`
@@ -208,7 +218,7 @@ rclone copy /home/joshua/Dropbox/joshandmariamusic/JoshMariaMusic/ gdrive:JoshMa
 
 **Do not push other files from `Dropbox/joshandmariamusic/JoshMariaMusic/`** — only the 4 Sonnet-readable templates above are mirrored. The rest stays Dropbox-only.
 
-After all actions, post a short summary: what was done, what was declined, and any verify-failures that left files in their pre-action state. Include a "mirror: refreshed (or no-op)" line so Josh knows the templates are current. **Finally, write today's ISO date to `~/.claude/skills/drive-cleanup/last-run.txt`** (even if zero actions were approved) so the session-start reminder clears for the day.
+After all actions, post a short summary: what was done, what was declined, and any verify-failures that left files in their pre-action state. Include a "mirror: refreshed (or no-op)" line so Josh knows the templates are current.
 
 ## Hard rules
 
@@ -222,18 +232,8 @@ After all actions, post a short summary: what was done, what was declined, and a
 
 ## Triggering
 
-- **Reminder-only, never auto-run.** A `SessionStart` hook in `~/.claude/settings.json`
-  prints "Drive cleanup has not run today …" when the stamp file is missing or not today's
-  date. The hook NEVER invokes this skill — Josh starts it himself (same as /memory-cleanup).
-- **Stamp file:** after a completed run, write today's ISO date to
-  `~/.claude/skills/drive-cleanup/last-run.txt` — write it even on a zero-action / clean
-  run, so the reminder clears for the day. The local skill dir is the right home for
-  runtime state (handle-gmails / memory-cleanup precedent).
-- **Manual:** invoke via the Skill tool or just type `/drive-cleanup`.
-- The old **07:00 daily run is retired** (Josh's call 2026-06-12): the reminder + manual
-  invocation are the only triggers. If a scheduled routine for drive-cleanup ever turns up
-  (none in crontab or hooks as of 2026-06-12), show it to Josh and remove it with his OK.
-  Never create a headless run — Phase 2 needs his interactive approval.
+- **Manual only:** invoke via the Skill tool or just type `/drive-cleanup`. Never auto-runs.
+- The old **07:00 daily run is retired** (Josh's call 2026-06-12): manual invocation is the only trigger. If a scheduled routine for drive-cleanup ever turns up (none in crontab or hooks as of 2026-06-12), show it to Josh and remove it with his OK. Never create a headless run — Phase 2 needs his interactive approval.
 
 ## See also
 
@@ -243,4 +243,5 @@ After all actions, post a short summary: what was done, what was declined, and a
 
 ## Description Detail & Triggers
 
-Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a Haiku subagent then classifies only the ambiguous remainder. Invoke when the session-start reminder appears or Josh asks (or /drive-cleanup) — it does NOT auto-run.
+Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a subagent (Claude Code: Haiku; agy: Flash) then classifies only the ambiguous remainder. Invoke when Josh asks (or /drive-cleanup) — it does NOT auto-run.
+

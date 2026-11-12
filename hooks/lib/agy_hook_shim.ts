@@ -35,17 +35,13 @@
  *      has no `decision` field at all (verified by decoding the shipped agy
  *      binary — see `toAgyReply()` below and the issue that fixed this).
  *
- * HONESTY NOTE on field-name mapping: only `run_command` (agy's shell tool,
- * args `CommandLine`/`Cwd`) is independently verified against a live agy
- * probe (finding 3). agy is closed-source, so no other tool's arg names are
- * verifiable from source. hooks/lib/detect_human_only_credentials.ts already
- * carries best-effort fallback field names for an edit-like tool
- * (`TargetFile`, `CodeContent`, `ReplacementContent`, `ReplacementChunks`)
- * from earlier work (web-jam-tools#344) — this shim's `buildToolInput`
- * mirrors those same names so a hook reading either the Claude name or the
- * best-effort agy name finds the value either way. Anything not in that
- * short, documented set is passed through verbatim (identity), never
- * invented.
+ * Field-name evidence: `run_command` (`CommandLine`/`Cwd`) was verified by
+ * finding 3. The 2026-10-31 live probe recorded `edit_file`
+ * (`Path`/`Target`/`Replacement`) and `write_file` (`Path`/`Content`), as
+ * documented in the hooks design's "agy's file tools" section. Earlier
+ * `TargetFile`/`CodeContent`/`ReplacementContent`/`ReplacementChunks` names
+ * remain supported. Unmapped names and arguments pass through unchanged;
+ * recognition after a tool rename is separate work.
  */
 
 import {
@@ -67,7 +63,12 @@ export interface AgyPayload {
   artifactDirectoryPath?: string;
   workspacePaths?: string[];
   modelName?: string;
+  cwd?: string;
   error?: unknown;
+}
+
+function isAbsolutePath(p: string): boolean {
+  return p.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(p);
 }
 
 export const DEFAULT_RECORD_PATH = "/tmp/agy-hook-invocations.jsonl";
@@ -164,11 +165,27 @@ export async function recordInvocation(
 
 // VERIFIED (web-jam-tools#432 finding 3, measured 2026-08-07): agy's shell
 // tool is `run_command`; Claude Code's equivalent tool name is `Bash`.
+// VERIFIED (web-jam-tools#1055 / web-jam-tools#1057, measured 2026-10-12): agy
+// native file-edit and GitHub MCP issue-write tools.
 const TOOL_NAME_MAP: Record<string, string> = {
   run_command: "Bash",
+  edit_file: "Edit",
+  replace_file_content: "Edit",
+  multi_replace_file_content: "Edit",
+  write_file: "Write",
+  write_to_file: "Write",
+  issue_write: "mcp__github__issue_write",
+  sub_issue_write: "mcp__github__sub_issue_write",
+  mcp_github_issue_write: "mcp__github__issue_write",
+  mcp_github_sub_issue_write: "mcp__github__sub_issue_write",
 };
 
-export function mapAgyToolName(name: string): string {
+export function mapAgyToolName(name: string, args?: Record<string, unknown>): string {
+  if (name === "call_mcp_tool" && args && typeof args.ToolName === "string") {
+    if (args.ToolName in TOOL_NAME_MAP) {
+      return TOOL_NAME_MAP[args.ToolName];
+    }
+  }
   return TOOL_NAME_MAP[name] ?? name;
 }
 
@@ -190,21 +207,43 @@ export function matcherMatches(matcher: string, toolName: string): boolean {
 
 export function buildToolInput(args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { ...args };
+  if (
+    args.Arguments !== null &&
+    typeof args.Arguments === "object" &&
+    !Array.isArray(args.Arguments)
+  ) {
+    Object.assign(out, args.Arguments);
+  } else if (typeof args.Arguments === "string") {
+    try {
+      const parsed = JSON.parse(args.Arguments);
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        Object.assign(out, parsed);
+      }
+    } catch {
+      // Unparseable JSON string in Arguments: leave out untouched
+    }
+  }
   if (out.command === undefined && args.CommandLine !== undefined) {
     out.command = args.CommandLine;
   }
   if (out.cwd === undefined && args.Cwd !== undefined) {
     out.cwd = args.Cwd;
   }
-  if (out.file_path === undefined && args.TargetFile !== undefined) {
-    out.file_path = args.TargetFile;
+  const filePath = args.TargetFile ?? args.Path;
+  if (out.file_path === undefined && filePath !== undefined) {
+    out.file_path = filePath;
   }
-  if (out.content === undefined) {
-    if (args.CodeContent !== undefined) {
-      out.content = args.CodeContent;
-    } else if (args.ReplacementContent !== undefined) {
-      out.content = args.ReplacementContent;
-    }
+  const oldString = args.TargetContent ?? args.Target;
+  if (out.old_string === undefined && oldString !== undefined) {
+    out.old_string = oldString;
+  }
+  const newString = args.ReplacementContent ?? args.Replacement;
+  if (out.new_string === undefined && newString !== undefined) {
+    out.new_string = newString;
+  }
+  const content = args.CodeContent ?? args.Content ?? newString;
+  if (out.content === undefined && content !== undefined) {
+    out.content = content;
   }
   return out;
 }
@@ -252,6 +291,7 @@ export function recoverPostToolOutput(
 export interface NormalizedPayload {
   tool_name: string;
   tool_input: Record<string, unknown>;
+  cwd?: string;
   transcript_path?: string;
   tool_response?: { stdout: string };
   // Extra, non-Claude fields preserved verbatim so agy-native hooks (e.g.
@@ -265,17 +305,73 @@ export interface NormalizedPayload {
   workspacePaths?: string[];
 }
 
+/**
+ * Resolves the authoritative working directory context for file guards (such
+ * as block-out-of-tree-write.sh). Uses explicit cwd if given, otherwise falls
+ * back to workspacePaths. When multiple workspaces are present, matches against
+ * the target file path, defaulting to the primary workspace root if ambiguous.
+ */
+export function resolveCwd(
+  payload: AgyPayload,
+  toolInput: Record<string, unknown>,
+): string | undefined {
+  if (typeof payload.cwd === "string" && isAbsolutePath(payload.cwd)) {
+    return payload.cwd;
+  }
+  if (typeof toolInput.cwd === "string" && isAbsolutePath(toolInput.cwd)) {
+    return toolInput.cwd;
+  }
+  const rawCwd = payload.toolCall?.args?.Cwd ?? payload.toolCall?.args?.cwd;
+  if (typeof rawCwd === "string" && isAbsolutePath(rawCwd)) {
+    return rawCwd;
+  }
+  const wsPaths = Array.isArray(payload.workspacePaths)
+    ? payload.workspacePaths.filter((p): p is string => typeof p === "string" && isAbsolutePath(p))
+    : [];
+  if (wsPaths.length === 1) {
+    return wsPaths[0];
+  }
+  if (wsPaths.length > 1) {
+    const targetFile = typeof toolInput.file_path === "string"
+      ? toolInput.file_path
+      : typeof toolInput.path === "string"
+      ? toolInput.path
+      : typeof toolInput.TargetFile === "string"
+      ? toolInput.TargetFile
+      : undefined;
+    if (targetFile && isAbsolutePath(targetFile)) {
+      const matching = wsPaths.filter((wp) =>
+        targetFile === wp || targetFile.startsWith(wp.endsWith("/") ? wp : wp + "/")
+      );
+      if (matching.length === 1) {
+        return matching[0];
+      }
+      if (matching.length > 1) {
+        return matching.sort((a, b) => b.length - a.length)[0];
+      }
+    }
+    return wsPaths[0];
+  }
+  return undefined;
+}
+
 export function normalize(
   payload: AgyPayload,
   event: "PreToolUse" | "PostToolUse",
   transcriptText?: string,
 ): { toolName: string; normalized: NormalizedPayload } {
   const rawName = payload.toolCall?.name ?? "";
-  const toolName = mapAgyToolName(rawName);
   const args = payload.toolCall?.args ?? {};
+  const toolName = mapAgyToolName(rawName, args);
+  const toolInput = buildToolInput(args);
+  const resolvedCwd = resolveCwd(payload, toolInput);
+  if (resolvedCwd && toolInput.cwd === undefined) {
+    toolInput.cwd = resolvedCwd;
+  }
   const normalized: NormalizedPayload = {
     tool_name: toolName,
-    tool_input: buildToolInput(args),
+    tool_input: toolInput,
+    cwd: resolvedCwd,
     transcript_path: payload.transcriptPath,
     modelName: payload.modelName,
     stepIdx: payload.stepIdx,
@@ -406,6 +502,7 @@ export async function runShim(
   rawInput: string,
   recordPath?: string,
 ): Promise<AgyVerdict> {
+  const gmailFence = targetHookPath.endsWith("/block-agy-gmail-send-delete.sh");
   let payload: AgyPayload = {};
   let parsedRaw: unknown = undefined;
   try {
@@ -431,16 +528,59 @@ export async function runShim(
       : { raw: parsedRaw }),
   };
 
-  await recordInvocation(recordEntry, recordPath);
+  // Gmail probe records contain tool identity only, never mailbox data or draft copy.
+  await recordInvocation(
+    gmailFence
+      ? {
+        timestamp: recordEntry.timestamp,
+        event,
+        matcher,
+        targetHookPath,
+        toolCall: { name: payload.toolCall?.name },
+      }
+      : recordEntry,
+    recordPath,
+  );
+
+  if (
+    targetHookPath.endsWith("/block-irreversible-operations.sh") &&
+    (typeof payload.toolCall?.name !== "string" || !payload.toolCall.name ||
+      /\s/.test(payload.toolCall.name))
+  ) {
+    // An unreadable name cannot establish a matcher non-match. Let the safety
+    // hook emit its own refusal and remedy, without trusting a conflicting
+    // Claude-shaped tool_name that may also be present in the agy payload.
+    return await invokeTargetHook(targetHookPath, { tool_name: "" });
+  }
 
   if (!parsedRaw || typeof parsedRaw !== "object" || Array.isArray(parsedRaw)) {
-    return { decision: "allow" };
+    return gmailFence
+      ? { decision: "deny", reason: "Gmail safety fence could not read the tool payload." }
+      : { decision: "allow" };
   }
 
   const rawName = payload.toolCall?.name ?? "";
-  const toolName = mapAgyToolName(rawName);
+  const rawArgs = payload.toolCall?.args;
+  if (gmailFence && (typeof rawName !== "string" || !rawName)) {
+    return { decision: "deny", reason: "Gmail safety fence could not identify the tool." };
+  }
+  const toolName = mapAgyToolName(rawName, rawArgs);
   if (!matcherMatches(matcher, toolName)) {
     return { decision: "allow" };
+  }
+  if (gmailFence) {
+    const rawArgs = payload.toolCall?.args;
+    const baseName = toolName.startsWith("mcp__gmail__")
+      ? toolName.slice("mcp__gmail__".length)
+      : toolName;
+    const isParameterless = baseName === "list_email_labels" || baseName === "list_filters";
+    if (rawArgs === undefined) {
+      if (!isParameterless) {
+        return { decision: "deny", reason: "Gmail safety fence could not read safety arguments." };
+      }
+    } else if (!rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) {
+      return { decision: "deny", reason: "Gmail safety fence could not read safety arguments." };
+    }
   }
 
   let transcriptText = "";
@@ -454,6 +594,13 @@ export async function runShim(
 
   const { normalized } = normalize(payload, event, transcriptText);
 
+  return await invokeTargetHook(targetHookPath, normalized);
+}
+
+async function invokeTargetHook(
+  targetHookPath: string,
+  payload: NormalizedPayload | { tool_name: string },
+): Promise<AgyVerdict> {
   const cmd = new Deno.Command("bash", {
     args: [targetHookPath],
     stdin: "piped",
@@ -462,7 +609,7 @@ export async function runShim(
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
-  await writer.write(new TextEncoder().encode(JSON.stringify(normalized)));
+  await writer.write(new TextEncoder().encode(JSON.stringify(payload)));
   await writer.close();
   const { code, stdout, stderr } = await child.output();
   return translateVerdict(

@@ -1,7 +1,7 @@
 // feature_branch_guard_hook.test.ts — web-jam-tools#285
 //
 // hooks/feature-branch-guard.sh had NO behaviour test before #285. It is a
-// PreToolUse guard (matched on Edit|Write in scripts/install-hooks.sh) that
+// PreToolUse guard (matched on Bash|Edit|Write in scripts/install-hooks.sh) that
 // blocks an edit whose target file's git repo is currently on a protected
 // branch (dev/main/master), forcing a feature branch first. Exercised the
 // same way as the other hooks — shelling out to it (Deno.Command) with
@@ -19,22 +19,32 @@ const SCRIPT_PATH = new URL(
 interface RunResult {
   code: number;
   stderr: string;
+  stdout: string;
 }
 
-async function runHookPayload(payload: Record<string, unknown>): Promise<RunResult> {
+async function runHookPayload(
+  payload: Record<string, unknown>,
+  args = [SCRIPT_PATH],
+  env: Record<string, string> = {},
+): Promise<RunResult> {
   const input = JSON.stringify(payload);
   const cmd = new Deno.Command("bash", {
-    args: [SCRIPT_PATH],
+    args,
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
+    env: { BASH_ENV: "", AGY_HOOK_RECORD_PATH: "off", ...env },
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
   await writer.write(new TextEncoder().encode(input));
   await writer.close();
-  const { code, stderr } = await child.output();
-  return { code, stderr: new TextDecoder().decode(stderr) };
+  const { code, stderr, stdout } = await child.output();
+  return {
+    code,
+    stderr: new TextDecoder().decode(stderr),
+    stdout: new TextDecoder().decode(stdout),
+  };
 }
 
 async function runHook(filePath: string): Promise<RunResult> {
@@ -71,7 +81,120 @@ function assertBlocked(stderr: string, branch: string) {
   assert(stderr.includes(branch), `expected branch '${branch}' named in message, got: ${stderr}`);
 }
 
+for (const branch of ["dev", "main", "master", "feature/bash-writes"]) {
+  Deno.test(`Bash write targets on ${branch}: direct hook and agy shim`, async () => {
+    await withRepoOnBranch(branch, async (filePath) => {
+      const cwd = filePath.slice(0, filePath.lastIndexOf("/"));
+      const protectedBranch = branch !== "feature/bash-writes";
+      const commands = [
+        "sed -i 's/x/y/' deno.json",
+        "echo x >> deno.json",
+        "echo x > new/subdir/file.ts",
+        "bash -c \"sed -i 's/x/y/' deno.json\"",
+        "cp /tmp/input .",
+      ];
+      for (const command of commands) {
+        const result = await runHookPayload({ tool_name: "Bash", cwd, tool_input: { command } });
+        assertEquals(result.code, protectedBranch ? 2 : 0, command + result.stderr);
+        const shim = await runHookPayload(
+          { toolCall: { name: "run_command", args: { CommandLine: command, Cwd: cwd } } },
+          [
+            new URL("../hooks/agy-hook-shim.sh", import.meta.url).pathname,
+            "PreToolUse",
+            btoa("Bash|Edit|Write"),
+            SCRIPT_PATH,
+          ],
+        );
+        assertEquals(shim.code, 0, shim.stderr);
+        assertEquals(JSON.parse(shim.stdout).decision, protectedBranch ? "deny" : "allow", command);
+      }
+      assertEquals(await Deno.readTextFile(filePath), "// placeholder\n");
+    });
+  });
+}
+
 // --- fires: protected branches block the edit ---
+
+Deno.test("Bash: read-only commands and unrecognized write shapes stay allowed on dev", async () => {
+  await withRepoOnBranch("dev", async (filePath) => {
+    const cwd = filePath.slice(0, filePath.lastIndexOf("/"));
+    for (
+      const command of [
+        "git commit -m 'record work'",
+        "git status",
+        "echo \"sed -i 's/x/y/' deno.json\"",
+        "cat <<'EOF'\nsed -i 's/x/y/' deno.json\nEOF",
+        'printf x > "$TARGET"',
+        "python3 fix.py",
+      ]
+    ) {
+      const result = await runHookPayload({ tool_name: "Bash", cwd, tool_input: { command } });
+      assertEquals(result.code, 0, command + result.stderr);
+    }
+  });
+});
+
+Deno.test("Bash: cd and every recognized target use the target repository's branch", async () => {
+  await withRepoOnBranch("feature/source", async (source) => {
+    await withRepoOnBranch("dev", async (protectedFile) => {
+      const cwd = source.slice(0, source.lastIndexOf("/"));
+      const protectedDir = protectedFile.slice(0, protectedFile.lastIndexOf("/"));
+      for (
+        const command of [
+          `cd '${protectedDir}' && sed -i 's/x/y/' deno.json`,
+          `tee '${source}' '${protectedFile}'`,
+          `git -C '${protectedDir}' apply /tmp/change.patch`,
+        ]
+      ) {
+        const result = await runHookPayload({ tool_name: "Bash", cwd, tool_input: { command } });
+        assertEquals(result.code, 2, command + result.stderr);
+        assertBlocked(result.stderr, "dev");
+      }
+    });
+  });
+});
+
+Deno.test("Bash: external files and a linked feature worktree stay allowed", async () => {
+  await withRepoOnBranch("dev", async (filePath) => {
+    const root = filePath.slice(0, filePath.lastIndexOf("/"));
+    const scratch = await Deno.makeTempDir();
+    try {
+      const linked = `${scratch}/feature`;
+      await run("git", ["-C", root, "worktree", "add", "-q", "-b", "feature/linked", linked]);
+      for (
+        const [cwd, command] of [
+          [linked, "echo x >> some-file.ts"],
+          [root, `echo x > '${scratch}/external.txt'`],
+        ]
+      ) {
+        const result = await runHookPayload({ tool_name: "Bash", cwd, tool_input: { command } });
+        assertEquals(result.code, 0, result.stderr);
+      }
+    } finally {
+      await Deno.remove(scratch, { recursive: true });
+    }
+  });
+});
+
+Deno.test("workflow runner: checker crash allows with a note through the shell entry point", async () => {
+  const shadow = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(`${shadow}/deno`, "#!/bin/sh\nexit 7\n");
+    await Deno.chmod(`${shadow}/deno`, 0o755);
+    const result = await runHookPayload(
+      { tool_name: "Bash", tool_input: { command: "git status" } },
+      [SCRIPT_PATH],
+      { PATH: `${shadow}:${Deno.env.get("PATH") ?? ""}` },
+    );
+    assertEquals(result.code, 0, result.stderr);
+    assertEquals(result.stderr, "");
+    assert(
+      JSON.parse(result.stdout).hookSpecificOutput.additionalContext.includes("feature-branch"),
+    );
+  } finally {
+    await Deno.remove(shadow, { recursive: true });
+  }
+});
 
 Deno.test("editing a file on 'dev' is blocked", async () => {
   await withRepoOnBranch("dev", async (filePath) => {

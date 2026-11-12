@@ -8,6 +8,34 @@
 
 import { assertEquals } from "@std/assert";
 import { checkIrreversibleOperation } from "../hooks/lib/check_irreversible_operations.ts";
+import {
+  COMMENT_HEREDOC_GUARD_CASES,
+  HEREDOC_REVIEW_CASES,
+} from "./comment_heredoc_guard_cases.ts";
+
+for (const row of [...COMMENT_HEREDOC_GUARD_CASES, ...HEREDOC_REVIEW_CASES]) {
+  Deno.test(`apostrophe checker literal case ${row.id}: ${row.irreversible}`, () => {
+    const result = checkIrreversibleOperation(row.command);
+    assertEquals(result.blocked, row.irreversible !== "allow");
+    assertEquals(result.reason, row.irreversible === "allow" ? undefined : row.irreversible);
+  });
+}
+
+Deno.test("apostrophe comment boundaries preserve escaped whitespace and following commands", () => {
+  for (
+    const command of [
+      "echo \\ #literal; gh repo delete WebJamApps/example --yes",
+      "echo hi\\\n#literal; gh repo delete WebJamApps/example --yes",
+      "echo a\\;#literal; gh repo delete WebJamApps/example --yes",
+    ]
+  ) assertEquals(checkIrreversibleOperation(command).reason, "operation", command);
+});
+
+Deno.test("apostrophe nested shell parse failures retain their unreadable classification", () => {
+  assertEquals(checkIrreversibleOperation(`bash -c 'echo "unclosed'`).reason, "unreadable");
+  assertEquals(checkIrreversibleOperation("sudo ".repeat(30) + "git status").reason, "unreadable");
+  assertEquals(checkIrreversibleOperation("eval ".repeat(10) + "git status").reason, "unreadable");
+});
 
 // --- the reported false positive: heredoc body merely mentioning the patterns ---
 

@@ -6,7 +6,7 @@
 // test/block_agy_non_flash_model_hook.test.ts (re-implementing the shell/
 // python logic in TypeScript would test a copy, not the real guard).
 
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertStringIncludes } from "@std/assert";
 import { checkModelLabelOnIssueCreate } from "../hooks/lib/check_model_label_on_issue_create.ts";
 
 const SCRIPT_PATH = new URL(
@@ -62,6 +62,15 @@ function assertBlocked(stderr: string) {
   if (!stderr.includes("BLOCKED (model-label guard)")) {
     throw new Error(`expected BLOCKED message in stderr, got: ${stderr}`);
   }
+}
+
+function assertAllowedWithNote(res: RunResult, field: string) {
+  assertEquals(res.code, 0, res.stderr);
+  const output = JSON.parse(res.stdout).hookSpecificOutput;
+  assertEquals(output.hookEventName, "PreToolUse");
+  assertEquals(output.permissionDecision, undefined);
+  assertStringIncludes(output.additionalContext, field);
+  assertStringIncludes(output.additionalContext, "Verify");
 }
 
 // --- Bash surface: gh issue create ---
@@ -248,12 +257,11 @@ Deno.test("a --label flag with no value at all is denied (malformed, fail closed
   assertBlocked(res.stderr);
 });
 
-Deno.test("unparseable shell quoting on what looks like a gh issue create is denied (fail closed)", async () => {
+Deno.test("unparseable shell quoting on an issue create allows with a command note", async () => {
   const res = await runHook(
     bashCall(`gh issue create --title "unterminated --label Sonnet --type Task`),
   );
-  assertEquals(res.code, 2);
-  assertBlocked(res.stderr);
+  assertAllowedWithNote(res, "unbalanced quoting");
 });
 
 Deno.test("unparseable shell quoting on an unrelated command passes through", async () => {
@@ -496,14 +504,13 @@ Deno.test("MCP issue_write update (not create) passes through even with no model
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("MCP issue_write with an unrecognized/missing method is denied (fail closed)", async () => {
+Deno.test("MCP issue_write with a missing method allows with a method note", async () => {
   const res = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       labels: ["Sonnet"],
     }),
   );
-  assertEquals(res.code, 2);
-  assertBlocked(res.stderr);
+  assertAllowedWithNote(res, "method");
 });
 
 Deno.test("a non-issue_write MCP tool call passes through untouched", async () => {
@@ -1071,15 +1078,14 @@ Deno.test("deno task create-issue with Sonnet and --escalation-reason is allowed
 // --- web-jam-tools#788 third review: the unterminated-quote fallback must
 // recognise every create form the parseable scan recognises ---
 
-Deno.test("unterminated-quote 'deno task issue:create' is blocked (task name carries no gh token)", async () => {
+Deno.test("unterminated-quote 'deno task issue:create' allows with a command note", async () => {
   const res = await runHook(
     bashCall(`deno task issue:create --title 'unterminated`),
   );
   // The fallback's first alternative requires a `gh` token, which
   // `issue:create` does not have — without its own alternative this command
   // passed silently even though the balanced-quote form is gated.
-  assertEquals(res.code, 2);
-  assertBlocked(res.stderr);
+  assertAllowedWithNote(res, "unbalanced quoting");
 });
 
 Deno.test("deno task create-issue with Opus and --escalation-reason is allowed", async () => {
@@ -1158,19 +1164,14 @@ Deno.test("web-jam-tools#813: multiple data heredocs in one command are each cla
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("web-jam-tools#813: an unterminated heredoc (no closing delimiter) fails closed without crashing", async () => {
+Deno.test("unterminated heredoc with ambiguous issue text allows with a command note", async () => {
   const res = await runHook(
     bashCall(
       `cat > /tmp/c.md <<'EOF'\n` +
         `Notes about gh issue create that don't get closed.`,
     ),
   );
-  // No matching closing delimiter — stripHeredocs() conservatively keeps
-  // the body in scope rather than discarding it, so the ambiguous parse
-  // remains ambiguous and the blunt fallback still sees the mention. The
-  // defined, tested fallback is "fail closed, don't crash" — not "pass".
-  assertEquals(res.code, 2);
-  assertBlocked(res.stderr);
+  assertAllowedWithNote(res, "unbalanced quoting");
 });
 
 Deno.test("web-jam-tools#813: a delimiter word appearing mid-body does not end the heredoc early", async () => {
@@ -1245,7 +1246,7 @@ Deno.test("web-jam-tools#813: a data heredoc mention and a real, invalid gh issu
 // convention above) so the raw command is genuinely ambiguous before the
 // fix gets a chance to run.
 
-Deno.test("web-jam-tools#813: a heredoc piped to a path-qualified interpreter (/bin/bash) is executed code and stays gated", async () => {
+Deno.test("web-jam-tools#813: a heredoc piped to a path-qualified interpreter (/bin/bash) with ambiguous quoting allows with a command note", async () => {
   const res = await runHook(
     bashCall(
       `cat <<'EOF' | /bin/bash\n` +
@@ -1253,11 +1254,10 @@ Deno.test("web-jam-tools#813: a heredoc piped to a path-qualified interpreter (/
         `EOF`,
     ),
   );
-  assertEquals(res.code, 2);
-  assertBlocked(res.stderr);
+  assertAllowedWithNote(res, "unbalanced quoting");
 });
 
-Deno.test("web-jam-tools#813: a heredoc fed directly to a path-qualified interpreter (/bin/sh) is executed code and stays gated", async () => {
+Deno.test("web-jam-tools#813: a heredoc fed directly to a path-qualified interpreter (/bin/sh) with ambiguous quoting allows with a command note", async () => {
   const res = await runHook(
     bashCall(
       `/bin/sh <<'EOF'\n` +
@@ -1265,11 +1265,10 @@ Deno.test("web-jam-tools#813: a heredoc fed directly to a path-qualified interpr
         `EOF`,
     ),
   );
-  assertEquals(res.code, 2);
-  assertBlocked(res.stderr);
+  assertAllowedWithNote(res, "unbalanced quoting");
 });
 
-Deno.test("web-jam-tools#813: a heredoc fed to 'source /dev/stdin' is executed code and stays gated", async () => {
+Deno.test("web-jam-tools#813: a heredoc fed to 'source /dev/stdin' with ambiguous quoting allows with a command note", async () => {
   const res = await runHook(
     bashCall(
       `source /dev/stdin <<'EOF'\n` +
@@ -1277,11 +1276,10 @@ Deno.test("web-jam-tools#813: a heredoc fed to 'source /dev/stdin' is executed c
         `EOF`,
     ),
   );
-  assertEquals(res.code, 2);
-  assertBlocked(res.stderr);
+  assertAllowedWithNote(res, "unbalanced quoting");
 });
 
-Deno.test("web-jam-tools#813: a heredoc fed to '. /dev/stdin' (dot form of source) is executed code and stays gated", async () => {
+Deno.test("web-jam-tools#813: a heredoc fed to '. /dev/stdin' (dot form of source) with ambiguous quoting allows with a command note", async () => {
   const res = await runHook(
     bashCall(
       `. /dev/stdin <<'EOF'\n` +
@@ -1289,8 +1287,7 @@ Deno.test("web-jam-tools#813: a heredoc fed to '. /dev/stdin' (dot form of sourc
         `EOF`,
     ),
   );
-  assertEquals(res.code, 2);
-  assertBlocked(res.stderr);
+  assertAllowedWithNote(res, "unbalanced quoting");
 });
 
 // --- web-jam-tools#813 Must Fix #2: the Must Fix #1 widening over-corrected.

@@ -27,7 +27,8 @@ export interface SessionLoadLimits {
   mainRules: PartLimit;
   crossAiRules: PartLimit;
   jammusicRules: PartLimit;
-  otherRepoRules: PartLimit;
+  otherRepoRules: PartLimit & { lowMarks?: Record<string, number> };
+  safetyRules: PartLimit;
   skillDescription: SkillDescriptionLimit;
   bundledSkills: BundledSkillsLimit;
 }
@@ -51,6 +52,8 @@ export interface SessionLoadReportOptions {
   memoryIndexPath?: string;
   /** Path to global CLAUDE.md (defaults to $HOME/.claude/CLAUDE.md). */
   globalClaudeMdPath?: string;
+  /** Path to safety rules file (defaults to $HOME/WebJamApps/web-jam-tools/docs/safety-rules.md). */
+  safetyRulesPath?: string;
 }
 
 export interface ToolReportResult {
@@ -91,6 +94,33 @@ async function getFileSize(filePath: string): Promise<number> {
   } catch {
     return 0;
   }
+}
+
+/** Safely gets file size in bytes from git origin/dev in the repo; falls back to disk size. */
+export async function getRepoRulesFileSize(
+  repoDir: string,
+  relPath: string,
+  fallbackDiskPath?: string,
+): Promise<number> {
+  const diskPath = fallbackDiskPath ?? join(repoDir, relPath);
+  try {
+    const cmd = new Deno.Command("git", {
+      args: ["-C", repoDir, "cat-file", "-s", `origin/dev:${relPath}`],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const output = await cmd.output();
+    if (output.success) {
+      const sizeStr = new TextDecoder().decode(output.stdout).trim();
+      const size = parseInt(sizeStr, 10);
+      if (!Number.isNaN(size)) {
+        return size;
+      }
+    }
+  } catch {
+    // git failed or permission denied
+  }
+  return await getFileSize(diskPath);
 }
 
 /** Extracts frontmatter description text from SKILL.md. */
@@ -175,9 +205,7 @@ export async function inspectBundledSkills(
     if (targetSkills.length > 0) {
       let overCount = 0;
       for (const skill of targetSkills) {
-        const val = overrides[skill] ??
-          overrides[`anthropic-skills:${skill}`] ??
-          overrides[`claude-ai:${skill}`];
+        const val = overrides[skill];
         if (val !== "name-only") {
           overCount++;
         }
@@ -270,21 +298,52 @@ export async function computeSessionLoadReport(
   const globalClaudeMdSize = await getFileSize(globalClaudeMdPath);
   const memoryIndexSize = await getFileSize(memoryIndexPath);
 
-  let mainRulesSize = await getFileSize(mainRulesPath);
+  const webJamToolsDir = join(webJamAppsDir, "web-jam-tools");
+  let mainRulesSize = await getRepoRulesFileSize(
+    webJamToolsDir,
+    "AGENTS.md",
+    mainRulesPath,
+  );
   if (mainRulesSize === 0) {
     const homeAgentsPath = join(homeDir, ".agents/AGENTS.md");
     mainRulesSize = await getFileSize(homeAgentsPath);
   }
 
-  const crossAiRulesSize = await getFileSize(crossAiRulesPath);
-  const jammusicRulesSize = await getFileSize(jammusicRulesPath);
+  const crossAiRulesSize = await getRepoRulesFileSize(
+    webJamToolsDir,
+    "docs/cross-ai-rules.md",
+    crossAiRulesPath,
+  );
+  const jammusicDir = join(webJamAppsDir, "JaMmusic");
+  const jammusicRulesSize = await getRepoRulesFileSize(
+    jammusicDir,
+    "AGENTS.md",
+    jammusicRulesPath,
+  );
+
+  const safetyRulesPath = options.safetyRulesPath ||
+    join(webJamAppsDir, "web-jam-tools/docs/safety-rules.md");
+  let safetyRulesSize = -1;
+  try {
+    const stat = await Deno.stat(safetyRulesPath);
+    if (stat.isFile) {
+      safetyRulesSize = stat.size;
+    }
+  } catch {
+    // Missing or unreadable safety rules file
+  }
 
   // Other repos' rules files
   const otherRepoSizes: Record<string, number> = {};
   for (const repo of ACTIVE_REPOS) {
     if (repo === "web-jam-tools" || repo === "JaMmusic") continue;
-    const repoRulesPath = join(webJamAppsDir, repo, "AGENTS.md");
-    otherRepoSizes[repo] = await getFileSize(repoRulesPath);
+    const repoDir = join(webJamAppsDir, repo);
+    const repoRulesPath = join(repoDir, "AGENTS.md");
+    otherRepoSizes[repo] = await getRepoRulesFileSize(
+      repoDir,
+      "AGENTS.md",
+      repoRulesPath,
+    );
   }
 
   // Skills inspection
@@ -367,6 +426,12 @@ export async function computeSessionLoadReport(
       agyItems.push(`${repo} rules +${formatNumber(excess)}`);
     }
   }
+  if (safetyRulesSize === -1) {
+    agyItems.push("the safety rules file is missing");
+  } else if (safetyRulesSize > limits.safetyRules.overMark) {
+    const excess = safetyRulesSize - limits.safetyRules.overMark;
+    agyItems.push(`safety rules +${formatNumber(excess)}`);
+  }
   if (agySkills.overCount > 0) {
     agyItems.push(`${agySkills.overCount} skill descriptions`);
   }
@@ -394,6 +459,12 @@ export async function computeSessionLoadReport(
       const excess = size - limits.otherRepoRules.overMark;
       codexItems.push(`${repo} rules +${formatNumber(excess)}`);
     }
+  }
+  if (safetyRulesSize === -1) {
+    codexItems.push("the safety rules file is missing");
+  } else if (safetyRulesSize > limits.safetyRules.overMark) {
+    const excess = safetyRulesSize - limits.safetyRules.overMark;
+    codexItems.push(`safety rules +${formatNumber(excess)}`);
   }
   if (codexSkills.installedCount === 0) {
     if (codexItems.length > 0) {

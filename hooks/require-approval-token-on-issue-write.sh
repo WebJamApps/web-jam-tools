@@ -34,7 +34,7 @@ set -euo pipefail
 HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 input=$(cat)
 
-result=$(printf '%s' "$input" | deno run --no-config --allow-env --allow-read "$HOOK_DIR/lib/check_issue_approval_token.ts" 2>/dev/null) || true
+result=$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group safety --name require-approval-token-on-issue-write deno run --no-config --allow-env --allow-read "$HOOK_DIR/lib/check_issue_approval_token.ts")
 
 if [ -z "$result" ]; then
   # deno run itself failed to produce output (crash, bad Deno install, etc).

@@ -93,6 +93,7 @@ function envWith(extra: Record<string, string>): Record<string, string> {
  * --session-id and would otherwise silently pick up this test run's own real session id. */
 function envWithoutAmbientSessionId(): Record<string, string> {
   const env = Deno.env.toObject();
+  delete env.CODEX_THREAD_ID;
   delete env.CLAUDE_CODE_SESSION_ID;
   delete env.CLAUDE_SESSION_ID;
   delete env.SESSION_ID;
@@ -1992,6 +1993,44 @@ Deno.test("authorizeWrite: authorizes a main Antigravity conversation whose own 
     await Deno.remove(root, { recursive: true });
   }
 });
+
+for (const ownIdentity of [AGY_PARENT, "unknown-session", "broken-codex"] as const) {
+  Deno.test(`CLI discovery: shared agy record with own identity ${ownIdentity}`, async () => {
+    const { root, transcript } = await makeAgyBrain({ [AGY_PARENT]: "/file-issue" }, false);
+    const recordPath = `${root}/agy-record.jsonl`;
+    const tokenPath = `${root}/token.json`;
+    try {
+      await Deno.writeTextFile(
+        recordPath,
+        JSON.stringify({
+          conversationId: AGY_PARENT,
+          transcriptPath: transcript(AGY_PARENT),
+        }) + "\n",
+      );
+      const env: Record<string, string> = {
+        ...envWithoutAmbientSessionId(),
+        HOME: root,
+        CODEX_HOME: root,
+        AGY_HOOK_RECORD_PATH: recordPath,
+      };
+      if (ownIdentity === "broken-codex") env.CODEX_THREAD_ID = AGY_PARENT;
+      const res = await runCli([
+        "--session-id",
+        ownIdentity === "broken-codex" ? AGY_PARENT : ownIdentity,
+        "--repo",
+        "WebJamApps/web-jam-tools",
+        "--title",
+        "Approved task",
+        "--token-path",
+        tokenPath,
+      ], env);
+      assertEquals(res.code, ownIdentity === AGY_PARENT ? 0 : 1, res.stderr);
+      assertEquals(loadToken(tokenPath) !== null, ownIdentity === AGY_PARENT);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+}
 
 Deno.test("resolveAntigravityWriteContext: marks the recorded conversation a subagent from its spawn record", async () => {
   const { root, transcript } = await makeAgyBrain(

@@ -1,7 +1,6 @@
 # agy (Antigravity/Flash) Hook Contract & Gmail Fence
 
-*Created for [web-jam-tools#432](https://github.com/WebJamApps/web-jam-tools/issues/432). Last
-updated 2026-08-15.*
+*Created for [web-jam-tools#432](https://github.com/WebJamApps/web-jam-tools/issues/432).*
 
 This document records the agy PreToolUse/PostToolUse hook contract as measured (2026-08-07,
 against `gemini-3.6-flash-low`), the translation shim that makes hooks actually enforce on that
@@ -24,17 +23,25 @@ under a control/test A/B, not by what the model said.
 
 1. **Hooks execute.** A hook registered in `~/.gemini/config/hooks.json` fires on `run_command`,
    `view_file`, `send_message`, and any other tool call.
-2. **`matcher` is ignored.** Registered with matcher `"Bash"`, a probe hook still fired on every
-   tool call — agy runs every registered `PreToolUse` hook on every tool, always. The shim (§3)
-   enforces the matcher itself.
+2. **`matcher` is evaluated against agy's own native tool names, not ignored.**
+   *(Initial finding 2026-08-07 claimed matcher was ignored; corrected 2026-09-16 via
+   [web-jam-tools#1036](https://github.com/WebJamApps/web-jam-tools/issues/1036) and design decision
+   D-24).*
+   agy tests the `matcher` field in `~/.gemini/config/hooks.json` against agy's *own native tool names*
+   (`run_command`, `replace_file_content`, `write_to_file`, `call_mcp_tool`, etc.), never Claude Code's
+   tool names. When a hook was registered with a Claude-shaped matcher like `"Bash"` or `"Edit|Write"`,
+   agy tested `"Bash"` against `run_command`, found no match, and silently never invoked the hook.
+   To solve this, `scripts/install-hooks.sh` registers every entry under `matcher: ".*"` so agy always
+   invokes `agy-hook-shim.sh`. The shim then receives the real Claude matcher (base64-encoded) and
+   enforces it against the normalized tool name (§3).
 3. **agy's tool names are not Claude's.** The shell tool is `run_command`, with the command in
    `args.CommandLine` and the working directory in `args.Cwd`. There is no `Bash`, `Edit`, or
-   `Write` tool name — this is the only tool/arg-name mapping independently verified against a
-   live probe (agy is closed-source, so nothing else is verifiable from source). Best-effort
-   fallback field names for an edit-like tool (`TargetFile`, `CodeContent`,
-   `ReplacementContent`/`ReplacementChunks`) come from earlier work
-   ([web-jam-tools#344](https://github.com/WebJamApps/web-jam-tools/issues/344)) and are honoured
-   by the shim, but are NOT independently verified the same way `run_command` is.
+   `Write` tool name. The current native file tools are `edit_file` (`Path`, `Target`,
+   `Replacement`) and `write_file` (`Path`, `Content`), recorded by the 2026-10-31 live probe
+   in the hooks design's "agy's file tools" section. Earlier field names from
+   [web-jam-tools#344](https://github.com/WebJamApps/web-jam-tools/issues/344) were formalized and
+   independently measured live on 2026-10-12 ([web-jam-tools#1055](https://github.com/WebJamApps/web-jam-tools/issues/1055)) —
+   see §9 for the earlier and current tool names and argument signatures.
 4. **The payload schema is camelCase, not Claude's.** agy sends `toolCall.name`, `toolCall.args`,
    `transcriptPath`, `conversationId`, `stepIdx`, `artifactDirectoryPath`, `workspacePaths`. None
    of Claude's `tool_input`, `transcript_path`, `hook_event_name` exist, so an unmodified hook's
@@ -85,9 +92,13 @@ twelve bilingual hooks. `scripts/install-hooks.sh` registers
 agy surface only. It:
 
 1. normalizes agy's payload into the Claude shape the hooks already parse (`toolCall.name` ->
-   `tool_name`, `toolCall.args` -> `tool_input` with `CommandLine`/`Cwd`/`TargetFile`/
-   `CodeContent` aliased to `command`/`cwd`/`file_path`/`content`, `transcriptPath` ->
-   `transcript_path`, and `run_command` -> `Bash`),
+   `tool_name`, `toolCall.args` -> `tool_input`, `transcriptPath` -> `transcript_path`).
+   `run_command` becomes `Bash`; `edit_file`, `replace_file_content` and
+   `multi_replace_file_content` become `Edit`; `write_file` and `write_to_file` become `Write`.
+   `CommandLine`/`Cwd` become `command`/`cwd`, `Path` or `TargetFile` becomes `file_path`, `Target`
+   or `TargetContent` becomes `old_string`, and `Replacement` or `ReplacementContent` becomes
+   `new_string` and `content`. `Content` and `CodeContent` also populate `content`. Original
+   arguments and already-present Claude fields are preserved,
 2. enforces the `matcher` itself (an anchored regex test against the mapped tool name) and exits
    with `{"decision":"allow"}` without running the target hook when it doesn't match,
 3. runs the target hook **unmodified**, piping it the normalized payload on stdin — for
@@ -115,28 +126,34 @@ accidentally adds one there is blocked instead of silently disarming every guard
 Two hooks exist only on the agy surface (never wired into Claude Code's `settings.json` — they
 depend on agy-native payload fields Claude Code's hook payload doesn't carry):
 
-- **`hooks/agy-model-guard.sh`** — matcher `.*` (every tool call). Denies a non-Flash model chosen
+- **`hooks/agy-model-guard.sh`** — matcher `.*` (every tool call). Checks the selected model
   **in-session**, using the `modelName` field agy's own payload carries (finding 7). Shares its
-  allowed-slug 3.7 floor (`gemini-3.7-flash-*` or newer) with `hooks/block-agy-non-flash-model.sh`
-  (which only sees a literal `agy --model ...` Bash invocation from Claude Code, not a running
+  allowed-slug list (the 3.7 Flash floor, `gemini-3.7-flash-*` or newer, plus
+  `gemini-4-argon-high` and `claude-sonnet-5-5-high`)
+  with `hooks/block-agy-non-flash-model.sh` (which sees an `agy --model ...` Bash invocation from
+  Claude Code, including one behind `timeout`, `sudo`, `bash -c` and the like, not a running
   agy session's live model) via `hooks/lib/check_agy_model.ts`, so the two can't drift apart.
   Fails OPEN when `modelName` is missing (cost guard, not a leak guard).
-- **`hooks/block-agy-gmail-send-delete.sh`** — matcher
-  `send_email|delete_email|batch_delete_emails` (agy exposes Gmail MCP tool names unprefixed — no
-  `mcp__gmail__` prefix; that convention is Claude Code-specific). Unconditionally denies once it
-  runs. Read, label, and archive tooling (`search_emails`, `read_email`, `list_email_labels`,
-  `modify_email`, ...) are not matched and stay available.
 
-## 5. Haiku cost gate surface-awareness
+  Post-merge verification follows
+  `~/Dropbox/web-jam-llms/Token_Savings/agy-model-guard-restore-manual-steps-2026-10-18.md`;
+  Josh restores the installed guard himself in web-jam-tools#1483
+  "Manual verification: restore the installed agy guard symlink".
+- **`hooks/block-agy-gmail-send-delete.sh`** — matcher covers all nineteen raw and
+  exact-server-prefixed Gmail MCP tool names (`mcp__gmail__.*|send_email|...`). Classifies tool calls
+  via `hooks/lib/check_gmail_write.ts`: unconditionally denies the five irreversible tools (`send_email`,
+  `delete_email`, `batch_delete_emails`, `delete_filter`, `delete_label`); refuses moving mail to Trash
+  while agy's permission prompt remains unverified; allows removing Trash, archiving, reads, drafts,
+  and ordinary labels.
 
-`hooks/haiku-only-gmail-gate.sh` is **not edited**. On Claude Code it stays wired to its existing
-matcher (`mcp__(gmail|claude_ai_Gmail)__.*`) and keeps gating Gmail tools to Haiku, exactly as
-before. On agy it's still wrapped by the shim (it's in the shared hook list), but that matcher is
-the Claude Code-specific `mcp__` prefix convention and never matches agy's raw, unprefixed Gmail
-tool names — so it naturally never fires there. Instead, `hooks/agy-model-guard.sh` (§4, matcher
-`.*`) is what gates the Antigravity surface: any tool call — Gmail included — is denied unless the
-session is on an allowed Flash model. Net effect: Claude Code stays gated to Haiku, Antigravity is
-gated to Flash, and neither hook needed to change.
+## 5. Gmail model choice and the session guard
+
+The session guard permits Flash, Argon and Sonnet at high; it supplies no Gmail-specific cost
+confirmation or action approval. The chosen-model workflow and expensive-model question are owned
+by `~/Dropbox/web-jam-llms/AI_Misbehaves/hooks-design-2026-09-15.md`, “Gmail model choice and
+connections”. Their implementation is tracked separately by web-jam-tools#1225
+"skills/handle-gmails: use the chosen model and ask the Astra or Opus cost question".
+The Gmail fence remains separate from model selection. This guard change adds no Gmail connection.
 
 ## 6. Antigravity Gmail MCP setup
 
@@ -167,8 +184,8 @@ by any of this.
     "github": {
       "command": "bash",
       "args": [
-        "-lc",
-        "exec docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN=\"$GH_TOKEN\" ghcr.io/github/github-mcp-server stdio"
+        "-c",
+        "set +x; if ! . \"$HOME/.bashrc\" >/dev/null 2>&1; then printf '%s\\n' 'GitHub MCP: token source could not be read.' >&2; exit 1; fi; set +x; if [ -z \"${GH_TOKEN:-}\" ]; then printf '%s\\n' 'GitHub MCP: GH_TOKEN is unavailable.' >&2; exit 1; fi; GITHUB_PERSONAL_ACCESS_TOKEN=\"$GH_TOKEN\" exec \"$HOME/.local/bin/github-mcp-server\" stdio"
       ]
     },
     "gmail": {
@@ -181,6 +198,17 @@ by any of this.
   }
 }
 ```
+
+The GitHub entry runs the released binary at `~/.local/bin/github-mcp-server`, installed and
+updated by `deno task update:all` after REAPER. The updater discovers the latest Linux release,
+verifies its archive against that release's checksums file, then replaces the binary atomically.
+A failed update preserves the installed binary; `agents` still starts on the installed versions.
+
+The launcher explicitly sources `~/.bashrc` with output suppressed and refuses startup if sourcing
+fails or `GH_TOKEN` is empty. It uses `bash -c` so that this checked source is the startup path,
+rather than an implicit login-profile read before the check. The shell receives literal variable
+references in its arguments; the token reaches the server through its environment only. Shell
+tracing is disabled before and after sourcing. No Docker container is involved.
 
 ### Applying it — reproducible from this repo, but Josh's action to take
 
@@ -206,12 +234,14 @@ file is backed up before being replaced by the symlink.
 
 ## 7. Send/delete fence
 
-`send_email`, `delete_email`, and `batch_delete_emails` are denied unconditionally on the
-Antigravity surface by `hooks/block-agy-gmail-send-delete.sh` (§4) — Flash never gets outbound
-mail identity or delete capability on Josh's personal inbox, independent of which model is active.
-Read, label, and archive tooling remain available, gated only by the model guard (§4/§5). This
-mirrors Claude Code's own draft-only Gmail policy in spirit, without touching Claude Code's
-permissions at all (non-goal).
+The five irreversible Gmail actions (`send_email`, `delete_email`, `batch_delete_emails`,
+`delete_filter`, and `delete_label`) are denied unconditionally on the Antigravity surface by
+`hooks/block-agy-gmail-send-delete.sh` (§4) — Flash never gets outbound mail identity or destructive
+deletion capability on Josh's personal inbox, independent of which model is active. Moving mail to
+Trash requires a real permission prompt; because agy's permission prompt is unverified, Trash additions
+are also refused. Removing Trash, archiving, reads, drafts, and ordinary labels pass this fence and
+remain subject to the separate Gmail permissions and skill workflow (§5). This mirrors Claude Code's
+own draft-only Gmail policy in spirit, without touching Claude Code's permissions at all (non-goal).
 
 ## 8. What is NOT verified / NOT applied
 
@@ -229,3 +259,158 @@ hook" section for the same disclosure on a related agy-native hook):
   agy session reports "denied by a system hook" for `send_email`/`delete_email`/
   `batch_delete_emails` and for a non-Flash model switch, and that Gmail read/label/archive still
   works, needs Josh to run it after applying §6 and restarting agy.
+
+## 9. Live Tool-Name & GitHub MCP Probe (2026-10-12, web-jam-tools#1055)
+
+A live agy probe was conducted on 2026-10-12 to measure agy's native file-edit-shaped tool names,
+its GitHub MCP tool-calling structure, and whether `PreToolUse` hooks registered under `.*` fire for each.
+
+### Current file tools (2026-10-31)
+
+The hooks design's revision 2.17.0 records the current live names and arguments:
+
+| Native tool  | Arguments                                                    | Normalized tool |
+| ------------ | ------------------------------------------------------------ | --------------- |
+| `edit_file`  | `Path`, `Target`, `Replacement`, `ArtifactMetadata`          | `Edit`          |
+| `write_file` | `Path`, `Content`, `Append`, `Overwrite`, `ArtifactMetadata` | `Write`         |
+
+These reach the same file guards as the earlier names below. Mapping the current names ships
+together with the out-of-tree guard's allowance for `artifactDirectoryPath`: a target inside that
+absolute folder is allowed, so a repository workspace does not refuse agy's own plan or task files.
+Normalized paths must stay within the folder; a sibling sharing its prefix and a `..` escape are
+refused. A missing, empty, relative or non-string field grants no allowance. Claude Code and Codex
+send no such field and retain their existing behavior.
+
+The guards add no `ask` replies and do not change agy's own Tool Permission setting. Feature branch
+edits and writes, new folders, artifact files and `/tmp` scratch writes pass; edits to repositories
+on `dev`, `main` or `master` are refused with the feature-branch fix. A home-folder workspace has no
+repository fence of its own, but protected-branch checks still examine the target file's repository.
+
+`test/agy_hook_shim_hook.test.ts` replays all eight normal-work design cases against every
+PreToolUse file guard and checks artifact containment separately. It also checks each known name in
+the design table, retaining the shell and issue-write mappings. Recognition after a rename and the
+unknown-name alarm remain separate work in web-jam-tools#1653 "hooks/agy-hook-shim: catch a renamed
+file-changing call by what its arguments hold, and log the new name".
+
+No installer change is needed: the installed shim and guard already reach these modules. After
+merge, with the canonical clone on the merged commit, the one-shot Flash session in "What this does
+to normal Flash work" must confirm real edits, writes and artifact writes pass without a new prompt,
+and a `dev` edit is refused with the file unchanged. Post that result on web-jam-tools#1057
+"hooks/agy-hook-shim: run Edit, Write and issue-write guards on agy's own tool names" before
+closure; replay tests alone do not prove the live session's enforcement.
+
+### File-Edit Tools
+
+- **`replace_file_content`** (native block replacement tool):
+  - Literal tool name: `replace_file_content`.
+  - Arguments observed in `args`:
+    - `TargetFile` (string, required path to file)
+    - `Instruction` (string, description of edit)
+    - `Description` (string, explanation of change)
+    - `StartLine` (number, 1-indexed start line)
+    - `EndLine` (number, 1-indexed end line)
+    - `TargetContent` (string, exact text to match and replace)
+    - `ReplacementContent` (string, replacement text)
+    - `AllowMultiple` (boolean)
+    - Optional: `TargetLintErrorIds` (array of lint error IDs)
+    - Standard metadata: `toolAction`, `toolSummary`.
+  - **PreToolUse hook firing:** Confirmed. A `PreToolUse` hook registered under `.*` fires on every invocation of `replace_file_content`.
+- **`write_to_file`** (native file creation and overwrite tool):
+  - Literal tool name: `write_to_file`.
+  - Arguments observed in `args`:
+    - `TargetFile` (string, required target file path)
+    - `CodeContent` (string, full content to write)
+    - `Overwrite` (boolean, overwrite permission flag)
+    - `Description` (string, rationale)
+    - Optional: `Append` (boolean), `ArtifactMetadata` (object)
+    - Standard metadata: `toolAction`, `toolSummary`.
+  - **PreToolUse hook firing:** Confirmed. A `PreToolUse` hook registered under `.*` fires on every invocation of `write_to_file`.
+- **`multi_replace_file_content`**:
+  - Identified directly in the agy binary (`strings "$(readlink -f "$(command -v agy)")"`) under Cortex deterministic vetting configs (`third_party/jetski/cortex/policyguardian/deterministic_vetting_configs/`) alongside `replace_file_content` and `write_to_file`.
+
+### GitHub MCP Tools (`issue_write`, `sub_issue_write`)
+
+- **Dispatch convention:** agy configures GitHub MCP tools lazily under `~/.gemini/antigravity-cli/mcp/github/`.
+  When a GitHub MCP tool is invoked, agy calls the native lazy dispatcher `call_mcp_tool`.
+- **Observed read-only call:** A live read-only `issue_read` call confirmed the literal hook payload shape:
+  - `toolCall.name`: `"call_mcp_tool"`
+  - `toolCall.args.ServerName`: `"github"`
+  - `toolCall.args.ToolName`: `"issue_read"`
+  - `toolCall.args.Arguments`: `{ "owner": "WebJamApps", "repo": "web-jam-tools", "issue_number": 1055, "method": "get" }`
+  - **PreToolUse hook firing:** Confirmed. `PreToolUse` hooks registered under `.*` fire for `call_mcp_tool`.
+- **Derived write tool names:** From the observed naming structure and the server schemas at `~/.gemini/antigravity-cli/mcp/github/` (`issue_write.json`, `sub_issue_write.json`):
+  - `issue_write`: `method: "create" | "update"`, `owner`, `repo`, `title`, `body`, `labels`, `milestone`, etc.
+  - `sub_issue_write`: `method: "add" | "remove" | "reprioritize"`, `owner`, `repo`, `issue_number`, `sub_issue_id`.
+  - In agy hook payloads, lazy dispatch emits `toolCall.name: "call_mcp_tool"` with `args.ServerName: "github"` and `args.ToolName: "issue_write"` or `"sub_issue_write"`. Eager or direct naming exposes `mcp_github_issue_write` / `mcp_github_sub_issue_write` or bare `issue_write` / `sub_issue_write`.
+  - Because guards like `require-model-label-on-issue-create` and `require-approval-token-on-issue-write` match against `mcp__.*__issue_write`, agy calls do not match without translation by `agy-hook-shim.sh`.
+- **Safety invariant verified:** At no point during the probe was an `issue_write` or `sub_issue_write` call made against a live repository. Zero write calls exist in the invocation log.
+
+### Verification Runbook and Probe Tooling
+
+The live session tool-call log was recorded at `/tmp/agy-hook-invocations.jsonl` and preserved at the run's scratchpad path `/home/joshua/.gemini/antigravity-cli/brain/b4801061-7dd9-40ac-a0b3-585b30cca574/scratch/probe-log-2026-10-12.jsonl`.
+The probe verification script `scripts/probe-agy-tools.sh` (runnable via `deno task probe:agy-tools`) analyzes the log, validates tool argument signatures, confirms `PreToolUse` firing, and verifies that zero write calls occurred:
+
+An empty log, malformed JSON, or a record without a usable tool identity is refused with exit 1. The verifier reports the path and line for damaged records and emits no safety report for an unreadable log.
+
+```bash
+deno task probe:agy-tools --log /path/to/log.jsonl
+```
+
+## Helper ancestry rules (moved from AGENTS.md)
+
+29. **Skill Discovery Test Directory Isolation & Strict Helper Ancestry Verification:**
+    - **Isolated Installed-Skill Fixtures in Hook & Integration Tests:** When testing hooks,
+      scripts, or CLIs that discover installed skills from default user or plugin directories (such
+      as `~/.gemini/config/plugins/...` or `~/.gemini/skills`), test suites must never depend on the
+      presence of skills in the ambient developer environment or host directories. The discovery
+      mechanism must accept directory overrides via environment variables (e.g.
+      `AGY_PLUGIN_SKILLS_DIR`, `AGY_USER_SKILLS_DIR`), and shell integration/E2E tests must
+      construct isolated temporary skill fixture directories containing mocked `SKILL.md` files so
+      that automated CI environments (such as CircleCI under `/home/circleci`) reliably discover
+      skills without host dependency.
+    - **Strict Helper Ancestry & Structured Creation Record Validation:** In multi-agent
+      conversation hierarchies, permission inheritance or skill-run state propagation across helper
+      agents must establish authentic creation ancestry rather than accepting arbitrary inter-agent
+      traffic or incidental transcript mentions. The child agent's message inbox must strictly
+      verify that the message is a genuine helper creation message (`invoke_subagent`) directed
+      specifically to this helper's conversation ID, rejecting ordinary inter-agent messages
+      (`send_message`), missing or non-string recipients, mismatched recipients, or competing
+      messages claiming conflicting parent IDs. Reciprocally, the parent conversation record must be
+      validated against structured helper-creation results (such as authentic `invoke_subagent` tool
+      execution entries matching recognized creation header formats like
+      `Created the following subagents:` declaring the `conversationId`), strictly refusing loose
+      raw substring containment, generic model entries, assistant examples in planner responses, or
+      unrelated JSON/status responses containing the ID.
+    - **Helper Synthetic Launch Input & Ancestry Traversal:** Real helper transcripts contain the
+      parent's synthetic launch prompt as `source: "USER_EXPLICIT", type: "USER_INPUT"`. Transcript
+      parsers and hook permission evaluators must distinguish a helper's synthetic launch prompt
+      from Josh's own input. When evaluating permission or skill-run inheritance, hooks must follow
+      the verified helper ancestry to the authentic starting conversation rather than prematurely
+      evaluating the helper's synthetic prompt as a direct user command and returning unapproved
+      before consulting verified creation messages and parent ancestry. Test suites must cover the
+      captured authentic helper launch format, including chained helper-of-a-helper ancestry.
+    - **Keep Rejected Helper Ancestry from Authorizing Synthetic Launch Input:** When resolving
+      helper ancestry, evaluators must strictly distinguish a genuine top-level starting
+      conversation (where Josh typed) from rejected or indeterminate helper evidence (e.g. missing
+      recipient, non-string recipient, mismatched recipient, competing senders, or parent records
+      failing reciprocal verification). If helper ancestry is rejected, the evaluator must fail
+      closed to `not_open` (allow without rewriting) and NEVER fall through to evaluate the helper's
+      synthetic launch prompt as user input. Furthermore, helper transcripts must be read with
+      helper mode active (isolating synthetic launch prompts into helper launch metadata and keeping
+      `userMessages` empty). Test suites must include full-handler regressions where the helper's
+      synthetic launch prompt contains a slash command (e.g. `/pr-review`) across every refusal
+      case, verifying that rejected ancestry never rewrites or authorizes commands.
+    - **Preserve Indeterminate Ancestry on Helper Message Read and Parse Failures:** When inspecting
+      a helper's message inbox to discover its parent conversation, reading errors (such as
+      permissions or I/O failures when reading the messages directory or individual message files)
+      and parsing errors (such as malformed or truncated JSON in a message file) must never be
+      silently ignored or collapsed into a genuine starting conversation (`outcome: "none"`). Doing
+      so creates an approval bypass by allowing a helper whose creation message is malformed or
+      unreadable to fall through to direct-user evaluation, where its synthetic launch prompt (e.g.
+      `/pr-review`) would be treated as Josh's approval. Instead, read and parse failures must be
+      preserved and propagated as indeterminate ancestry (`outcome: "indeterminate"` /
+      `cannot_tell`), returning allow without rewriting (`overwrite: undefined`) while strictly
+      preserving the legitimate top-level/no-messages case (where the messages directory does not
+      exist or is empty). Test suites must include unit, full-handler, and E2E regressions covering
+      unreadable message directories, unreadable files, and malformed JSON messages with slash-command
+      launch prompts.

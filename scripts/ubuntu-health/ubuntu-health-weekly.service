@@ -1,0 +1,9 @@
+[Unit]
+Description=Ubuntu health weekly run
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/ubuntu-health/weekly.sh
+Nice=19
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle

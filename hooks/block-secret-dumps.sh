@@ -10,6 +10,23 @@
 set -euo pipefail
 
 input=$(cat)
+
+block() {
+  echo "BLOCKED (secret-dump guard): $1" >&2
+  echo "Safe alternative: $2" >&2
+  echo "(rule: feedback-never-dump-secrets-via-config — override by rephrasing to a redacted/targeted form)" >&2
+  exit 2
+}
+
+HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+# Check the original payload before jq can discard an unreadable command. The
+# checker reuses the shared parser; it never executes the supplied command.
+side_effect=$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group safety --name block-secret-dumps deno run --no-config "$HOOK_DIR/lib/check_secret_dump_side_effects.ts")
+if [ -n "$side_effect" ]; then
+  block "$side_effect" \
+        "pgrep -f <pattern> (PIDs), pgrep -l <pattern> (names), ps -o pid,etime,stat -p <pid>, or kill -0 <pid>; inspect a single non-secret variable with declare -p PATH."
+fi
+
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
 [ -z "$cmd" ] && exit 0
 
@@ -43,20 +60,7 @@ cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null ||
 # bias to safety, per the issue's guidance.
 # Resolve this hook's REAL directory (it is installed as a symlink into
 # ~/.claude/hooks, so readlink -f is required) to find the shared normalizer.
-HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-c=$(CMD_FOR_PY="$cmd" deno run --no-config --allow-env "$HOOK_DIR/lib/normalize_command.ts" 2>/dev/null) || true
-if [ -z "$c" ]; then
-  # Deno unavailable or crashed: fall back to the old collapse so the
-  # guard still fires on unambiguous cases rather than silently no-op'ing.
-  c=$(printf '%s' "$cmd" | tr '\n' ' ' | tr -s ' ')
-fi
-
-block() {
-  echo "BLOCKED (secret-dump guard): $1" >&2
-  echo "Safe alternative: $2" >&2
-  echo "(rule: feedback-never-dump-secrets-via-config — override by rephrasing to a redacted/targeted form)" >&2
-  exit 2
-}
+c=$(CMD_FOR_PY="$cmd" "$HOOK_DIR/lib/run_hook.sh" --group safety --name block-secret-dumps deno run --no-config --allow-env "$HOOK_DIR/lib/normalize_command.ts")
 
 # rclone config show/dump prints the OAuth access + refresh token
 if printf '%s' "$c" | grep -Eq 'rclone +config +(show|dump)'; then
@@ -140,7 +144,7 @@ fi
 
 # reading known credential/secret files
 #
-# The .env boundary (web-jam-tools#257 review fix) matches a literal `.`
+# The .env right boundary (web-jam-tools#257 review fix) matches a literal `.`
 # (so .env.test/.env.local/.env.production are recognized too), any
 # non-identifier character (space, /, ), quote, pipe, redirect, backtick,
 # $, etc.), or end-of-string. The old `( |$|/)` boundary missed both: (a)
@@ -154,7 +158,10 @@ fi
 # agy's settings.json all hold live credentials and were NOT on this list — that
 # is how a Dropbox refresh token (tail -15 ~/.bashrc) and a Google API key
 # (agy settings.json) reached transcripts on 2026-07-25.
-SECRET_FILE_RE='(rclone\.conf|\.circleci-token|gcp-oauth\.keys\.json|oauth_creds|credentials\.json|client_secret|/token\.json|google-drive-mcp/|\.bashrc|\.bash_profile|\.zshrc|\.zprofile|/\.profile|\.netrc|\.npmrc|\.config/gh/hosts\.yml|antigravity-cli/settings\.json|\.env(\.|[^A-Za-z0-9_-]|$))'
+# The left boundary reads .env as a file name, not a property in Deno.env.get
+# or process.env. Quotes and expression/read delimiters can start a file name.
+ENV_FILE_RE="(^|[[:space:]/'\"=(<])\\.env(\\.|[^A-Za-z0-9_-]|$)"
+SECRET_FILE_RE='(rclone\.conf|\.circleci-token|gcp-oauth\.keys\.json|oauth_creds|credentials\.json|client_secret|/token\.json|google-drive-mcp/|\.bashrc|\.bash_profile|\.zshrc|\.zprofile|/\.profile|\.netrc|\.npmrc|\.config/gh/hosts\.yml|antigravity-cli/settings\.json|'"$ENV_FILE_RE"')'
 if printf '%s' "$c" | grep -Eiq "$SECRET_FILE_RE"; then
   # WRITE-ONLY exception (web-jam-tools#272): appending to ~/.bashrc is normal,
   # safe work — the guard must block READING these files, not writing to them.

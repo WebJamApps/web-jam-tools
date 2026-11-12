@@ -17,7 +17,7 @@ project directories that live alongside it on the same machine.
 
 - **`docs/`** — system-setup and integration documentation (rclone, Google APIs, etc.)
 - **`scripts/`** — workspace bootstrapping, environment checks, and example scraping/data-prep utilities
-- **`src/`** — Deno TypeScript tools: task-queue (CLI), gig-scraper (Playwright + xlsx), devotional (daily email sender), outreach-cron (cadence automation), dropbox-link (share-link CLI for Setlist play links)
+- **`src/`** — Deno TypeScript tools: task-queue (CLI), gig-scraper (Playwright + xlsx), devotional (daily email sender), dropbox-link (share-link CLI for Setlist play links)
 - **`skills/`** — Claude Code skills (single source of truth; symlinked into `~/.claude/skills`)
 - **`hooks/`** — Claude Code hooks (single source of truth; symlinked into `~/.claude/hooks`, wired into `~/.claude/settings.json` by `scripts/install-hooks.sh` — see [Claude Code hooks](#claude-code-hooks))
 - **`CLAUDE.md` / `GEMINI.md`** — orientation and rules for AI assistants working in the workspace
@@ -96,23 +96,23 @@ this machine — and says nothing when it hasn't.
 
 ## Push-time secret scanning (Gitleaks)
 
-`scripts/install-git-secret-hook.sh` installs a push-time secret guard and shared `.gitleaks.toml` configuration across WebJamApps repositories (web-jam-tools#658):
+`scripts/install-hooks.sh` sets `git config --global core.hooksPath` to the canonical clone's `git-hooks` directory, installing a machine-wide `pre-push` hook (`git-hooks/pre-push`) that scans commits being pushed across all WebJamApps repositories using the shared Docker-driven gitleaks tool (`scripts/gitleaks.sh`):
 
 ```bash
-# Install in the current repository
-bash scripts/install-git-secret-hook.sh
+# Install machine-wide hooks and set core.hooksPath
+bash scripts/install-hooks.sh
 
-# Install into a target repository
-bash scripts/install-git-secret-hook.sh --repo ../JaMmusic
+# Check for drift across installed hooks and global git settings
+bash scripts/install-hooks.sh --check
 
-# Check for drift
-bash scripts/install-git-secret-hook.sh --check
+# Run proof script on laptop
+bash scripts/prove-push-guard.sh
 ```
 
-- Node repos are wired via `.husky/pre-push`.
-- Deno repos are wired via `.git/hooks/pre-push`.
-- When a credential literal is detected in commits being pushed, the push is refused with non-zero exit, naming the file and rule ID while redacting the secret value.
-- To allow intentional test fixtures, include `// webjam-fixture-ok` or locate the test under `test/`.
+- Installed once globally via `core.hooksPath`; no per-repository copying or husky hooks needed.
+- When a credential literal is detected in commits being pushed, the push is refused with non-zero exit, naming the file, line, and rule ID while redacting the secret value.
+- Refusals print the way out: remove the secret or fingerprint it in the repository's `.gitleaksignore`.
+- After clean scanning, executes the repository's own `.git/hooks/pre-push` if present.
 
 ## Checks (CI gate)
 
@@ -239,17 +239,21 @@ printf '/a.mp3\n/b.mp3\n' | deno task dropbox:link --
 link (Dropbox 409 `shared_link_already_exists` → list-and-reuse fallback),
 never a duplicate.
 
-### Auth: durable OAuth refresh token (one-time setup)
+### Auth: durable OAuth refresh token in KeePass (one-time setup)
 
-No more 4-hour throwaway access tokens. The CLI holds a **refresh token**
-that never expires and mints a fresh access token on every run — env-driven,
-no hardcoded laptop paths, secrets never committed:
+No more 4-hour throwaway access tokens, and no Dropbox credentials in shell
+environments. The three OAuth values live only in **KeePass** (entry
+`webjam-setlist-links` in `~/Dropbox/web-jam-llc/webjamllc.kdbx`, never in
+`~/.bashrc` or any file a shell loads). On every run, `deno task dropbox:link`
+reads them at run time through `keepassxc-cli` — which prompts for the KeePass
+master password — mints a fresh short-lived access token, and never prints any
+of the three values:
 
-| Env var | What it is |
+| KeePass field (`webjam-setlist-links`) | What it is |
 |---|---|
-| `DROPBOX_APP_KEY` | The `webjam-setlist-links` Dropbox app's key |
-| `DROPBOX_APP_SECRET` | That app's secret |
-| `DROPBOX_REFRESH_TOKEN` | Minted once via the offline OAuth flow below |
+| **Username** (`UserName`) | The `webjam-setlist-links` Dropbox app's key |
+| **Password** (`Password`) | That app's secret |
+| **Notes** (`Notes`) | The refresh token minted once via the offline OAuth flow below |
 
 This reuses the existing **`webjam-setlist-links`** Dropbox app (account
 `web.jam.adm@gmail.com`; scopes `files.metadata.read`, `sharing.read`,
@@ -272,11 +276,11 @@ token (one-time, or if it's ever revoked):
      -d client_id=<DROPBOX_APP_KEY> \
      -d client_secret=<DROPBOX_APP_SECRET>
    ```
-   The JSON response's `refresh_token` field is the durable
-   `DROPBOX_REFRESH_TOKEN` — it does not expire under normal use.
-4. Store all three values in **KeePass**, and set them as env vars wherever
-   the CLI runs (shell profile for local/manual runs; the hosting platform's
-   secret store for anything automated). Never commit them.
+   The JSON response's `refresh_token` field is the durable refresh token — it
+   does not expire under normal use.
+4. Store all three values in **KeePass** only (under the `webjam-setlist-links`
+   entry: Username = app key, Password = app secret, Notes = refresh token).
+   Never export them in `~/.bashrc` or any shell profile, and never commit them.
 
 ## VSCode multi-root workspace
 

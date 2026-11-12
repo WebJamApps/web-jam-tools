@@ -33,7 +33,13 @@ export function runDriveCleanupPrepass(): void {
   }
 
   const CANONICAL = new Set(["claude-sonnet-tasks.txt", "SHARED.md"]);
-  const KNOWN_FOLDERS = new Set(["CLAUDE", "JoshMariaMusic", "MariaParty", "CollegeLutheran", "Misc"]);
+  const KNOWN_FOLDERS = new Set([
+    "CLAUDE",
+    "JoshMariaMusic",
+    "MariaParty",
+    "CollegeLutheran",
+    "Misc",
+  ]);
   const REPORT_FILE = "drive-cleanup-pending-report.md";
   const MIRROR = [
     "Pitch Email – MidRange Cafe Bar.txt",
@@ -111,7 +117,9 @@ export function runDriveCleanupPrepass(): void {
         actions.push([
           "duplicate-canonical",
           it,
-          `canonical file appears ${nameCounts[name]}x — must be exactly one; keep latest only, trash this older copy`,
+          `canonical file appears ${
+            nameCounts[name]
+          }x — must be exactly one; keep latest only, trash this older copy`,
           trashCmd(it),
         ]);
       } else {
@@ -145,7 +153,9 @@ export function runDriveCleanupPrepass(): void {
       actions.push([
         "duplicate",
         it,
-        `same-name duplicate at root (${nameCounts[name]}x) — Josh/model picks which to keep, then trash the rest by ID (never by name)`,
+        `same-name duplicate at root (${
+          nameCounts[name]
+        }x) — Josh/model picks which to keep, then trash the rest by ID (never by name)`,
         `deleteItem ${fid}  # only if this copy is NOT the keeper`,
       ]);
       continue;
@@ -198,15 +208,18 @@ export function runDriveCleanupPrepass(): void {
     }
   }
 
-  const mirrorCmd =
-    `rclone copy "${jmmLocal}/" gdrive:JoshMariaMusic/ ` +
+  const mirrorCmd = `rclone copy "${jmmLocal}/" gdrive:JoshMariaMusic/ ` +
     '--include "Pitch Email – MidRange Cafe Bar.txt" ' +
     '--include "Pitch Email – Originals Venues.txt" ' +
     '--include "Pitch Email – Pub Festival Brewery.txt" ' +
     '--include "Online Form Information Block.txt" --update';
 
   const out: string[] = [];
-  out.push(`## drive-cleanup pre-pass (rclone, deterministic) — ${now.toISOString().replace(/\.\d{3}Z$/, "Z")}`);
+  out.push(
+    `## drive-cleanup pre-pass (rclone, deterministic) — ${
+      now.toISOString().replace(/\.\d{3}Z$/, "Z")
+    }`,
+  );
   out.push("");
   const total = root.length;
   out.push(
@@ -223,7 +236,9 @@ export function runDriveCleanupPrepass(): void {
     out.push("none");
   }
   if (staleMirror.length) {
-    out.push(`- **[mirror]** JoshMariaMusic mirror stale: ${staleMirror.join(", ")} — push Dropbox→Drive`);
+    out.push(
+      `- **[mirror]** JoshMariaMusic mirror stale: ${staleMirror.join(", ")} — push Dropbox→Drive`,
+    );
     out.push(`  - \`${mirrorCmd}\``);
   }
   out.push("");
@@ -231,7 +246,9 @@ export function runDriveCleanupPrepass(): void {
   if (ambiguous.length) {
     for (const [kind, it] of ambiguous) {
       out.push(
-        `- \`${it.Name}\` (id \`${it.ID || "?"}\`) — ${it.IsDir ? "dir" : `${it.Size ?? -1} bytes`}, modified ${it.ModTime || "?"} [${kind}]`,
+        `- \`${it.Name}\` (id \`${it.ID || "?"}\`) — ${
+          it.IsDir ? "dir" : `${it.Size ?? -1} bytes`
+        }, modified ${it.ModTime || "?"} [${kind}]`,
       );
     }
   } else {

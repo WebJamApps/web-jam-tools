@@ -51,13 +51,13 @@ labels:
   # --- Model-tier — all 8 repos ---
   # `modelTier: true` is the machine-readable marker for "this is a model
   # label" (web-jam-tools#265). src/fix-labels/generate-model-labels.ts
-  # selects these nine entries into the committed sidecar
+  # selects these entries into the committed sidecar
   # skills/fix-labels/model-labels.json (`deno task
   # fix-labels:generate-model-labels`, kept honest by
   # test/fix_labels_model_labels_parity.test.ts), which
   # hooks/require-model-label-on-issue-create.sh reads at runtime — that hook
   # is bash/python and the CircleCI image has no PyYAML, so it can't parse
-  # this file directly. No second hardcoded copy of the nine names exists
+  # this file directly. No second hardcoded copy of the model names exists
   # anywhere; regenerate the sidecar after editing modelTier entries here.
   - name: Haiku
     hex: "0E8A16"
@@ -72,6 +72,11 @@ labels:
   - name: Sonnet
     hex: "1D76DB"
     description: "Coding that needs a Claude-side capability Flash lacks; ranks above Flash but is not the default coder tier (a cost decision)"
+    repos: all
+    modelTier: true
+  - name: Argon
+    hex: "2B0607"
+    description: "Logic- and safety-heavy coding via agy: Gemini 4 Argon (gemini-4-argon-high), high effort"
     repos: all
     modelTier: true
   - name: Opus
@@ -122,12 +127,6 @@ labels:
     modelTier: true
 
   # --- Status — all 8 repos ---
-  # `parked` and `Josh` are NOT priority/topic/type/dependency labels, so
-  # they are outside every web-jam-tools#300 prune category and are kept.
-  - name: parked
-    hex: "C2C2C2"
-    description: "Parked issue — work on hold until unparked"
-    repos: all
   - name: Josh
     hex: "795548"
     description: "Manual step requiring Josh (credential creation, vendor dashboard action, or physical step)"
@@ -188,15 +187,14 @@ milestoneTopics:
   # canonical topic, not an unrelated keeper. Milestone already created live
   # in all three repos below, with the 5 historical (closed) issues assigned
   # (web-jam-back#922, web-jam-back#897, JaMmusic#1182,
-  # WebJamSocketCluster#237, WebJamSocketCluster#94). This repo list must
-  # match those three repos exactly, or the milestone-drift check reports
-  # false drift. 0 open issues carry it as of this writing — mainly for
-  # future use.
+  # WebJamSocketCluster#237, WebJamSocketCluster#94). TimShermanMusic added
+  # per backlog-groom-design.md registration table (web-jam-tools#1643).
   - name: timshermanmusic
     repos:
       - web-jam-back
       - JaMmusic
       - WebJamSocketCluster
+      - TimShermanMusic
   # web-jam-tools#315 "Restrict Claude and Flash Dropbox access to
   # web-jam-llms and JoshMariaMusic only" — Josh's call, created live in all 8
   # active repos on 2026-07-30. Covers restricting what AI agents and
@@ -225,11 +223,11 @@ milestoneTopics:
   # deny rules, GitHub ruleset, HARD RULES)" and web-jam-tools#324 "No agent
   # connects a new account, credential, or MCP server without Josh's explicit
   # authorization — add the rule and audit where it can be mechanically
-  # enforced". web-jam-tools only for now — add repos here (and create the
-  # milestone live there) if the topic ever spans more.
+  # enforced". JaMmusic added per backlog-groom-design.md (web-jam-tools#1643).
   - name: AI Misbehaves
     repos:
       - web-jam-tools
+      - JaMmusic
 
   # Six topics from Josh's list on web-jam-tools#287 "fix-labels skill
   # expanded / corrected" — never created at the time that issue landed, and
@@ -237,7 +235,8 @@ milestoneTopics:
   # 2026-07-31 at his instruction. Registered here the same day so
   # `fix-labels:milestone-diff` stops reporting them as non-canonical drift.
   # (venue-mining was dropped 2026-09-17 at Josh's instruction; its work goes
-  # under `gig-outreach`)
+  # under `gig-outreach`). CollegeLutheran added to `promote-gigs` per
+  # backlog-groom-design.md registration table (web-jam-tools#1643).
   - name: song-recordings
     repos:
       - JaMmusic
@@ -256,6 +255,7 @@ milestoneTopics:
       - web-jam-back
       - WebJamSocketCluster
       - web-jam-tools
+      - CollegeLutheran
   - name: financial
     repos:
       - JaMmusic
@@ -273,6 +273,36 @@ milestoneTopics:
       - JaMmusic
       - web-jam-back
       - WebJamSocketCluster
+      - web-jam-tools
+
+  # Canonical milestones registered per backlog-groom-design.md
+  # "The milestone rules" (web-jam-tools#1643).
+  - name: Operations
+    repos:
+      - web-jam-tools
+      - JaMmusic
+      - web-jam-back
+      - WebJamSocketCluster
+      - CollegeLutheran
+      - AppersonAuto
+      - TimShermanMusic
+      - HenricksonForSalem
+  - name: Other-Projects
+    repos:
+      - web-jam-tools
+      - JaMmusic
+      - web-jam-back
+      - AppersonAuto
+      - HenricksonForSalem
+  - name: collegelutheran
+    repos:
+      - web-jam-tools
+      - CollegeLutheran
+  - name: songwriting
+    repos:
+      - web-jam-tools
+  - name: token-savings
+    repos:
       - web-jam-tools
 
 # DECISION (Josh, 2026-07-31): NEITHER a `Blocker` label NOR a `depends-on`

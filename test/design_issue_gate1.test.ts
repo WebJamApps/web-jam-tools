@@ -20,6 +20,8 @@ import {
   isDesignDocFilename,
   isThemeLevelDesignDoc,
   matchesTopic,
+  matchThemeFolder,
+  normalizeThemeName,
   normalizeTopicSlug,
   parseDecisionsRecord,
   refuseRedundantDesignDoc,
@@ -467,27 +469,64 @@ Deno.test("runGate1 fails loudly when browser launch fails", async () => {
   }
 });
 
-Deno.test("defaultOpenBrowserImpl formats and executes background command with environment propagation", async () => {
+Deno.test("defaultOpenBrowserImpl starts google-chrome directly with the file URL and the display", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "gate1-open-browser-" });
   const htmlPath = path.join(tempDir, "test.html");
   await Deno.writeTextFile(htmlPath, "<h1>Test</h1>");
 
   try {
-    let capturedCmd = "";
+    let capturedBin = "";
+    let capturedArgs: string[] = [];
     let capturedEnv: Record<string, string> = {};
-    await defaultOpenBrowserImpl(htmlPath, ":99", (cmd, env) => {
-      capturedCmd = cmd;
+    await defaultOpenBrowserImpl(htmlPath, ":99", (bin, args, env) => {
+      capturedBin = bin;
+      capturedArgs = args;
       capturedEnv = env;
-      return Promise.resolve({ success: true, code: 0 });
     });
-    assertStringIncludes(capturedCmd, 'DISPLAY=":99" google-chrome "file://');
-    assertStringIncludes(capturedCmd, "test.html");
+    assertEquals(capturedBin, "google-chrome");
+    assertEquals(capturedArgs, [`file://${htmlPath}`]);
     assertEquals(capturedEnv["DISPLAY"], ":99");
     if (Deno.env.get("PATH")) {
       assertEquals(capturedEnv["PATH"], Deno.env.get("PATH"));
     }
   } finally {
     await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("defaultOpenBrowserImpl rejects when the launcher cannot start Chrome (web-jam-tools#1455)", async () => {
+  await assertRejects(
+    () =>
+      defaultOpenBrowserImpl("/tmp/x.html", ":0", () => {
+        throw new Deno.errors.NotFound("google-chrome: No such file or directory");
+      }),
+    Error,
+    "google-chrome was not found on PATH",
+  );
+  await assertRejects(
+    () =>
+      defaultOpenBrowserImpl("/tmp/x.html", ":0", () => {
+        throw new Error("spawn denied");
+      }),
+    Error,
+    "Failed to launch Google Chrome: spawn denied",
+  );
+});
+
+Deno.test("defaultOpenBrowserImpl reports a missing Chrome through the real launcher (web-jam-tools#1455)", async () => {
+  const emptyBin = await Deno.makeTempDir({ prefix: "gate1-no-chrome-" });
+  const originalPath = Deno.env.get("PATH");
+  Deno.env.set("PATH", emptyBin);
+  try {
+    await assertRejects(
+      () => defaultOpenBrowserImpl("/tmp/x.html", ":0"),
+      Error,
+      "google-chrome was not found on PATH",
+    );
+  } finally {
+    if (originalPath === undefined) Deno.env.delete("PATH");
+    else Deno.env.set("PATH", originalPath);
+    await Deno.remove(emptyBin, { recursive: true });
   }
 });
 
@@ -614,7 +653,10 @@ Deno.test("cli.ts runs Gate 1 on valid file with --no-open", async () => {
   }
 });
 
-Deno.test("defaultScreenshotImpl takes a real screenshot when google-chrome is available", async () => {
+// A suite run must launch no browser ("Epics, repositories and sub-issues", web-jam-tools#1455), so
+// this live check runs only when asked for: WJT_LIVE_CHROME=1 deno task test <this file>.
+Deno.test("defaultScreenshotImpl takes a real screenshot when google-chrome is available (opt-in: WJT_LIVE_CHROME=1)", async () => {
+  if (Deno.env.get("WJT_LIVE_CHROME") !== "1") return;
   // Check if google-chrome is on PATH
   let hasChrome = false;
   try {
@@ -922,7 +964,7 @@ Deno.test("runMatchDesignCli CLI prints match and returns 0 or 1 appropriately",
     const exitCode1 = await runMatchDesignCli(
       ["unknown-feature", "--dropbox-dir", tempDir],
     );
-    assertEquals(exitCode1, 1);
+    assertEquals(exitCode1, 2);
 
     // Missing query returns 1
     const exitCodeMissing = await runMatchDesignCli([]);
@@ -958,7 +1000,7 @@ Deno.test("runCandidatesCli resolves Epic argument to existing canonical design 
     const exitCode = await runCandidatesCli(
       [
         "--epic",
-        "skills/design-issue: automatically match existing feature design documents on Epics for Major Revisions",
+        "design-issue",
         "--dropbox-dir",
         tempDir,
       ],
@@ -1106,7 +1148,7 @@ Deno.test("web-jam-tools#942 outcome 1: a topic with an existing canonical docum
   }
 });
 
-Deno.test("web-jam-tools#942 outcome 2: a topic with no existing document proceeds unchanged", async () => {
+Deno.test("web-jam-tools#942 outcome 2: an unmatched topic asks Josh rather than claiming no design exists", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "precondition-outcome-2-" });
   const themeDir = path.join(tempDir, "gig-outreach");
   await Deno.mkdir(themeDir, { recursive: true });
@@ -1121,7 +1163,7 @@ Deno.test("web-jam-tools#942 outcome 2: a topic with no existing document procee
       dropboxDir: tempDir,
     });
 
-    assertEquals(resolution.outcome, "no-document");
+    assertEquals(resolution.outcome, "could-not-tell");
     assertEquals(resolution.match, null);
     assertEquals(resolution.decisions.length, 0);
 
@@ -1130,10 +1172,10 @@ Deno.test("web-jam-tools#942 outcome 2: a topic with no existing document procee
       ["brand-new-feature", "--dropbox-dir", tempDir],
       { log: (msg) => logs.push(msg) },
     );
-    assertEquals(exitCode, 1);
+    assertEquals(exitCode, 2);
     assertStringIncludes(
       logs.join("\n"),
-      'No existing design document found for "brand-new-feature"',
+      "could not tell",
     );
   } finally {
     await Deno.remove(tempDir, { recursive: true });
@@ -1295,12 +1337,13 @@ Deno.test("web-jam-tools#942: the Gate 1 refusal on a redundant parallel documen
   await Deno.writeTextFile(redundantDocPath, MINIMAL_LINT_CLEAN_DOC);
 
   try {
-    // The precondition resolves the canonical document up front...
+    // The precondition lists both ambiguous matches up front...
     const resolution = await resolveCanonicalDesignDoc({
       topic: "book-gig",
       dropboxDir: tempDir,
     });
-    assertEquals(resolution.outcome, "existing-document");
+    assertEquals(resolution.outcome, "could-not-tell");
+    assertEquals(resolution.candidates?.length, 2);
 
     // ...and the late refusal still refuses the duplicate file independently.
     await assertRejects(
@@ -1675,16 +1718,15 @@ Deno.test("web-jam-tools#1098: theme folder with both theme-level and topic-leve
     assertEquals(venueMiningMatch?.source, "theme-fallback");
     assertEquals(venueMiningMatch?.theme, "gig-outreach");
 
-    // 3. resolveCanonicalDesignDoc for venue-mining resolves existing-document to gig-outreach-design-2026-09-18.md
+    // 3. Step zero lists shared words but never resolves an unrelated theme document.
     const resolution = await resolveCanonicalDesignDoc({
       topic: "venue-mining",
       theme: "gig-outreach",
       dropboxDir: tempDir,
     });
-    assertEquals(resolution.outcome, "existing-document");
-    assertEquals(resolution.match?.filename, "gig-outreach-design-2026-09-18.md");
-    assertEquals(resolution.decisions.length, 1);
-    assertEquals(resolution.decisions[0].id, "1");
+    assertEquals(resolution.outcome, "could-not-tell");
+    assertEquals(resolution.match, null);
+    assertEquals(resolution.decisions.length, 0);
 
     // 4. refuseRedundantDesignDoc throws when trying to create parallel document for venue-mining in gig-outreach
     await assertRejects(
@@ -1745,5 +1787,241 @@ Deno.test("runGate1 opens Gate 1 record as open and clears any earlier approval"
     assertEquals(status3.reply, undefined);
   } finally {
     await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("web-jam-tools#1394: matchThemeFolder matches theme folder ignoring casing and separators", () => {
+  assertEquals(normalizeThemeName("AI Misbehaves"), "ai_misbehaves");
+  assertEquals(normalizeThemeName("Access Controls"), "access_controls");
+  assertEquals(normalizeThemeName("token-savings"), "token_savings");
+  assertEquals(normalizeThemeName("Token_Savings"), "token_savings");
+
+  assertEquals(matchThemeFolder("AI Misbehaves", ["AI_Misbehaves"]), {
+    outcome: "match",
+    folder: "AI_Misbehaves",
+  });
+  assertEquals(matchThemeFolder("Access Controls", ["Access_Controls"]), {
+    outcome: "match",
+    folder: "Access_Controls",
+  });
+  assertEquals(matchThemeFolder("token-savings", ["Token_Savings"]), {
+    outcome: "match",
+    folder: "Token_Savings",
+  });
+  assertEquals(matchThemeFolder("gig-outreach", ["gig-outreach"]), {
+    outcome: "match",
+    folder: "gig-outreach",
+  });
+  assertEquals(matchThemeFolder("AI_Misbehaves", ["AI_Misbehaves"]), {
+    outcome: "match",
+    folder: "AI_Misbehaves",
+  });
+  assertEquals(
+    matchThemeFolder("token-savings", ["token-savings", "Token_Savings"]),
+    {
+      outcome: "match",
+      folder: "token-savings",
+    },
+  );
+  assertEquals(
+    matchThemeFolder("Token Savings", ["token-savings", "Token_Savings"]),
+    {
+      outcome: "ambiguous",
+      matches: ["Token_Savings", "token-savings"],
+    },
+  );
+  assertEquals(matchThemeFolder("song-recordings", []), {
+    outcome: "none",
+  });
+  assertEquals(matchThemeFolder("backup", ["backups", "backup-restore"]), {
+    outcome: "none",
+  });
+});
+
+Deno.test("web-jam-tools#1394: resolveCanonicalDesignDoc matches theme folder ignoring casing and separators (9-case closed set)", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "theme-folder-resolution-" });
+  try {
+    // Set up initial folders
+    await Deno.mkdir(path.join(tempDir, "AI_Misbehaves"), { recursive: true });
+    await Deno.mkdir(path.join(tempDir, "Access_Controls"), { recursive: true });
+    await Deno.mkdir(path.join(tempDir, "Token_Savings"), { recursive: true });
+    await Deno.mkdir(path.join(tempDir, "gig-outreach"), { recursive: true });
+    await Deno.mkdir(path.join(tempDir, "backups"), { recursive: true });
+    await Deno.mkdir(path.join(tempDir, "backup-restore"), { recursive: true });
+
+    // 1. "AI Misbehaves" -> "AI_Misbehaves" (resolves)
+    const res1 = await resolveCanonicalDesignDoc({
+      topic: "test-topic",
+      theme: "AI Misbehaves",
+      dropboxDir: tempDir,
+    });
+    assertEquals(res1.outcome, "could-not-tell");
+
+    // 2. "Access Controls" -> "Access_Controls" (resolves)
+    const res2 = await resolveCanonicalDesignDoc({
+      topic: "test-topic",
+      theme: "Access Controls",
+      dropboxDir: tempDir,
+    });
+    assertEquals(res2.outcome, "could-not-tell");
+
+    // 3. "token-savings" -> "Token_Savings" (resolves)
+    const res3 = await resolveCanonicalDesignDoc({
+      topic: "test-topic",
+      theme: "token-savings",
+      dropboxDir: tempDir,
+    });
+    assertEquals(res3.outcome, "could-not-tell");
+
+    // 4. "gig-outreach" -> "gig-outreach" (resolves)
+    const res4 = await resolveCanonicalDesignDoc({
+      topic: "test-topic",
+      theme: "gig-outreach",
+      dropboxDir: tempDir,
+    });
+    assertEquals(res4.outcome, "could-not-tell");
+
+    // 5. "AI_Misbehaves" -> "AI_Misbehaves" (resolves)
+    const res5 = await resolveCanonicalDesignDoc({
+      topic: "test-topic",
+      theme: "AI_Misbehaves",
+      dropboxDir: tempDir,
+    });
+    assertEquals(res5.outcome, "could-not-tell");
+
+    // Create "token-savings" alongside "Token_Savings"
+    await Deno.mkdir(path.join(tempDir, "token-savings"), { recursive: true });
+    await Deno.writeTextFile(
+      path.join(tempDir, "token-savings", "test-topic-design-2026-10-14.md"),
+      MINIMAL_LINT_CLEAN_DOC,
+    );
+
+    // 6. "token-savings" with ["token-savings", "Token_Savings"] present -> resolves to exact "token-savings"
+    const res6 = await resolveCanonicalDesignDoc({
+      topic: "test-topic",
+      theme: "token-savings",
+      dropboxDir: tempDir,
+    });
+    assertEquals(res6.outcome, "existing-document");
+    assertEquals(res6.match?.theme, "token-savings");
+
+    // 7. "Token Savings" with ["token-savings", "Token_Savings"] present -> refuses naming both
+    const err7 = await assertRejects(
+      () =>
+        resolveCanonicalDesignDoc({
+          topic: "test-topic",
+          theme: "Token Savings",
+          dropboxDir: tempDir,
+        }),
+      DesignDocResolutionRefusal,
+    );
+    assertStringIncludes(err7.message, 'multiple theme folders match "Token Savings"');
+    assertStringIncludes(err7.message, '"Token_Savings"');
+    assertStringIncludes(err7.message, '"token-savings"');
+
+    // 8. "song-recordings" -> refuses naming path (no folder exists)
+    const err8 = await assertRejects(
+      () =>
+        resolveCanonicalDesignDoc({
+          topic: "test-topic",
+          theme: "song-recordings",
+          dropboxDir: tempDir,
+        }),
+      DesignDocResolutionRefusal,
+    );
+    assertStringIncludes(
+      err8.message,
+      'the theme folder "song-recordings" is missing or unreadable',
+    );
+    assertStringIncludes(err8.message, path.join(tempDir, "song-recordings"));
+
+    // 9. "backup" with ["backups", "backup-restore"] present -> refuses naming path (neither matches; no prefix-match)
+    const err9 = await assertRejects(
+      () =>
+        resolveCanonicalDesignDoc({
+          topic: "test-topic",
+          theme: "backup",
+          dropboxDir: tempDir,
+        }),
+      DesignDocResolutionRefusal,
+    );
+    assertStringIncludes(err9.message, 'the theme folder "backup" is missing or unreadable');
+    assertStringIncludes(err9.message, path.join(tempDir, "backup"));
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+// --- "Epics, repositories and sub-issues" case 20 (web-jam-tools#1455) ---
+
+const STAND_IN_CHILD_ENV = "WJT_STAND_IN_CHROME_CHILD";
+
+Deno.test("epics case 20: the test files that reach the browser launcher record zero google-chrome launches", async () => {
+  // The nested run below executes this file too; the guard keeps it from recursing.
+  if (Deno.env.get(STAND_IN_CHILD_ENV)) return;
+
+  const standInDir = await Deno.makeTempDir({ prefix: "stand-in-chrome-" });
+  const launchLog = path.join(standInDir, "launches.log");
+  const binDir = path.join(standInDir, "bin");
+  await Deno.mkdir(binDir);
+  await Deno.writeTextFile(
+    path.join(binDir, "google-chrome"),
+    `#!/bin/sh\necho "$@" >> "${launchLog}"\n`,
+    { mode: 0o755 },
+  );
+  try {
+    const repoDir = path.resolve(path.dirname(path.fromFileUrl(import.meta.url)), "..");
+    const files = [
+      "test/design_issue_gate1.test.ts",
+      "test/design_issue_lint_plan.test.ts",
+      "test/design_issue_file_plan.test.ts",
+      "test/create_issue.test.ts",
+      "test/design_issue_lint_doc_proved_date.test.ts",
+      "test/design_issue_lint_runbook.test.ts",
+    ];
+    const prevLiveChrome = Deno.env.get("WJT_LIVE_CHROME");
+    Deno.env.set("WJT_LIVE_CHROME", "1");
+    let result: Deno.CommandOutput;
+    try {
+      result = await new Deno.Command(Deno.execPath(), {
+        args: [
+          "test",
+          "--cached-only",
+          "--config",
+          path.join(repoDir, "deno.json"),
+          "--allow-env",
+          "--allow-run",
+          "--allow-read",
+          "--allow-write",
+          ...files.map((f) => path.join(repoDir, f)),
+        ],
+        cwd: repoDir,
+        env: {
+          PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
+          [STAND_IN_CHILD_ENV]: "1",
+          WJT_LIVE_CHROME: "",
+        },
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+    } finally {
+      if (prevLiveChrome === undefined) {
+        Deno.env.delete("WJT_LIVE_CHROME");
+      } else {
+        Deno.env.set("WJT_LIVE_CHROME", prevLiveChrome);
+      }
+    }
+    const stderr = new TextDecoder().decode(result.stderr);
+    assertEquals(result.success, true, stderr + new TextDecoder().decode(result.stdout));
+
+    let launches = "";
+    try {
+      launches = await Deno.readTextFile(launchLog);
+    } catch (err) {
+      if (!(err instanceof Deno.errors.NotFound)) throw err;
+    }
+    assertEquals(launches, "", "a test launched google-chrome");
+  } finally {
+    await Deno.remove(standInDir, { recursive: true });
   }
 });

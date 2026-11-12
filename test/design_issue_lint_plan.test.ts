@@ -11,14 +11,17 @@ import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
 import { parsePlanTable } from "../src/design-issue/plan_table.ts";
 import {
+  checkCriterionOrClosesCell,
   checkGate1ApprovalRecord,
   checkNeedsDesignRemovals,
+  extractDesignHeadings,
   findNarrowedDirective,
   type IssueBodyFetcher,
-  lintPlanTableFile,
+  type LintPlanOptions,
+  lintPlanTableFile as lintPlanFile,
   parseNeedsDesignRemovals,
   type PlanTableViolation,
-  runLintPlanCli,
+  runLintPlanCli as lintPlanCli,
   validatePlanTable,
 } from "../src/design-issue/lint_plan.ts";
 import {
@@ -29,6 +32,22 @@ import {
 import type { Schema } from "../src/fix-labels/diff.ts";
 import { ACTIVE_REPOS } from "../src/shared/repos.ts";
 import denoJson from "../deno.json" with { type: "json" };
+import type { CommandRunner, OpenIssueSummary } from "../hooks/lib/detect_duplicate_issue.ts";
+
+// File/CLI tests never call the workstation's gh or use the live backlog.
+const emptyOpenIssues: CommandRunner = () => Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+function lintPlanTableFile(file: string, options?: Parameters<typeof lintPlanFile>[1]) {
+  return lintPlanFile(file, { runGh: emptyOpenIssues, ...options });
+}
+function runLintPlanCli(args: string[], options?: Parameters<typeof lintPlanCli>[1]) {
+  return lintPlanCli(args, {
+    runGh: emptyOpenIssues,
+    renderDesignDocFileImpl: () => {},
+    openBrowserImpl: () => Promise.resolve(),
+    noOpen: options?.openBrowserImpl ? false : true,
+    ...options,
+  });
+}
 
 const HEADER_LINE =
   "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |";
@@ -49,16 +68,24 @@ const TEST_SCHEMA: Schema = {
   labels: [
     { name: "Haiku", hex: "0E8A16", repos: "all", modelTier: true },
     { name: "Sonnet", hex: "1D76DB", repos: "all", modelTier: true },
+    { name: "Sol", hex: "006B75", repos: "all", modelTier: true },
     { name: "Opus", hex: "B392F0", repos: "all", modelTier: true },
     { name: "Flash", hex: "E67E22", repos: "all", modelTier: true },
     { name: "Josh", hex: "795548", repos: "all" },
   ],
 };
 
-function validate(doc: string): PlanTableViolation[] {
+function validate(
+  doc: string,
+  options?: Partial<LintPlanOptions>,
+): PlanTableViolation[] {
   const parsed = parsePlanTable(doc);
   if (parsed === null) throw new Error("test fixture has no plan table");
-  return validatePlanTable(parsed, { schema: TEST_SCHEMA, activeRepos: ACTIVE_REPOS });
+  return validatePlanTable(parsed, {
+    schema: TEST_SCHEMA,
+    activeRepos: ACTIVE_REPOS,
+    ...options,
+  });
 }
 
 function findRule(violations: PlanTableViolation[], rule: string): PlanTableViolation[] {
@@ -68,7 +95,7 @@ function findRule(violations: PlanTableViolation[], rule: string): PlanTableViol
 // A clean baseline epic + child row pair, reused (with mutations) by every test below so each
 // test isolates exactly the one cell/case it targets.
 const EPIC_ROW =
-  "| 1 | Add design:lint-plan cell validation | - | Opus | High | web-jam-tools | Unit tests covering every validator rule | all children close |";
+  "| 1 | Coordinate plan validation delivery | Epic | Opus | High | web-jam-tools | Unit tests covering every validator rule | all children close |";
 function childRow(overrides: Partial<{
   title: string;
   epicChild: string;
@@ -79,17 +106,255 @@ function childRow(overrides: Partial<{
   closes: string;
 }> = {}): string {
   const c = {
-    title: "Add cell validators for design:lint-plan",
+    title: "Reject missing model tiers",
     epicChild: "Epic #1",
     tier: "Flash",
     priority: "High",
     repo: "web-jam-tools",
     tests: "Unit tests, one per acceptance criterion",
-    closes: "PR merges",
+    closes: "the `deno task test` suite passes",
     ...overrides,
   };
   return `| 2 | ${c.title} | ${c.epicChild} | ${c.tier} | ${c.priority} | ${c.repo} | ${c.tests} | ${c.closes} |`;
 }
+
+// Duplicate-title acceptance fixtures (web-jam-tools#1356).
+const PUSH_TITLE =
+  "scripts/push: post the fix comment with the push and sign it with the model the tool recorded";
+const MODEL_TITLE = "scripts/running-model: print the model the tool recorded for the session";
+const REWORDED_MODEL_TITLE = "scripts/running-model: print which model this session is running on";
+const FIX_PR_TITLE = "skills/fix-pr: add the skill and install it on Claude Code, agy and Codex";
+
+function duplicateRow(
+  title: string,
+  id = 1,
+  repo = "web-jam-tools",
+  tier = "Flash",
+  epic = "Epic #1",
+): string {
+  return `| ${id} | ${title} | ${epic} | ${tier} | Medium | ${repo} | Unit tests cover each acceptance case | the \`deno task test\` suite passes |`;
+}
+
+function issueRunner(issues: OpenIssueSummary[]): CommandRunner {
+  return (args) => {
+    assertEquals(args, [
+      "api",
+      "repos/WebJamApps/web-jam-tools/issues?state=open&per_page=100&page=1",
+    ]);
+    return Promise.resolve({ code: 0, stdout: JSON.stringify(issues), stderr: "" });
+  };
+}
+
+async function lintDuplicateRows(rows: string[], runGh: CommandRunner) {
+  const file = await Deno.makeTempFile({ suffix: ".md" });
+  try {
+    await Deno.writeTextFile(file, planTableDoc(rows));
+    return await lintPlanTableFile(file, { schema: TEST_SCHEMA, runGh });
+  } finally {
+    await Deno.remove(file);
+  }
+}
+
+Deno.test("duplicate titles: open look-alikes, rewording, exact existing rows, and closed issues", async (t) => {
+  const cases = [
+    {
+      name: "recorded-model look-alike refuses",
+      title: MODEL_TITLE,
+      open: PUSH_TITLE,
+      fails: true,
+    },
+    {
+      name: "different-work rewording passes",
+      title: REWORDED_MODEL_TITLE,
+      open: PUSH_TITLE,
+      fails: false,
+    },
+    { name: "exact existing issue passes", title: FIX_PR_TITLE, open: FIX_PR_TITLE, fails: false },
+    {
+      name: "nearly equal fix-pr title refuses",
+      title: "skills/fix-pr: add the skill and install it on Claude Code and Codex",
+      open: FIX_PR_TITLE,
+      fails: true,
+    },
+    // The runner asserts state=open above; a closed look-alike is absent from that listing.
+    { name: "closed look-alike passes", title: MODEL_TITLE, open: null, fails: false },
+  ];
+  for (const c of cases) {
+    await t.step(c.name, async () => {
+      const result = await lintDuplicateRows(
+        [duplicateRow(c.title)],
+        issueRunner(c.open ? [{ number: 137, title: c.open }] : []),
+      );
+      assertEquals(result.valid, !c.fails);
+      if (c.fails) {
+        assertEquals(result.violations.length, 1);
+        const violation = result.violations[0];
+        assertEquals(violation.rule, "duplicate-title");
+        assertEquals(violation.line, 7);
+        assertEquals(violation.column, "Proposed title");
+        assertStringIncludes(violation.message, `web-jam-tools#137 "${c.open}"`);
+      } else {
+        assertEquals(result.violations, []);
+      }
+    });
+  }
+});
+
+Deno.test("duplicate titles: new plan rows cite both look-alikes, and rewording passes", async () => {
+  const first =
+    "skills/backlog-groom: check Priority against the spread, with a focus milestone named for the run";
+  const second =
+    "Manual verification: run backlog-groom with a focus and approve its first Priority batch";
+  const result = await lintDuplicateRows(
+    [duplicateRow(first), duplicateRow(second, 2, "web-jam-tools", "Josh")],
+    issueRunner([]),
+  );
+  assertEquals(result.valid, false);
+  assertEquals(result.violations.map((v) => [v.rule, v.line]), [
+    ["duplicate-title", 7],
+    ["duplicate-title", 8],
+  ]);
+  assertStringIncludes(result.violations[0].message, `plan row 2 (web-jam-tools) "${second}"`);
+  assertStringIncludes(result.violations[1].message, `plan row 1 (web-jam-tools) "${first}"`);
+
+  const reworded = await lintDuplicateRows([
+    duplicateRow(first),
+    duplicateRow(
+      "Manual verification: approve the first batch of proposed levels from a focused groom run",
+      2,
+      "web-jam-tools",
+      "Josh",
+    ),
+  ], issueRunner([]));
+  assertEquals(reworded.valid, true);
+  assertEquals(reworded.violations, []);
+});
+
+Deno.test("duplicate titles: exact existing row stays a candidate for a different new row", async () => {
+  const newTitle = "skills/fix-pr: add the skill and install it on Claude Code and Codex";
+  const result = await lintDuplicateRows(
+    [
+      duplicateRow(FIX_PR_TITLE),
+      duplicateRow(newTitle, 2),
+    ],
+    issueRunner([{ number: 42, title: FIX_PR_TITLE }, {
+      number: 43,
+      title: newTitle + " tomorrow",
+    }]),
+  );
+  assertEquals(result.violations.length, 1);
+  assertEquals(result.violations[0].line, 8);
+  assertStringIncludes(result.violations[0].message, `web-jam-tools#42 "${FIX_PR_TITLE}"`);
+  assertStringIncludes(result.violations[0].message, `web-jam-tools#43 "${newTitle} tomorrow"`);
+});
+
+Deno.test("duplicate titles: fewer than three significant tokens and an empty plan never fetch", async () => {
+  const unexpectedFetch: CommandRunner = () => {
+    throw new Error("short/empty plans must not call gh");
+  };
+  for (const rows of [[], [duplicateRow("Fix the typo")]]) {
+    const result = await lintDuplicateRows(rows, unexpectedFetch);
+    assertEquals(result.valid, true);
+    assertEquals(result.violations, []);
+  }
+});
+
+Deno.test("duplicate titles: fetch each row's repository once, even with owner/markdown wrappers", async () => {
+  const requests: string[][] = [];
+  const runner: CommandRunner = (args) => {
+    requests.push(args);
+    const title = args[1].includes("/JaMmusic/") ? MODEL_TITLE : PUSH_TITLE;
+    return Promise.resolve({
+      code: 0,
+      stdout: JSON.stringify([{ number: 99, title }]),
+      stderr: "",
+    });
+  };
+  const result = await lintDuplicateRows([
+    duplicateRow(MODEL_TITLE),
+    duplicateRow(FIX_PR_TITLE, 2, "`WebJamApps/web-jam-tools`"),
+    duplicateRow("Arrange guitar chord positions", 3, "JaMmusic"),
+  ], runner);
+  assertEquals(requests, [
+    ["api", "repos/WebJamApps/web-jam-tools/issues?state=open&per_page=100&page=1"],
+    ["api", "repos/WebJamApps/JaMmusic/issues?state=open&per_page=100&page=1"],
+  ]);
+  assertEquals(result.violations.length, 1);
+  assertStringIncludes(result.violations[0].message, `web-jam-tools#99 "${PUSH_TITLE}"`);
+});
+
+Deno.test("duplicate titles: failed or incomplete listings refuse and name the repository", async (t) => {
+  const failures: [string, CommandRunner][] = [
+    ["gh nonzero", () => Promise.resolve({ code: 1, stdout: "", stderr: "offline" })],
+    ["runner throws", () => {
+      throw new Error("gh unavailable");
+    }],
+    ["invalid listing", () => Promise.resolve({ code: 0, stdout: "{}", stderr: "" })],
+    ["later page fails", (args) => {
+      if (args[1].endsWith("page=1")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify(
+            Array.from({ length: 100 }, (_, i) => ({ number: i + 1, title: PUSH_TITLE })),
+          ),
+          stderr: "",
+        });
+      }
+      return Promise.resolve({ code: 1, stdout: "", stderr: "rate limited" });
+    }],
+  ];
+  for (const [name, runner] of failures) {
+    await t.step(name, async () => {
+      const requests: string[][] = [];
+      const result = await lintDuplicateRows([duplicateRow(MODEL_TITLE, 1, "JaMmusic")], (args) => {
+        requests.push(args);
+        return runner(args);
+      });
+      assertEquals(
+        requests,
+        (name === "later page fails" ? [1, 2] : [1]).map((page) => [
+          "api",
+          `repos/WebJamApps/JaMmusic/issues?state=open&per_page=100&page=${page}`,
+        ]),
+      );
+      assertEquals(result.valid, false);
+      assertEquals(result.violations.length, 1);
+      assertEquals(result.violations[0].rule, "duplicate-title-search-failed");
+      assertStringIncludes(
+        result.violations[0].message,
+        "could not run or finish for WebJamApps/JaMmusic",
+      );
+    });
+  }
+});
+
+Deno.test("duplicate titles: CLI forwards the injected runner and refuses despite approved Gate 1", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const doc = `${dir}/design.md`;
+    const plan = `${dir}/plan.md`;
+    await Deno.writeTextFile(doc, "# Design\n");
+    await Deno.writeTextFile(plan, planTableDoc([duplicateRow(MODEL_TITLE)]));
+    await openGate1Record(doc, "# Design\n", { stateDir: dir });
+    await approveGate1Record(doc, "Gate 1 approved by Josh.", { stateDir: dir });
+    const output: string[] = [];
+    const errors: string[] = [];
+    const code = await runLintPlanCli([plan, "--design-doc", doc, "--state-dir", dir, "--json"], {
+      schema: TEST_SCHEMA,
+      runGh: issueRunner([{ number: 137, title: PUSH_TITLE }]),
+      log: (line) => output.push(line),
+      errorLog: (line) => errors.push(line),
+    });
+    assertEquals(code, 1);
+    assertEquals(errors, []);
+    const result = JSON.parse(output.join("\n"));
+    assertEquals(result.valid, false);
+    assertEquals(result.violations.length, 1);
+    assertStringIncludes(result.violations[0].message, `web-jam-tools#137 "${PUSH_TITLE}"`);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
 
 // --- 1. Missing cell values ---
 
@@ -115,6 +380,27 @@ Deno.test("AC2: a model tier absent from labels.yaml is reported, including case
     const doc = planTableDoc([EPIC_ROW, childRow({ tier })]);
     const violations = findRule(validate(doc), "tier-unknown");
     assertEquals(violations.length, 1, `expected tier-unknown violation for "${tier}"`);
+  }
+});
+
+Deno.test("lint-plan applies the shared plan reader and pair rule without an escalation column", () => {
+  for (const tier of ["Sonnet / Sol", "Sol / Sonnet", "Sonnet/Sol", "**Sonnet  /  Sol**"]) {
+    assertEquals(validate(planTableDoc([EPIC_ROW, childRow({ tier })])), [], tier);
+  }
+  for (
+    const tier of [
+      "Sonnet / Flash",
+      "Sol / Opus",
+      "Sol / Sonnet / Opus",
+      "Sonnet / Bogus",
+      "Sonnet / ",
+    ]
+  ) {
+    assertEquals(
+      findRule(validate(planTableDoc([EPIC_ROW, childRow({ tier })])), "tier-unknown").length,
+      1,
+      tier,
+    );
   }
 });
 
@@ -274,26 +560,130 @@ Deno.test("AC9 (non-composite case): a single-surface Josh row is not reported c
   assertEquals(violations.length, 0);
 });
 
-// --- 10. Cross-repo child not cited as repo#number "title" ---
+// --- 10. Epic requirement and cross-repo epics (web-jam-tools#1398) ---
 
-Deno.test('AC10: a child row whose repo differs from the epic\'s and is not cited as repo#number "title" is reported', () => {
-  const doc = planTableDoc([
-    EPIC_ROW, // repo: web-jam-tools
-    childRow({ epicChild: "Epic #1", repo: "JaMmusic" }), // cross-repo, cited only as "Epic #1"
+Deno.test("AC4 (#1398): a non-epic row whose Epic / child of cell is empty or none is reported as row-missing-epic", () => {
+  const emptyCellDoc = planTableDoc([
+    EPIC_ROW,
+    childRow({ epicChild: "" }),
   ]);
-  const violations = findRule(validate(doc), "cross-repo-child-uncited");
-  assertEquals(violations.length, 1);
+  const emptyViolations = findRule(validate(emptyCellDoc), "row-missing-epic");
+  assertEquals(emptyViolations.length, 1);
+  assertEquals(emptyViolations[0].column, "Epic / child of");
+
+  const noneCellDoc = planTableDoc([
+    EPIC_ROW,
+    childRow({ epicChild: "none" }),
+  ]);
+  const noneViolations = findRule(validate(noneCellDoc), "row-missing-epic");
+  assertEquals(noneViolations.length, 1);
+  assertEquals(noneViolations[0].column, "Epic / child of");
+
+  const upperNoneDoc = planTableDoc([
+    EPIC_ROW,
+    childRow({ epicChild: "None" }),
+  ]);
+  const upperNoneViolations = findRule(validate(upperNoneDoc), "row-missing-epic");
+  assertEquals(upperNoneViolations.length, 1);
+
+  for (const missing of ["-", "—", "n/a", "N/A", "Standalone issue", "standalone issue"]) {
+    const doc = planTableDoc([
+      EPIC_ROW,
+      childRow({ epicChild: missing }),
+    ]);
+    const violations = findRule(validate(doc), "row-missing-epic");
+    assertEquals(violations.length, 1, `expected row-missing-epic for "${missing}"`);
+  }
 });
 
-Deno.test('AC10 (properly cited case): a cross-repo child cited as repo#number "title" is not reported', () => {
+Deno.test("AC4 (#1398): a non-epic row whose Epic / child of cell names an epic or plan row passes", () => {
+  for (const epicChild of ["Epic #1", "row 1", "web-jam-tools#1355"]) {
+    const doc = planTableDoc([
+      EPIC_ROW,
+      childRow({ epicChild }),
+    ]);
+    const violations = findRule(validate(doc), "row-missing-epic");
+    assertEquals(violations.length, 0, `expected no row-missing-epic for "${epicChild}"`);
+  }
+});
+
+Deno.test("a task mentioning an epic in its test description still requires a parent", () => {
   const doc = planTableDoc([
     EPIC_ROW,
-    childRow({
-      epicChild: 'Epic web-jam-tools#793 "design-issue skill enhancements and fixes"',
-      repo: "JaMmusic",
-    }),
+    childRow({ epicChild: "none", tests: "Unit tests reject a task without an epic" }),
   ]);
-  const violations = findRule(validate(doc), "cross-repo-child-uncited");
+  assertEquals(findRule(validate(doc), "row-missing-epic").length, 1);
+});
+
+Deno.test("cross-repo epic validation resolves qualified parent citations", () => {
+  const title = "Coordinate cross-repo music features";
+  const epic =
+    `| 1 | ${title} | Epic | Opus | High | JaMmusic | Tests cover both child repositories | all children close |`;
+  for (const prefix of ["", "Epic "]) {
+    for (const repo of ["JaMmusic", "WebJamApps/JaMmusic"]) {
+      const epicChild = `${prefix}${repo}#1355 "${title}"`;
+      const doc = planTableDoc([
+        epic,
+        childRow({ epicChild, repo: "JaMmusic" }),
+        childRow({ epicChild, repo: "web-jam-back", title: "Add backend audio routes" }),
+      ]);
+      assertEquals(
+        findRule(validate(doc), "cross-repo-epic-not-in-web-jam-tools").length,
+        1,
+        epicChild,
+      );
+    }
+  }
+});
+
+Deno.test("qualified parent citations do not match a different repository or owner", () => {
+  const title = "Coordinate cross-repo music features";
+  const epic =
+    `| 1 | ${title} | Epic | Opus | High | JaMmusic | Tests cover both child repositories | all children close |`;
+  for (const repo of ["AppersonAuto", "OtherOrg/JaMmusic"]) {
+    const epicChild = `${repo}#1355 "${title}"`;
+    const doc = planTableDoc([
+      epic,
+      childRow({ epicChild, repo: "JaMmusic" }),
+      childRow({ epicChild, repo: "web-jam-back", title: "Add backend audio routes" }),
+    ]);
+    assertEquals(findRule(validate(doc), "cross-repo-epic-not-in-web-jam-tools").length, 0);
+  }
+});
+
+Deno.test("AC5 (#1398): an Epic row whose children sit in more than one repo fails when Repo is not web-jam-tools", () => {
+  const epicJaMmusic =
+    "| 1 | Coordinate cross-repo music features | Epic | Opus | High | JaMmusic | Unit tests | all children close |";
+  const doc = planTableDoc([
+    epicJaMmusic,
+    childRow({ epicChild: "row 1", repo: "JaMmusic" }),
+    childRow({ epicChild: "row 1", repo: "web-jam-back", title: "Add backend audio routes" }),
+  ]);
+  const violations = findRule(validate(doc), "cross-repo-epic-not-in-web-jam-tools");
+  assertEquals(violations.length, 1);
+  assertEquals(violations[0].column, "Repo");
+  assertStringIncludes(violations[0].message, "web-jam-tools");
+});
+
+Deno.test("AC5 (#1398): an Epic row whose children sit in more than one repo passes when Repo is web-jam-tools", () => {
+  const doc = planTableDoc([
+    EPIC_ROW, // repo: web-jam-tools
+    childRow({ epicChild: "Epic #1", repo: "JaMmusic" }),
+    childRow({ epicChild: "Epic #1", repo: "web-jam-back", title: "Add backend audio routes" }),
+  ]);
+  const violations = findRule(validate(doc), "cross-repo-epic-not-in-web-jam-tools");
+  assertEquals(violations.length, 0);
+});
+
+Deno.test("AC5 (#1398): an Epic row whose children sit in a single repo passes when Repo matches that repo", () => {
+  const epicJaMmusic =
+    "| 1 | Coordinate single-repo music features | Epic | Opus | High | JaMmusic | Unit tests | all children close |";
+  const doc = planTableDoc([
+    epicJaMmusic,
+    childRow({ epicChild: "row 1", repo: "JaMmusic" }),
+    childRow({ epicChild: "row 1", repo: "JaMmusic", title: "Add frontend audio player" }),
+  ]);
+  const violations = findRule(validate(doc), "cross-repo-epic-not-in-web-jam-tools");
   assertEquals(violations.length, 0);
 });
 
@@ -376,8 +766,12 @@ Deno.test("malformed rows from the parser are surfaced as malformed-row violatio
 // --- CLI Runner (runLintPlanCli) tests ---
 
 Deno.test("runLintPlanCli: --help exits with 0", async () => {
-  const code = await runLintPlanCli(["--help"]);
+  const output: string[] = [];
+  const code = await runLintPlanCli(["--help"], { log: (line) => output.push(line) });
   assertEquals(code, 0);
+  assertStringIncludes(output.join("\n"), "new titles resembling open issues");
+  assertStringIncludes(output.join("\n"), "other new");
+  assertStringIncludes(output.join("\n"), "failed title listing refuses the plan");
 });
 
 Deno.test("runLintPlanCli: missing path argument exits with 1", async () => {
@@ -866,4 +1260,493 @@ Deno.test("AC7 (#1156): refuses when design document cannot be read", async () =
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
   }
+});
+
+// --- HTML rendering and Chrome opening (AC6 #1398) ---
+
+Deno.test("AC6 (#1398): passing runLintPlanCli renders <plan>.html and opens in Chrome", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = `${tmpDir}/plan.md`;
+    const designDoc = `${tmpDir}/design.md`;
+    const designContent = "# Approved Design\n";
+    await Deno.writeTextFile(designDoc, designContent);
+    const doc = planTableDoc([EPIC_ROW, childRow({ epicChild: "Epic #1" })]);
+    await Deno.writeTextFile(planFile, doc);
+
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+    await approveGate1Record(designDoc, "Approved.", { stateDir: tmpDir });
+
+    let renderedInput = "";
+    let renderedOutput = "";
+    let openedHtml = "";
+    let openedDisplay: string | undefined = undefined;
+
+    const code = await runLintPlanCli(
+      [planFile, "--design-doc", designDoc, "--state-dir", tmpDir],
+      {
+        schema: TEST_SCHEMA,
+        renderDesignDocFileImpl: (inPath, outPath) => {
+          renderedInput = inPath;
+          renderedOutput = outPath;
+        },
+        openBrowserImpl: (htmlPath, display) => {
+          openedHtml = htmlPath;
+          openedDisplay = display;
+          return Promise.resolve();
+        },
+      },
+    );
+
+    assertEquals(code, 0);
+    assertEquals(renderedInput, planFile);
+    assertEquals(renderedOutput, `${tmpDir}/plan.html`);
+    assertEquals(openedHtml, `${tmpDir}/plan.html`);
+    assertEquals(openedDisplay, undefined);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("AC6 (#1398): passing runLintPlanCli with --no-open renders <plan>.html but skips browser open", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = `${tmpDir}/plan.md`;
+    const designDoc = `${tmpDir}/design.md`;
+    const designContent = "# Approved Design\n";
+    await Deno.writeTextFile(designDoc, designContent);
+    const doc = planTableDoc([EPIC_ROW, childRow({ epicChild: "Epic #1" })]);
+    await Deno.writeTextFile(planFile, doc);
+
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+    await approveGate1Record(designDoc, "Approved.", { stateDir: tmpDir });
+
+    let rendered = false;
+    let opened = false;
+
+    const code = await runLintPlanCli(
+      [planFile, "--design-doc", designDoc, "--state-dir", tmpDir, "--no-open"],
+      {
+        schema: TEST_SCHEMA,
+        renderDesignDocFileImpl: () => {
+          rendered = true;
+        },
+        openBrowserImpl: () => {
+          opened = true;
+          return Promise.resolve();
+        },
+      },
+    );
+
+    assertEquals(code, 0);
+    assertEquals(rendered, true);
+    assertEquals(opened, false);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("AC6 (#1398): passing runLintPlanCli prints warning and exits 0 when Chrome is unavailable", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = `${tmpDir}/plan.md`;
+    const designDoc = `${tmpDir}/design.md`;
+    const designContent = "# Approved Design\n";
+    await Deno.writeTextFile(designDoc, designContent);
+    const doc = planTableDoc([EPIC_ROW, childRow({ epicChild: "Epic #1" })]);
+    await Deno.writeTextFile(planFile, doc);
+
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+    await approveGate1Record(designDoc, "Approved.", { stateDir: tmpDir });
+
+    const errLogs: string[] = [];
+
+    const code = await runLintPlanCli(
+      [planFile, "--design-doc", designDoc, "--state-dir", tmpDir],
+      {
+        schema: TEST_SCHEMA,
+        errorLog: (msg) => errLogs.push(msg),
+        renderDesignDocFileImpl: () => {},
+        openBrowserImpl: () => {
+          return Promise.reject(new Error("google-chrome: command not found"));
+        },
+      },
+    );
+
+    assertEquals(code, 0);
+    assertEquals(
+      errLogs.some((l) => l.includes("Warning") && l.includes("Chrome could not be opened")),
+      true,
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("AC6 (#1398): failing plan writes and opens nothing", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = `${tmpDir}/plan.md`;
+    const designDoc = `${tmpDir}/design.md`;
+    const designContent = "# Approved Design\n";
+    await Deno.writeTextFile(designDoc, designContent);
+    // Missing epic in child row
+    const doc = planTableDoc([EPIC_ROW, childRow({ epicChild: "none" })]);
+    await Deno.writeTextFile(planFile, doc);
+
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+    await approveGate1Record(designDoc, "Approved.", { stateDir: tmpDir });
+
+    let rendered = false;
+    let opened = false;
+
+    const code = await runLintPlanCli(
+      [planFile, "--design-doc", designDoc, "--state-dir", tmpDir],
+      {
+        schema: TEST_SCHEMA,
+        renderDesignDocFileImpl: () => {
+          rendered = true;
+        },
+        openBrowserImpl: () => {
+          opened = true;
+          return Promise.resolve();
+        },
+      },
+    );
+
+    assertEquals(code, 1);
+    assertEquals(rendered, false);
+    assertEquals(opened, false);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("lint-plan CLI warns when Chrome is absent using the real browser launcher", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const binDir = path.join(tmpDir, "bin");
+    await Deno.mkdir(binDir);
+    await Deno.symlink("/bin/bash", path.join(binDir, "bash"));
+    await Deno.writeTextFile(path.join(binDir, "gh"), "#!/bin/bash\nprintf '[]\\n'\n", {
+      mode: 0o755,
+    });
+    const planFile = path.join(tmpDir, "plan.md");
+    const designDoc = path.join(tmpDir, "design.md");
+    const designContent = "# Approved Design\n";
+    await Deno.writeTextFile(designDoc, designContent);
+    await Deno.writeTextFile(planFile, planTableDoc([EPIC_ROW, childRow()]));
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+    await approveGate1Record(designDoc, "Approved.", { stateDir: tmpDir });
+
+    const repoDir = path.resolve(path.dirname(path.fromFileUrl(import.meta.url)), "..");
+    const result = await new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--cached-only",
+        "--config",
+        path.join(repoDir, "deno.json"),
+        "-A",
+        path.join(repoDir, "src/design-issue/cli.ts"),
+        "lint-plan",
+        planFile,
+        "--design-doc",
+        designDoc,
+        "--state-dir",
+        tmpDir,
+      ],
+      env: { PATH: binDir },
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+
+    const stdout = new TextDecoder().decode(result.stdout);
+    const stderr = new TextDecoder().decode(result.stderr);
+    assertEquals(result.code, 0, stderr);
+    assertStringIncludes(stdout, "[design:lint-plan] PASS:");
+    assertStringIncludes(stderr, "Warning: Chrome could not be opened");
+    assertEquals((await Deno.stat(path.join(tmpDir, "plan.html"))).isFile, true);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+// --- "Epics, repositories and sub-issues" case list (Appendix D), lint-plan cases (web-jam-tools#1455) ---
+
+const CASE_EPIC_TITLE = "Coordinate plan validation delivery";
+const CASE_EPIC_CITATION = `web-jam-tools#1450 "${CASE_EPIC_TITLE}"`;
+
+/** Runs the CLI over a plan with a passing Gate 1 record, a stubbed gh and a stubbed Chrome
+ * launcher; returns what it printed, rendered and opened. */
+async function runApprovedPlanCli(
+  rows: string[],
+  openBrowserImpl?: (htmlPath: string, display?: string) => Promise<void>,
+) {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = path.join(tmpDir, "plan.md");
+    const designDoc = path.join(tmpDir, "design.md");
+    await Deno.writeTextFile(designDoc, "# Approved Design\n");
+    await Deno.writeTextFile(planFile, planTableDoc(rows));
+    await openGate1Record(designDoc, "# Approved Design\n", { stateDir: tmpDir });
+    await approveGate1Record(designDoc, "Approved.", { stateDir: tmpDir });
+    const rendered: string[] = [];
+    const opened: string[] = [];
+    const errLogs: string[] = [];
+    const logs: string[] = [];
+    const code = await lintPlanCli(
+      [planFile, "--design-doc", designDoc, "--state-dir", tmpDir],
+      {
+        schema: TEST_SCHEMA,
+        runGh: emptyOpenIssues,
+        log: (m) => logs.push(m),
+        errorLog: (m) => errLogs.push(m),
+        renderDesignDocFileImpl: (_input, output) => rendered.push(output),
+        openBrowserImpl: openBrowserImpl ?? ((htmlPath) => {
+          opened.push(htmlPath);
+          return Promise.resolve();
+        }),
+      },
+    );
+    return { code, rendered, opened, errLogs, logs, planHtml: path.join(tmpDir, "plan.html") };
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+}
+
+Deno.test("epics case 01: a non-epic row with an empty Epic / child of cell fails: the row names no epic", () => {
+  const found = findRule(
+    validate(planTableDoc([EPIC_ROW, childRow({ epicChild: "" })])),
+    "row-missing-epic",
+  );
+  assertEquals(found.length, 1);
+  assertStringIncludes(found[0].message, "the row names no epic");
+});
+
+Deno.test("epics case 02: a non-epic row whose Epic / child of cell is none fails: the row names no epic", () => {
+  const found = findRule(
+    validate(planTableDoc([EPIC_ROW, childRow({ epicChild: "none" })])),
+    "row-missing-epic",
+  );
+  assertEquals(found.length, 1);
+  assertStringIncludes(found[0].message, "the row names no epic");
+});
+
+Deno.test("epics case 03: a non-epic row whose Epic / child of cell is row 1, where row 1 reads Epic, passes", () => {
+  const violations = validate(planTableDoc([EPIC_ROW, childRow({ epicChild: "row 1" })]));
+  assertEquals(violations, []);
+});
+
+Deno.test('epics case 04: a non-epic row citing web-jam-tools#<N> "<title>" of an epic row passes', () => {
+  const epic =
+    `| 1 | ${CASE_EPIC_TITLE} | Epic | Opus | High | web-jam-tools | Unit tests covering every validator rule | all children close |`;
+  const violations = validate(planTableDoc([epic, childRow({ epicChild: CASE_EPIC_CITATION })]));
+  assertEquals(violations, []);
+});
+
+Deno.test("epics case 05: none with a Tests cell mentioning an epic still fails: a word in another cell does not make a row an epic", () => {
+  const row = childRow({
+    epicChild: "none",
+    tests: "Unit tests reject a task without an epic",
+    title: "Epic: reject a task without an epic",
+    closes: "all children close",
+  });
+  const found = findRule(validate(planTableDoc([EPIC_ROW, row])), "row-missing-epic");
+  assertEquals(found.length, 1);
+  assertStringIncludes(found[0].message, "the row names no epic");
+});
+
+Deno.test("epics case 06: an epic row in JaMmusic with children in JaMmusic and web-jam-back fails: cross-repository work lives in web-jam-tools", () => {
+  const epic =
+    "| 1 | Coordinate cross-repo music features | Epic | Opus | High | JaMmusic | Tests cover both child repositories | all children close |";
+  const doc = planTableDoc([
+    epic,
+    childRow({ epicChild: "row 1", repo: "JaMmusic" }),
+    childRow({ epicChild: "row 1", repo: "web-jam-back", title: "Add backend audio routes" }),
+  ]);
+  const found = findRule(validate(doc), "cross-repo-epic-not-in-web-jam-tools");
+  assertEquals(found.length, 1);
+  assertStringIncludes(found[0].message, "Cross-repository work lives in web-jam-tools");
+});
+
+Deno.test("epics case 07: an epic row in web-jam-tools with children in JaMmusic and web-jam-back passes", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({ epicChild: "row 1", repo: "JaMmusic" }),
+    childRow({ epicChild: "row 1", repo: "web-jam-back", title: "Add backend audio routes" }),
+  ]);
+  assertEquals(validate(doc), []);
+});
+
+Deno.test('epics case 08: an epic row cited as JaMmusic#<N> "<title>" in JaMmusic, with a web-jam-back child citing it, fails', () => {
+  const title = "Coordinate cross-repo music features";
+  const epic =
+    `| 1 | ${title} | Epic | Opus | High | JaMmusic | Tests cover both child repositories | all children close |`;
+  const doc = planTableDoc([
+    epic,
+    childRow({ epicChild: `JaMmusic#1355 "${title}"`, repo: "web-jam-back" }),
+  ]);
+  const violations = validate(doc);
+  assertEquals(findRule(violations, "cross-repo-epic-not-in-web-jam-tools").length, 1);
+  // The citation resolved to the epic row, so the child is not reported as naming no epic.
+  assertEquals(findRule(violations, "row-missing-epic").length, 0);
+});
+
+Deno.test("epics case 17: design:lint-plan on a passing plan renders the plan beside the plan file and opens it in Chrome", async () => {
+  const run = await runApprovedPlanCli([EPIC_ROW, childRow({ epicChild: "row 1" })]);
+  assertEquals(run.code, 0);
+  assertEquals(run.rendered, [run.planHtml]);
+  assertEquals(run.opened, [run.planHtml]);
+});
+
+Deno.test("epics case 18: design:lint-plan on a failing plan renders and opens nothing", async () => {
+  const run = await runApprovedPlanCli([EPIC_ROW, childRow({ epicChild: "none" })]);
+  assertEquals(run.code, 1);
+  assertEquals(run.rendered, []);
+  assertEquals(run.opened, []);
+});
+
+Deno.test("epics case 19: design:lint-plan on a passing plan with no Chrome installed prints that Chrome could not be opened, and passes", async () => {
+  const emptyBin = await Deno.makeTempDir({ prefix: "lint-plan-no-chrome-" });
+  const originalPath = Deno.env.get("PATH");
+  Deno.env.set("PATH", emptyBin);
+  try {
+    const tmpDir = await Deno.makeTempDir();
+    try {
+      const planFile = path.join(tmpDir, "plan.md");
+      const designDoc = path.join(tmpDir, "design.md");
+      await Deno.writeTextFile(designDoc, "# Approved Design\n");
+      await Deno.writeTextFile(
+        planFile,
+        planTableDoc([EPIC_ROW, childRow({ epicChild: "row 1" })]),
+      );
+      await openGate1Record(designDoc, "# Approved Design\n", { stateDir: tmpDir });
+      await approveGate1Record(designDoc, "Approved.", { stateDir: tmpDir });
+      const errLogs: string[] = [];
+      const logs: string[] = [];
+      // The real launcher, with no google-chrome on PATH: nothing can start.
+      const code = await lintPlanCli(
+        [planFile, "--design-doc", designDoc, "--state-dir", tmpDir],
+        {
+          schema: TEST_SCHEMA,
+          runGh: emptyOpenIssues,
+          log: (m) => logs.push(m),
+          errorLog: (m) => errLogs.push(m),
+          renderDesignDocFileImpl: () => {},
+        },
+      );
+      assertEquals(code, 0);
+      assertEquals(logs.some((l) => l.includes("PASS")), true);
+      assertEquals(errLogs.some((l) => l.includes("Chrome could not be opened")), true);
+    } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  } finally {
+    if (originalPath === undefined) Deno.env.delete("PATH");
+    else Deno.env.set("PATH", originalPath);
+    await Deno.remove(emptyBin, { recursive: true });
+  }
+});
+
+// --- Appendix D — Case Lists: Issues filed from a design point at it (Cases 1–6) ---
+// In every case the design document has a heading `### The model-label rule` and no heading `Nope`.
+const APPENDIX_D_DESIGN_DOC = `
+# Appendix D Design Fixture
+
+### The model-label rule
+
+Requirements text here.
+`;
+
+Deno.test('Appendix D Case 1: Closes when cell `builds "The model-label rule" as written; tests pass` passes', () => {
+  const headings = extractDesignHeadings(APPENDIX_D_DESIGN_DOC);
+  const check = checkCriterionOrClosesCell(
+    'builds "The model-label rule" as written; tests pass',
+    headings,
+  );
+  assertEquals(check.valid, true);
+
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({ closes: 'builds "The model-label rule" as written; tests pass' }),
+  ]);
+  const violations = validate(doc, { designHeadings: headings });
+  assertEquals(findRule(violations, "closes-when-unknown-heading").length, 0);
+  assertEquals(findRule(violations, "closes-when-neither-heading-nor-command").length, 0);
+});
+
+Deno.test("Appendix D Case 2: Closes when cell `the `deno task test` suite passes` passes — a backtick-quoted command", () => {
+  const headings = extractDesignHeadings(APPENDIX_D_DESIGN_DOC);
+  const check = checkCriterionOrClosesCell("the `deno task test` suite passes", headings);
+  assertEquals(check.valid, true);
+
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({ closes: "the `deno task test` suite passes" }),
+  ]);
+  const violations = validate(doc, { designHeadings: headings });
+  assertEquals(findRule(violations, "closes-when-unknown-heading").length, 0);
+  assertEquals(findRule(violations, "closes-when-neither-heading-nor-command").length, 0);
+});
+
+Deno.test('Appendix D Case 3: Closes when cell `builds "Nope" as written` fails, naming the row and Nope', () => {
+  const headings = extractDesignHeadings(APPENDIX_D_DESIGN_DOC);
+  const check = checkCriterionOrClosesCell('builds "Nope" as written', headings);
+  assertEquals(check.valid, false);
+  assertEquals(check.reason, "unknown-heading");
+  assertEquals(check.unknownHeading, "Nope");
+
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({ closes: 'builds "Nope" as written' }),
+  ]);
+  const violations = validate(doc, { designHeadings: headings });
+  const unknown = findRule(violations, "closes-when-unknown-heading");
+  assertEquals(unknown.length, 1);
+  assertStringIncludes(unknown[0].message, "Row 2");
+  assertStringIncludes(unknown[0].message, "Nope");
+});
+
+Deno.test("Appendix D Case 4: Closes when cell `PR merges` fails, naming the row: neither a heading nor a command", () => {
+  const headings = extractDesignHeadings(APPENDIX_D_DESIGN_DOC);
+  const check = checkCriterionOrClosesCell("PR merges", headings);
+  assertEquals(check.valid, false);
+  assertEquals(check.reason, "neither-heading-nor-command");
+
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({ closes: "PR merges" }),
+  ]);
+  const violations = validate(doc, { designHeadings: headings });
+  const bad = findRule(violations, "closes-when-neither-heading-nor-command");
+  assertEquals(bad.length, 1);
+  assertStringIncludes(bad[0].message, "Row 2");
+  assertStringIncludes(bad[0].message, "neither a heading nor a command");
+});
+
+Deno.test("Appendix D Case 5: Closes when cell `PR merges` on a row whose Epic / child of cell reads Epic passes — an epic closes when its children close", () => {
+  const headings = extractDesignHeadings(APPENDIX_D_DESIGN_DOC);
+  const epic =
+    "| 1 | Coordinate plan validation | Epic | Opus | High | web-jam-tools | Unit tests | PR merges |";
+  const doc = planTableDoc([
+    epic,
+    childRow({ epicChild: "row 1", closes: "the `deno task test` suite passes" }),
+  ]);
+  const violations = validate(doc, { designHeadings: headings });
+  assertEquals(findRule(violations, "closes-when-unknown-heading").length, 0);
+  assertEquals(findRule(violations, "closes-when-neither-heading-nor-command").length, 0);
+});
+
+Deno.test("Appendix D Case 6: Closes when cell `Josh confirms he ran it` on a row whose Model tier is Josh passes — a manual step", () => {
+  const headings = extractDesignHeadings(APPENDIX_D_DESIGN_DOC);
+  const joshRow =
+    "| 3 | Manual verification run | row 1 | Josh | Medium | web-jam-tools | None | Josh confirms he ran it |";
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({ epicChild: "row 1", closes: "the `deno task test` suite passes" }),
+    joshRow,
+  ]);
+  const violations = validate(doc, { designHeadings: headings });
+  assertEquals(findRule(violations, "closes-when-unknown-heading").length, 0);
+  assertEquals(findRule(violations, "closes-when-neither-heading-nor-command").length, 0);
 });

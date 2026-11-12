@@ -33,13 +33,12 @@
  *  3. Fails CLOSED: this is a destructive-operation guard, unlike the agy
  *     cost guard (which deliberately fails open). Any parse exception, or an
  *     unterminated quote (an ambiguous parse — we cannot be sure what's
- *     really being executed), blocks with a generic description rather than
- *     passing the command through.
+ *     really being executed), returns an unreadable classification. The shell entry point
+ *     keeps that response distinct from a positively identified protected operation.
  *
- * SCOPE: this only ever sees a Bash tool_input.command string. It does not
- * see Write/Edit file writes, and it does not see anything agy does
- * internally — agy's own hooks are inert
- * (web-jam-tools#432 "agy hooks do not enforce...").
+ * SCOPE: this checker reads Bash tool_input.command strings. Claude Code and Codex call
+ * the same shell entry point directly; the agy shim supplies the translated Bash payload.
+ * It does not inspect Write/Edit file writes. MCP tool-name checks remain in the shell wrapper.
  *
  * WRAPPER-BYPASS FIX (guard-wrapper-bypass, and extended by web-jam-tools#716
  * to all 14 POSITIONAL_RULES): a positional check requires the real command
@@ -68,6 +67,7 @@ import {
 
 export interface CheckResult {
   blocked: boolean;
+  reason?: "operation" | "unreadable";
   description?: string;
 }
 
@@ -76,7 +76,11 @@ function ok(): CheckResult {
 }
 
 function block(description: string): CheckResult {
-  return { blocked: true, description };
+  return { blocked: true, reason: "operation", description };
+}
+
+function unreadable(description: string): CheckResult {
+  return { blocked: true, reason: "unreadable", description };
 }
 
 /**
@@ -180,19 +184,19 @@ export function checkIrreversibleOperation(rawCmd: string, depth = 0): CheckResu
   if (!rawCmd) return ok();
 
   if (depth > MAX_WRAPPER_RECURSION_DEPTH) {
-    return block("wrapper/interpreter nesting exceeded recursion cap — failing closed");
+    return unreadable("wrapper/interpreter nesting exceeded recursion cap — failing closed");
   }
 
-  let stripped: string;
+  let parsed: ReturnType<typeof splitOnOperators>;
   try {
-    stripped = stripHeredocs(rawCmd);
+    parsed = splitOnOperators(stripHeredocs(rawCmd));
   } catch {
-    return block("unparseable command (heredoc parse failure) — failing closed");
+    return unreadable("unparseable command (heredoc parse failure) — failing closed");
   }
 
-  const { segments, unterminated } = splitOnOperators(stripped);
+  const { segments, unterminated } = parsed;
   if (unterminated) {
-    return block("unparseable command (unterminated quote) — failing closed");
+    return unreadable("unparseable command (unterminated quote or heredoc) — failing closed");
   }
 
   for (const seg of segments) {
@@ -200,17 +204,17 @@ export function checkIrreversibleOperation(rawCmd: string, depth = 0): CheckResu
     try {
       argv = splitShellTokens(seg);
     } catch {
-      return block("unparseable command (tokenizer failure) — failing closed");
+      return unreadable("unparseable command (tokenizer failure) — failing closed");
     }
 
     const resolved = resolveThroughWrappers(argv);
     if (resolved.kind === "cap-exceeded") {
-      return block("wrapper resolution exceeded iteration cap — failing closed");
+      return unreadable("wrapper resolution exceeded iteration cap — failing closed");
     }
     if (resolved.kind === "nested") {
       const nestedResult = checkIrreversibleOperation(resolved.command, depth + 1);
       if (nestedResult.blocked) {
-        return block(nestedResult.description ?? "blocked via wrapped/nested command");
+        return nestedResult;
       }
       continue;
     }
@@ -233,7 +237,9 @@ if (import.meta.main) {
   const cmd = Deno.env.get("CMD_FOR_PY") || Deno.args[0] || "";
   const result = checkIrreversibleOperation(cmd);
   if (result.blocked) {
-    console.log("BLOCK:" + (result.description ?? "irreversible operation"));
+    console.log(
+      (result.reason === "unreadable" ? "UNREADABLE:" : "BLOCK:") + result.description,
+    );
   } else {
     console.log("OK");
   }
