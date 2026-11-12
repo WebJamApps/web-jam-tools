@@ -96,6 +96,33 @@ async function getFileSize(filePath: string): Promise<number> {
   }
 }
 
+/** Safely gets file size in bytes from git origin/dev in the repo; falls back to disk size. */
+export async function getRepoRulesFileSize(
+  repoDir: string,
+  relPath: string,
+  fallbackDiskPath?: string,
+): Promise<number> {
+  const diskPath = fallbackDiskPath ?? join(repoDir, relPath);
+  try {
+    const cmd = new Deno.Command("git", {
+      args: ["-C", repoDir, "cat-file", "-s", `origin/dev:${relPath}`],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const output = await cmd.output();
+    if (output.success) {
+      const sizeStr = new TextDecoder().decode(output.stdout).trim();
+      const size = parseInt(sizeStr, 10);
+      if (!Number.isNaN(size)) {
+        return size;
+      }
+    }
+  } catch {
+    // git failed or permission denied
+  }
+  return await getFileSize(diskPath);
+}
+
 /** Extracts frontmatter description text from SKILL.md. */
 function extractSkillDescription(text: string): string | null {
   const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
@@ -271,14 +298,28 @@ export async function computeSessionLoadReport(
   const globalClaudeMdSize = await getFileSize(globalClaudeMdPath);
   const memoryIndexSize = await getFileSize(memoryIndexPath);
 
-  let mainRulesSize = await getFileSize(mainRulesPath);
+  const webJamToolsDir = join(webJamAppsDir, "web-jam-tools");
+  let mainRulesSize = await getRepoRulesFileSize(
+    webJamToolsDir,
+    "AGENTS.md",
+    mainRulesPath,
+  );
   if (mainRulesSize === 0) {
     const homeAgentsPath = join(homeDir, ".agents/AGENTS.md");
     mainRulesSize = await getFileSize(homeAgentsPath);
   }
 
-  const crossAiRulesSize = await getFileSize(crossAiRulesPath);
-  const jammusicRulesSize = await getFileSize(jammusicRulesPath);
+  const crossAiRulesSize = await getRepoRulesFileSize(
+    webJamToolsDir,
+    "docs/cross-ai-rules.md",
+    crossAiRulesPath,
+  );
+  const jammusicDir = join(webJamAppsDir, "JaMmusic");
+  const jammusicRulesSize = await getRepoRulesFileSize(
+    jammusicDir,
+    "AGENTS.md",
+    jammusicRulesPath,
+  );
 
   const safetyRulesPath = options.safetyRulesPath ||
     join(webJamAppsDir, "web-jam-tools/docs/safety-rules.md");
@@ -296,8 +337,13 @@ export async function computeSessionLoadReport(
   const otherRepoSizes: Record<string, number> = {};
   for (const repo of ACTIVE_REPOS) {
     if (repo === "web-jam-tools" || repo === "JaMmusic") continue;
-    const repoRulesPath = join(webJamAppsDir, repo, "AGENTS.md");
-    otherRepoSizes[repo] = await getFileSize(repoRulesPath);
+    const repoDir = join(webJamAppsDir, repo);
+    const repoRulesPath = join(repoDir, "AGENTS.md");
+    otherRepoSizes[repo] = await getRepoRulesFileSize(
+      repoDir,
+      "AGENTS.md",
+      repoRulesPath,
+    );
   }
 
   // Skills inspection

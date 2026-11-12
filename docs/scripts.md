@@ -197,7 +197,7 @@ Reads the size of every session-load part from disk across Claude Code, agy, and
 canonical limits in `src/session-load/limits.json`, prints a `systemMessage` JSON line, and exits 0.
 
 ```sh
-deno run --allow-read --allow-env scripts/session-load-report.ts
+deno run --allow-read --allow-env --allow-run=git scripts/session-load-report.ts
 ```
 
 ### `bootstrap-project.sh`
