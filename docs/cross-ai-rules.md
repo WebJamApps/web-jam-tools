@@ -55,6 +55,16 @@ skill.
 
 - **CODEX RUNNING MODEL:** On Codex, run `deno task whoami` whenever you need your own model — when Josh asks which model you are, and before `$pr-review` applies the reviewer rule — and never answer from your own context or from `~/.codex/config.toml`.
 - CALENDAR CONFLICT: never schedule over an existing event without Josh's explicit override.
+- **RUNBOOKS MUST USE CLI COMMANDS WHENEVER POSSIBLE; BROWSER STEPS ARE A LAST RESORT.** This
+  applies to every agent and every runbook, whether delivered in chat or saved to a file. Before
+  writing browser instructions, check the installed CLI's help and the service's official
+  documentation for a supported command. Write exact, copy-pasteable CLI commands for every action
+  the CLI supports. Use a browser only for an action the CLI cannot perform, and state that specific
+  limitation beside the browser step; resume CLI commands immediately afterwards. An expired token,
+  missing local authentication, unfamiliar syntax, or an existing browser-based runbook is not a
+  reason to move CLI-capable work into a dashboard. Include the necessary authentication steps,
+  keep secret entry hidden and out of logs and shell history, and preserve all existing approval
+  requirements. Verify command syntax against the tool's help before delivering the runbook.
 - EMAIL: always DRAFT, never send. Save as Gmail draft for Josh's review.
 - **EMAIL SEND CARVE-OUT — `/book-gig` gated batch dispatch only:** The single named
   exception to "EMAIL: always DRAFT, never send" is `/book-gig`'s batch outreach dispatch

@@ -377,6 +377,9 @@ Manual artifact / documentation / UI inspection (e.g., verifying generated Markd
 
 ### Runbook Format Requirements
 
+Apply the CLI requirement in `docs/cross-ai-rules.md` ("RUNBOOKS MUST USE CLI COMMANDS WHENEVER
+POSSIBLE; BROWSER STEPS ARE A LAST RESORT") when choosing the surface for each step.
+
 Every runbook file must follow this exact format:
 - **Professional, role-agnostic title:** Never include personal names (e.g. do NOT use `# Josh Walkthrough Runbook: ...`). Use action-oriented titles like `# Walkthrough Runbook: ...` or `# Manual Verification Runbook: ...`.
 - **Runbook naming convention:** Runbooks are named `<topic>-manual-steps-<YYYY-MM-DD>.md`. Ownership of a manual step is designated exclusively by the `Josh` label, never by embedding a personal name in a filename, an issue title, or a document title.
