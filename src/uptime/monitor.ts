@@ -43,6 +43,11 @@ export const DEFAULT_TARGETS: UptimeCheckConfig[] = [
     url: "https://collegelutheran.org",
     expectedStatus: [200],
   },
+  {
+    name: "Tim Sherman Music",
+    url: "https://timshermanmusic.com",
+    expectedStatus: [200],
+  },
 ];
 
 export async function runCheck(

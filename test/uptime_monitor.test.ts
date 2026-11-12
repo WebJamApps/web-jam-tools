@@ -12,7 +12,7 @@ import {
 } from "../src/uptime/monitor.ts";
 
 Deno.test("DEFAULT_TARGETS contains all required production URLs and check parameters", () => {
-  assertEquals(DEFAULT_TARGETS.length, 5);
+  assertEquals(DEFAULT_TARGETS.length, 6);
 
   const urls = DEFAULT_TARGETS.map((t) => t.url);
   assert(urls.includes("https://joshandmariamusic.com"));
@@ -20,6 +20,12 @@ Deno.test("DEFAULT_TARGETS contains all required production URLs and check param
   assert(urls.includes("https://web-jam.com"));
   assert(urls.includes("https://web-jam.com/music"));
   assert(urls.includes("https://collegelutheran.org"));
+  assert(urls.includes("https://timshermanmusic.com"));
+
+  const timTarget = DEFAULT_TARGETS.find((t) => t.url === "https://timshermanmusic.com");
+  assert(timTarget);
+  assertEquals(timTarget.name, "Tim Sherman Music");
+  assertEquals(timTarget.expectedStatus, [200]);
 
   const musicTarget = DEFAULT_TARGETS.find((t) => t.url === "https://web-jam.com/music");
   assert(musicTarget);
@@ -117,8 +123,30 @@ Deno.test("runAllChecks evaluates multiple targets", async () => {
   };
 
   const results = await runAllChecks(DEFAULT_TARGETS, mockFetch);
-  assertEquals(results.length, 5);
+  assertEquals(results.length, 6);
   assert(results.every((r) => r.success));
+  const heartbeat = formatHeartbeatEmail(results);
+  assertStringIncludes(heartbeat.subject, "All 6 Production Services Healthy");
+  assertStringIncludes(heartbeat.text, "Tim Sherman Music (https://timshermanmusic.com) [200]");
+  assertStringIncludes(heartbeat.html, "Tim Sherman Music");
+});
+
+Deno.test("Tim Sherman Music outages appear in the default checks and alert email", async () => {
+  const mockFetch = (url: string | URL | Request): Promise<Response> =>
+    Promise.resolve(
+      new Response("music content", {
+        status: String(url) === "https://timshermanmusic.com" ? 503 : 200,
+      }),
+    );
+  const results = await runAllChecks(DEFAULT_TARGETS, mockFetch);
+  const failures = results.filter((result) => !result.success);
+  assertEquals(failures.length, 1);
+  assertEquals(failures[0].config.name, "Tim Sherman Music");
+  assertEquals(failures[0].status, 503);
+  const alert = formatAlertEmail(failures);
+  assertStringIncludes(alert.subject, "1 check failed");
+  assertStringIncludes(alert.text, "Tim Sherman Music (https://timshermanmusic.com)");
+  assertStringIncludes(alert.html, "Tim Sherman Music");
 });
 
 Deno.test("formatAlertEmail formats subject and body correctly", () => {

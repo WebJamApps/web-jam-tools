@@ -11,12 +11,13 @@ Uptime monitoring for WebJam LLC production websites is managed via Deno Deploy 
 | **Web Jam** | `https://web-jam.com` | `200` | HTTP status check |
 | **Web Jam Music** | `https://web-jam.com/music` | `200` | **Content-aware assertion**: Verifies HTTP 200 AND checks that page content contains expected music elements (catches SocketCluster outages where page returns 200 OK while empty) |
 | **College Lutheran** | `https://collegelutheran.org` | `200` | HTTP status check |
+| **Tim Sherman Music** | `https://timshermanmusic.com` | `200` | HTTP status check |
 
 ## How It Works
 
 1. **24/7 Edge Cron & Schedules (`src/uptime/cron.ts`)**:
-   - **30-Minute Failure Check (`*/30 * * * *`)**: Evaluates all 5 targets every 30 minutes. Silent on success; sends an immediate alert email to `joshua.v.sherman@gmail.com` and `chemmariasherman@gmail.com` on failure detailing the outage.
-   - **Daily Heartbeat (`0 12 * * *`)**: Evaluates all 5 targets at 12:00 UTC and checks the newest backup. Sends the daily status email to the existing alert recipients, with one backup-age line such as `Backup: newest good run is 25.0 hours old.` The site's status summary and subject remain independent of the backup warning.
+   - **30-Minute Failure Check (`*/30 * * * *`)**: Evaluates all configured targets every 30 minutes. Silent on success; sends an immediate alert email to `joshua.v.sherman@gmail.com` and `chemmariasherman@gmail.com` on failure detailing the outage.
+   - **Daily Heartbeat (`0 12 * * *`)**: Evaluates all configured targets at 12:00 UTC and checks the newest backup. Sends the daily status email to the existing alert recipients, with one backup-age line such as `Backup: newest good run is 25.0 hours old.` The site's status summary and subject remain independent of the backup warning.
    - **Midnight Backup Check (`0 0 * * *`)**: Checks the newest backup without sending another daily heartbeat or running the site checks.
 
    Both backup runs read public `GET https://web-jam.com/backup/status` from the same production backend address used by the site monitor. A timestamp in `newestGoodRun` gives the age; `"none"` means no good run exists. A non-success HTTP status means the backend cannot determine the backup state. The request times out after 10 seconds. A timestamp more than 26 hours old, no good run, an unknown/invalid answer, or a failed/timed-out request sends a `[Uptime Alert] MongoDB backup warning` naming that condition. Exactly 26 hours does not warn. A recent good run remains recent even if `lastRunFailed` is true; the backend reports individual failed runs separately. Noon reuses its check result in the heartbeat, including an explicit unavailable/none line when an age cannot be determined. The 30-minute job never reads backup status.
