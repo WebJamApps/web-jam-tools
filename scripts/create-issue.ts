@@ -11,8 +11,9 @@
 import { createIssueAndVerify, parseArgs } from "../src/create-issue/lib.ts";
 
 async function main() {
+  const help = Deno.args.includes("--help") || Deno.args.includes("-h");
   const options = parseArgs(Deno.args);
-  if (!options.title || !options.bodyFile) {
+  if (help || !options.title || !options.bodyFile) {
     console.error('Usage: deno task create-issue --title "..." --body-file <path> [options]');
     console.error("Options:");
     console.error("  --repo <repo>          (default: WebJamApps/web-jam-tools)");
@@ -33,7 +34,8 @@ async function main() {
       '  --author <tool — model>   (required outside Codex) e.g. "Claude Code — Opus"; Codex looks up the running model',
     );
     console.error("  --dry-run");
-    Deno.exit(1);
+    console.error("  --help, -h            Print usage and exit");
+    Deno.exit(help ? 0 : 1);
   }
 
   try {
