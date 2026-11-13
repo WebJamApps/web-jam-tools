@@ -150,7 +150,8 @@ function scriptPath(
       ? "javascript"
       : "typescript";
     if (invocation.language !== family) return null;
-    return invocation.args[Number(argument[2]) - offset] ?? null;
+    const value = invocation.args[Number(argument[2]) - offset];
+    return value !== undefined && !/[$`]/.test(value) ? value : null;
   }
   const pathStart = tokens[0]?.text === "Path" ? 0 : words.startsWith("pathlib.Path(") ? 2 : -1;
   if (pathStart >= 0 && tokens[pathStart + 1]?.text === "(" && tokens.at(-1)?.text === ")") {

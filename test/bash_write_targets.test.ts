@@ -74,6 +74,7 @@ Deno.test("script file naming: argument aliases, reassignment, comments and unre
   assertEquals(targets(`python3 -c 'p = "/tmp/a"; p += "b"; open(p,"w")'`), [CWD]);
   assertEquals(targets(`python3 -c 'p = "/tmp/a"; p = "AGENTS.md"; open(p,"w")'`), [CWD]);
   assertEquals(targets(`python3 -c 'open(p,"w"); p = "/tmp/a"'`), [CWD]);
+  assertEquals(targets(`python3 -c 'import sys; open(sys.argv[1],"w")' "$HOME/a"`), [CWD]);
   assertEquals(targets(`python3 -c 'p = "/tmp/a"; open(p,"w") # p = "AGENTS.md"'`), ["/tmp/a"]);
   assertEquals(targets(`python3 main.py -c 'open("AGENTS.md","w")'`), []);
   assertEquals(targets("cd $S; echo x > /tmp/a; cd /repo && echo x > b"), ["/tmp/a", "/repo/b"]);
@@ -154,6 +155,8 @@ Deno.test("scriptWriteTargets: literal paths, variable paths judged by cwd, and 
 Deno.test("heredoc receivers: interpreter and shell writes are inspected; data bodies are ignored", () => {
   assertEquals(targets("python3.11 - <<EOF\nopen('a','w')\nEOF"), ["/repo/a"]);
   assertEquals(targets("nodejs <<EOF\nfs.writeFileSync('a','x')\nEOF"), ["/repo/a"]);
+  assertEquals(targets("perl <<EOF\nopen(FH, '>a');\nEOF"), ["/repo/a"]);
+  assertEquals(targets("ruby <<EOF\nFile.write('a','x')\nEOF"), ["/repo/a"]);
   assertEquals(targets("cat <<EOF | /usr/bin/node\nfs.writeFileSync('a', 'x')\nEOF"), ["/repo/a"]);
   assertEquals(targets("bash <<EOF\necho x > f\nEOF"), ["/repo/f"]);
   assertEquals(targets("cat > notes.md <<'EOF'\n> quoted\nEOF\necho done"), ["/repo/notes.md"]);

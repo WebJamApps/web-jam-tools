@@ -620,8 +620,8 @@ export function commandPartsInFolders(
   let legacyHeredoc = false;
   let heredocCwd = initialCwd;
   for (const region of commandRegions(command).regions) {
-    if (region.kind === "data") continue;
-    if (region.kind === "script") {
+    if (region.kind === "data" && !legacyHeredoc) continue;
+    if (region.kind === "script" || (legacyHeredoc && region.closing !== undefined)) {
       if (legacyHeredoc) parts.push({ text: region.text, cwd: heredocCwd, script: true });
       for (const invocation of heredocInvocations) {
         parts.push({ text: region.text, cwd: heredocCwd, script: true, invocation });
