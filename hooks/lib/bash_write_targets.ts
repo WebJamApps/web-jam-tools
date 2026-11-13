@@ -21,9 +21,8 @@
  *     `createWriteStream`, `copyFile`, `rename`, `cpSync` (and their Sync forms); Deno
  *     `writeTextFile`, `writeFile`, `create`, `copyFile`, `rename`, `truncate` (and Sync forms); perl `open(FH, '>...')`; ruby
  *     `File.write`, `IO.write`, `File.open(..., 'w'|'a')`.
- *     A literal quoted path as the write call's first argument is the target; a write through a
- *     variable is judged by the working directory, because the file it writes is unknown but the
- *     write itself is certain.
+ *     Literal paths, single-assignment path variables, and literal interpreter arguments name the
+ *     file. Other script writes retain their folder as an explicitly unnamed destination.
  * `cd <dir>` earlier in the command moves the working directory later targets resolve against.
  *
  * Known gaps (allowed, on purpose or for now):
@@ -34,16 +33,16 @@
  *   - interpreter code choosing its write mode through a variable (`open(p, mode)`), `os.open`, and
  *     writes through other libraries or languages (`awk`, `ruby -i`, `rsync`, `ln`, `git checkout`,
  *     `git restore`, formatters like `deno fmt`).
- *   - `cd` into a variable, `pushd`, and a `cd` inside a subshell that should not persist.
+ *   - `pushd`, and a `cd` inside a subshell that should not persist.
  */
 
 import {
   ASSIGN_RE,
-  findHeredocMarker,
-  readInterpreterHeredocs,
+  commandPartsInFolders,
+  type InterpreterInvocation,
   readInterpreterScript,
+  resolveCommandPath,
   resolveThroughWrappers,
-  splitOnOperators,
   splitShellTokens,
 } from "./normalize_command.ts";
 
@@ -77,34 +76,169 @@ const SCRIPT_WRITES: RegExp[] = [
 ];
 
 export interface WriteTargetOptions {
-  cwd: string;
+  cwd: string | null;
   home: string;
 }
 
-/** Joins a path onto a base, without touching the filesystem. `~` and `$HOME` expand. */
-export function resolvePath(raw: string, cwd: string, home: string): string | null {
-  let p = raw.replace(/^~(?=\/|$)/, home).replace(/^\$\{?HOME\}?(?=\/|$)/, home);
-  if (p === "" || /[$`]/.test(p)) return null;
-  if (!p.startsWith("/")) p = `${cwd.replace(/\/+$/, "")}/${p}`;
-  const parts: string[] = [];
-  for (const part of p.split("/")) {
-    if (part === "" || part === ".") continue;
-    if (part === "..") parts.pop();
-    else parts.push(part);
+export const resolvePath = resolveCommandPath;
+
+interface ScriptToken {
+  text: string;
+  literal?: string;
+  start: number;
+}
+
+/** Read only names, punctuation and literal strings; comments and quoted code are not assignments. */
+function scriptTokens(code: string): ScriptToken[] {
+  const tokens: ScriptToken[] = [];
+  for (let i = 0; i < code.length;) {
+    const start = i;
+    const ch = code[i];
+    if (ch === "\n") {
+      tokens.push({ text: ";", start });
+      i++;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      i++;
+      continue;
+    }
+    if (ch === "#" || code.startsWith("//", i)) {
+      while (i < code.length && code[i] !== "\n") i++;
+      continue;
+    }
+    if (code.startsWith("/*", i)) {
+      const end = code.indexOf("*/", i + 2);
+      i = end < 0 ? code.length : end + 2;
+      continue;
+    }
+    if (["'", '"', "`"].includes(ch)) {
+      let value = "";
+      i++;
+      while (i < code.length && code[i] !== ch) {
+        if (code[i] === "\\" && i + 1 < code.length) i++;
+        value += code[i++];
+      }
+      const closed = code[i] === ch;
+      i++;
+      tokens.push({ text: code.slice(start, i), literal: closed ? value : undefined, start });
+      continue;
+    }
+    const word = /^[\w$]+/.exec(code.slice(i))?.[0];
+    i += word?.length ?? 1;
+    tokens.push({ text: word ?? ch, start });
   }
-  return `/${parts.join("/")}`;
+  return tokens;
+}
+
+function scriptPath(
+  tokens: ScriptToken[],
+  invocation?: InterpreterInvocation,
+): string | null {
+  if (tokens.length === 1 && tokens[0].literal !== undefined) return tokens[0].literal;
+  const words = tokens.map((token) => token.text).join("");
+  const argument = /^(sys\.argv|process\.argv|Deno\.args)\[(\d+)\]$/.exec(words);
+  if (argument && invocation) {
+    const offset = argument[1] === "sys.argv"
+      ? 1
+      : argument[1] === "process.argv"
+      ? invocation.script?.kind === "inline" ? 1 : 2
+      : 0;
+    const family = argument[1] === "sys.argv"
+      ? "python"
+      : argument[1] === "process.argv"
+      ? "javascript"
+      : "typescript";
+    if (invocation.language !== family) return null;
+    return invocation.args[Number(argument[2]) - offset] ?? null;
+  }
+  const pathStart = tokens[0]?.text === "Path" ? 0 : words.startsWith("pathlib.Path(") ? 2 : -1;
+  if (pathStart >= 0 && tokens[pathStart + 1]?.text === "(" && tokens.at(-1)?.text === ")") {
+    return scriptPath(tokens.slice(pathStart + 2, -1), invocation);
+  }
+  return null;
+}
+
+function scriptVariables(
+  tokens: ScriptToken[],
+  invocation?: InterpreterInvocation,
+): Map<string, { path: string | null; start: number }> {
+  const assignments = new Map<string, { path: string | null; start: number }>();
+  for (let i = 0; i + 1 < tokens.length; i++) {
+    const name = tokens[i].text;
+    if (!/^[A-Za-z_$][\w$]*$/.test(name) || tokens[i - 1]?.text === ".") continue;
+    const next = tokens[i + 1].text;
+    if (
+      ["+", "-", "*", "/", "%", "&", "|", "^"].includes(next) &&
+      ["=", next].includes(tokens[i + 2]?.text)
+    ) {
+      assignments.set(name, { path: null, start: tokens[i].start });
+      continue;
+    }
+    if (next !== "=" || tokens[i + 2]?.text === "=") continue;
+    let end = i + 2;
+    let nesting = 0;
+    while (end < tokens.length) {
+      const current = tokens[end];
+      if (nesting === 0 && current.text === ";") break;
+      if (["(", "["].includes(current.text)) nesting++;
+      if ([")", "]"].includes(current.text)) nesting--;
+      end++;
+    }
+    const value = scriptPath(tokens.slice(i + 2, end), invocation);
+    assignments.set(name, {
+      path: assignments.has(name) ? null : value,
+      start: tokens[i].start,
+    });
+  }
+  return assignments;
 }
 
 /** Targets written by interpreter code: literal paths where the call names one, otherwise the cwd. */
-export function scriptWriteTargets(code: string, cwd: string, home: string): string[] {
+export function scriptWriteTargets(
+  code: string,
+  cwd: string | null,
+  home: string,
+  invocation?: InterpreterInvocation,
+  unknown?: (cwd: string | null) => void,
+): string[] {
   const targets: string[] = [];
+  const tokens = scriptTokens(code);
+  const variables = scriptVariables(tokens, invocation);
+  const expressionPath = (expression: ScriptToken[], before: number) => {
+    const variable = expression.length === 1 ? variables.get(expression[0].text) : undefined;
+    return variable
+      ? variable.start < before ? variable.path : null
+      : scriptPath(expression, invocation);
+  };
   for (const pattern of SCRIPT_WRITES) {
     pattern.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(code))) {
-      const literal = match[2];
-      const resolved = literal ? resolvePath(literal, cwd, home) : null;
-      targets.push(resolved ?? cwd);
+      // A write-looking string/comment is data, not a call.
+      if (!tokens.some((token) => token.start === match!.index)) continue;
+      let literal: string | null = match[2] ?? null;
+      if (literal === null && pattern !== SCRIPT_WRITES[2]) {
+        if (pattern === SCRIPT_WRITES[1]) {
+          const receiver = match[0].slice(0, match[0].indexOf(".write_"));
+          literal = expressionPath(scriptTokens(receiver), match.index);
+        } else {
+          const start = match.index + match[0].indexOf("(") + 1;
+          const expression: ScriptToken[] = [];
+          let nesting = 0;
+          for (const token of tokens.filter((token) => token.start >= start)) {
+            if (nesting === 0 && [",", ")", ";"].includes(token.text)) break;
+            if (["(", "["].includes(token.text)) nesting++;
+            if ([")", "]"].includes(token.text)) nesting--;
+            expression.push(token);
+          }
+          literal = expressionPath(expression, match.index);
+        }
+      }
+      const resolved = literal !== null ? resolvePath(literal, cwd, home) : null;
+      if (resolved) targets.push(resolved);
+      else if (unknown) unknown(cwd);
+      else if (cwd !== null) targets.push(cwd);
     }
   }
   return [...new Set(targets)];
@@ -251,26 +385,39 @@ function inlineCode(name: string, args: string[]): string | null {
 
 interface ArgvResult {
   targets: string[];
-  cd?: string;
   nested?: string;
 }
 
 /** Targets named by one resolved argv (wrappers already peeled). */
-function argvTargets(argv: string[], cwd: string, home: string): ArgvResult {
+function argvTargets(
+  argv: string[],
+  cwd: string | null,
+  home: string,
+  unknown: (cwd: string | null) => void,
+): ArgvResult {
   let i = 0;
   while (i < argv.length && ASSIGN_RE.test(argv[i])) i++;
   if (i >= argv.length) return { targets: [] };
   const name = argv[i].split("/").pop() ?? argv[i];
   const args = argv.slice(i + 1);
   const resolveAll = (paths: string[]) =>
-    paths.map((p) => resolvePath(p, cwd, home)).filter((p): p is string => p !== null);
+    paths.flatMap((path) => {
+      const resolved = resolvePath(path, cwd, home);
+      if (!resolved && cwd === null) unknown(null);
+      return resolved ? [resolved] : [];
+    });
+  const scriptTargets = (code: string) =>
+    scriptWriteTargets(
+      code,
+      cwd,
+      home,
+      readInterpreterScript(argv) ?? undefined,
+      unknown,
+    );
 
   switch (name) {
-    case "cd": {
-      const dir = args.find((a) => !a.startsWith("-")) ?? home;
-      if (args.includes("-")) return { targets: [] };
-      return { targets: [], cd: resolvePath(dir, cwd, home) ?? undefined };
-    }
+    case "cd":
+      return { targets: [] };
     case "tee":
       return { targets: resolveAll(nonOptionArgs(args)) };
     case "sed":
@@ -280,7 +427,7 @@ function argvTargets(argv: string[], cwd: string, home: string): ArgvResult {
       return {
         targets: [
           ...resolveAll(perlInPlaceFiles(args)),
-          ...(code ? scriptWriteTargets(code, cwd, home) : []),
+          ...(code ? scriptTargets(code) : []),
         ],
       };
     }
@@ -334,92 +481,73 @@ function argvTargets(argv: string[], cwd: string, home: string): ArgvResult {
       }
       if (SCRIPT_INTERPRETER.test(name)) {
         const code = inlineCode(name, args);
-        return { targets: code ? scriptWriteTargets(code, cwd, home) : [] };
+        return { targets: code ? scriptTargets(code) : [] };
       }
       return { targets: [] };
     }
   }
 }
 
-interface Split {
-  shell: string;
-  scripts: string[];
+export interface BashWriteAnalysis {
+  targets: string[];
+  unknownFiles: string[];
+  unknownDirectory: boolean;
 }
 
-/**
- * Separates heredoc bodies from shell text. A body fed to python/node/deno/perl/ruby is interpreter
- * code; a body fed to a shell stays shell text; any other body (a commit message, `cat > f <<EOF`
- * content) is data and dropped. The redirect or `tee` on the marker line still names the file.
- */
-export function splitHeredocs(command: string): Split {
-  const lines = command.split("\n");
-  const shell: string[] = [];
-  const scripts: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    shell.push(line);
-    const marker = findHeredocMarker(line);
-    if (!marker) continue;
-    const [word, stripTabs] = marker;
-    const body: string[] = [];
-    let j = i + 1;
-    for (; j < lines.length; j++) {
-      const probe = stripTabs ? lines[j].replace(/^\t+/, "") : lines[j];
-      if (probe.replace(/\r$/, "") === word) break;
-      body.push(lines[j]);
-    }
-    // Every command word on the marker line, before or after `<<` (`cat <<EOF | python3`).
-    const words = splitShellTokens(line.replace(/[|;&()]/g, " ")).map((w) =>
-      w.split("/").pop() ?? w
-    );
-    const shared = readInterpreterHeredocs(line);
-    const legacy = words.some((w) =>
-      SCRIPT_INTERPRETER.test(w) && !["python", "python3", "node", "deno"].includes(w)
-    );
-    if (shared.length || legacy) scripts.push(body.join("\n"));
-    else if (words.some((w) => SHELLS.has(w))) shell.push(...body);
-    i = j;
-  }
-  return { shell: shell.join("\n"), scripts };
-}
-
-/** Absolute paths (or working directories, for unknown destinations) that `command` writes to. */
-export function bashWriteTargets(
+/** Known files and uncertain writes are separate, so guards never mistake a folder for a file. */
+export function analyzeBashWrites(
   command: string,
   opts: WriteTargetOptions,
   depth = 0,
-): string[] {
-  if (depth > MAX_DEPTH) return [];
+): BashWriteAnalysis {
+  const analysis: BashWriteAnalysis = { targets: [], unknownFiles: [], unknownDirectory: false };
+  if (depth > MAX_DEPTH) return analysis;
   const { home } = opts;
-  let cwd = opts.cwd;
-  const { shell, scripts } = splitHeredocs(command);
-  const targets: string[] = [];
-
-  for (const segment of splitOnOperators(shell).segments) {
+  const unknown = (cwd: string | null) => {
+    if (cwd === null) analysis.unknownDirectory = true;
+    else analysis.unknownFiles.push(cwd);
+  };
+  const nested = (text: string, cwd: string | null) => {
+    const result = analyzeBashWrites(text, { cwd, home }, depth + 1);
+    analysis.targets.push(...result.targets);
+    analysis.unknownFiles.push(...result.unknownFiles);
+    analysis.unknownDirectory ||= result.unknownDirectory;
+  };
+  for (const part of commandPartsInFolders(command, opts.cwd, home)) {
+    const { cwd } = part;
+    if (part.script) {
+      analysis.targets.push(...scriptWriteTargets(part.text, cwd, home, part.invocation, unknown));
+      continue;
+    }
+    const segment = part.text;
     for (const word of redirectTargets(segment)) {
       const resolved = resolvePath(word, cwd, home);
-      if (resolved) targets.push(resolved);
+      if (resolved) analysis.targets.push(resolved);
+      else if (cwd === null) unknown(null);
     }
     const tokens = withoutRedirections(splitShellTokens(segment));
     if (tokens.length === 0) continue;
     const resolution = resolveThroughWrappers(tokens);
     if (resolution.kind === "cap-exceeded") continue;
     if (resolution.kind === "nested") {
-      targets.push(...bashWriteTargets(resolution.command, { cwd, home }, depth + 1));
+      nested(resolution.command, cwd);
       continue;
     }
-    const result = argvTargets(resolution.argv, cwd, home);
-    targets.push(...result.targets);
+    const result = argvTargets(resolution.argv, cwd, home, unknown);
+    analysis.targets.push(...result.targets);
     if (result.nested) {
-      targets.push(...bashWriteTargets(result.nested, { cwd, home }, depth + 1));
+      nested(result.nested, cwd);
     }
-    if (result.cd) cwd = result.cd;
   }
-  // A heredoc script is judged from the last `cd` in the command (`cd repo && python3 - <<EOF`).
-  for (const code of scripts) {
-    targets.push(...scriptWriteTargets(code, cwd, home));
-  }
-  return [...new Set(targets)];
+  analysis.targets = [...new Set(analysis.targets)];
+  analysis.unknownFiles = [...new Set(analysis.unknownFiles)];
+  return analysis;
+}
+
+/** The CLI's legacy path list includes the folder of a script whose file cannot be named. */
+export function bashWriteTargets(command: string, opts: WriteTargetOptions, depth = 0): string[] {
+  const result = analyzeBashWrites(command, opts, depth);
+  return [...new Set([...result.targets, ...result.unknownFiles])];
 }
 
 if (import.meta.main) {
@@ -430,7 +558,9 @@ if (import.meta.main) {
       : "";
     const cwd = typeof payload?.cwd === "string" && payload.cwd ? payload.cwd : Deno.cwd();
     const home = Deno.env.get("HOME") ?? "";
-    for (const target of bashWriteTargets(command, { cwd, home })) console.log(target);
+    if (Deno.args.includes("--json")) {
+      console.log(JSON.stringify(analyzeBashWrites(command, { cwd, home })));
+    } else for (const target of bashWriteTargets(command, { cwd, home })) console.log(target);
   } catch {
     // An unreadable payload names no target, so the gate allows it — the same as an Edit with no path.
   }

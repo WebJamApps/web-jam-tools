@@ -1,6 +1,6 @@
 /** Apply the protected-branch rule to Edit/Write, apply_patch, and known Bash write targets. */
 import { dirname, isAbsolute, resolve } from "jsr:@std/path@^1.0.0";
-import { bashWriteTargets } from "./bash_write_targets.ts";
+import { analyzeBashWrites } from "./bash_write_targets.ts";
 import { parseApplyPatchFilePaths } from "./parse_apply_patch.ts";
 
 function record(value: unknown): Record<string, unknown> {
@@ -52,12 +52,15 @@ export function checkFeatureBranch(raw: unknown): void {
   const input = record(payload.tool_input);
   const cwd = typeof payload.cwd === "string" && isAbsolute(payload.cwd) ? payload.cwd : Deno.cwd();
   let targets: string[];
+  let uncertain = false;
   if (payload.tool_name === "Bash") {
     if (typeof input.command !== "string") {
       allowWithNote("the Bash command could not be read");
       return;
     }
-    targets = bashWriteTargets(input.command, { cwd, home: Deno.env.get("HOME") ?? "" });
+    const writes = analyzeBashWrites(input.command, { cwd, home: Deno.env.get("HOME") ?? "" });
+    targets = writes.targets;
+    uncertain = writes.unknownDirectory || writes.unknownFiles.length > 0;
   } else if (payload.tool_name === "apply_patch") {
     targets = parseApplyPatchFilePaths(typeof input.command === "string" ? input.command : "");
     if (targets.length === 0) {
@@ -87,6 +90,7 @@ export function checkFeatureBranch(raw: unknown): void {
       Deno.exit(2);
     }
   }
+  if (uncertain) allowWithNote("the working directory or file of a write could not be determined");
 }
 
 if (import.meta.main) {

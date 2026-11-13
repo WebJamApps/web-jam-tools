@@ -10,6 +10,12 @@
 // reads the actual current branch via `git branch --show-current`.
 
 import { assert, assertEquals } from "@std/assert";
+import { folderCases, verifyFolderRow } from "./helpers/write_folder_cases.ts";
+
+for (const [index, row] of folderCases("/repo", "/scratch", "/home/test").entries()) {
+  Deno.test(`folder design table, feature branch: ${row.name}`, () =>
+    verifyFolderRow(index, "feature-branch-guard"));
+}
 
 const SCRIPT_PATH = new URL(
   "../hooks/feature-branch-guard.sh",
