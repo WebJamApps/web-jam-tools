@@ -5,6 +5,12 @@
 // transcript JSONL files standing in for Claude Code's actual transcript.
 
 import { assert, assertEquals } from "@std/assert";
+import { folderCases, verifyFolderRow } from "./helpers/write_folder_cases.ts";
+
+for (const [index, row] of folderCases("/repo", "/scratch", "/home/test").entries()) {
+  Deno.test(`folder design table, Opus: ${row.name}`, () =>
+    verifyFolderRow(index, "opus-delegation-gate"));
+}
 
 const SCRIPT_PATH = new URL(
   "../hooks/opus-delegation-gate.sh",

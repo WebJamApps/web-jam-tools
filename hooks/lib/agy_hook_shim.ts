@@ -419,6 +419,9 @@ export function translateVerdict(exitCode: number, stdout: string, stderr: strin
             return reason !== undefined ? { decision: d, reason } : { decision: d };
           }
         }
+        if (typeof hso?.additionalContext === "string" && hso.additionalContext) {
+          return { decision: "allow", reason: hso.additionalContext };
+        }
       } catch {
         // Not JSON (e.g. a reminder hook's plain stdout) — not a veto.
       }

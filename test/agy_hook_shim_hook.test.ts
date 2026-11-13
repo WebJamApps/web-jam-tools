@@ -548,6 +548,16 @@ Deno.test("translateVerdict: exit 0, no output -> allow", () => {
   assertEquals(translateVerdict(0, "", ""), { decision: "allow" });
 });
 
+Deno.test("translateVerdict: allow notices use only agy's supported decision and reason fields", () => {
+  const note = "the working directory could not be determined; proceeding";
+  const stdout = JSON.stringify({
+    hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: note },
+  });
+  const reply = toAgyReply("PreToolUse", translateVerdict(0, stdout, ""));
+  assertEquals(reply, { decision: "allow", reason: note });
+  assertEquals(Object.keys(reply).sort(), ["decision", "reason"]);
+});
+
 Deno.test("translateVerdict: exit 0 with hookSpecificOutput deny JSON -> deny with reason", () => {
   const stdout = JSON.stringify({
     hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "nope" },

@@ -48,7 +48,7 @@ import {
   type TranscriptEntry,
 } from "./select_transcript_entry.ts";
 import { slashCommandFromInvocationWrapper } from "./check_token_write_authorization.ts";
-import { bashWriteTargets } from "./bash_write_targets.ts";
+import { analyzeBashWrites } from "./bash_write_targets.ts";
 import { parseApplyPatchFilePaths } from "./parse_apply_patch.ts";
 import { checkAndConsumeWorkflowSwitch, type SwitchCheckResult } from "./workflow_switch.ts";
 
@@ -297,22 +297,25 @@ export function checkBashCommandTarget(
     };
   }
 
-  const targets = bashWriteTargets(command, { cwd, home });
+  const writes = analyzeBashWrites(command, { cwd, home });
+  const targets = [...writes.targets, ...writes.unknownFiles];
   if (targets.length === 0) {
+    if (writes.unknownDirectory) {
+      return {
+        determinable: false,
+        note: "The working directory of a Bash write could not be determined.",
+      };
+    }
     return { determinable: true, targets: [] };
   }
-
-  // bash_write_targets.ts reports the working directory, or a bare directory, when it cannot name
-  // the file a command writes — "somewhere under here", not a destination this gate can judge.
-  const unnamedDestination = (t: string) => t === cwd || t === ".";
-  if (targets.some(unnamedDestination) || targets.every((t) => t.endsWith("/"))) {
-    return {
-      determinable: false,
-      note: "A Bash write whose destination cannot be read.",
-    };
-  }
-
-  return { determinable: true, target: targets[0], targets };
+  return {
+    determinable: true,
+    target: targets[0],
+    targets,
+    note: writes.unknownFiles.length
+      ? "A write whose file cannot be named: run the same command again with its file paths written out."
+      : undefined,
+  };
 }
 
 /** Resolves whether the tool call's write target is determinable. */
@@ -921,6 +924,7 @@ export function decide(
       if (switchResult.released) {
         return allow(decision.kind, switchResult.reason);
       }
+      if (targetCheck.note) return deny(decision.kind, targetCheck.note);
     }
     return decision;
   } catch (err) {
