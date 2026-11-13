@@ -28,7 +28,8 @@ export interface BankTransaction {
 }
 
 export interface AccountRule {
-  pattern: RegExp;
+  /** Literal payee substring, matched case-insensitively; never evaluated as a regex. */
+  pattern: string;
   category: string;
   purpose?: string;
 }

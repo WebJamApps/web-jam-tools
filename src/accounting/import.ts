@@ -110,7 +110,7 @@ export function loadAccountRules(rulesText?: string): AccountRule[] {
   if (!rulesText) return rules;
 
   const lines = rulesText.split(/\r?\n/);
-  let currentPattern: RegExp | null = null;
+  let currentPattern: string | null = null;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -135,7 +135,7 @@ export function loadAccountRules(rulesText?: string): AccountRule[] {
     );
     if (singleLineMatch) {
       rules.push({
-        pattern: new RegExp(singleLineMatch[1].trim(), "i"),
+        pattern: singleLineMatch[1].trim().toLowerCase(),
         category: singleLineMatch[2].trim(),
       });
       currentPattern = null;
@@ -145,7 +145,7 @@ export function loadAccountRules(rulesText?: string): AccountRule[] {
     // Multi-line header: if <pattern>
     const ifMatch = trimmed.match(/^if(?:\s+%description)?\s+(.+)$/i);
     if (ifMatch) {
-      currentPattern = new RegExp(ifMatch[1].trim(), "i");
+      currentPattern = ifMatch[1].trim().toLowerCase();
       continue;
     }
   }
@@ -158,14 +158,14 @@ export function categorizeTransaction(
   amount: number,
   rules: AccountRule[] = [],
 ): string {
+  const lower = payee.toLowerCase();
   for (const rule of rules) {
-    if (rule.pattern.test(payee)) {
+    if (rule.pattern && lower.includes(rule.pattern.toLowerCase())) {
       return rule.category;
     }
   }
 
   // Built-in rule defaults
-  const lower = payee.toLowerCase();
   if (lower.includes("penn station") || lower.includes("restaurant") || lower.includes("cafe")) {
     return "Expenses:Meals";
   }

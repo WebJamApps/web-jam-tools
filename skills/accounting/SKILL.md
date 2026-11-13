@@ -105,6 +105,10 @@ Each month, downloaded statements are processed and closed:
    ```
    The importer enforces duplicate prevention: lines previously imported are skipped.
 4. **Categorize**: Review uncategorized transactions and apply mapping rules from `rules/`.
+   Pass the account's file with `--rules <rules-file>` on `accounting:import`. The importer accepts
+   `if <payee text> account2 <category>` on one line, or `if <payee text>` followed by an indented
+   `account2 <category>`. Payee text is a case-insensitive literal substring, not a regular expression;
+   punctuation such as `.` and `+` is matched as written. Rules are tried in file order.
 5. **Month-End Close**: Once all transactions are entered and reconciled to the statement balance:
    ```sh
    deno task accounting:close-month --year <year> --month <month> --balance <account>=<amount>
