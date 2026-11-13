@@ -214,6 +214,15 @@ export async function verifyFolderRow(
       const result = stdout.trim() ? JSON.parse(stdout) : {};
       if (surface === "agy") {
         assertEquals(output.code, 0, stderr);
+        // docs/agy-hooks.md §2 item 6: protojson rejects fields outside PreToolHookResult.
+        const fields = new Set([
+          "decision",
+          "reason",
+          "overwrite",
+          "permissionOverrides",
+          "allowTool",
+        ]);
+        assert(Object.keys(result).every((key) => fields.has(key)), stdout);
         assertEquals(result.decision, denied ? "deny" : "allow", row.name + stdout);
       } else if (hook === "feature-branch-guard") {
         assertEquals(output.code, denied ? 2 : 0, row.name + stderr);
@@ -226,7 +235,9 @@ export async function verifyFolderRow(
         );
       }
       if (!denied && (row.unknownDirectory || row.unknownFiles?.length)) {
-        const note = result.hookSpecificOutput?.additionalContext;
+        const note = surface === "agy"
+          ? result.reason
+          : result.hookSpecificOutput?.additionalContext;
         assert(
           typeof note === "string" && note.includes("could not be determined"),
           row.name + stdout,

@@ -393,7 +393,6 @@ export type AgyDecision = "allow" | "deny" | "ask";
 export interface AgyVerdict {
   decision: AgyDecision;
   reason?: string;
-  hookSpecificOutput?: { hookEventName: string; additionalContext: string };
 }
 
 /**
@@ -421,13 +420,7 @@ export function translateVerdict(exitCode: number, stdout: string, stderr: strin
           }
         }
         if (typeof hso?.additionalContext === "string" && hso.additionalContext) {
-          return {
-            decision: "allow",
-            hookSpecificOutput: {
-              hookEventName: "PreToolUse",
-              additionalContext: hso.additionalContext,
-            },
-          };
+          return { decision: "allow", reason: hso.additionalContext };
         }
       } catch {
         // Not JSON (e.g. a reminder hook's plain stdout) — not a veto.

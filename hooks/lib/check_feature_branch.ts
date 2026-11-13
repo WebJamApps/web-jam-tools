@@ -52,7 +52,7 @@ export function checkFeatureBranch(raw: unknown): void {
   const input = record(payload.tool_input);
   const cwd = typeof payload.cwd === "string" && isAbsolute(payload.cwd) ? payload.cwd : Deno.cwd();
   let targets: string[];
-  let uncertain = false;
+  const notes: string[] = [];
   if (payload.tool_name === "Bash") {
     if (typeof input.command !== "string") {
       allowWithNote("the Bash command could not be read");
@@ -60,7 +60,9 @@ export function checkFeatureBranch(raw: unknown): void {
     }
     const writes = analyzeBashWrites(input.command, { cwd, home: Deno.env.get("HOME") ?? "" });
     targets = writes.targets;
-    uncertain = writes.unknownDirectory || writes.unknownFiles.length > 0;
+    if (writes.unknownDirectory || writes.unknownFiles.length > 0) {
+      notes.push("the working directory or file of a write could not be determined");
+    }
   } else if (payload.tool_name === "apply_patch") {
     targets = parseApplyPatchFilePaths(typeof input.command === "string" ? input.command : "");
     if (targets.length === 0) {
@@ -80,7 +82,7 @@ export function checkFeatureBranch(raw: unknown): void {
     if (top.code !== 0 || !top.text) continue; // Outside a git working tree, as before.
     const branch = git(dir, ["branch", "--show-current"]);
     if (branch.code !== 0) {
-      allowWithNote("a target repository's branch could not be read");
+      notes.push("a target repository's branch could not be read");
       continue;
     }
     if (["dev", "main", "master"].includes(branch.text)) {
@@ -90,7 +92,7 @@ export function checkFeatureBranch(raw: unknown): void {
       Deno.exit(2);
     }
   }
-  if (uncertain) allowWithNote("the working directory or file of a write could not be determined");
+  if (notes.length) allowWithNote([...new Set(notes)].join("; "));
 }
 
 if (import.meta.main) {

@@ -109,6 +109,10 @@ agy surface only. It:
 4. converts the target hook's verdict (`exit 2`, or `hookSpecificOutput.permissionDecision`) into
    agy's own `{"decision":"deny"|"allow"|"ask","reason":"..."}` form.
 
+For a `PreToolUse` allow notice, the shim puts the target hook's `additionalContext` text in
+agy's supported `reason` field. It never emits Claude's `hookSpecificOutput` field in the agy
+reply: that field is absent from the measured `PreToolHookResult` contract above.
+
 None of the twelve existing hook scripts under `hooks/` were modified to build this — their
 existing tests pass unchanged. The matcher is base64-encoded in the registered command string
 (rather than embedded as literal shell text) because agy's exact invocation mechanism (a full
