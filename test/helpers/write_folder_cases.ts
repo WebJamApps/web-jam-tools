@@ -21,9 +21,13 @@ export function folderCases(repo: string, scratch: string, home: string): Folder
       name: "01 heredoc before later repository cd",
       cwd: doc,
       command: `cd ${doc} && ${
-        python("import sys\np = sys.argv[1]\nopen(p,'w').write('x')", "model-tier.md ")
-      }\ncd ${repo} && deno task design:lint-doc ${doc}/model-tier.md`,
-      targets: [`${doc}/model-tier.md`],
+        python(
+          "import sys\np = sys.argv[1]\nopen(p,'w').write('x')",
+          "model-tier-order-design-2026-10-02.md ",
+        )
+          .replace("python3 - ", "python3 -I - ")
+      }\ncd ${repo} && deno task design:lint-doc ${doc}/model-tier-order-design-2026-10-02.md`,
+      targets: [`${doc}/model-tier-order-design-2026-10-02.md`],
     },
     {
       name: "02 variable cd before heredoc and later literal cd",
