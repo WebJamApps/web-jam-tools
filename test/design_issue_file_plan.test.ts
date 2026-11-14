@@ -45,6 +45,7 @@ for (const row of DESIGN_BODY_CASES) {
 }
 import { TEST_AUTHOR, withPassingProbe } from "./authored_by_test_helpers.ts";
 import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
+import { AGY_IDENTITIES, withAgySigningFixture } from "./support/agy_signing_fixture.ts";
 import {
   filePlan as realFilePlan,
   type FilePlanOptions,
@@ -66,6 +67,64 @@ import {
 
 const APPROVE_ALL: (repoFull: string, title: string) => ApprovalCheckResult = () => ({ ok: true });
 
+for (const identity of AGY_IDENTITIES) {
+  Deno.test(`agy plan signs each body as ${identity.conversationId}`, () =>
+    withAgySigningFixture(async (signing) => {
+      const output: string[] = [];
+      const calls: string[][] = [];
+      const log = console.log;
+      console.log = (...values: unknown[]) => output.push(values.join("\n"));
+      try {
+        await realFilePlan({
+          planPath: "test/fixtures/design-issue/fixture-plan.json",
+          dryRun: true,
+          author: "agy — Gemini Flash",
+          approvalCheck: APPROVE_ALL,
+          deps: {
+            signing,
+            readFileText: (path) => Deno.readTextFile(path),
+            runCmd: (cmd) => {
+              calls.push(cmd);
+              return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+            },
+          },
+        });
+      } finally {
+        console.log = log;
+      }
+      const bodies = output.filter((body) => body.startsWith("## What this builds"));
+      assertEquals(bodies.length, 3);
+      for (const body of bodies) {
+        assertEquals(body.trimEnd().endsWith(`🤖 Authored by ${identity.author}`), true);
+      }
+      assertEquals(calls.some((cmd) => cmd[0] === "gh"), false);
+    }, identity));
+}
+
+Deno.test("agy plan refuses missing record before any subprocess call", () =>
+  withAgySigningFixture(async (signing, _env, recordPath) => {
+    await Deno.remove(recordPath);
+    const calls: string[][] = [];
+    await assertRejects(
+      () =>
+        realFilePlan({
+          planPath: "test/fixtures/design-issue/fixture-plan.json",
+          author: "agy — Gemini Flash",
+          approvalCheck: APPROVE_ALL,
+          deps: {
+            signing,
+            readFileText: (path) => Deno.readTextFile(path),
+            runCmd: (cmd) => {
+              calls.push(cmd);
+              return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+            },
+          },
+        }),
+      Error,
+      "Cannot read",
+    );
+    assertEquals(calls, []);
+  }));
 Deno.test("file-plan: unreadable body file refuses before filing, naming file and issue", async () => {
   const dir = await Deno.makeTempDir();
   try {

@@ -4,6 +4,7 @@
 
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { TEST_AUTHOR, withPassingProbe } from "./authored_by_test_helpers.ts";
+import { AGY_IDENTITIES, withAgySigningFixture } from "./support/agy_signing_fixture.ts";
 import { MODEL_LABEL_CASES } from "./support/model_label_cases.ts";
 import { DESIGN_BODY_CASES } from "./support/design_body_cases.ts";
 
@@ -56,6 +57,50 @@ import {
 // path, against createIssueAndVerify() with the argument OMITTED, further
 // down this file.
 const APPROVE_ALL: (repoFull: string, title: string) => ApprovalCheckResult = () => ({ ok: true });
+
+for (const identity of AGY_IDENTITIES) {
+  Deno.test(`agy issue creation resolves ${identity.conversationId} before publishing`, () =>
+    withAgySigningFixture(async (signing) => {
+      const { deps, calls } = probeDeps("## What this builds\nBody", { code: 0, stderr: "" });
+      deps.signing = signing;
+      const result = await realCreateIssueAndVerify(
+        {
+          title: "Signing fixture",
+          bodyFile: "/tmp/b.md",
+          labels: ["Flash"],
+          author: "agy — Gemini Flash",
+          dryRun: true,
+        },
+        deps,
+        APPROVE_ALL,
+      );
+      assertEquals(result.trimEnd().endsWith(`🤖 Authored by ${identity.author}`), true);
+      assertEquals(calls, []);
+    }, identity));
+}
+
+Deno.test("agy issue creation refuses missing record before any GitHub call", () =>
+  withAgySigningFixture(async (signing, _env, recordPath) => {
+    const { deps, calls } = probeDeps("Body", { code: 0, stderr: "" });
+    deps.signing = signing;
+    await Deno.remove(recordPath);
+    await assertRejects(
+      () =>
+        realCreateIssueAndVerify(
+          {
+            title: "Signing fixture",
+            bodyFile: "/tmp/b.md",
+            labels: ["Flash"],
+            author: "agy — Gemini Flash",
+          },
+          deps,
+          APPROVE_ALL,
+        ),
+      Error,
+      "Cannot read",
+    );
+    assertEquals(calls, []);
+  }));
 
 for (const { labels, reason, error } of MODEL_LABEL_CASES) {
   Deno.test(`create-issue enforces the shared rule: ${JSON.stringify(labels)}, reason ${JSON.stringify(reason)}`, async () => {

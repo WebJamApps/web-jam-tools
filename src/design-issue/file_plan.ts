@@ -9,7 +9,11 @@
 import { parseArgs } from "@std/cli/parse-args";
 import { checkDesignBody } from "../shared/design_body.ts";
 import { checkAuthorOnRoster, withFooter } from "../../hooks/lib/authored_by_footer.ts";
-import { isCodexSession, resolveSigningAuthor } from "../shared/codex_running_model.ts";
+import {
+  isAgySession,
+  isCodexSession,
+  resolveSigningAuthor,
+} from "../shared/codex_running_model.ts";
 import * as path from "@std/path";
 import {
   type ApprovalCheckResult,
@@ -600,7 +604,7 @@ export async function filePlan(
 
   if (options.dryRun) {
     console.log(`[design:file-plan] Dry run verified: ${allItems.length} issue(s) approved.`);
-    if (isCodexSession(deps.signing)) {
+    if (isCodexSession(deps.signing) || isAgySession(deps.signing)) {
       for (const { item } of allItems) {
         const bodyPath = item.bodyFile || item.body_file || item.bodyPath;
         const body = bodyPath

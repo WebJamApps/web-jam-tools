@@ -17,17 +17,40 @@ export function isCodexSession(options: RunningModelOptions = {}): boolean {
   return Boolean((options.env ?? ((name: string) => Deno.env.get(name)))("CODEX_THREAD_ID"));
 }
 
-/** Use the running Codex model for signatures; other surfaces keep their typed author. */
+/** Identity hints select the agy resolver; none of them grants permission to act. */
+export function isAgySession(options: RunningModelOptions = {}): boolean {
+  const env = options.env ?? ((name: string) => Deno.env.get(name));
+  return options.invocationContext !== undefined || env("WJT_SURFACE") === "agy" ||
+    Boolean(
+      env("AGY_CONVERSATION_ID") || env("AGY_MODEL_NAME") || env("AGY_TRANSCRIPT_PATH") ||
+        env("FORCED_PR_AUTHOR"),
+    );
+}
+
+/** Resolve recorded Codex/agy signatures; preserve Claude Code's existing author checks. */
 export async function resolveSigningAuthor(
   typedAuthor: string | undefined,
   options: RunningModelOptions = {},
 ): Promise<string | undefined> {
   const env = options.env ?? ((name: string) => Deno.env.get(name));
-  if (!isCodexSession({ env })) return typedAuthor;
-  if (env("FORCED_PR_AUTHOR")) {
+  const codex = isCodexSession({ env });
+  const claude = Boolean(env("CLAUDE_CODE_SESSION_ID"));
+  const agy = isAgySession({ ...options, env });
+  if (codex && env("FORCED_PR_AUTHOR")) {
     throw new Error("Refusing to sign: CODEX_THREAD_ID and FORCED_PR_AUTHOR are both set");
   }
-  return await codexRunningModel({ ...options, env });
+  if ([codex, claude, agy].filter(Boolean).length > 1) {
+    throw new Error("Refusing to sign: two tools claim the session");
+  }
+  if (codex) return await codexRunningModel({ ...options, env });
+  if (
+    agy || (!claude && /^agy\s*—/u.test(typedAuthor ?? ""))
+  ) {
+    // Reuse the conversation-bound resolver and its sole-roster mapping.
+    const { resolveRunningModel } = await import("../../scripts/running-model.ts");
+    return `agy — ${await resolveRunningModel({ ...options, env })}`;
+  }
+  return typedAuthor;
 }
 
 /** Read the sole author roster through its side-effect-free shell probe. */

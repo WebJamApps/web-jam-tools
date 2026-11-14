@@ -2,7 +2,7 @@
 # create-draft-pr.sh — web-jam-tools#49
 #
 # The single source of truth for opening pull requests across the WebJamApps
-# workspace. Bash + `gh`, with Deno for Codex model lookup, so it is model- and
+# workspace. Bash + `gh`, with Deno for recorded model lookup, so it is model- and
 # tool-agnostic: Claude Code, agy, and Codex finish a coding task by calling this script instead
 # of `gh pr create` directly.
 #
@@ -27,7 +27,7 @@
 #       [--test-plan TEXT | --test-plan-file PATH] \
 #       [--test-evidence TEXT | --test-evidence-file PATH] [--screenshots TEXT]
 #
-#   --author        Required outside Codex. e.g. "Claude Code — Opus", "agy — Gemini Flash",
+#   --author        Required on Claude Code. e.g. "Claude Code — Opus", "agy — Gemini Flash",
 #                   "Claude Code — Sonnet 5.5". Lands in the footer so Josh can track per-model
 #                   quality. MUST name a model on the ROSTER list maintained near
 #                   the top of this script (web-jam-tools#190) — models routinely
@@ -35,10 +35,8 @@
 #                   Flash run self-reported "Gemini 1.5 Pro"), so the script
 #                   checks the value itself rather than trusting it. Matched as a
 #                   SUBSTRING (caller format is "<tool> — <model>"), not an exact
-#                   match. Outside Codex, FORCED_PR_AUTHOR overrides --author
-#                   entirely (see below) — headless/scripted callers that already
-#                   know the exact model should set it instead of trusting the
-#                   model to self-report correctly.
+#                   match. On agy, the verified calling conversation supplies the
+#                   author; typed names and FORCED_PR_AUTHOR never override it.
 #                   In Codex, the running session supplies the signature even if
 #                   --author is absent or wrong. Lookup failures and simultaneous
 #                   CODEX_THREAD_ID / FORCED_PR_AUTHOR refuse before any write.
@@ -128,17 +126,9 @@
 #                   plan/Test evidence swapped in — with the same guards — once
 #                   the work is actually done, without opening a second PR.
 #
-# FORCED_PR_AUTHOR (environment variable, not a flag): outside Codex, REPLACES
-# whatever --author was passed (or not passed) before any check runs. It still
-# has to be on the roster — this is an override of the SOURCE of the author
-# string, not a bypass of the roster check. handle-agy-tasks.sh sets this to
-# the exact "agy — <model>" string for the model it actually invoked, so a
-# headless or interactive agy run's PR footer can never depend on the model
-# correctly naming itself (web-jam-tools#190). Because the roster is
-# deliberately UNVERSIONED while the agy model chain's display names carry a
-# version token, handle-agy-tasks.sh strips that token before setting this —
-# an unstripped name can never clear the substring roster match, which left
-# agy no way to open a PR through this script at all (web-jam-tools#912).
+# FORCED_PR_AUTHOR (environment variable, not a flag): a launcher hint only.
+# agy signing requires the calling conversation's trusted model context and
+# matching hook record; neither this hint nor --author can replace that evidence.
 # A Codex session with FORCED_PR_AUTHOR set refuses because the two surfaces
 # disagree about the source of the signature (web-jam-tools#1252).
 #
@@ -330,16 +320,10 @@ while [ $# -gt 0 ]; do
 done
 
 # --- Resolve the signing author before roster checks or writes ---
-# Outside Codex, FORCED_PR_AUTHOR wins over --author. handle-agy-tasks.sh sets it to the exact
-# "agy — <model>" string for the model it actually invoked, so the PR footer
-# never depends on the model self-reporting correctly (still has to clear the
-# roster check below — this overrides the SOURCE of the value, not the check).
-if [ -n "${CODEX_THREAD_ID:-}" ]; then
-  SIGNING_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  AUTHOR=$(deno run --allow-env=CODEX_THREAD_ID,CODEX_HOME,HOME,FORCED_PR_AUTHOR --allow-read --allow-run=bash "$SIGNING_SCRIPT_DIR/whoami.ts" --signing-author "$AUTHOR") || exit 1
-elif [ -n "${FORCED_PR_AUTHOR:-}" ]; then
-  AUTHOR="$FORCED_PR_AUTHOR"
-fi
+# Codex and agy use their own recorded identity; Claude Code retains its author checks.
+# Read-only roster probes exit before this bridge, so resolving a model cannot recurse.
+SIGNING_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AUTHOR=$(deno run --allow-env=CODEX_THREAD_ID,CODEX_HOME,HOME,FORCED_PR_AUTHOR,CLAUDE_CODE_SESSION_ID,WJT_SURFACE,AGY_HOOK_RECORD_PATH,AGY_CONVERSATION_ID,AGY_MODEL_NAME,AGY_TRANSCRIPT_PATH --allow-read --allow-run=bash "$SIGNING_SCRIPT_DIR/whoami.ts" --signing-author "$AUTHOR") || exit 1
 
 # --- required: author ---
 if [ -z "$AUTHOR" ]; then

@@ -5,6 +5,77 @@ import { type Deps, run } from "../scripts/post-pr-comment.ts";
 import { REVIEW_SUMMARY_HEADER } from "../scripts/gh-write/guard.ts";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
 import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
+import { AGY_IDENTITIES, withAgySigningFixture } from "./support/agy_signing_fixture.ts";
+
+for (const identity of AGY_IDENTITIES) {
+  Deno.test(`agy comment signs Work, Fixed and Reviewed lines as ${identity.conversationId}`, () =>
+    withAgySigningFixture(async (signing) => {
+      const body =
+        "Notes\r\n🤖 Work by agy — Gemini Flash\r\n🤖 Fixed by agy — Gemini Flash\r\n🤖 Reviewed by agy — Gemini Flash\r\n";
+      const calls: string[][] = [];
+      assertEquals(
+        await run(
+          ARGS,
+          fakeDeps({
+            signing,
+            readFileText: () => Promise.resolve(body),
+            runCmd: (cmd) => {
+              calls.push(cmd);
+              return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+            },
+          }),
+        ),
+        0,
+      );
+      const post = calls.find((cmd) => cmd[0] === "gh")!;
+      const expected = body.replaceAll("agy — Gemini Flash", identity.author);
+      if (expected === body) {
+        assertEquals(post.slice(-2), ["--body-file", "/tmp/example-comment.md"]);
+      } else assertEquals(post[post.indexOf("--body") + 1], expected);
+    }, identity));
+}
+
+Deno.test("agy comment missing evidence refuses before GitHub or roster subprocess calls", () =>
+  withAgySigningFixture(async (signing, _env, recordPath) => {
+    await Deno.remove(recordPath);
+    const calls: string[][] = [];
+    assertEquals(
+      await run(
+        ARGS,
+        fakeDeps({
+          signing,
+          readFileText: () => Promise.resolve("Notes\n🤖 Fixed by agy — Gemini Flash"),
+          runCmd: (cmd) => {
+            calls.push(cmd);
+            return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+          },
+        }),
+      ),
+      1,
+    );
+    assertEquals(calls, []);
+  }));
+
+Deno.test("Codex repost preserves the helper signature already checked by the push path", () =>
+  withSigningFixture(async (signing) => {
+    const body = "Fixed formatting.\n🤖 Fixed by Codex — GPT-6.1 Sol\n";
+    const calls: string[][] = [];
+    assertEquals(
+      await run(
+        ARGS,
+        fakeDeps({
+          signing,
+          readFileText: () => Promise.resolve(body),
+          runCmd: (cmd) => {
+            calls.push(cmd);
+            return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+          },
+        }),
+      ),
+      0,
+    );
+    assertEquals(calls[0].slice(-2), ["--body-file", "/tmp/example-comment.md"]);
+  }));
 
 function fakeDeps(overrides: Partial<Deps> = {}): Deps {
   return {
