@@ -120,7 +120,7 @@ Deno.test("fresh home: exact 28 nested registrations, matcher fidelity, sandbox 
         ["Bash", "block-agy-non-flash-model.sh"],
         ["Bash|Edit|Write", "block-human-only-credentials.sh"],
         ["Bash|Edit|Write", "feature-branch-guard.sh"],
-        ["mcp__(gmail|claude_ai_Gmail)__.*", "haiku-only-gmail-gate.sh"],
+        ["mcp__codex_apps__gmail_.*", "haiku-only-gmail-gate.sh"],
         ["Bash|mcp__.*__issue_write", "require-model-label-on-issue-create.sh"],
         ["Write|Edit|NotebookEdit", "block-out-of-tree-write.sh"],
         ["Bash|Write|Edit|NotebookEdit", "opus-delegation-gate.sh"],
@@ -237,7 +237,7 @@ Deno.test("invalid TOML, missing hook, missing rules and unreadable arrays refus
   }
 });
 
-Deno.test("links every shared skill except Gmail; no agents folder; conflicted skill is skipped", () => {
+Deno.test("links every shared skill including Gmail; no agents folder; conflicted skill is skipped", () => {
   for (const conflict of [false, true]) {
     fixture((home, repo) => {
       if (conflict) Deno.mkdirSync(join(home, ".codex/skills/pr-review"), { recursive: true });
@@ -245,9 +245,12 @@ Deno.test("links every shared skill except Gmail; no agents folder; conflicted s
       assertEquals(result.code, conflict ? 1 : 0);
       const files = snapshot(home);
       assert(!Object.keys(files).some((path) => path.startsWith(".agents")));
-      assertEquals(files[".codex/skills/handle-gmails"], undefined);
+      assertEquals(
+        files[".codex/skills/handle-gmails"],
+        `link:${join(repo, "skills/handle-gmails")}`,
+      );
       for (const entry of Deno.readDirSync(join(repo, "skills"))) {
-        if (!entry.isDirectory || entry.name === "handle-gmails") continue;
+        if (!entry.isDirectory) continue;
         const target = join(home, ".codex/skills", entry.name);
         if (conflict && entry.name === "pr-review") {
           assert(Deno.lstatSync(target).isDirectory);

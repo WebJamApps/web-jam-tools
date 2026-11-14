@@ -7,7 +7,11 @@ const hooksDir = new URL("../hooks/", import.meta.url).pathname;
 // TypeScript checker can emit a verdict. The fake runtime never runs a tool.
 for (
   const [script, payload, field] of [
-    ["haiku-only-gmail-gate.sh", { transcript_path: import.meta.filename }, "session model"],
+    [
+      "haiku-only-gmail-gate.sh",
+      { transcript_path: import.meta.filename },
+      "model could not be read",
+    ],
     ["require-model-label-on-issue-create.sh", {
       tool_name: "Bash",
       tool_input: { command: "gh issue create --type Task --label Haiku" },
@@ -47,7 +51,10 @@ for (
       assertEquals(output.hookEventName, "PreToolUse");
       assertEquals(output.permissionDecision, undefined);
       assertStringIncludes(output.additionalContext, field);
-      assertStringIncludes(output.additionalContext, "proceeding");
+      assertStringIncludes(
+        output.additionalContext,
+        script === "haiku-only-gmail-gate.sh" ? "this call proceeds" : "proceeding",
+      );
     } finally {
       await Deno.remove(runtimeDir, { recursive: true });
     }

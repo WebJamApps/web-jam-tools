@@ -398,16 +398,10 @@ export function selectLastUserEntry(
 
 /**
  * Recovers the active session model from a transcript.
- * Checks the current turn's assistant entry first; if none is present (e.g. before the
- * assistant entry is flushed), falls back to traversing reverse-chronologically for
- * the latest genuine (non-sidechain, non-error) assistant entry across the session.
+ * Reads the newest genuine main-session assistant entry that carries a model,
+ * regardless of text content or turn boundaries. Model-less records are skipped.
  */
 export function selectSessionModel(entries: readonly TranscriptEntry[]): string {
-  const currentTurn = selectLastAssistantEntry(entries, { requireText: false });
-  if (currentTurn) {
-    const m = extractEntryModel(currentTurn);
-    if (m) return m;
-  }
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
     if (!entry || typeof entry !== "object") continue;
@@ -633,8 +627,7 @@ if (import.meta.main) {
         console.log(text);
       }
     } else if (mode === "model") {
-      const selected = selectLastAssistantEntry(entries, { requireText: false });
-      const model = extractEntryModel(selected);
+      const model = selectSessionModel(entries);
       if (model !== "") {
         console.log(model);
       }

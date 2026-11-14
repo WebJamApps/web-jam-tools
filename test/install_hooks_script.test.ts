@@ -2149,41 +2149,13 @@ Deno.test(
         );
       }
 
-      // R-43 (D-29): Hosted Gmail connector write tools denied (local server is sanctioned laptop path)
-      const hostedGmailWrites = [
-        "mcp__claude_ai_Gmail__create_draft",
-        "mcp__claude_ai_Gmail__update_draft",
-        "mcp__claude_ai_Gmail__create_label",
-        "mcp__claude_ai_Gmail__update_label",
-        "mcp__claude_ai_Gmail__label_message",
-        "mcp__claude_ai_Gmail__label_thread",
-        "mcp__claude_ai_Gmail__unlabel_message",
-        "mcp__claude_ai_Gmail__unlabel_thread",
-        "mcp__claude_ai_Gmail__apply_sensitive_message_label",
-        "mcp__claude_ai_Gmail__apply_sensitive_thread_label",
-        "mcp__claude_ai_Gmail__delete_label",
-        "mcp__claude_ai_Gmail__send_message",
-        "mcp__claude_ai_Gmail__forward",
-        "mcp__claude_ai_Gmail__reply",
-      ];
-      for (const tool of hostedGmailWrites) {
-        assert(deny.includes(tool), `hosted Gmail write tool ${tool} must be in permissions.deny`);
-      }
-      // R-43 Gmail control tests: hosted Gmail reads are not denied
-      for (
-        const readTool of [
-          "mcp__claude_ai_Gmail__get_message",
-          "mcp__claude_ai_Gmail__get_thread",
-          "mcp__claude_ai_Gmail__list_drafts",
-          "mcp__claude_ai_Gmail__list_labels",
-          "mcp__claude_ai_Gmail__search_threads",
-        ]
-      ) {
-        assert(
-          !deny.includes(readTool),
-          `hosted Gmail read tool ${readTool} must not be in permissions.deny`,
-        );
-      }
+      assert(
+        deny.includes("mcp__claude_ai_Gmail__*"),
+        "whole hosted Gmail connector must be denied",
+      );
+      assertEquals(deny.filter((rule) => rule.startsWith("mcp__claude_ai_Gmail__")), [
+        "mcp__claude_ai_Gmail__*",
+      ]);
 
       // R-43 (D-30): Hosted Google Drive connector write tools denied (local server is sanctioned laptop path)
       const hostedDriveWrites = [
@@ -3022,3 +2994,83 @@ Deno.test(
     }
   },
 );
+
+for (
+  const tool of [
+    "mcp__claude_ai_Gmail__search_threads",
+    "mcp__claude_ai_Gmail__get_thread",
+    "mcp__claude_ai_Gmail__trash_message",
+    "mcp__claude_ai_Gmail__update_message_labels",
+    "mcp__claude_ai_Gmail__delete_draft",
+    "mcp__claude_ai_Gmail__a_tool_added_later",
+    "mcp__gmail__search_emails",
+    "mcp__gmail__read_email",
+    "mcp__claude_ai_Google_Drive__search_files",
+    "mcp__codex_apps__gmail_search_emails",
+  ]
+) {
+  Deno.test(`hosted Gmail installer deny case: ${tool}`, async () => {
+    const dir = await Deno.makeTempDir();
+    try {
+      const settings = `${dir}/settings.json`;
+      await Deno.writeTextFile(
+        settings,
+        JSON.stringify({
+          permissions: { deny: ["mcp__claude_ai_Gmail__reply", "mcp__other__do_not_touch"] },
+        }),
+      );
+      await Deno.writeTextFile(
+        `${dir}/agy.json`,
+        JSON.stringify({
+          hooks: {
+            PreToolUse: [{
+              matcher: ".*",
+              hooks: [{
+                type: "command",
+                command:
+                  "$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse bWNwX19nbWFpbF9fLio= $HOME/.claude/hooks/haiku-only-gmail-gate.sh",
+              }],
+            }],
+          },
+        }),
+      );
+      const args = [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        `${dir}/hooks`,
+        "--settings-path",
+        settings,
+        "--agy-hooks-path",
+        `${dir}/agy.json`,
+      ];
+      const result = await run("bash", args, { HOME: dir });
+      assertEquals(result.code, 0, result.stdout + result.stderr);
+      const data = JSON.parse(await Deno.readTextFile(settings));
+      const deny = data.permissions.deny as string[];
+      assertEquals(deny.filter((rule) => rule.startsWith("mcp__claude_ai_Gmail__")), [
+        "mcp__claude_ai_Gmail__*",
+      ]);
+      assert(deny.includes("mcp__other__do_not_touch"));
+      // Claude's documented bare-name server wildcard matches all tools of that connector.
+      assertEquals(
+        deny.some((rule) => rule.endsWith("*") && tool.startsWith(rule.slice(0, -1))),
+        tool.startsWith("mcp__claude_ai_Gmail__"),
+      );
+      assert(!deny.includes(tool));
+      const hooks = data.hooks.PreToolUse as Array<
+        { matcher: string; hooks: Array<{ command: string }> }
+      >;
+      assertEquals(
+        hooks.filter((entry) =>
+          entry.hooks.some((hook) => hook.command.endsWith("haiku-only-gmail-gate.sh"))
+        ).map((entry) => entry.matcher),
+        ["mcp__gmail__.*"],
+      );
+      assert(!(await Deno.readTextFile(`${dir}/agy.json`)).includes("haiku-only-gmail-gate.sh"));
+      const check = await run("bash", [...args, "--check"], { HOME: dir });
+      assertEquals(check.code, 0, check.stdout + check.stderr);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+}

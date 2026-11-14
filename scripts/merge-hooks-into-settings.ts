@@ -414,6 +414,13 @@ export function merge(settingsPath: string, args: string[]): number {
   }
 
   const addedDeny = mergePermissionsList("deny", denyPatterns);
+  // Exact hosted Gmail denies are redundant only once the whole connector is denied.
+  // Never prune a deny from another connector or without this stronger replacement.
+  const redundantGmailDenies: string[] = denyPatterns.includes("mcp__claude_ai_Gmail__*")
+    ? (data.permissions.deny as string[]).filter((rule) =>
+      /^mcp__claude_ai_Gmail__[a-zA-Z0-9_]+$/.test(rule)
+    )
+    : [];
   const addedAsk = mergePermissionsList("ask", askPatterns);
   // permissions.allow (web-jam-tools#685, §3a) — purely additive, same shape
   // as deny/ask. Rules owned by DENY_RULES or ASK_RULES are cross-checked and
@@ -652,6 +659,7 @@ export function merge(settingsPath: string, args: string[]): number {
     prunedPostToolUseStale.length > 0 ||
     prunedPostToolUseRetired.length > 0 ||
     addedDeny.length > 0 ||
+    redundantGmailDenies.length > 0 ||
     addedAsk.length > 0 ||
     addedAllow.length > 0 ||
     denyOwnedInAsk.length > 0 ||
@@ -668,6 +676,11 @@ export function merge(settingsPath: string, args: string[]): number {
 
   if (isCheckMode) {
     if (hasDrift) {
+      if (redundantGmailDenies.length) {
+        console.error(
+          `${targetFilename}: hosted Gmail tool denies are superseded by the connector wildcard`,
+        );
+      }
       if (!fileExists) {
         console.error(`${targetFilename}: settings file does not exist`);
       }
@@ -798,6 +811,12 @@ export function merge(settingsPath: string, args: string[]): number {
     return 0;
   }
 
+  if (redundantGmailDenies.length) {
+    const redundant = new Set(redundantGmailDenies);
+    data.permissions.deny = (data.permissions.deny as string[]).filter((rule) =>
+      !redundant.has(rule)
+    );
+  }
   if (denyOwnedInAsk.length > 0) {
     const removeSet = new Set(denyOwnedInAsk);
     data.permissions.ask = (data.permissions.ask as string[]).filter((p) => !removeSet.has(p));

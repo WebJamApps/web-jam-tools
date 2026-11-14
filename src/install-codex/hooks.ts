@@ -61,7 +61,13 @@ export function readHookRegistrations(source: string, home: string): Record<Even
         if (parts.length !== (paired ? 2 : 1) || !script || !/^[a-zA-Z0-9_-]+\.sh$/.test(script)) {
           throw new Error(`invalid hook entry in ${arrays[index]}: ${entry}`);
         }
-        const matcher = paired ? parts[0] : event === "SessionStart" ? "startup|resume" : undefined;
+        const matcher = script === "haiku-only-gmail-gate.sh"
+          ? "mcp__codex_apps__gmail_.*"
+          : paired
+          ? parts[0]
+          : event === "SessionStart"
+          ? "startup|resume"
+          : undefined;
         if (paired && !matcher) throw new Error(`missing matcher in ${arrays[index]}`);
         return {
           ...(matcher === undefined ? {} : { matcher }),

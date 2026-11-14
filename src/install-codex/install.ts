@@ -99,9 +99,7 @@ export function installCodex(options: InstallOptions): number {
       canonical = dirname(resolve(metadata, common));
     }
     const skills = [...Deno.readDirSync(join(sourceRepo, "skills"))]
-      .filter((entry) =>
-        entry.isDirectory && entry.name !== "handle-gmails" && entry.name !== ".system"
-      )
+      .filter((entry) => entry.isDirectory && entry.name !== ".system")
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((entry) => {
         const target = join(codex, "skills", entry.name);
