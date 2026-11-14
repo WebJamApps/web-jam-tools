@@ -772,12 +772,18 @@ export async function findIssueCreateFooterDenial(
 }
 
 /**
- * Model tiers that require an explicit escalation justification (web-jam-tools#709).
+ * Model tiers that require an explicit escalation justification (web-jam-tools#709, web-jam-tools#1467).
  *
  * NOTE: The guard checks ONLY presence of non-empty justification text,
  * NEVER quality or task complexity. Do not add complexity classification here.
  */
-export const ESCALATION_LABELS = new Set(["Sonnet", "Opus"]);
+export const ESCALATION_LABELS = new Set(["Opus", "Fable"]);
+
+const ALLOWED_MULTI_LABEL_LANES: readonly (readonly string[])[] = [
+  ["Sol", "Argon", "Hydrogen"],
+  ["Terra", "Sonnet"],
+  ["Opus", "Fable"],
+];
 
 export function decide(
   labels: string[],
@@ -796,11 +802,11 @@ export function decide(
     const present = labels.length ? labels.join(", ") : "(none)";
     return `DENY:no model label (labels present: ${present}). Valid model labels: ${validStr}.`;
   }
-  const isSolSonnetPair = matched.length === 2 && matched.includes("Sol") &&
-    matched.includes("Sonnet");
-  if (matched.length > 1 && !isSolSonnetPair) {
+  const inSingleLane = matched.length === 1 ||
+    ALLOWED_MULTI_LABEL_LANES.some((lane) => matched.every((label) => lane.includes(label)));
+  if (!inSingleLane) {
     const joined = matched.join(", ");
-    return `DENY:${matched.length} model labels given (${joined}) — exactly one is required, except for the Sol and Sonnet pair. Valid model labels: ${validStr}.`;
+    return `DENY:${matched.length} model labels given (${joined}) — multiple model labels must belong to one lane: shared (Sol, Argon, Hydrogen), everyday (Terra, Sonnet), or top (Opus, Fable). Valid model labels: ${validStr}.`;
   }
 
   const matchedTier = matched.find((label) => ESCALATION_LABELS.has(label));
@@ -808,12 +814,12 @@ export function decide(
     const reason = escalationReason?.trim();
     if (!reason) {
       if (mode === "mcp") {
-        return `DENY:Creating an issue labeled '${matchedTier}' requires an explicit escalation justification.\nFlash is the default model tier for implementation work and bills a separate Google budget, whereas ${matchedTier} bills the constrained Anthropic budget.\nTo proceed with ${matchedTier}, supply an 'escalation_reason' property (e.g. escalation_reason: "<why ${matchedTier} is genuinely the right tier>") in the tool input.`;
+        return `DENY:Creating an issue labeled '${matchedTier}' requires an explicit escalation justification.\nTo proceed with ${matchedTier}, supply an 'escalation_reason' property (e.g. escalation_reason: "<why ${matchedTier} is genuinely the right tier>") in the tool input.`;
       }
       const commandToRun = cmd?.trim()
         ? `${cmd.trim()} --escalation-reason "<why ${matchedTier} is genuinely the right tier>"`
         : `gh issue create ... --label ${matchedTier} --escalation-reason "<why ${matchedTier} is genuinely the right tier>"`;
-      return `DENY:Creating an issue labeled '${matchedTier}' requires an explicit escalation justification.\nFlash is the default model tier for implementation work and bills a separate Google budget, whereas ${matchedTier} bills the constrained Anthropic budget.\nTo proceed with ${matchedTier}, re-run with an escalation reason:\n${commandToRun}`;
+      return `DENY:Creating an issue labeled '${matchedTier}' requires an explicit escalation justification.\nTo proceed with ${matchedTier}, re-run with an escalation reason:\n${commandToRun}`;
     }
   }
 
@@ -894,7 +900,7 @@ async function scanIssueCommandSegments(
       try {
         modelLabels = loadModelLabels(modelLabelsPath);
       } catch (e) {
-        return `PASS: could not determine valid model labels from model-labels.json (${e}); proceeding. Verify the issue has exactly one valid model label before creating it.`;
+        return `PASS: could not determine valid model labels from model-labels.json (${e}); proceeding. Verify the issue has a valid model-label set before creating it.`;
       }
       const [labels, ok] = extractLabelValues(createArgs);
       if (!ok) {
@@ -1068,7 +1074,7 @@ export async function checkModelLabelOnIssueCreate(
     try {
       modelLabels = loadModelLabels(modelLabelsPath);
     } catch (e) {
-      return `PASS: could not determine valid model labels from model-labels.json (${e}); proceeding. Verify the issue has exactly one valid model label before creating it.`;
+      return `PASS: could not determine valid model labels from model-labels.json (${e}); proceeding. Verify the issue has a valid model-label set before creating it.`;
     }
     const rawLabels = toolInput.labels;
     if (!Array.isArray(rawLabels) || !rawLabels.every((x) => typeof x === "string")) {

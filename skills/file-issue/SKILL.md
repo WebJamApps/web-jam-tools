@@ -107,11 +107,15 @@ that's what following this skill prevents.
    See item 15 below for the three-outcome specification and model floor governing any guard, gate, or permission check.
 
    When genuinely unsure between two tiers, say so in the issue body rather than guessing — but
-   choose labels allowed by the tier-order design cited above. **`Sonnet` and `Opus` require an
+   choose labels allowed by the tier-order design cited above (a single label, or a non-empty
+   subset of one lane: shared `Sol`, `Argon`, `Hydrogen`; everyday `Terra`, `Sonnet`; or top
+   `Opus`, `Fable`). **`Opus` and `Fable` require an
    explicit escalation reason** — `--escalation-reason` on the CLI, `escalation_reason` in the
    MCP `issue_write` input — before `hooks/lib/check_model_label_on_issue_create.ts`
    (`ESCALATION_LABELS`, web-jam-tools#709 "Guard denies issue-create carrying Sonnet/Opus model
-   label without an explicit escalation justification") lets the create through. The hook only
+   label without an explicit escalation justification", web-jam-tools#1467 "model-label rule and
+   the issue-create guard: accept the tier-order 1.10.0 lane sets and ask a reason only for Opus
+   or Fable") lets the create through. The hook only
    checks that the field is non-empty and deliberately never judges what it says, so the reason
    must do the work the hook can't: say **why the tier above the one you chose is not needed**,
    not merely why the chosen tier is plausible.
@@ -289,9 +293,11 @@ deno task create-issue \
 
 - Require native type (`Task`, `Bug`, `Feature`, `Epic`) via `scripts/create-issue.ts --type <Type>` or GitHub MCP `issue_write` (`"type": "<Type>"`).
 - Specify `--milestone "<name>"` when an open repo Milestone matches the scope. If no open Milestone fits, explicitly note "no fitting milestone — leaving unassigned" in chat or body.
-- Choose model labels according to the tier-order design cited above. `deno task create-issue`
+- Choose model labels according to the tier-order design cited above (a single label, or a
+  non-empty subset of a permitted lane: shared `Sol`, `Argon`, `Hydrogen`; everyday `Terra`,
+  `Sonnet`; or top `Opus`, `Fable`). `deno task create-issue`
   checks them before any create, including in `--dry-run`.
-- For `Sonnet` or `Opus`, also supply `--escalation-reason "<why the tier above is not needed>"`
+- For `Opus` or `Fable`, also supply `--escalation-reason "<why the tier above is not needed>"`
   (CLI) or `escalation_reason: "<...>"` (MCP `issue_write`). The shared check and the hook refuse
   a missing or blank reason. The create task records the reason in the issue body. The reason
   must compare against the tier above, not just justify the tier chosen.

@@ -24,7 +24,7 @@ import { type Snapshot } from "../src/backlog-groom/snapshot.ts";
 import { EVERYDAY_MODEL_LABELS } from "../src/shared/model_label_rule.ts";
 import { ACTIVE_REPOS } from "../src/shared/repos.ts";
 
-function snapshot(labels = ["Flash"], priority: Priority | null = "Low"): Snapshot {
+function snapshot(labels = ["Terra"], priority: Priority | null = "Low"): Snapshot {
   const now = new Date().toISOString();
   return {
     schemaVersion: 1,
@@ -63,7 +63,7 @@ function snapshot(labels = ["Flash"], priority: Priority | null = "Low"): Snapsh
 }
 
 function finding(number = 1, changes: FindingChange[] = [
-  { kind: "labels", remove: ["Flash"], add: ["Sol"] },
+  { kind: "labels", remove: ["Terra"], add: ["Sol"] },
 ]): Finding {
   return {
     number,
@@ -89,83 +89,83 @@ const cases: Array<{
   batch: boolean;
 }> = [
   {
-    name: "Flash Low to Sol",
-    labels: ["Flash"],
+    name: "Terra Low to Sol",
+    labels: ["Terra"],
     priority: "Low",
-    remove: ["Flash"],
+    remove: ["Terra"],
     add: ["Sol"],
     batch: true,
   },
   {
-    name: "Flash Medium to Sol",
-    labels: ["Flash"],
-    priority: "Medium",
-    remove: ["Flash"],
-    add: ["Sol"],
-    batch: true,
-  },
-  {
-    name: "Terra Medium to Sonnet",
+    name: "Terra Medium to Sol",
     labels: ["Terra"],
     priority: "Medium",
     remove: ["Terra"],
-    add: ["Sonnet"],
+    add: ["Sol"],
     batch: true,
   },
   {
-    name: "both everyday labels Low removing Flash",
-    labels: ["Flash", "Terra"],
+    name: "Sonnet Medium to Opus",
+    labels: ["Sonnet"],
+    priority: "Medium",
+    remove: ["Sonnet"],
+    add: ["Opus"],
+    batch: true,
+  },
+  {
+    name: "both everyday labels Low removing Sonnet",
+    labels: ["Terra", "Sonnet"],
     priority: "Low",
-    remove: ["Flash"],
+    remove: ["Sonnet"],
     add: [],
     batch: true,
   },
   {
-    name: "Flash High to Sol",
-    labels: ["Flash"],
+    name: "Terra High to Sol",
+    labels: ["Terra"],
     priority: "High",
-    remove: ["Flash"],
+    remove: ["Terra"],
     add: ["Sol"],
     batch: false,
   },
   {
-    name: "Flash Urgent to Sol",
-    labels: ["Flash"],
+    name: "Terra Urgent to Sol",
+    labels: ["Terra"],
     priority: "Urgent",
-    remove: ["Flash"],
+    remove: ["Terra"],
     add: ["Sol"],
     batch: false,
   },
   {
-    name: "Flash with no Priority to Sol",
-    labels: ["Flash"],
+    name: "Terra with no Priority to Sol",
+    labels: ["Terra"],
     priority: null,
-    remove: ["Flash"],
+    remove: ["Terra"],
     add: ["Sol"],
     batch: false,
   },
   {
-    name: "Sol Low to Flash",
+    name: "Sol Low to Terra",
     labels: ["Sol"],
     priority: "Low",
     remove: ["Sol"],
-    add: ["Flash"],
+    add: ["Terra"],
     batch: false,
   },
   {
-    name: "Flash Low adding Needs Design",
-    labels: ["Flash"],
+    name: "Terra Low adding Needs Design",
+    labels: ["Terra"],
     priority: "Low",
     remove: [],
     add: ["Needs Design"],
     batch: false,
   },
   {
-    name: "Flash Low adding Terra",
-    labels: ["Flash"],
+    name: "Terra Low adding Sonnet",
+    labels: ["Terra"],
     priority: "Low",
     remove: [],
-    add: ["Terra"],
+    add: ["Sonnet"],
     batch: false,
   },
 ];
@@ -184,19 +184,19 @@ for (const row of cases) {
 
 Deno.test("Needs Design and model relabel items stay independently numbered and keep their reasons", () => {
   const design = finding(9, [{ kind: "labels", remove: [], add: ["Needs Design"] }]);
-  const relabel = finding(15, [{ kind: "labels", remove: ["Flash"], add: ["Opus"] }]);
+  const relabel = finding(15, [{ kind: "labels", remove: ["Terra"], add: ["Opus"] }]);
   const result = filterLabelRules(findings([design, relabel]), snapshot());
   assertEquals(result.items, [design]);
   assertEquals(result.flashBatch, [relabel]);
-  assertEquals(EVERYDAY_MODEL_LABELS, ["Flash", "Terra"]);
+  assertEquals(EVERYDAY_MODEL_LABELS, ["Terra", "Sonnet"]);
 });
 
 Deno.test("other changes and proposed closes remain visible in the main list", () => {
   const mixed = finding(1, [
-    { kind: "labels", remove: ["Flash"], add: ["Sol", "Needs Design"] },
+    { kind: "labels", remove: ["Terra"], add: ["Sol", "Needs Design"] },
   ]);
   const milestone = finding(2, [
-    { kind: "labels", remove: ["Flash"], add: ["Sol"] },
+    { kind: "labels", remove: ["Terra"], add: ["Sol"] },
     { kind: "milestone", before: null, after: "token-savings" },
   ]);
   const close = { ...finding(3, []), proposedClose: true };
@@ -206,8 +206,8 @@ Deno.test("other changes and proposed closes remain visible in the main list", (
     close,
   ]);
   const priorBatch = { schemaVersion: 1 as const, items: [], flashBatch: [finding()] };
-  assertEquals(filterLabelRules(priorBatch, snapshot(["Flash"], "High")).flashBatch, []);
-  assertEquals(filterLabelRules(priorBatch, snapshot(["Flash"], "High")).items, [finding()]);
+  assertEquals(filterLabelRules(priorBatch, snapshot(["Terra"], "High")).flashBatch, []);
+  assertEquals(filterLabelRules(priorBatch, snapshot(["Terra"], "High")).items, [finding()]);
 });
 
 const validChanges: FindingChange[] = [

@@ -35,14 +35,24 @@ Deno.test("model-label vocabulary fails closed for a missing or damaged sidecar"
 });
 
 const cellCases: Array<[string, string[] | string]> = [
-  ["Sonnet / Sol", ["Sonnet", "Sol"]],
-  ["Sol / Sonnet", ["Sol", "Sonnet"]],
-  ["Sonnet/Sol", ["Sonnet", "Sol"]],
-  ["Sonnet  /  Sol", ["Sonnet", "Sol"]],
-  ["**Sonnet / Sol**", ["Sonnet", "Sol"]],
+  ["Sol", ["Sol"]],
+  ["Sonnet", ["Sonnet"]],
+  ["Argon", ["Argon"]],
+  ["Hydrogen", ["Hydrogen"]],
+  ["Terra / Sonnet", ["Terra", "Sonnet"]],
+  ["Sonnet/Terra", ["Sonnet", "Terra"]],
+  ["Terra  /  Sonnet", ["Terra", "Sonnet"]],
+  ["**Terra / Sonnet**", ["Terra", "Sonnet"]],
+  ["Sol / Argon", ["Sol", "Argon"]],
+  ["Sol / Hydrogen", ["Sol", "Hydrogen"]],
+  ["Argon / Hydrogen", ["Argon", "Hydrogen"]],
+  ["Sol / Argon / Hydrogen", ["Sol", "Argon", "Hydrogen"]],
   ["Terra", ["Terra"]],
   ["Josh", ["Josh"]],
-  ["Sonnet / Terra", ["Sonnet", "Terra"]],
+  ["Opus / Fable", ["Opus", "Fable"]],
+  ["Fable", ["Fable"]],
+  ["Sonnet / Sol", ["Sonnet", "Sol"]],
+  ["Flash", "Flash"],
   ["Sonnet / Bogus", "Bogus"],
   ["Sonnet / ", "empty name"],
   ["", "tier is missing"],
@@ -58,13 +68,35 @@ for (const [cell, expected] of cellCases) {
 }
 
 Deno.test("plan lint checks label combinations without requiring a reason column", () => {
-  assertEquals(
-    modelLabelViolation(readPlanModelLabels("Sonnet / Sol", tiers), tiers, undefined, false),
-    undefined,
-  );
+  for (
+    const allowedCell of [
+      "Sol",
+      "Sonnet",
+      "Argon",
+      "Hydrogen",
+      "Terra / Sonnet",
+      "Sonnet/Terra",
+      "Terra  /  Sonnet",
+      "**Terra / Sonnet**",
+      "Sol / Argon",
+      "Sol / Hydrogen",
+      "Argon / Hydrogen",
+      "Sol / Argon / Hydrogen",
+      "Terra",
+      "Josh",
+      "Opus / Fable",
+      "Fable",
+    ]
+  ) {
+    assertEquals(
+      modelLabelViolation(readPlanModelLabels(allowedCell, tiers), tiers, undefined, false),
+      undefined,
+      allowedCell,
+    );
+  }
   assertStringIncludes(
-    modelLabelViolation(readPlanModelLabels("Sonnet / Terra", tiers), tiers, undefined, false)!,
-    "outside the allowed pair",
+    modelLabelViolation(readPlanModelLabels("Sonnet / Sol", tiers), tiers, undefined, false)!,
+    "forbidden model-label combination",
   );
 });
 
@@ -72,7 +104,7 @@ Deno.test("retired Flash is unknown to the canonical label vocabulary", () => {
   const vocabulary = loadModelLabels();
   assertEquals(modelLabelViolation(["Flash"], vocabulary), "no model label");
   assertThrows(() => readPlanModelLabels("Flash", vocabulary), Error, 'Unknown model tier "Flash"');
-  for (const name of ["Terra", "Hydrogen", "Fable"]) {
+  for (const name of ["Argon", "Terra", "Hydrogen", "Fable"]) {
     assertEquals(vocabulary.has(name), true);
   }
 });

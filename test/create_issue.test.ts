@@ -128,7 +128,7 @@ for (const { labels, reason, error } of MODEL_LABEL_CASES) {
         APPROVE_ALL,
       );
       assertStringIncludes(result, "dry run: would create issue");
-      if (reason) assertStringIncludes(result, reason);
+      if (reason?.trim()) assertStringIncludes(result, reason);
     }
     assertEquals(calls, []);
   });
