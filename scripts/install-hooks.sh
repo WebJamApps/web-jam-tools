@@ -223,7 +223,7 @@ PRE_TOOL_USE_HOOKS=(
   "Bash::block-agy-non-flash-model.sh"
   "Bash|Edit|Write::block-human-only-credentials.sh"
   "Bash|Edit|Write::feature-branch-guard.sh"
-  "mcp__(gmail|claude_ai_Gmail)__.*::haiku-only-gmail-gate.sh"
+  "mcp__gmail__.*::haiku-only-gmail-gate.sh"
   "Bash|mcp__.*__issue_write::require-model-label-on-issue-create.sh"
   "Write|Edit|NotebookEdit::block-out-of-tree-write.sh"
   "Bash|Write|Edit|NotebookEdit::opus-delegation-gate.sh"
@@ -458,21 +458,8 @@ DENY_RULES=(
   'mcp__claude_ai_Composio__COMPOSIO_REMOTE_BASH_TOOL'
   'mcp__claude_ai_Composio__COMPOSIO_REMOTE_WORKBENCH'
 
-  # Hosted Gmail connector write tool denies — local server is sanctioned laptop path (R-43 & D-29, web-jam-tools#448)
-  'mcp__claude_ai_Gmail__create_draft'
-  'mcp__claude_ai_Gmail__update_draft'
-  'mcp__claude_ai_Gmail__create_label'
-  'mcp__claude_ai_Gmail__update_label'
-  'mcp__claude_ai_Gmail__label_message'
-  'mcp__claude_ai_Gmail__label_thread'
-  'mcp__claude_ai_Gmail__unlabel_message'
-  'mcp__claude_ai_Gmail__unlabel_thread'
-  'mcp__claude_ai_Gmail__apply_sensitive_message_label'
-  'mcp__claude_ai_Gmail__apply_sensitive_thread_label'
-  'mcp__claude_ai_Gmail__delete_label'
-  'mcp__claude_ai_Gmail__send_message'
-  'mcp__claude_ai_Gmail__forward'
-  'mcp__claude_ai_Gmail__reply'
+  # R-43: deny the whole hosted Gmail connector on Claude Code.
+  'mcp__claude_ai_Gmail__*'
 
   # Hosted Google Drive connector write tool denies — local server is sanctioned laptop path (R-43 & D-30, web-jam-tools#448)
   'mcp__claude_ai_Google_Drive__copy_file'
@@ -1066,6 +1053,8 @@ merge_agy_pre_tool_use_args=()
 for entry in "${PRE_TOOL_USE_HOOKS[@]}" "${AGY_ONLY_PRE_TOOL_USE_HOOKS[@]}"; do
   matcher="${entry%%::*}"
   name="${entry#*::}"
+  # Model context is not applicable to agy; preserve its independent Gmail fence.
+  [ "$name" = "haiku-only-gmail-gate.sh" ] && continue
   [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in PRE_TOOL_USE_HOOKS/AGY_ONLY_PRE_TOOL_USE_HOOKS)" >&2; exit 1; }
   merge_agy_pre_tool_use_args+=("$(agy_shim_arg PreToolUse "$matcher" "$name")")
 done
