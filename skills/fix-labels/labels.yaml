@@ -71,7 +71,7 @@ labels:
     modelTier: true
   - name: Sonnet
     hex: "1D76DB"
-    description: "Ranks at the level as Terra for easier coding tasks"
+    description: "Ranks at the same level as Terra for easier coding tasks"
     repos: all
     modelTier: true
   - name: Argon
