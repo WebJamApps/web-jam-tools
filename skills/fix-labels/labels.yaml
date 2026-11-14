@@ -169,6 +169,8 @@ milestoneTopics:
   - name: backup-restore
     repos:
       - web-jam-tools
+      - JaMmusic
+      - web-jam-back
   # web-jam-tools#300 follow-up: Josh's call — `timshermanmusic` IS a
   # canonical topic, not an unrelated keeper. Milestone already created live
   # in all three repos below, with the 5 historical (closed) issues assigned
@@ -287,9 +289,15 @@ milestoneTopics:
   - name: songwriting
     repos:
       - web-jam-tools
+      - JaMmusic
+      - web-jam-back
   - name: token-savings
     repos:
       - web-jam-tools
+      - JaMmusic
+      - web-jam-back
+      - CollegeLutheran
+      - AppersonAuto
 
 # DECISION (Josh, 2026-07-31): NEITHER a `Blocker` label NOR a `depends-on`
 # label will be added, both requested on web-jam-tools#287 "fix-labels
