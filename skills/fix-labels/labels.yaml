@@ -81,7 +81,7 @@ labels:
     modelTier: true
   - name: Opus
     hex: "B392F0"
-    description: "Top-tier architectural design, complex tech-lead judgment, spec/requirements alignment, and reviewing complex subagent outputs"
+    description: "Top-tier architectural design"
     repos: all
     modelTier: true
   - name: Fable
