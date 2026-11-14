@@ -816,3 +816,34 @@ Deno.test("agy runner carries complete identity through the scoped running-model
       }
     }
   }));
+
+for (const modelName of ["gemini-3.8-flash-high", "gemini-3.8-flash-tiered"]) {
+  Deno.test(`running-model refuses retired ${modelName} even with a stale Flash roster`, () =>
+    withFixture(async (fixture) => {
+      await fixture.agy({ ...ARGON_RECORD, modelName });
+      fixture.options.readRoster = () => Promise.resolve(["Gemini Flash", "Gemini Hydrogen"]);
+      await refuses(fixture, "no author roster entry");
+    }));
+}
+
+Deno.test("running-model keeps Hydrogen and Argon authors isolated across interleaved conversations", () =>
+  withFixture(async (fixture) => {
+    const hydrogen = {
+      conversationId: "hydrogen",
+      modelName: "gemini-4-hydrogen-high",
+      transcriptPath: "/tmp/hydrogen.jsonl",
+    };
+    const argon = { ...ARGON_RECORD };
+    await Deno.writeTextFile(
+      fixture.env.AGY_HOOK_RECORD_PATH,
+      [hydrogen, argon, hydrogen, argon].map((row) => JSON.stringify(row)).join("\n") + "\n",
+    );
+    for (
+      const [row, expected] of [[hydrogen, "Gemini Hydrogen"], [argon, "Gemini Argon"]] as const
+    ) {
+      fixture.env.AGY_CONVERSATION_ID = row.conversationId;
+      fixture.env.AGY_MODEL_NAME = row.modelName;
+      fixture.env.AGY_TRANSCRIPT_PATH = row.transcriptPath;
+      await succeeds(fixture, expected);
+    }
+  }));

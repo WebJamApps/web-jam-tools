@@ -74,11 +74,6 @@ export async function claudeRecordedAuthor(
 }
 
 function matchesAgyModel(model: string, entry: string): boolean {
-  if (entry === "Gemini Flash") {
-    return model === "Gemini Flash" ||
-      /^gemini-\d+(?:\.\d+)*-flash-(?:high|tiered)$/.test(model) ||
-      /^Gemini \d+(?:\.\d+)* Flash(?: \(High\))?$/.test(model);
-  }
   if (entry === "Gemini Hydrogen") {
     return model === "Gemini Hydrogen" ||
       model === "gemini-4-hydrogen-high" ||
