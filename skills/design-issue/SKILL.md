@@ -159,12 +159,15 @@ Replacing a paragraph is not the complete edit. An edit is finished only when th
 ### Phase 2 — The Issue Plan
 
 Model-label combinations follow
-`~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`, "How the order is used".
+`~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`, "How the order is used":
+a single model label, or any non-empty subset of one lane — shared (`Sol`, `Argon`, `Hydrogen`),
+everyday (`Terra`, `Sonnet`), or top (`Opus`, `Fable`) — with an escalation reason required only
+for a set holding `Opus` or `Fable`.
 `design:lint-plan` reads every `Model tier` cell through `src/shared/model_label_rule.ts` and
 checks the labels alone, because the table has no escalation-reason column. `design:file-plan`
 uses the same reader, merges each row's `labels`, and checks every row (the epic included) with
 its `escalationReason` before filing anything and in `--dry-run`. Carry that reason in the filing
-JSON for any row that needs it; the create receives both the labels and the reason.
+JSON for any `Opus` or `Fable` row that needs it; the create receives both the labels and the reason.
 
 7. **Propose the plan table**, applying the epic heuristic and the Flash size checklist:
 

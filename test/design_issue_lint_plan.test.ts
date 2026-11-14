@@ -67,8 +67,12 @@ const TEST_SCHEMA: Schema = {
   keep: {},
   milestoneTopics: [],
   labels: [
+    { name: "Argon", hex: "1D76DB", repos: "all", modelTier: true },
+    { name: "Astra", hex: "1D76DB", repos: "all", modelTier: true },
+    { name: "Fable", hex: "B392F0", repos: "all", modelTier: true },
     { name: "Haiku", hex: "0E8A16", repos: "all", modelTier: true },
     { name: "Hydrogen", hex: "A5D6A7", repos: "all", modelTier: true },
+    { name: "Luna", hex: "0E8A16", repos: "all", modelTier: true },
     { name: "Sonnet", hex: "1D76DB", repos: "all", modelTier: true },
     { name: "Sol", hex: "006B75", repos: "all", modelTier: true },
     { name: "Opus", hex: "B392F0", repos: "all", modelTier: true },
@@ -385,14 +389,29 @@ Deno.test("AC2: a model tier absent from labels.yaml is reported, including case
   }
 });
 
-Deno.test("lint-plan applies the shared plan reader and pair rule without an escalation column", () => {
-  for (const tier of ["Sonnet / Sol", "Sol / Sonnet", "Sonnet/Sol", "**Sonnet  /  Sol**"]) {
+Deno.test("lint-plan applies the shared plan reader and lane sets without an escalation column", () => {
+  for (
+    const tier of [
+      "Terra / Sonnet",
+      "Sonnet / Terra",
+      "Sonnet/Terra",
+      "**Terra  /  Sonnet**",
+      "Sol / Argon",
+      "Sol / Hydrogen",
+      "Argon / Hydrogen",
+      "Sol / Argon / Hydrogen",
+      "Opus / Fable",
+      "Fable",
+    ]
+  ) {
     assertEquals(validate(planTableDoc([EPIC_ROW, childRow({ tier })])), [], tier);
   }
   for (
     const tier of [
-      "Sonnet / Terra",
+      "Sonnet / Sol",
+      "Terra / Hydrogen",
       "Sol / Opus",
+      "Argon / Astra",
       "Sol / Sonnet / Opus",
       "Sonnet / Bogus",
       "Sonnet / ",

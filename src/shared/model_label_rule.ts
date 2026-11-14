@@ -5,8 +5,23 @@ export const DEFAULT_MODEL_LABELS_PATH = new URL(
   import.meta.url,
 );
 
+/** Any non-empty subset permits the shared logic-and-safety lane. */
+export const SHARED_MODEL_LABELS = ["Sol", "Argon", "Hydrogen"] as const;
+
 /** Either label permits either model on the everyday coding lane. */
-export const EVERYDAY_MODEL_LABELS = ["Flash", "Terra"] as const;
+export const EVERYDAY_MODEL_LABELS = ["Terra", "Sonnet"] as const;
+
+/** Either label permits either model on the top lane. */
+export const TOP_MODEL_LABELS = ["Opus", "Fable"] as const;
+
+/** Model labels that require an explicit escalation reason. */
+export const ESCALATION_MODEL_LABELS = ["Opus", "Fable"] as const;
+
+const ALLOWED_MULTI_LABEL_LANES: readonly (readonly string[])[] = [
+  SHARED_MODEL_LABELS,
+  EVERYDAY_MODEL_LABELS,
+  TOP_MODEL_LABELS,
+];
 
 export function loadModelLabels(file: string | URL = DEFAULT_MODEL_LABELS_PATH): Set<string> {
   try {
@@ -36,13 +51,14 @@ export function modelLabelViolation(
   if (matched.length === 0) {
     return labels.includes("Josh") ? undefined : "no model label";
   }
-  if (
-    matched.length > 1 &&
-    !(matched.length === 2 && matched.includes("Sol") && matched.includes("Sonnet"))
-  ) {
-    return `a second model label outside the allowed pair (${matched.join(", ")})`;
+  const inSingleLane = matched.length === 1 ||
+    ALLOWED_MULTI_LABEL_LANES.some((lane) => matched.every((label) => lane.includes(label)));
+  if (!inSingleLane) {
+    return `forbidden model-label combination (${matched.join(", ")})`;
   }
-  const escalated = matched.find((label) => label === "Sonnet" || label === "Opus");
+  const escalated = matched.find((label) =>
+    (ESCALATION_MODEL_LABELS as readonly string[]).includes(label)
+  );
   if (checkEscalationReason && escalated && !escalationReason?.trim()) {
     return `${escalated} needs an escalation reason`;
   }

@@ -16,11 +16,15 @@ const MODEL_LABELS_PATH = new URL(
   import.meta.url,
 ).pathname;
 
-Deno.test("ESCALATION_LABELS contains Sonnet and Opus", () => {
-  assertEquals(ESCALATION_LABELS.has("Sonnet"), true);
+Deno.test("ESCALATION_LABELS contains Opus and Fable only", () => {
   assertEquals(ESCALATION_LABELS.has("Opus"), true);
+  assertEquals(ESCALATION_LABELS.has("Fable"), true);
+  assertEquals(ESCALATION_LABELS.has("Sonnet"), false);
   assertEquals(ESCALATION_LABELS.has("Terra"), false);
   assertEquals(ESCALATION_LABELS.has("Haiku"), false);
+  assertEquals(ESCALATION_LABELS.has("Sol"), false);
+  assertEquals(ESCALATION_LABELS.has("Argon"), false);
+  assertEquals(ESCALATION_LABELS.has("Hydrogen"), false);
 });
 
 Deno.test("extractEscalationReason: parses space-separated flag", () => {
@@ -87,21 +91,8 @@ Deno.test("extractRepoValue: parses --repo, --repo=, -R, and -R= (web-jam-tools#
   assertEquals(extractRepoValue(["--title", "T"]), null);
 });
 
-Deno.test("decide: Sonnet and Opus require escalation justification", () => {
+Deno.test("decide: Opus and Fable require escalation justification; non-top labels do not", () => {
   const modelLabels = loadModelLabels(MODEL_LABELS_PATH);
-
-  // Sonnet without reason
-  const resSonnetNoReason = decide(["Sonnet"], modelLabels);
-  assertEquals(
-    resSonnetNoReason.startsWith(
-      "DENY:Creating an issue labeled 'Sonnet' requires an explicit escalation justification.",
-    ),
-    true,
-  );
-  assertEquals(
-    resSonnetNoReason.includes("Flash is the default model tier"),
-    true,
-  );
 
   // Opus without reason
   const resOpusNoReason = decide(["Opus"], modelLabels);
@@ -111,62 +102,75 @@ Deno.test("decide: Sonnet and Opus require escalation justification", () => {
     ),
     true,
   );
+  assertEquals(resOpusNoReason.includes("Flash"), false);
+
+  // Fable without reason
+  const resFableNoReason = decide(["Fable"], modelLabels);
   assertEquals(
-    resOpusNoReason.includes("Flash is the default model tier"),
+    resFableNoReason.startsWith(
+      "DENY:Creating an issue labeled 'Fable' requires an explicit escalation justification.",
+    ),
     true,
   );
+  assertEquals(resFableNoReason.includes("Flash"), false);
 
-  // Sonnet with reason
-  assertEquals(decide(["Sonnet"], modelLabels, "complex rewrite"), "PASS");
-
-  // Opus with reason
+  // Opus and Fable with reason
   assertEquals(decide(["Opus"], modelLabels, "architectural design"), "PASS");
+  assertEquals(decide(["Fable"], modelLabels, "architectural design"), "PASS");
 
-  // Terra, Haiku require no reason
-  assertEquals(decide(["Terra"], modelLabels), "PASS");
-  assertEquals(decide(["Haiku"], modelLabels), "PASS");
-  assertEquals(decide(["Fable"], modelLabels), "PASS");
+  // Non-top labels require no reason
+  for (const label of ["Terra", "Sonnet", "Sol", "Argon", "Hydrogen", "Haiku", "Luna", "Astra"]) {
+    assertEquals(decide([label], modelLabels), "PASS", label);
+  }
 
-  // The retired Terra labels are no model label at all (web-jam-tools#1202)
-  for (const retired of ["Terra Med", "Terra High"]) {
-    assertEquals(decide([retired], modelLabels).startsWith("DENY:no model label"), true);
+  // Retired labels are no model label at all (web-jam-tools#1202, web-jam-tools#1551)
+  for (const retired of ["Flash", "Terra Med", "Terra High"]) {
+    assertEquals(decide([retired], modelLabels).startsWith("DENY:no model label"), true, retired);
   }
 
   // Josh carve-out
   assertEquals(decide(["Josh"], modelLabels), "PASS");
 });
 
-Deno.test("decide: MCP mode formats denial message with tool input property instructions", () => {
+Deno.test("decide: MCP mode formats denial message with tool input property instructions and no Flash reference", () => {
   const modelLabels = loadModelLabels(MODEL_LABELS_PATH);
-  const res = decide(["Sonnet"], modelLabels, null, undefined, "mcp");
+  const res = decide(["Opus"], modelLabels, null, undefined, "mcp");
   assertEquals(res.includes("supply an 'escalation_reason' property"), true);
-});
-
-Deno.test("decide: Sol alone requires no escalation justification", () => {
-  assertEquals(decide(["Sol"], loadModelLabels(MODEL_LABELS_PATH)), "PASS");
+  assertEquals(res.includes("Flash"), false);
 });
 
 for (
   const labels of [
-    ["Sol", "Sonnet"],
-    ["Sonnet", "Sol"],
-    ["Josh", "Sol", "Sonnet"],
-    ["Sol", "Sonnet", "Sol", "bug"],
+    ["Terra", "Sonnet"],
+    ["Sonnet", "Terra"],
+    ["Sol", "Argon"],
+    ["Sol", "Hydrogen"],
+    ["Argon", "Hydrogen"],
+    ["Sol", "Argon", "Hydrogen"],
+    ["Hydrogen", "Argon", "Sol"],
+    ["Josh", "Sol", "Argon"],
+    ["Terra", "Sonnet", "Terra", "bug"],
   ]
 ) {
+  Deno.test(`decide: ${labels.join(" / ")} passes with no reason`, () => {
+    assertEquals(decide(labels, loadModelLabels(MODEL_LABELS_PATH)), "PASS");
+  });
+}
+
+for (const labels of [["Opus", "Fable"], ["Fable", "Opus"], ["Josh", "Opus", "Fable"]]) {
   Deno.test(`decide: ${labels.join(" / ")} passes with a reason`, () => {
-    assertEquals(decide(labels, loadModelLabels(MODEL_LABELS_PATH), "guard logic"), "PASS");
+    assertEquals(decide(labels, loadModelLabels(MODEL_LABELS_PATH), "open case list"), "PASS");
   });
 }
 
 for (const mode of ["cli", "mcp"] as const) {
-  Deno.test(`decide: Sol / Sonnet still requires a Sonnet reason in ${mode} mode`, () => {
+  Deno.test(`decide: Opus / Fable requires a reason in ${mode} mode`, () => {
     const modelLabels = loadModelLabels(MODEL_LABELS_PATH);
     for (const reason of [undefined, null, "", " \t\n"]) {
-      const result = decide(["Sol", "Sonnet"], modelLabels, reason, undefined, mode);
+      const result = decide(["Opus", "Fable"], modelLabels, reason, undefined, mode);
       assertEquals(
         result.startsWith(
-          "DENY:Creating an issue labeled 'Sonnet' requires an explicit escalation justification.",
+          "DENY:Creating an issue labeled 'Fable' requires an explicit escalation justification.",
         ),
         true,
         result,
@@ -176,17 +180,20 @@ for (const mode of ["cli", "mcp"] as const) {
         true,
         result,
       );
+      assertEquals(result.includes("Flash"), false, result);
     }
   });
 }
 
 for (
   const labels of [
-    ["Terra", "Sonnet"],
+    ["Sol", "Sonnet"],
+    ["Sonnet", "Sol"],
+    ["Terra", "Hydrogen"],
     ["Sol", "Opus"],
-    ["Sol", "Astra"],
-    ["Sonnet", "Opus"],
-    ["Sol", "Sonnet", "Terra"],
+    ["Argon", "Astra"],
+    ["Fable", "Sonnet"],
+    ["Sol", "Sonnet", "Opus"],
   ]
 ) {
   Deno.test(`decide: ${labels.join(" / ")} is refused even with a reason`, () => {
@@ -196,37 +203,37 @@ for (
 }
 
 for (const withReason of [true, false]) {
-  Deno.test(`checkModelLabelOnIssueCreate: CLI Sol / Sonnet ${withReason ? "passes" : "needs a reason"}`, async () => {
+  Deno.test(`checkModelLabelOnIssueCreate: CLI Opus / Fable ${withReason ? "passes" : "needs a reason"}`, async () => {
     const payload = JSON.stringify({
       tool_name: "Bash",
       tool_input: {
         command:
-          'gh issue create --title T --body "Body.\n\n🤖 Authored by Claude Code — Opus" --type Task --label Sol,Sonnet' +
-          (withReason ? ' --escalation-reason "guard logic"' : ""),
+          'gh issue create --title T --body "Body.\n\n🤖 Authored by Claude Code — Opus" --type Task --label Opus,Fable' +
+          (withReason ? ' --escalation-reason "open case list"' : ""),
       },
     });
     const result = await checkModelLabelOnIssueCreate(payload, MODEL_LABELS_PATH);
     assertEquals(
-      withReason ? result : result.startsWith("DENY:Creating an issue labeled 'Sonnet'"),
+      withReason ? result : result.startsWith("DENY:Creating an issue labeled 'Fable'"),
       withReason ? "PASS" : true,
       result,
     );
   });
 
-  Deno.test(`checkModelLabelOnIssueCreate: MCP Sol / Sonnet ${withReason ? "passes" : "needs a reason"}`, async () => {
+  Deno.test(`checkModelLabelOnIssueCreate: MCP Opus / Fable ${withReason ? "passes" : "needs a reason"}`, async () => {
     const payload = JSON.stringify({
       tool_name: "mcp__github__issue_write",
       tool_input: {
         method: "create",
         type: "Task",
-        labels: ["Sol", "Sonnet"],
+        labels: ["Opus", "Fable"],
         body: SIGNED_BODY,
-        ...(withReason ? { escalation_reason: "guard logic" } : {}),
+        ...(withReason ? { escalation_reason: "open case list" } : {}),
       },
     });
     const result = await checkModelLabelOnIssueCreate(payload, MODEL_LABELS_PATH);
     assertEquals(
-      withReason ? result : result.startsWith("DENY:Creating an issue labeled 'Sonnet'"),
+      withReason ? result : result.startsWith("DENY:Creating an issue labeled 'Fable'"),
       withReason ? "PASS" : true,
       result,
     );
@@ -242,53 +249,102 @@ Deno.test("checkModelLabelOnIssueCreate: end-to-end payload evaluation", async (
     },
   });
   assertEquals(
-    (await checkModelLabelOnIssueCreate(cliSonnetNoReason, MODEL_LABELS_PATH)).startsWith(
-      "DENY:Creating an issue labeled 'Sonnet'",
-    ),
-    true,
-  );
-
-  const cliSonnetWithReason = JSON.stringify({
-    tool_name: "Bash",
-    tool_input: {
-      command:
-        'gh issue create --title "T" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Sonnet --escalation-reason "complex refactor"',
-    },
-  });
-  assertEquals(
-    await checkModelLabelOnIssueCreate(cliSonnetWithReason, MODEL_LABELS_PATH),
+    await checkModelLabelOnIssueCreate(cliSonnetNoReason, MODEL_LABELS_PATH),
     "PASS",
   );
 
-  const mcpSonnetNoReason = JSON.stringify({
-    tool_name: "mcp__github__issue_write",
+  const cliOpusNoReason = JSON.stringify({
+    tool_name: "Bash",
     tool_input: {
-      method: "create",
-      type: "Task",
-      labels: ["Sonnet"],
+      command:
+        'gh issue create --title "T" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Opus',
     },
   });
   assertEquals(
-    (await checkModelLabelOnIssueCreate(mcpSonnetNoReason, MODEL_LABELS_PATH)).startsWith(
-      "DENY:Creating an issue labeled 'Sonnet'",
+    (await checkModelLabelOnIssueCreate(cliOpusNoReason, MODEL_LABELS_PATH)).startsWith(
+      "DENY:Creating an issue labeled 'Opus'",
     ),
     true,
   );
 
-  const mcpSonnetWithReason = JSON.stringify({
+  const cliOpusWithReason = JSON.stringify({
+    tool_name: "Bash",
+    tool_input: {
+      command:
+        'gh issue create --title "T" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Opus --escalation-reason "open case list"',
+    },
+  });
+  assertEquals(
+    await checkModelLabelOnIssueCreate(cliOpusWithReason, MODEL_LABELS_PATH),
+    "PASS",
+  );
+
+  const mcpOpusNoReason = JSON.stringify({
     tool_name: "mcp__github__issue_write",
     tool_input: {
       method: "create",
       type: "Task",
-      labels: ["Sonnet"],
-      escalation_reason: "complex refactor",
+      labels: ["Opus"],
+    },
+  });
+  assertEquals(
+    (await checkModelLabelOnIssueCreate(mcpOpusNoReason, MODEL_LABELS_PATH)).startsWith(
+      "DENY:Creating an issue labeled 'Opus'",
+    ),
+    true,
+  );
+
+  const mcpOpusWithReason = JSON.stringify({
+    tool_name: "mcp__github__issue_write",
+    tool_input: {
+      method: "create",
+      type: "Task",
+      labels: ["Opus"],
+      escalation_reason: "open case list",
       body: SIGNED_BODY,
     },
   });
   assertEquals(
-    await checkModelLabelOnIssueCreate(mcpSonnetWithReason, MODEL_LABELS_PATH),
+    await checkModelLabelOnIssueCreate(mcpOpusWithReason, MODEL_LABELS_PATH),
     "PASS",
   );
+});
+
+Deno.test("checkModelLabelOnIssueCreate: fallback PASS note when model-labels.json cannot be read does not say 'exactly one'", async () => {
+  const missingLabelsPath = `/tmp/nonexistent_model_labels_${Date.now()}.json`;
+  const cliRes = await checkModelLabelOnIssueCreate(
+    JSON.stringify({
+      tool_name: "Bash",
+      tool_input: {
+        command: 'gh issue create --title "T" --body "B" --type Task --label Terra',
+      },
+    }),
+    missingLabelsPath,
+  );
+  assertEquals(
+    cliRes.includes("Verify the issue has a valid model-label set before creating it."),
+    true,
+    cliRes,
+  );
+  assertEquals(cliRes.includes("exactly one"), false, cliRes);
+
+  const mcpRes = await checkModelLabelOnIssueCreate(
+    JSON.stringify({
+      tool_name: "mcp__github__issue_write",
+      tool_input: {
+        method: "create",
+        type: "Task",
+        labels: ["Terra"],
+      },
+    }),
+    missingLabelsPath,
+  );
+  assertEquals(
+    mcpRes.includes("Verify the issue has a valid model-label set before creating it."),
+    true,
+    mcpRes,
+  );
+  assertEquals(mcpRes.includes("exactly one"), false, mcpRes);
 });
 
 Deno.test("loadModelLabels: error handling on bad json", () => {

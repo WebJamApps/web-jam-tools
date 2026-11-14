@@ -69,7 +69,97 @@ function githubFixture() {
   return { deps, calls, creates };
 }
 
-Deno.test("model-label chain: lint-plan, dry-run and filing preserve both labels and the reason", async () => {
+const ALLOWED_NO_REASON_CELLS: Array<[string, string[]]> = [
+  ["Sol", ["Sol"]],
+  ["Sonnet", ["Sonnet"]],
+  ["Argon", ["Argon"]],
+  ["Hydrogen", ["Hydrogen"]],
+  ["Terra / Sonnet", ["Terra", "Sonnet"]],
+  ["Sonnet/Terra", ["Sonnet", "Terra"]],
+  ["Terra  /  Sonnet", ["Terra", "Sonnet"]],
+  ["**Terra / Sonnet**", ["Terra", "Sonnet"]],
+  ["Sol / Argon", ["Sol", "Argon"]],
+  ["Sol / Hydrogen", ["Sol", "Hydrogen"]],
+  ["Argon / Hydrogen", ["Argon", "Hydrogen"]],
+  ["Sol / Argon / Hydrogen", ["Sol", "Argon", "Hydrogen"]],
+  ["Terra", ["Terra"]],
+  ["Josh", ["Josh"]],
+];
+
+for (const [cell, expectedLabels] of ALLOWED_NO_REASON_CELLS) {
+  Deno.test(`model-label chain: allowed no-reason cell ${JSON.stringify(cell)} passes lint-plan, dry-run and filing`, async () => {
+    const directory = await Deno.makeTempDir();
+    const { deps, calls, creates } = githubFixture();
+    const planPath = `${directory}/filing.json`;
+    const designPath = `${directory}/design.md`;
+    const tablePath = `${directory}/plan.md`;
+    try {
+      const content = "# Fixture design\n\n## Load-bearing premises\n\nNone.\n";
+      await Deno.writeTextFile(designPath, content);
+      await openGate1Record(designPath, content, { stateDir: directory });
+      await approveGate1Record(designPath, "fixture approval", { stateDir: directory });
+      const closesWhen = cell === "Josh" ? "Josh confirms" : "`deno task test` passes";
+      const testsCell = cell === "Josh" ? "none — manual step" : "Unit tests cover every case";
+      const rows = cell === "Josh"
+        ? [
+          '| 1 | Author doc for manual check | web-jam-tools#900 "Fixture epic" | Terra | High | web-jam-tools | Unit tests cover doc | `deno task test` passes |',
+          `| 2 | Manual verification: Share the model-label reader | web-jam-tools#900 "Fixture epic" | ${cell} | High | web-jam-tools | ${testsCell} | ${closesWhen} |`,
+        ]
+        : [
+          `| 1 | Share the model-label reader | web-jam-tools#900 "Fixture epic" | ${cell} | High | web-jam-tools | ${testsCell} | ${closesWhen} |`,
+        ];
+      await Deno.writeTextFile(
+        tablePath,
+        [
+          "# Plan",
+          "",
+          "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |",
+          "|---|---|---|---|---|---|---|---|",
+          ...rows,
+        ].join("\n"),
+      );
+      const logs: string[] = [];
+      const exitCode = await runLintPlanCli([tablePath, "--design-doc", designPath, "--no-open"], {
+        stateDir: directory,
+        runGh: (args) => deps.runCmd(["gh", ...args]),
+        log: (line) => logs.push(line),
+        errorLog: (line) => logs.push(line),
+      });
+      assertEquals(exitCode, 0, logs.join("\n"));
+      const child: PlanIssueItem = {
+        title: "Share the model-label reader",
+        parent: 900,
+        tier: cell,
+        body:
+          "## What this builds\n\nBuild the shared model-label reader.\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes",
+      };
+      await Deno.writeTextFile(
+        planPath,
+        JSON.stringify({ designDoc: designPath, children: [child] }),
+      );
+      const options = { planPath, deps, author: TEST_AUTHOR, approvalCheck: () => ({ ok: true }) };
+      const callsBeforeDryRun = calls.length;
+      const dry = await filePlan({ ...options, dryRun: true });
+      assertEquals(dry.totalIssuesFiled, 0);
+      assertEquals(calls.length, callsBeforeDryRun);
+      const filed = await filePlan(options);
+      assertEquals(filed.totalIssuesFiled, 1);
+      assertEquals(creates.length, 1);
+      const command = creates[0];
+      assertEquals(
+        command.flatMap((arg, i) => arg === "--label" ? [command[i + 1]] : []),
+        expectedLabels,
+      );
+      if (cell.includes("/")) {
+        assertEquals(command.includes(cell), false);
+      }
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+}
+
+Deno.test("model-label chain: Opus / Fable top lane preserves both labels and escalation reason", async () => {
   const directory = await Deno.makeTempDir();
   const { deps, calls, creates } = githubFixture();
   const planPath = `${directory}/filing.json`;
@@ -87,7 +177,7 @@ Deno.test("model-label chain: lint-plan, dry-run and filing preserve both labels
         "",
         "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |",
         "|---|---|---|---|---|---|---|---|",
-        '| 1 | Share the model-label reader | web-jam-tools#900 "Fixture epic" | Sonnet / Sol | High | web-jam-tools | Unit tests cover every literal case | `deno task test` passes |',
+        '| 1 | Share the model-label reader | web-jam-tools#900 "Fixture epic" | Opus / Fable | High | web-jam-tools | Unit tests cover every literal case | `deno task test` passes |',
       ].join("\n"),
     );
     const logs: string[] = [];
@@ -101,7 +191,7 @@ Deno.test("model-label chain: lint-plan, dry-run and filing preserve both labels
     const child: PlanIssueItem = {
       title: "Share the model-label reader",
       parent: 900,
-      tier: "Sonnet / Sol",
+      tier: "Opus / Fable",
       labels: ["Needs Design"],
       escalationReason: ESCALATION_REASON,
       body:
@@ -121,12 +211,48 @@ Deno.test("model-label chain: lint-plan, dry-run and filing preserve both labels
     assertEquals(creates.length, 1);
     const command = creates[0];
     assertEquals(command.flatMap((arg, i) => arg === "--label" ? [command[i + 1]] : []), [
-      "Sonnet",
-      "Sol",
+      "Opus",
+      "Fable",
       "Needs Design",
     ]);
     assertStringIncludes(command[command.indexOf("--body") + 1], ESCALATION_REASON);
-    assertEquals(command.includes("Sonnet / Sol"), false);
+    assertEquals(command.includes("Opus / Fable"), false);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test('model-label chain: row merging ["Argon"] with Sol / Hydrogen passes as the permitted triple', async () => {
+  const directory = await Deno.makeTempDir();
+  const { deps, creates } = githubFixture();
+  const planPath = `${directory}/filing.json`;
+  const designPath = `${directory}/design.md`;
+  try {
+    await Deno.writeTextFile(designPath, "# Fixture design\n");
+    const child: PlanIssueItem = {
+      title: "Shared triple child",
+      parent: 900,
+      tier: "Sol / Hydrogen",
+      labels: ["Argon"],
+      body:
+        "## What this builds\n\nBuild the shared model-label reader.\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes",
+    };
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({ designDoc: designPath, children: [child] }),
+    );
+    const options = { planPath, deps, author: TEST_AUTHOR, approvalCheck: () => ({ ok: true }) };
+    const dry = await filePlan({ ...options, dryRun: true });
+    assertEquals(dry.totalIssuesFiled, 0);
+    const filed = await filePlan(options);
+    assertEquals(filed.totalIssuesFiled, 1);
+    assertEquals(creates.length, 1);
+    const command = creates[0];
+    assertEquals(command.flatMap((arg, i) => arg === "--label" ? [command[i + 1]] : []), [
+      "Sol",
+      "Hydrogen",
+      "Argon",
+    ]);
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
@@ -134,7 +260,7 @@ Deno.test("model-label chain: lint-plan, dry-run and filing preserve both labels
 
 for (const dryRun of [true, false]) {
   for (const invalidEpic of [false, true]) {
-    Deno.test(`model-label chain: missing reason refuses ${invalidEpic ? "epic" : "child"} before any create (dryRun=${dryRun})`, async () => {
+    Deno.test(`model-label chain: missing reason on Opus refuses ${invalidEpic ? "epic" : "child"} before any create (dryRun=${dryRun})`, async () => {
       const directory = await Deno.makeTempDir();
       const planPath = `${directory}/filing.json`;
       const { deps, calls, creates } = githubFixture();
@@ -142,8 +268,21 @@ for (const dryRun of [true, false]) {
         await Deno.writeTextFile(
           planPath,
           JSON.stringify({
-            epic: { title: "Fixture epic", tier: invalidEpic ? "Sonnet / Sol" : "Sol" },
-            children: [{ title: "Pair child", tier: "Sonnet / Sol" }],
+            epic: { title: "Fixture epic", tier: invalidEpic ? "Opus" : "Sol" },
+            children: [
+              {
+                title: "Valid child first",
+                tier: "Terra / Sonnet",
+                body:
+                  "## What this builds\n\nFirst.\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes",
+              },
+              {
+                title: "Top child",
+                tier: "Opus",
+                body:
+                  "## What this builds\n\nSecond.\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes",
+              },
+            ],
           }),
         );
         await assertRejects(
@@ -157,8 +296,8 @@ for (const dryRun of [true, false]) {
             }),
           Error,
           invalidEpic
-            ? 'Epic "Fixture epic": Sonnet needs an escalation reason'
-            : 'issue "Pair child": Sonnet needs an escalation reason',
+            ? 'Epic "Fixture epic": Opus needs an escalation reason'
+            : 'issue "Top child": Opus needs an escalation reason',
         );
         assertEquals(creates, []);
         assertEquals(calls, []);
@@ -169,7 +308,7 @@ for (const dryRun of [true, false]) {
   }
 }
 
-Deno.test("model-label chain: extra row labels cannot smuggle in a forbidden pair", async () => {
+Deno.test("model-label chain: extra row labels cannot smuggle in a forbidden combination", async () => {
   const directory = await Deno.makeTempDir();
   const planPath = `${directory}/filing.json`;
   const { deps, calls } = githubFixture();
@@ -188,10 +327,44 @@ Deno.test("model-label chain: extra row labels cannot smuggle in a forbidden pai
     await assertRejects(
       () => filePlan({ planPath, deps, author: TEST_AUTHOR, approvalCheck: () => ({ ok: true }) }),
       Error,
-      "outside the allowed pair",
+      "forbidden model-label combination",
     );
     assertEquals(calls, []);
   } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("model-label chain: failed vocabulary read refuses before the first create", async () => {
+  const directory = await Deno.makeTempDir();
+  const planPath = `${directory}/filing.json`;
+  const { deps, calls, creates } = githubFixture();
+  const origReadTextFileSync = Deno.readTextFileSync;
+  try {
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        children: [{
+          title: "Valid child",
+          tier: "Terra",
+        }],
+      }),
+    );
+    Deno.readTextFileSync = (path: string | URL) => {
+      if (String(path).endsWith("model-labels.json")) {
+        throw new Deno.errors.NotFound("missing model-labels.json");
+      }
+      return origReadTextFileSync(path);
+    };
+    await assertRejects(
+      () => filePlan({ planPath, deps, author: TEST_AUTHOR, approvalCheck: () => ({ ok: true }) }),
+      Error,
+      "Cannot read model labels from",
+    );
+    assertEquals(creates, []);
+    assertEquals(calls, []);
+  } finally {
+    Deno.readTextFileSync = origReadTextFileSync;
     await Deno.remove(directory, { recursive: true });
   }
 });
