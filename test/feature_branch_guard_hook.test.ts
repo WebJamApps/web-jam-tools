@@ -10,6 +10,12 @@
 // reads the actual current branch via `git branch --show-current`.
 
 import { assert, assertEquals } from "@std/assert";
+import { folderCases, verifyFolderRow } from "./helpers/write_folder_cases.ts";
+
+for (const [index, row] of folderCases("/repo", "/scratch", "/home/test").entries()) {
+  Deno.test(`folder design table, feature branch: ${row.name}`, () =>
+    verifyFolderRow(index, "feature-branch-guard"));
+}
 
 const SCRIPT_PATH = new URL(
   "../hooks/feature-branch-guard.sh",
@@ -80,6 +86,46 @@ function assertBlocked(stderr: string, branch: string) {
   assert(stderr.includes("BLOCKED"), `expected BLOCKED message, got: ${stderr}`);
   assert(stderr.includes(branch), `expected branch '${branch}' named in message, got: ${stderr}`);
 }
+
+Deno.test("multiple unreadable branches and an unnamed script file produce exactly one JSON notice", async () => {
+  await withRepoOnBranch("feature/notes", async (filePath) => {
+    const root = filePath.slice(0, filePath.lastIndexOf("/"));
+    const bin = await Deno.makeTempDir();
+    try {
+      await Deno.writeTextFile(
+        `${bin}/git`,
+        `#!/bin/sh
+case "$*" in
+  *rev-parse*) printf '%s\\n' "$FEATURE_GUARD_TEST_ROOT" ;;
+  *) exit 1 ;;
+esac
+`,
+      );
+      await Deno.chmod(`${bin}/git`, 0o755);
+      const result = await runHookPayload(
+        {
+          tool_name: "Bash",
+          cwd: root,
+          tool_input: { command: `echo x > one; echo y > two; python3 -c 'open(p, "w")'` },
+        },
+        [SCRIPT_PATH],
+        {
+          PATH: `${bin}:${Deno.env.get("PATH") ?? ""}`,
+          FEATURE_GUARD_TEST_ROOT: root,
+        },
+      );
+      assertEquals(result.code, 0, result.stderr);
+      assertEquals(result.stderr, "");
+      assertEquals(result.stdout.trim().split("\n").length, 1);
+      const note = JSON.parse(result.stdout).hookSpecificOutput.additionalContext;
+      assert(note.includes("file of a write could not be determined"), note);
+      assert(note.includes("a target repository's branch could not be read"), note);
+      assertEquals(note.split("a target repository's branch could not be read").length, 2);
+    } finally {
+      await Deno.remove(bin, { recursive: true });
+    }
+  });
+});
 
 for (const branch of ["dev", "main", "master", "feature/bash-writes"]) {
   Deno.test(`Bash write targets on ${branch}: direct hook and agy shim`, async () => {

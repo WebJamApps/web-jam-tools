@@ -765,7 +765,7 @@ Deno.test("Case 2: missing subagent metadata allows with note", () => {
   assert(res.why.includes("model could not be determined"));
 });
 
-Deno.test("Case 3: a Bash write whose destination cannot be read allows with note", () => {
+Deno.test("a single-assignment pathlib variable now names the repository file for the Opus decision", () => {
   const read = reader({ [MAIN]: jsonl([human("fix this"), assistant("claude-opus-5")]) });
   const res = decide(
     {
@@ -779,8 +779,7 @@ Deno.test("Case 3: a Bash write whose destination cannot be read allows with not
     read,
     labels,
   );
-  assertEquals(res.decision, "allow");
-  assert(res.why.includes("destination cannot be read"));
+  assertEquals(res.decision, "deny");
 });
 
 Deno.test("Case 4: a read-only command whose quoted text merely contains a write allows with note", () => {

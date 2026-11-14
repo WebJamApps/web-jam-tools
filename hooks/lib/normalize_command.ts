@@ -582,6 +582,84 @@ export function splitOnOperators(text: string): { segments: string[]; unterminat
   return { segments, unterminated };
 }
 
+/** A null folder is deliberately unknown, rather than the session's original folder. */
+export interface CommandPart {
+  text: string;
+  cwd: string | null;
+  script?: boolean;
+  invocation?: InterpreterInvocation;
+}
+
+/** Resolve only literal shell paths, plus the existing HOME shorthand. */
+export function resolveCommandPath(raw: string, cwd: string | null, home: string): string | null {
+  let path = raw.replace(/^~(?=\/|$)/, home).replace(/^\$\{?HOME\}?(?=\/|$)/, home);
+  if (!path || /[$`]/.test(path)) return null;
+  if (!path.startsWith("/")) {
+    if (cwd === null) return null;
+    path = `${cwd.replace(/\/+$/, "")}/${path}`;
+  }
+  const parts: string[] = [];
+  for (const part of path.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  return `/${parts.join("/")}`;
+}
+
+/** Keep every shell part and interpreter body beside the folder in effect when it runs. */
+export function commandPartsInFolders(
+  command: string,
+  initialCwd: string | null,
+  home: string,
+): CommandPart[] {
+  const parts: CommandPart[] = [];
+  let cwd = initialCwd;
+  let previousCwd: string | null = null;
+  let heredocInvocations: InterpreterInvocation[] = [];
+  let legacyHeredoc = false;
+  let heredocCwd = initialCwd;
+  for (const region of commandRegions(command).regions) {
+    if (region.kind === "data" && !legacyHeredoc) continue;
+    if (region.kind === "script" || (legacyHeredoc && region.closing !== undefined)) {
+      if (legacyHeredoc) parts.push({ text: region.text, cwd: heredocCwd, script: true });
+      for (const invocation of heredocInvocations) {
+        parts.push({ text: region.text, cwd: heredocCwd, script: true, invocation });
+      }
+      continue;
+    }
+    if (region.closing !== undefined) {
+      parts.push(...commandPartsInFolders(region.text, heredocCwd, home));
+      continue;
+    }
+    for (const text of splitOnOperators(region.text).segments) {
+      parts.push({ text, cwd });
+      if (findHeredocMarker(text)) heredocCwd = cwd;
+      const tokens = splitShellTokens(text).filter((token) => token !== "{" && token !== "}");
+      const resolved = resolveThroughWrappers(tokens);
+      if (resolved.kind !== "argv") continue;
+      let start = 0;
+      while (ASSIGN_RE.test(resolved.argv[start] ?? "")) start++;
+      const argv = resolved.argv.slice(start);
+      if (argv[0]?.split("/").pop() !== "cd") continue;
+      const args = argv.slice(1);
+      const oldCwd = cwd;
+      cwd = args.includes("-")
+        ? previousCwd
+        : resolveCommandPath(args.find((arg) => !arg.startsWith("-")) ?? home, cwd, home);
+      previousCwd = oldCwd;
+    }
+    // commandRegions ends this shell region at the marker line, before its body.
+    const header = region.text.split("\n").at(-1) ?? "";
+    heredocInvocations = readInterpreterHeredocs(header);
+    legacyHeredoc = splitShellTokens(header).some((token) => {
+      const name = token.split("/").pop() ?? "";
+      return /^(?:perl|ruby|python\d+(?:\.\d+)*|nodejs)$/.test(name) && name !== "python3";
+    });
+  }
+  return parts;
+}
+
 export function dropProse(text: string): string {
   const tokens = splitShellTokens(text);
   const kept: string[] = [];
