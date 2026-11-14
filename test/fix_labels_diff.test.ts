@@ -253,7 +253,7 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(byName.get("Sonnet")?.modelTier, true);
   assertEquals(
     byName.get("Sonnet")?.description,
-    "Ranks at the level as Terra for easier coding tasks",
+    "Ranks at the same level as Terra for easier coding tasks",
   );
   assertEquals(byName.get("Opus")?.hex, "B392F0");
   assertEquals(byName.get("Opus")?.modelTier, true);
