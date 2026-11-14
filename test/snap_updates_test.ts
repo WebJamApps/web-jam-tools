@@ -13,6 +13,8 @@ import {
   parseFirstSeen,
   parsePendingSnaps,
   STATE_FILE,
+  STUCK_FIX_COMMAND,
+  stuckSnapsNotice,
   updateFirstSeen,
 } from "../src/snap-updates/check_updates.ts";
 
@@ -271,4 +273,78 @@ Deno.test("the check-snap-updates task exits 1 when the query fails", async () =
   assertEquals(task.code, 1);
   assertStringIncludes(task.stderr, "Could not check snap updates");
   assertStringIncludes(task.notifiedText, "--urgency=normal");
+});
+
+async function noticeHarness(live: CommandResult | Error) {
+  const stateDir = `${await Deno.makeTempDir({ prefix: "snap-notice-" })}/state`;
+  const calls: string[][] = [];
+  const notice = () =>
+    stuckSnapsNotice({
+      stateDir,
+      now: NOW,
+      runCommand: (command, args) => {
+        calls.push([command, ...args]);
+        return live instanceof Error ? Promise.reject(live) : Promise.resolve(live);
+      },
+    });
+  return { stateDir, calls, notice };
+}
+
+const LIVE_TABLE: CommandResult = { code: 0, stdout: TABLE, stderr: "" };
+const STUCK_RECORD = JSON.stringify({ code: FOUR_DAYS_AGO, firefox: FOUR_DAYS_AGO });
+
+Deno.test("stuckSnapsNotice is null and runs nothing without a state file", async () => {
+  const { calls, notice } = await noticeHarness(LIVE_TABLE);
+  assertEquals(await notice(), null);
+  assertEquals(calls, []);
+});
+
+Deno.test("stuckSnapsNotice is null and runs nothing when every snap is under 3 days", async () => {
+  const { stateDir, calls, notice } = await noticeHarness(LIVE_TABLE);
+  await seed(stateDir, JSON.stringify({ code: ONE_DAY_AGO }));
+  assertEquals(await notice(), null);
+  assertEquals(calls, []);
+});
+
+Deno.test("stuckSnapsNotice names a stuck snap that is still pending", async () => {
+  const { stateDir, calls, notice } = await noticeHarness(LIVE_TABLE);
+  await seed(stateDir, JSON.stringify({ code: ONE_DAY_AGO, firefox: FOUR_DAYS_AGO }));
+  assertEquals(
+    await notice(),
+    "Snap updates stuck 3+ days (firefox). Run: sudo snap refresh",
+  );
+  assertEquals(STUCK_FIX_COMMAND, "sudo snap refresh");
+  assertEquals(calls, [["timeout", "5", "snap", "refresh", "--list"]]);
+});
+
+Deno.test("stuckSnapsNotice is null when the stuck snap has since been updated", async () => {
+  const { stateDir, notice } = await noticeHarness({
+    code: 0,
+    stdout: "",
+    stderr: "All snaps up to date.\n",
+  });
+  await seed(stateDir, STUCK_RECORD);
+  assertEquals(await notice(), null);
+});
+
+Deno.test("stuckSnapsNotice uses the recorded list when the live query fails", async () => {
+  const expected = "Snap updates stuck 3+ days (code, firefox). Run: sudo snap refresh";
+  for (
+    const live of [new Error("no timeout"), { code: 1, stdout: "", stderr: "boom" }, {
+      code: 0,
+      stdout: "garbage",
+      stderr: "",
+    }]
+  ) {
+    const { stateDir, notice } = await noticeHarness(live);
+    await seed(stateDir, STUCK_RECORD);
+    assertEquals(await notice(), expected);
+  }
+});
+
+Deno.test("stuckSnapsNotice leaves the state file unchanged", async () => {
+  const { stateDir, notice } = await noticeHarness(LIVE_TABLE);
+  await seed(stateDir, STUCK_RECORD);
+  await notice();
+  assertEquals(await Deno.readTextFile(`${stateDir}/${STATE_FILE}`), STUCK_RECORD);
 });

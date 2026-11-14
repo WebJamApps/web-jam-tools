@@ -29,6 +29,7 @@ const REPO_DIR = new URL("../", import.meta.url).pathname;
 
 // Pinned set of skills/*/ directory names. Update deliberately.
 const EXPECTED_SKILL_DIRS = [
+  "accounting",
   "backlog-groom",
   "book-gig",
   "delegate",
