@@ -20,6 +20,7 @@ import {
   checkStatusLineUnregistered,
   checkUnregisteredHooks,
   detectDrift,
+  extractExpectedAgyHooksFromInstaller,
   extractScriptPathFromCommand,
   formatDriftMessage,
 } from "../hooks/lib/check_hook_install_drift.ts";
@@ -1049,4 +1050,17 @@ Deno.test("hooks/hook-install-drift-reminder.sh reports agy drift end-to-end", a
   } finally {
     await sb.cleanup();
   }
+});
+
+Deno.test("extractExpectedAgyHooksFromInstaller honours the installer's agy skip lines", async () => {
+  const synthetic =
+    `PRE_TOOL_USE_HOOKS=(\n  "Bash::hook2.sh"\n  "mcp__gmail__.*::skipped.sh"\n)\nAGY_ONLY_PRE_TOOL_USE_HOOKS=(\n)\nPOST_TOOL_USE_HOOKS=(\n)\n` +
+    `merge_agy_pre_tool_use_args=()\nfor entry in "\${PRE_TOOL_USE_HOOKS[@]}"; do\n  [ "$name" = "skipped.sh" ] && continue\ndone\n`;
+  assertEquals([...extractExpectedAgyHooksFromInstaller(synthetic)], ["hook2.sh"]);
+
+  // The real installer: haiku-only-gmail-gate.sh is deliberately not registered in agy.
+  const real = await Deno.readTextFile(path.join(REPO_ROOT, "scripts/install-hooks.sh"));
+  const expected = extractExpectedAgyHooksFromInstaller(real);
+  assert(!expected.has("haiku-only-gmail-gate.sh"));
+  assert(expected.has("block-agy-gmail-send-delete.sh"));
 });

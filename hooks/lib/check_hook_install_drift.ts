@@ -579,6 +579,18 @@ export function extractExpectedAgyHooksFromInstaller(
     }
   }
 
+  // Honour the installer's own agy skips (`[ "$name" = "x.sh" ] && continue`
+  // inside the merge_agy_pre_tool_use_args loop), so the installer stays the
+  // single source of truth for what agy's hooks.json deliberately omits.
+  const agyLoop = installerContent.match(
+    /merge_agy_pre_tool_use_args=\(\)\n([\s\S]*?)\ndone\n/,
+  );
+  if (agyLoop) {
+    for (const m of agyLoop[1].matchAll(/\[ "\$name" = "([^"]+)" \] && continue/g)) {
+      expected.delete(m[1]);
+    }
+  }
+
   return expected;
 }
 
