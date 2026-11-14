@@ -35,23 +35,33 @@ written**, and they run for a named issue and an auto-picked one alike:
 
 ## Model Label Check & Approval
 
-Allowed model-label combinations follow
-`~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`, "How the order is used".
-For a paired issue, run on whichever of its two lanes Josh dispatches it to. Matching either label
-satisfies the model-label check: retain both labels and do not ask for a label override.
+The lane sets and working-model tracking follow
+`~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`,
+"How the order is used" and "Issue labels follow the working model".
 
-When `work-issue` begins an issue (`<Repo>#<num>`):
-1. **Read the GitHub issue's model labels**: Read the model labels under the tier-order design cited above.
-2. **Determine Agent Delegation vs Execution**:
-   - Under **Claude Code** (e.g., Opus/Sonnet interactive session): If the issue is labeled `Haiku` or `Sonnet`, delegate execution to a subagent matching the labeled tier per delegation rules.
-   - Under **Antigravity** (e.g., Flash interactive session): If the issue is labeled `Flash`, execute it in the session or hand it to a subagent at the same level.
-   - Under **Codex**: Execute directly when the running model's tier matches the issue's `Luna`, `Sol`, or `Astra` label. If it differs, follow the approval rule below before overruling the label.
-   - If the active session tier matches either of the issue's model labels, execute the task directly in the current session.
-3. **Prompt for approval before overruling**: If the active session tier matches none of the issue's model labels and the session intends to overrule the labels rather than delegating down, prompt Josh for explicit approval in chat before executing:
-   ```bash
-   gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>
-   ```
-4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini Flash"` for Flash subagents or `--author "Claude Code — Haiku 5.5"` for Haiku on Claude Code). On Codex, read `payload.model` from the latest `turn_context` entry in this session's rollout JSONL under `~/.codex/sessions/`; identify this session by the `session_meta` ID, rather than selecting another session's newest file or the default model in `config.toml`. Find that model's accepted display spelling in `ROSTER` in `scripts/create-draft-pr.sh`, then validate it with `~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --check-author "Codex — <roster spelling>"` before passing the same value in `--author`. Do not pass the raw API slug as the display name or substitute another model if the roster probe refuses it.
+1. Read the issue’s known model labels and determine the actual executing model. Any of
+   `Sol`, `Argon` or `Hydrogen` may take any non-empty set of those shared-lane labels.
+   Either `Terra` or `Sonnet` may take either or both everyday-lane labels. Multiple labels
+   within a lane add no restriction and require no override question or model switch. Unknown
+   labels grant no eligibility. Other model choices follow the cited design: single-model choices
+   such as `Luna`, `Haiku` and `Astra` still require the matching model or Josh’s approval.
+2. Execute directly in an eligible current session. Claude Code may delegate to an eligible
+   labeled tier; an eligible Codex session works directly. Sonnet work selected within agy stays
+   in agy: use the second-process mechanism in the design, never an Anthropic-billed Claude Code
+   helper. Keep every surface’s existing approval and helper-ancestry checks.
+3. Setup records the actual working model before creating or resuming a branch. Run
+   `scripts/handle-agy-tasks.sh --setup-only <Repo>#<num>`; Claude Code supplies its roster-checked
+   `--author "Claude Code — <model>"`. Codex and agy resolve their recorded session/conversation
+   identity; typed authors and launcher display names never override those records. Setup replaces
+   model labels with that author’s single label through `deno task edit-issue`, preserves all
+   non-model labels, and reads the result back. An unreadable or failed edit stops before branch
+   creation and names the issue. Do not retain the earlier model labels after work starts.
+
+   Outside the executing model’s eligible lane, ask Josh before overruling the issue labels.
+   After his explicit approval, use `deno task edit-issue --repo WebJamApps/<Repo> --issue <num>`
+   with `--remove-label` for each old model label and `--add-label` for the approved model,
+   preserving all other labels, then rerun setup. Never use raw `gh issue edit`.
+4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "agy — Gemini Hydrogen"` for Hydrogen sessions or `--author "Claude Code — Haiku 5.5"` for Haiku on Claude Code). On Codex, read `payload.model` from the latest `turn_context` entry in this session's rollout JSONL under `~/.codex/sessions/`; identify this session by the `session_meta` ID, rather than selecting another session's newest file or the default model in `config.toml`. Find that model's accepted display spelling in `ROSTER` in `scripts/create-draft-pr.sh`, then validate it with `~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --check-author "Codex — <roster spelling>"` before passing the same value in `--author`. Do not pass the raw API slug as the display name or substitute another model if the roster probe refuses it.
 
 ## Startability test
 
@@ -304,47 +314,13 @@ When an issue's deliverables are strictly external documents (such as manual ver
    The main clone (`MAIN_CLONE`) remains untouched. If the script exits non-zero (dirty tree, missing repo,
    bad/missing issue argument), stop and report its error to the user — do not improvise.
 
-3. **Perform Model Label Check & Model Selection:** Before implementing:
-   - Perform the **Model Label Check**:
-     1. Read the issue's model labels under the tier-order design cited above.
-     2. Compare the issue's model labels against the active executing session tier.
-     3. If the active session tier matches none of the issue's model labels and the session intends to overrule the labels, prompt Josh for explicit approval in chat before executing `gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>`.
-     4. Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier.
-   - **Codex**: Keep the matching running model and execute in this session. Do not invoke the agy `/model` switch or use the Claude/Gemini fallback ladder below. A tier mismatch uses the Model Label Check & Approval rule above.
-   - **Claude Code**: Follow the delegation/execution choice in Model Label Check & Approval above.
-   - **Antigravity only**: Classify the task to determine the most cost-effective model that can succeed. Switch to it by outputting the slash command exactly like `/model "Model Name"` on a new line and wait for the switch to complete. The model chain, classification rules, quota pools, and rate-limit fallback below apply only to Antigravity.
-
-   **Antigravity Model Chain (Most to least capable):**
-   1. `Claude Opus 4.6 (Thinking)`
-   2. `Gemini 3.8 Flash (High)`
-   3. `Claude Sonnet 4.6 (Thinking)`
-   4. `Gemini 3.1 Pro (High)`
-
-   `Gemini 3.8 Flash (High)` sits above `Claude Sonnet 4.6 (Thinking)` on this agy fallback ladder.
-   That is a different, older model from the current Claude Sonnet 5.5, which Josh ruled on
-   2026-10-01 ranks above Gemini 3.8 Flash (High); this ladder is unchanged by that ruling.
-   (Dated history, superseded for Sonnet 5.5: on 2026-09-05 DeepSWE v1.1 scored Flash 73.7%
-   against Sonnet 5's 54%.) Flash also bills a separate Google budget rather than the
-   constrained Anthropic one. Opus keeps the top slot because abstract, multi-step unguided agent
-   work (Terminal-Bench 4.0) is what open-ended design and review are. Model names here are the exact
-   in-session picker `displayName` values and carry their version token — never version-scrub them.
-
-   There are only **two independent quota pools** (verified — web-jam-tools#79):
-   `{Claude Opus/Sonnet}` and `{Gemini Pro/Flash}`. `GPT-OSS 120B` shares Claude's
-   pool, so it is **not** a usable fallback (it's dead whenever Claude is) and is
-   excluded from the chain. Failover only ever crosses Claude ↔ Gemini.
-
-   **Antigravity Classification Rules (in priority order):**
-   * **Explicit Override**: If the user passed an explicit model name when invoking `/work-issue`, use it and skip classification.
-   * **Task-Line Tag**: If the TASK PROMPT contains an explicit tag (e.g., `[media]`, `[junior]`, `[simple]`) or a model name, this tag wins.
-   * **Hard Media Override**: If the task involves audio/video files (`.mp3`, `.wav`, `.m4a`, `.mp4`, `.mov`, `.webm`, etc.), it **MUST** go to `Gemini 3.1 Pro (High)`. Claude cannot ingest these. (*Note: `.svg` is NOT media, it is XML/markup, so it rides the difficulty ladder.*)
-   * **Difficulty Routing**:
-     * *Trivial / Junior-dev*: (rename, one-liner, simple mechanical edit) → Luna or Haiku, via a handoff since Luna and Haiku are outside agy's picker; simple image/PDF reads → `Gemini 3.1 Pro (High)` (the media override still applies).
-     * *Ordinary Coding*: → `Gemini 3.8 Flash (High)`. This is the tier that moved: ordinary contained coding used to route to `Claude Sonnet 4.6 (Thinking)`, and Flash is now the default lane because it bills to Google rather than the constrained Anthropic budget. Route to Sonnet only when the task needs a Claude-side capability Flash lacks, and say which one.
-     * *Complex / Multi-file / Real Judgment*: (including complex SVG/diagram tasks) → `Claude Opus 4.6 (Thinking)`.
-   * **Tie-breaker**: If classification is genuinely ambiguous, default to `Claude Opus 4.6 (Thinking)`.
-
-   **Antigravity Rate-limit Fallback**: If the switch to your chosen model fails (e.g., rate limit), fall back to the next-capable available model in the chain. Because Claude and Gemini are the only two pools, this effectively means: if a Claude model is walled, cross to Gemini (and vice versa).
+3. **Apply Model Label Check & Approval above.** Setup has already checked lane eligibility and
+   recorded the actual working model; keep that verified model and author for implementation and
+   the draft PR. Use the playbook’s routing table and supported models when delegation is needed.
+   Explicit model choices and task-line tags still apply, and media work requires a model capable
+   of ingesting its files. An eligible session needs no switch. On agy, a selected helper uses one
+   model; a failed helper stops and reports rather than retrying on a different model. Codex
+   executes directly and does not invoke the agy model switch or fallback chain.
 
 4. Work **entirely inside `REPO_DIR`** (the isolated `/tmp` worktree): cd there first; every file edit,
    command, and commit happens in that directory. Never work in `MAIN_CLONE`, and do not run

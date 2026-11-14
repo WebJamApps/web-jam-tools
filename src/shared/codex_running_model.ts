@@ -53,6 +53,21 @@ export async function resolveSigningAuthor(
   return typedAuthor;
 }
 
+/** Setup accepts a typed Claude Code author; other tools must supply recorded identity. */
+export async function resolveSetupAuthor(
+  typedAuthor: string | undefined,
+  options: RunningModelOptions = {},
+): Promise<string | undefined> {
+  const author = await resolveSigningAuthor(typedAuthor, options);
+  if (
+    !isCodexSession(options) && !isAgySession(options) &&
+    !/^Claude Code\s*—\s*\S/u.test(author ?? "")
+  ) {
+    throw new Error("Setup requires recorded Codex/agy identity or a Claude Code --author");
+  }
+  return author;
+}
+
 /** Read the sole author roster through its side-effect-free shell probe. */
 export async function readAuthorRoster(): Promise<string[]> {
   const script = new URL("../../scripts/create-draft-pr.sh", import.meta.url).pathname;
