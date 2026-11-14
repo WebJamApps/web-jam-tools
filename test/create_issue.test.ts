@@ -1991,7 +1991,7 @@ Deno.test("createIssueAndVerify writes the Authored-by footer as the last line, 
 
 Deno.test("createIssueAndVerify: a body already ending in a footer, filed with a duplicate-search override, carries exactly one footer", async () => {
   const { deps } = probeDeps(
-    "## What this builds\nBody\n\n🤖 Authored by agy — Gemini Terra\n",
+    "## What this builds\nBody\n\n🤖 Authored by agy — Gemini Flash\n",
     { code: 0, stderr: "" },
   );
   const result = await realCreateIssueAndVerify(
@@ -2007,7 +2007,7 @@ Deno.test("createIssueAndVerify: a body already ending in a footer, filed with a
     APPROVE_ALL,
   );
   assertEquals(result.split("🤖 Authored by").length - 1, 1, result);
-  assertEquals(result.includes("agy — Gemini Terra"), false, result);
+  assertEquals(result.includes("agy — Gemini Flash"), false, result);
   assertEquals(result.trimEnd().endsWith("🤖 Authored by Claude Code — Opus"), true, result);
   assertEquals(result.indexOf("## Duplicate check") < result.indexOf("🤖 Authored by"), true);
 });
@@ -2089,7 +2089,7 @@ Deno.test("createIssueAndVerify: a probe that cannot run refuses with a differen
 });
 
 Deno.test("createIssueAndVerify: a body already ending in a footer gets exactly one, naming --author", async () => {
-  const { deps } = probeDeps("Body\n\n🤖 Authored by agy — Gemini Terra\n", {
+  const { deps } = probeDeps("Body\n\n🤖 Authored by agy — Gemini Flash\n", {
     code: 0,
     stderr: "",
   });
@@ -2105,7 +2105,7 @@ Deno.test("createIssueAndVerify: a body already ending in a footer gets exactly 
     APPROVE_ALL,
   );
   assertEquals(result.split("🤖 Authored by").length - 1, 1);
-  assertEquals(result.includes("Gemini Terra"), false);
+  assertEquals(result.includes("Gemini Flash"), false);
   assertEquals(result.trimEnd().endsWith("🤖 Authored by Claude Code — Opus"), true);
 });
 
