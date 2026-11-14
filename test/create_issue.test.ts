@@ -7,6 +7,7 @@ import { TEST_AUTHOR, withPassingProbe } from "./authored_by_test_helpers.ts";
 import { AGY_IDENTITIES, withAgySigningFixture } from "./support/agy_signing_fixture.ts";
 import { MODEL_LABEL_CASES } from "./support/model_label_cases.ts";
 import { DESIGN_BODY_CASES } from "./support/design_body_cases.ts";
+import { STEP_AFTER_MERGE_CASES } from "./support/step_after_merge_cases.ts";
 
 for (const row of DESIGN_BODY_CASES) {
   Deno.test(`create-issue one design: ${row.name}`, async () => {
@@ -2387,4 +2388,79 @@ Deno.test("epics case 16: create-issue --parent WebJamApps/web-jam-tools#<N> is 
     "HTTP 502: Bad Gateway",
   );
   assertEquals(failingCalls.some((c) => c.includes("gh issue create")), false);
+});
+
+// --- Appendix D — "A step after the merge and its commands" (web-jam-tools#1724) ---
+
+for (const c of STEP_AFTER_MERGE_CASES) {
+  const type = c.isEpic ? "Epic" : "Task";
+  const escalationReason = c.labels.includes("Opus") ? "Container epic" : undefined;
+  Deno.test(`Appendix D step-after-merge (create-issue) ${c.name}`, async () => {
+    const body = `## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] ${c.criterion}\n`;
+    const { deps, calls } = recordingDeps(body);
+    if (c.expectedError) {
+      const error = await assertRejects(
+        () =>
+          createIssueAndVerify(
+            {
+              title: "Step after merge create-issue check",
+              bodyFile: "/tmp/b.md",
+              type,
+              labels: c.labels,
+              escalationReason,
+            },
+            deps,
+            APPROVE_ALL,
+          ),
+        Error,
+        c.expectedError,
+      );
+      assertStringIncludes(error.message, c.criterion);
+      assertEquals(calls.length, 0);
+    } else {
+      const result = await createIssueAndVerify(
+        {
+          title: "Step after merge create-issue check",
+          bodyFile: "/tmp/b.md",
+          type,
+          labels: c.labels,
+          escalationReason,
+          dryRun: true,
+        },
+        deps,
+        APPROVE_ALL,
+      );
+      assertStringIncludes(result, "dry run: would create issue");
+      assertEquals(calls.length, 0);
+    }
+  });
+}
+
+Deno.test("Appendix D step-after-merge (create-issue) case 24: unreadable body file is refused, naming the file", async () => {
+  const calls: string[][] = [];
+  const missingBodyPath = "/tmp/does-not-exist-step-after-merge-create-issue-24.md";
+  const deps: ExecDeps = {
+    runCmd(cmd: string[]) {
+      calls.push(cmd);
+      return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+    },
+    readFileText: () => Promise.reject(new Deno.errors.NotFound("No such file or directory")),
+  };
+  const error = await assertRejects(
+    () =>
+      createIssueAndVerify(
+        {
+          title: "Unreadable body file check",
+          bodyFile: missingBodyPath,
+          type: "Task",
+          labels: ["Terra"],
+        },
+        deps,
+        APPROVE_ALL,
+      ),
+    Error,
+    "cannot read body file",
+  );
+  assertStringIncludes(error.message, missingBodyPath);
+  assertEquals(calls.length, 0);
 });

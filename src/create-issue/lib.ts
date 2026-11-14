@@ -597,9 +597,10 @@ export async function createIssueAndVerify(
   if (!options.bodyFile) {
     throw new Error("Missing required argument --body-file");
   }
+  const modelLabels = loadModelLabels();
   const labelViolation = modelLabelViolation(
     options.labels ?? [],
-    loadModelLabels(),
+    modelLabels,
     options.escalationReason,
   );
   if (labelViolation) throw new Error(`Refused to file issue — ${labelViolation}`);
@@ -610,12 +611,25 @@ export async function createIssueAndVerify(
   // task checks the file it actually reads, before any GitHub call. Same
   // exemptions as the hook: an Epic skips them, `Needs Design` skips the
   // deferred-verification check.
-  const fileBody = await deps.readFileText(options.bodyFile);
+  let fileBody: string;
+  try {
+    fileBody = await deps.readFileText(options.bodyFile);
+  } catch (err) {
+    throw new Error(
+      `Refused to file issue — cannot read body file "${options.bodyFile}": ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
   await checkDesignBody(fileBody);
   const lowerLabels = (options.labels || []).map((l) => l.trim().toLowerCase());
   const isEpic = options.type?.trim().toLowerCase() === "epic" || lowerLabels.includes("epic");
   if (!isEpic) {
-    const violation = findIssueCreateBodyViolation(fileBody, lowerLabels.includes("needs design"));
+    const violation = findIssueCreateBodyViolation(
+      fileBody,
+      lowerLabels.includes("needs design"),
+      { labels: options.labels ?? [], modelLabels },
+    );
     if (violation) {
       throw new Error(`Refused to file issue — ${violation}`);
     }

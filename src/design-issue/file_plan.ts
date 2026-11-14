@@ -33,7 +33,11 @@ import {
   readPlanModelLabels,
 } from "../shared/model_label_rule.ts";
 
-import { checkCriterionOrClosesCell, extractDesignHeadings } from "./lint_plan.ts";
+import {
+  checkCriterionOrClosesCell,
+  type CriterionCheckOptions,
+  extractDesignHeadings,
+} from "./lint_plan.ts";
 
 export interface PlanIssueItem {
   id?: number | string;
@@ -338,6 +342,7 @@ export function validateIssueBodyCriteria(
   title: string,
   body: string,
   designHeadings: ReadonlySet<string>,
+  options?: CriterionCheckOptions,
 ): void {
   const lines = body.split(/\r?\n/);
   let inCriteria = false;
@@ -381,7 +386,7 @@ export function validateIssueBodyCriteria(
       }
     }
 
-    if (trimmed === "" || trimmed.startsWith("<!--")) {
+    if (trimmed === "" || trimmed.startsWith("<!--") || trimmed.startsWith("🤖 Authored by ")) {
       flushCurrent();
       continue;
     }
@@ -406,11 +411,19 @@ export function validateIssueBodyCriteria(
   }
 
   for (const { text, lineNum } of criteria) {
-    const check = checkCriterionOrClosesCell(text, designHeadings);
+    const check = checkCriterionOrClosesCell(text, designHeadings, options);
     if (!check.valid) {
       if (check.reason === "unknown-heading") {
         throw new Error(
           `Refused to file plan — issue "${title}" criterion line ${lineNum} ("${text}"): names heading "${check.unknownHeading}", which does not exist in the design document.`,
+        );
+      } else if (check.reason === "step-after-merge-missing-command") {
+        throw new Error(
+          `Refused to file plan — issue "${title}" criterion line ${lineNum} ("${text}"): describes a step after the merge, but the command that starts the step is missing.`,
+        );
+      } else if (check.reason === "step-after-merge-missing-josh") {
+        throw new Error(
+          `Refused to file plan — issue "${title}" criterion line ${lineNum} ("${text}"): describes a step after the merge, but the issue is missing the "Josh" label.`,
         );
       } else {
         throw new Error(
@@ -577,7 +590,8 @@ export async function filePlan(
     if (isEpic || item.type?.toLowerCase() === "epic") continue;
     const labels = resolvedLabels.get(item) ?? [];
     const tier = item.tier ?? item.model ?? item.modelTier;
-    if (labels.includes("Josh") || tier === "Josh") continue;
+    const hasModelLabel = labels.some((l) => modelLabels.has(l));
+    if (!hasModelLabel && (labels.includes("Josh") || tier?.trim() === "Josh")) continue;
 
     const bodyPath = item.bodyFile || item.body_file || item.bodyPath;
     let body: string | undefined = item.body;
@@ -599,7 +613,10 @@ export async function filePlan(
       );
     }
 
-    validateIssueBodyCriteria(item.title, body, designHeadings);
+    validateIssueBodyCriteria(item.title, body, designHeadings, {
+      labels,
+      modelLabels,
+    });
   }
 
   if (options.dryRun) {

@@ -44,6 +44,7 @@ for (const row of DESIGN_BODY_CASES) {
   });
 }
 import { TEST_AUTHOR, withPassingProbe } from "./authored_by_test_helpers.ts";
+import { STEP_AFTER_MERGE_CASES } from "./support/step_after_merge_cases.ts";
 import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
 import { AGY_IDENTITIES, withAgySigningFixture } from "./support/agy_signing_fixture.ts";
 import {
@@ -1937,6 +1938,117 @@ Deno.test("validateIssueBodyCriteria: indented subsequent heading (e.g. '  ## Fi
     );
     const result = await filePlan({ planPath, dryRun: true, approvalCheck: APPROVE_ALL });
     assertEquals(result.children.length, 1);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+// --- Appendix D — "A step after the merge and its commands" (web-jam-tools#1724) ---
+
+const STEP_AFTER_MERGE_DESIGN_DOC = `
+# Step After Merge Design Fixture
+
+### Manual Steps & Runbooks
+
+Requirements text here.
+`;
+
+for (const c of STEP_AFTER_MERGE_CASES) {
+  Deno.test(`Appendix D step-after-merge (file-plan) ${c.name}`, async () => {
+    const tmpDir = await Deno.makeTempDir();
+    try {
+      const designPath = path.join(tmpDir, "design.md");
+      const planPath = path.join(tmpDir, "plan.json");
+      await Deno.writeTextFile(designPath, STEP_AFTER_MERGE_DESIGN_DOC);
+      const body =
+        `## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] ${c.criterion}\n`;
+      const planPayload = c.isEpic
+        ? {
+          repo: "web-jam-tools",
+          designDoc: designPath,
+          epic: {
+            title: "Epic container",
+            tier: "Opus",
+            escalationReason: "Container epic",
+            body,
+          },
+          children: [
+            {
+              title: "Child task",
+              tier: "Terra",
+              body:
+                "## What this builds\n\nChild\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
+            },
+          ],
+        }
+        : {
+          repo: "web-jam-tools",
+          designDoc: designPath,
+          children: [
+            {
+              title: "Step after merge test task",
+              labels: c.labels,
+              body,
+            },
+          ],
+        };
+      await Deno.writeTextFile(planPath, JSON.stringify(planPayload));
+      const noGhDeps: ExecDeps = {
+        readFileText: (p) => Deno.readTextFile(p),
+        runCmd: () => {
+          throw new Error("Unexpected gh call");
+        },
+      };
+      if (c.expectedError) {
+        const error = await assertRejects(
+          () => filePlan({ planPath, dryRun: false, approvalCheck: APPROVE_ALL, deps: noGhDeps }),
+          Error,
+          "Refused to file plan",
+        );
+        assertStringIncludes(error.message, c.expectedError);
+        assertStringIncludes(error.message, c.criterion);
+      } else {
+        const result = await filePlan({
+          planPath,
+          dryRun: true,
+          approvalCheck: APPROVE_ALL,
+          deps: noGhDeps,
+        });
+        assertEquals(result.children.length, 1);
+      }
+    } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  });
+}
+
+Deno.test("Appendix D step-after-merge (file-plan) case 24: unreadable body file is refused naming the file", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    const missingBodyPath = path.join(tmpDir, "missing-body.md");
+    await Deno.writeTextFile(designPath, STEP_AFTER_MERGE_DESIGN_DOC);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with missing body file",
+            labels: ["Terra"],
+            bodyFile: missingBodyPath,
+          },
+        ],
+      }),
+    );
+    const error = await assertRejects(
+      () => filePlan({ planPath, dryRun: false, approvalCheck: APPROVE_ALL }),
+      Error,
+      "cannot read body file",
+    );
+    assertStringIncludes(error.message, missingBodyPath);
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
   }
