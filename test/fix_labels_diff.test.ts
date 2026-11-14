@@ -266,34 +266,25 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(byName.get("Fable")?.modelTier, true);
   assertEquals(
     byName.get("Fable")?.description,
-    "Fable 5 remains the superior model for deep reasoning, structural planning, and long-context retention - currently unavailable",
+    "Claude Fable 5.2 at high effort: top-tier reasoning and design, only for work Josh names",
   );
-  // web-jam-tools#1202: the medium level is retired, and `Flash` carries the old
-  // `Flash High` label as an alias so it is renamed in place.
-  assertEquals(byName.get("Flash Med"), undefined);
-  assertEquals(byName.get("Flash")?.aliases, ["Flash High"]);
-  // Josh's call, 2026-07-31: Flash is routable in all 8 active repos, not just
-  // the 5 front-end ones — see the comment above the `labels:` entries in
-  // skills/fix-labels/labels.yaml. Assert this explicitly so a future agent
-  // can't quietly re-narrow Flash back to `frontend`.
-  assertEquals(byName.get("Flash")?.hex, "E67E22");
-  assertEquals(byName.get("Flash")?.modelTier, true);
-  assertEquals(
-    byName.get("Flash")?.description,
-    "Default implementation tier: full-stack coding, multi-file refactoring, complex backend/system work, and interactive work across all repos; the default lane, billed to Google rather than the constrained Anthropic budget",
-  );
-  assertEquals(byName.get("Flash")?.repos, "all");
+  assertEquals(byName.get("Flash"), undefined);
+  for (const name of ["Terra", "Hydrogen"]) {
+    assertEquals(byName.get(name)?.modelTier, true);
+    assertEquals(byName.get(name)?.repos, "all");
+  }
   const modelTierNames = schema.labels.filter((l) => l.modelTier).map((l) => l.name).sort();
   assertEquals(modelTierNames, [
     "Argon",
     "Astra",
     "Fable",
-    "Flash",
     "Haiku",
+    "Hydrogen",
     "Luna",
     "Opus",
     "Sol",
     "Sonnet",
+    "Terra",
   ]);
   assertEquals(byName.get("parked"), undefined);
   assertEquals(byName.get("Josh")?.hex, "795548");
@@ -556,57 +547,19 @@ Deno.test("web-jam-tools#329: `Blocked` is scoped `repos: all`, so it is never a
   }
 });
 
-Deno.test("web-jam-tools 2026-07-31: `Flash` is scoped `repos: all`, so it is never a wrong-repo removal candidate in web-jam-back or WebJamSocketCluster", async () => {
-  // Regression test for the standing trap described on the dispatch that
-  // widened this label: `Flash` had been `repos: frontend`,
-  // so `deno task fix-labels:diff` kept proposing REMOVE for it in
-  // web-jam-back and WebJamSocketCluster, where web-jam-back#991 "Remove
-  // PUT /venue/:id once all callers use PATCH" legitimately carries it.
+Deno.test("retired Flash labels are non-canonical without renaming them to another model", async () => {
   const schema = await loadSchema(LABELS_YAML_PATH);
-  const fhDesc = schema.labels.find((l) => l.name === "Flash")?.description ?? "";
-  for (const repo of ["web-jam-back", "WebJamSocketCluster"]) {
-    const actual: ActualLabel[] = [
-      { name: "Flash", color: "E67E22", description: fhDesc },
-    ];
-    const drift = classifyRepoDrift(schema, repo, actual);
-    assertEquals(
-      findByName(drift, "Flash"),
-      undefined,
-      `expected no Flash drift (esp. no wrong-repo) in ${repo}`,
-    );
-  }
-});
-
-Deno.test("web-jam-tools#1202: a repo carrying `Flash High` and `Flash Med` gets a rename to `Flash` and a delete of `Flash Med`, and no create of `Flash`", async () => {
-  const schema = await loadSchema(LABELS_YAML_PATH);
-  const actual: ActualLabel[] = [
-    { name: "Flash High", color: "E67E22" },
-    { name: "Flash Med", color: "FBCA04" },
-  ];
-  const drift = classifyRepoDrift(schema, "TimShermanMusic", actual);
-
-  const flash = findByName(drift, "Flash");
-  assertEquals(flash?.kind, "misnamed");
-  assertEquals(flash?.action, "rename");
-  assertEquals(flash?.fromName, "Flash High");
-  assertEquals(drift.filter((d) => d.name === "Flash" && d.action === "create"), []);
-  // The renamed label does not also surface as its own delete line.
-  assertEquals(drift.filter((d) => d.name === "Flash High"), []);
-
-  const flashMed = findByName(drift, "Flash Med");
-  assertEquals(flashMed?.kind, "non-canonical");
-  assertEquals(flashMed?.action, "delete");
-});
-
-Deno.test("real defect 4: 'Flash' at #D93F0B (the Fable color) is flagged MISCOLORED in every front-end repo", async () => {
-  const schema = await loadSchema(LABELS_YAML_PATH);
-  for (const repo of schema.repoClasses.frontend) {
-    const actual: ActualLabel[] = [{ name: "Flash", color: "D93F0B" }];
-    const drift = classifyRepoDrift(schema, repo, actual);
-    const item = findByName(drift, "Flash");
-    assertEquals(item?.kind, "miscolored", `expected Flash miscolored in ${repo}`);
-    assertEquals(item?.fromHex, "D93F0B");
-    assertEquals(item?.hex, "E67E22");
+  for (const repo of allRepos(schema)) {
+    const drift = classifyRepoDrift(schema, repo, [
+      { name: "Flash", color: "E67E22" },
+      { name: "Flash High", color: "E67E22" },
+      { name: "Flash Med", color: "FBCA04" },
+    ]);
+    for (const name of ["Flash", "Flash High", "Flash Med"]) {
+      assertEquals(findByName(drift, name)?.kind, "non-canonical");
+      assertEquals(findByName(drift, name)?.action, "delete");
+    }
+    assertEquals(drift.some((item) => item.action === "rename"), false);
   }
 });
 

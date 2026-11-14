@@ -181,6 +181,11 @@ async function refuses(options: RunningModelOptions, ...reasons: string[]) {
 }
 
 const successfulCases = [
+  {
+    case: "Terra resolves its recorded API slug through the sole roster",
+    text: '{"type":"turn_context","payload":{"model":"gpt-6.1-terra"}}',
+    signature: "Codex — GPT-6.1 Terra",
+  },
   { case: "a: one turn", text: LUNA_TURN, signature: "Codex — GPT-6 Luna" },
   {
     case: "b: switch to the newest turn",

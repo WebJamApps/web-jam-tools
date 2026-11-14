@@ -79,6 +79,11 @@ function matchesAgyModel(model: string, entry: string): boolean {
       /^gemini-\d+(?:\.\d+)*-flash-(?:high|tiered)$/.test(model) ||
       /^Gemini \d+(?:\.\d+)* Flash(?: \(High\))?$/.test(model);
   }
+  if (entry === "Gemini Hydrogen") {
+    return model === "Gemini Hydrogen" ||
+      model === "gemini-4-hydrogen-high" ||
+      model === "Gemini 4 Hydrogen (High)";
+  }
   if (entry === "Gemini Argon") {
     return model === "Gemini Argon" ||
       model === "gemini-4-argon-high" ||

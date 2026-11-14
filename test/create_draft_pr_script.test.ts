@@ -98,7 +98,7 @@ Deno.test("signing PR: roster probes remain read-only with conflicting Codex sur
     const result = await new Deno.Command("bash", {
       args: [SCRIPT_PATH, ...args],
       cwd: "/tmp",
-      env: { CODEX_THREAD_ID: "missing-session", FORCED_PR_AUTHOR: "agy — Gemini Flash (High)" },
+      env: { CODEX_THREAD_ID: "missing-session", FORCED_PR_AUTHOR: "agy — Gemini Hydrogen (High)" },
       stdout: "piped",
       stderr: "piped",
     }).output();
@@ -128,7 +128,7 @@ for (const author of [undefined, "Codex — GPT-6.1 Sol"]) {
     withSigningFixture(async (_options, env) => {
       const dir = await makeFixtureRepo();
       try {
-        env.FORCED_PR_AUTHOR = "agy — Gemini Flash (High)";
+        env.FORCED_PR_AUTHOR = "agy — Gemini Hydrogen (High)";
         const args = baseArgs();
         args.splice(0, 2, ...(author ? ["--author", author] : []));
         const result = await runScriptWithoutDryRun(dir, args, env);
@@ -170,9 +170,21 @@ Deno.test("--list-roster is read-only and needs no git repository", async () => 
     assertEquals(result.code, 0);
     assertEquals(new TextDecoder().decode(result.stderr), "");
     const entries = new TextDecoder().decode(result.stdout).trimEnd().split("\n");
-    for (const entry of ["Gemini Argon", "GPT-6 Luna", "GPT-6.1 Sol", "GPT-6 Astra"]) {
+    for (
+      const entry of [
+        "Gemini Argon",
+        "Gemini Hydrogen",
+        "GPT-6.1 Terra",
+        "Claude Fable 5.2",
+        "GPT-6 Luna",
+        "GPT-6.1 Sol",
+        "GPT-6 Astra",
+      ]
+    ) {
       assertEquals(entries.includes(entry), true);
     }
+    assertEquals(entries.includes("Gemini Flash"), false);
+    assertEquals(entries.includes("Claude Fable 5"), false);
     assertEquals(Array.from(Deno.readDirSync(dir)).map((entry) => entry.name), ["git"]);
   } finally {
     await Deno.remove(dir, { recursive: true });
@@ -355,7 +367,7 @@ Deno.test("replay #1212 defect 1: off-roster author is refused", async () => {
   const res = await runScript(repoDir, baseArgs({ author: OFF_ROSTER_AUTHOR }));
   assertEquals(res.code, 1);
   assertMatch(res.stderr, /does not name a model on the roster/);
-  assertMatch(res.stderr, /- Gemini Flash\n/); // valid list printed
+  assertMatch(res.stderr, /- Gemini Hydrogen\n/); // valid list printed
 });
 
 Deno.test("paraphrased test-evidence passes without requiring test-runner output format", async () => {
@@ -400,13 +412,13 @@ Deno.test("creates/dry-runs a PR cleanly with only --author, --summary, and --te
 Deno.test("roster match is by substring: agy's full model name passes", async () => {
   const res = await runScript(
     repoDir,
-    ["--check-author", "agy — Gemini Flash"],
+    ["--check-author", "agy — Gemini Hydrogen"],
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("roster: an author signed `Gemini Flash (High)` still passes (web-jam-tools#1202)", async () => {
-  const res = await runScript(repoDir, ["--check-author", "agy — Gemini Flash (High)"]);
+Deno.test("roster: an author signed `Gemini Hydrogen (High)` still passes (web-jam-tools#1202)", async () => {
+  const res = await runScript(repoDir, ["--check-author", "agy — Gemini Hydrogen (High)"]);
   assertEquals(res.code, 0, res.stderr);
 });
 
@@ -1507,7 +1519,9 @@ async function withModelLabelFixture(
 const MODEL_LABEL_CASES = [
   ["Claude Code — Claude Haiku 5.5", "Haiku"],
   ["Codex — GPT-6 Luna", "Luna"],
-  ["agy — Gemini Flash", "Flash"],
+  ["Codex — GPT-6.1 Terra", "Terra"],
+  ["Claude Code — Claude Fable 5.2", "Fable"],
+  ["agy — Gemini Hydrogen", "Hydrogen"],
   ["agy — Gemini Argon", "Argon"],
   ["Codex — GPT-6.1 Sol", "Sol"],
   ["Codex — GPT-6 Astra", "Astra"],
@@ -1561,19 +1575,31 @@ for (const [author, label] of MODEL_LABEL_CASES) {
     }, { author }));
 }
 
-Deno.test("model label: Fable opens the draft before reporting no tier-order label", () =>
-  withModelLabelFixture(async ({ repo, dir, env, invocations }) => {
-    const result = await runScriptWithoutDryRun(
-      repo,
-      baseArgs({ author: "Claude Code — Claude Fable 5" }),
-      env,
+Deno.test("retired Flash record cannot create a new draft or touch GitHub", () =>
+  withAgySigningFixture(async (_options, signingEnv, recordPath) => {
+    const modelName = "gemini-3.8-flash-high";
+    await Deno.writeTextFile(
+      recordPath,
+      JSON.stringify({
+        conversationId: signingEnv.AGY_CONVERSATION_ID,
+        transcriptPath: signingEnv.AGY_TRANSCRIPT_PATH,
+        modelName,
+      }) + "\n",
     );
-    assertEquals(result.code, 1);
-    assertEquals((await Deno.stat(`${dir}/pr-open`)).isFile, true);
-    assertEquals(result.stderr.includes("Claude Fable 5"), true);
-    assertEquals(result.stderr.includes("no model label"), true);
-    assertEquals(result.stderr.includes("WebJamApps/web-jam-tools"), true);
-    assertEquals((await invocations()).map((call) => call.slice(0, 2)), [["pr", "create"]]);
+    await withModelLabelFixture(async ({ repo, env, invocations }) => {
+      const result = await runScriptWithoutDryRun(
+        repo,
+        baseArgs({ author: "agy — Gemini Flash" }),
+        {
+          ...env,
+          ...signingEnv,
+          AGY_MODEL_NAME: modelName,
+        },
+      );
+      assertEquals(result.code, 1);
+      assertMatch(result.stderr, /no author roster entry/);
+      assertEquals(await invocations(), []);
+    });
   }));
 
 for (const initialLabels of [["Flash"], []]) {
@@ -1611,7 +1637,7 @@ for (const identity of AGY_IDENTITIES) {
         ? "Argon"
         : identity.conversationId === "beta"
         ? "Sonnet"
-        : "Flash";
+        : "Hydrogen";
       assertEquals(calls[1], ["pr", "edit", LABEL_PR_URL, "--add-label", label]);
     }, { author: identity.author }));
 }
@@ -1841,8 +1867,8 @@ for (
     ["Antigravity — Gemini Flash (Medium)", 1],
     ["Antigravity — gemini flash (MEDIUM)", 1],
     ["Antigravity — Gemini Flash (Low)", 1],
-    ["Antigravity — Gemini Flash", 0],
-    ["Antigravity — Gemini Flash (High)", 0],
+    ["Antigravity — Gemini Flash", 1],
+    ["Antigravity — Gemini Flash (High)", 1],
     ["agy — Gemini Argon", 0],
     ["agy — Gemini Argon (High)", 0],
     ["agy — Gemini Argon (Low)", 1],
@@ -1993,7 +2019,7 @@ Deno.test("Workflow Status write: confirmed write and read-back proceeds to open
   await withModelLabelFixture(async ({ repo, env, invocations }) => {
     const res = await runScriptWithoutDryRun(
       repo,
-      [...baseArgs({ author: "agy — Gemini Flash" }), "--issue", "999"],
+      [...baseArgs({ author: "agy — Gemini Hydrogen" }), "--issue", "999"],
       env,
     );
     assertEquals(res.code, 0, res.stderr);
@@ -2003,14 +2029,14 @@ Deno.test("Workflow Status write: confirmed write and read-back proceeds to open
     const calls = await invocations();
     const hasGraphQL = calls.some((c) => c[0] === "api" && c[1] === "graphql");
     assertEquals(hasGraphQL, true);
-  }, { author: "agy — Gemini Flash" });
+  }, { author: "agy — Gemini Hydrogen" });
 });
 
 Deno.test("Workflow Status write: mutation failure makes script refuse and fail closed", async () => {
   await withModelLabelFixture(async ({ repo, env, invocations }) => {
     const res = await runScriptWithoutDryRun(
       repo,
-      [...baseArgs({ author: "agy — Gemini Flash" }), "--issue", "999"],
+      [...baseArgs({ author: "agy — Gemini Hydrogen" }), "--issue", "999"],
       env,
     );
     assertEquals(res.code, 1);
@@ -2018,14 +2044,14 @@ Deno.test("Workflow Status write: mutation failure makes script refuse and fail 
     const calls = await invocations();
     const hasPrCreate = calls.some((c) => c[0] === "pr" && c[1] === "create");
     assertEquals(hasPrCreate, false);
-  }, { author: "agy — Gemini Flash", failStatusMutation: true });
+  }, { author: "agy — Gemini Hydrogen", failStatusMutation: true });
 });
 
 Deno.test("Workflow Status write: read-back mismatch makes script refuse and fail closed", async () => {
   await withModelLabelFixture(async ({ repo, env, invocations }) => {
     const res = await runScriptWithoutDryRun(
       repo,
-      [...baseArgs({ author: "agy — Gemini Flash" }), "--issue", "999"],
+      [...baseArgs({ author: "agy — Gemini Hydrogen" }), "--issue", "999"],
       env,
     );
     assertEquals(res.code, 1);
@@ -2033,14 +2059,14 @@ Deno.test("Workflow Status write: read-back mismatch makes script refuse and fai
     const calls = await invocations();
     const hasPrCreate = calls.some((c) => c[0] === "pr" && c[1] === "create");
     assertEquals(hasPrCreate, false);
-  }, { author: "agy — Gemini Flash", statusReadbackValue: "In progress" });
+  }, { author: "agy — Gemini Hydrogen", statusReadbackValue: "In progress" });
 });
 
 Deno.test("Workflow Status write: legacy base64 node ID succeeds and passes issueId to mutation", async () => {
   await withModelLabelFixture(async ({ repo, env, invocations }) => {
     const res = await runScriptWithoutDryRun(
       repo,
-      [...baseArgs({ author: "agy — Gemini Flash" }), "--issue", "999"],
+      [...baseArgs({ author: "agy — Gemini Hydrogen" }), "--issue", "999"],
       env,
     );
     assertEquals(res.code, 0, res.stderr);
@@ -2051,14 +2077,14 @@ Deno.test("Workflow Status write: legacy base64 node ID succeeds and passes issu
     const graphQLCall = calls.find((c) => c[0] === "api" && c[1] === "graphql");
     assertEquals(Boolean(graphQLCall), true);
     assertEquals(graphQLCall?.includes("issueId=MDU6SXNzdWU0NjU3NDY2NTU="), true);
-  }, { author: "agy — Gemini Flash", nodeId: "MDU6SXNzdWU0NjU3NDY2NTU=" });
+  }, { author: "agy — Gemini Hydrogen", nodeId: "MDU6SXNzdWU0NjU3NDY2NTU=" });
 });
 
 Deno.test("Workflow Status write: missing or null node ID causes script to fail closed", async () => {
   await withModelLabelFixture(async ({ repo, env, invocations }) => {
     const res = await runScriptWithoutDryRun(
       repo,
-      [...baseArgs({ author: "agy — Gemini Flash" }), "--issue", "999"],
+      [...baseArgs({ author: "agy — Gemini Hydrogen" }), "--issue", "999"],
       env,
     );
     assertEquals(res.code, 1);
@@ -2066,7 +2092,7 @@ Deno.test("Workflow Status write: missing or null node ID causes script to fail 
     const calls = await invocations();
     const hasPrCreate = calls.some((c) => c[0] === "pr" && c[1] === "create");
     assertEquals(hasPrCreate, false);
-  }, { author: "agy — Gemini Flash", nodeId: "null" });
+  }, { author: "agy — Gemini Hydrogen", nodeId: "null" });
 });
 
 Deno.test("issue line table: Row 4 - parent API failure (rate limit / 500) fails closed", async () => {

@@ -27,7 +27,7 @@ if [ "\${1:-}" = "pr" ] && [ "\${2:-}" = "view" ]; then
   # write: its ROSTER is unversioned, so it refuses a version-qualified author
   # outright. This fixture previously carried the version-qualified spelling,
   # which no real PR body can ever have.
-  echo "Closes #686\\n\\n🤖 Work by agy — Gemini Flash"
+  echo "Closes #686\\n\\n🤖 Work by agy — Gemini Argon"
   exit 0
 fi
 if [ "\${1:-}" = "api" ]; then
@@ -102,6 +102,7 @@ async function runScript(args: string[], repoName = "web-jam-tools"): Promise<Ru
       ...Deno.env.toObject(),
       PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
       AGY_WEBJAM_ROOT: webjamRoot,
+      AGY_MODELS: "Gemini 4 Argon (High)",
     },
     stdout: "piped",
     stderr: "piped",

@@ -70,7 +70,7 @@ const TEST_SCHEMA: Schema = {
     { name: "Sonnet", hex: "1D76DB", repos: "all", modelTier: true },
     { name: "Sol", hex: "006B75", repos: "all", modelTier: true },
     { name: "Opus", hex: "B392F0", repos: "all", modelTier: true },
-    { name: "Flash", hex: "E67E22", repos: "all", modelTier: true },
+    { name: "Terra", hex: "E67E22", repos: "all", modelTier: true },
     { name: "Josh", hex: "795548", repos: "all" },
   ],
 };
@@ -108,7 +108,7 @@ function childRow(overrides: Partial<{
   const c = {
     title: "Reject missing model tiers",
     epicChild: "Epic #1",
-    tier: "Flash",
+    tier: "Terra",
     priority: "High",
     repo: "web-jam-tools",
     tests: "Unit tests, one per acceptance criterion",
@@ -129,7 +129,7 @@ function duplicateRow(
   title: string,
   id = 1,
   repo = "web-jam-tools",
-  tier = "Flash",
+  tier = "Terra",
   epic = "Epic #1",
 ): string {
   return `| ${id} | ${title} | ${epic} | ${tier} | Medium | ${repo} | Unit tests cover each acceptance case | the \`deno task test\` suite passes |`;
@@ -375,7 +375,7 @@ Deno.test("AC1: empty, whitespace-only, and -/—/N/A cells are all reported as 
 // --- 2. Unknown model tier (including case variants) ---
 
 Deno.test("AC2: a model tier absent from labels.yaml is reported, including case/hyphen variants", () => {
-  const cases = ["Flash-High", "flash high", "FLASH HIGH", "Gemini Ultra"];
+  const cases = ["Terra-High", "flash high", "FLASH HIGH", "Gemini Ultra"];
   for (const tier of cases) {
     const doc = planTableDoc([EPIC_ROW, childRow({ tier })]);
     const violations = findRule(validate(doc), "tier-unknown");
@@ -389,7 +389,7 @@ Deno.test("lint-plan applies the shared plan reader and pair rule without an esc
   }
   for (
     const tier of [
-      "Sonnet / Flash",
+      "Sonnet / Terra",
       "Sol / Opus",
       "Sol / Sonnet / Opus",
       "Sonnet / Bogus",
@@ -434,7 +434,7 @@ Deno.test("validatePlanTable: an omitted schema skips tier validation entirely (
 // --- 3. Markdown-wrapped tier still validates ---
 
 Deno.test("AC3: a tier wrapped in backticks or bold still validates correctly", () => {
-  const cases = ["`Flash`", "**Flash**", "**`Flash`**", "_Flash_"];
+  const cases = ["`Terra`", "**Terra**", "**`Terra`**", "_Terra_"];
   for (const tier of cases) {
     const doc = planTableDoc([EPIC_ROW, childRow({ tier })]);
     const violations = validate(doc);
@@ -849,7 +849,7 @@ Deno.test("runLintPlanCli: document with violations exits with code 1", async ()
 
     const doc = planTableDoc([
       EPIC_ROW,
-      childRow({ tier: "Flash-High" }),
+      childRow({ tier: "Terra-High" }),
     ]);
     await Deno.writeTextFile(planFile, doc);
 

@@ -98,6 +98,7 @@ async function runGuard(issueBody: string, opts: GuardOptions = {}): Promise<Run
     ...Deno.env.toObject(),
     PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
     AGY_WEBJAM_ROOT: webjamRoot,
+    AGY_MODELS: "Gemini 4 Argon (High)",
     TEST_ISSUE_BODY: issueBody,
   };
   if (opts.depJson !== undefined) env.TEST_DEP_JSON = opts.depJson;

@@ -83,6 +83,7 @@ async function runScript(
       ...Deno.env.toObject(),
       PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
       AGY_WEBJAM_ROOT: webjamRoot,
+      AGY_MODELS: "Gemini 4 Argon (High)",
       ...envOverrides,
     },
     stdout: "piped",

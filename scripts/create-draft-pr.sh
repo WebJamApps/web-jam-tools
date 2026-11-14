@@ -171,7 +171,7 @@ usage() {
 # format is "<tool> — <model>" (e.g. "Claude Code — Sonnet 5.5" — the tool name
 # already says "Claude", so the model half doesn't repeat it).
 ROSTER=(
-  "Gemini Flash"
+  "Gemini Hydrogen"
   "Gemini Argon"
   "Claude Sonnet 5.5"
   "Claude Haiku 5.5"
@@ -180,9 +180,10 @@ ROSTER=(
   # than this list gets updated — pinning a version only produced a stale
   # roster with no honest value to pass. Replaces "Claude Opus 4.8".
   "Claude Opus"
-  "Claude Fable 5"
+  "Claude Fable 5.2"
   # Codex CLI running GPT-6 Luna — trial lane for Haiku-tier work (Josh, 2026-09-30).
   "GPT-6 Luna"
+  "GPT-6.1 Terra"
   # Codex CLI running GPT-6.1 Sol — default coding and review model on Plus (Josh, 2026-10-02).
   "GPT-6.1 Sol"
   # Codex CLI running GPT-6 Astra — reserved for REAPER recording (Josh, 2026-10-02).
@@ -194,7 +195,7 @@ PR_MODEL_LABEL=""
 
 author_roster_check() {
   local author="$1" entry needle
-  # Unversioned/substring roster entries ("Gemini Flash", "Gemini Argon", "Claude Sonnet 5.5")
+  # Unversioned/substring roster entries ("Gemini Hydrogen", "Gemini Argon", "Claude Sonnet 5.5")
   # would otherwise substring-match low or medium display names, so an author naming a low or
   # medium effort level is refused before the match runs (web-jam-tools#1202, web-jam-tools#1465).
   if printf '%s' "$author" | grep -qiE '\((low|medium)\)'; then
@@ -209,11 +210,12 @@ author_roster_check() {
     if printf '%s' "$author" | grep -qF "$needle"; then
       MATCHED_AUTHOR_MODEL="$entry"
       # Use the very roster entry that accepted the signing author, never the issue's label.
-      # Fable remains accepted by the roster but has no label in the tier-order design.
       case "$entry" in
         "Claude Haiku 5.5") PR_MODEL_LABEL="Haiku" ;;
         "GPT-6 Luna") PR_MODEL_LABEL="Luna" ;;
-        "Gemini Flash") PR_MODEL_LABEL="Flash" ;;
+        "Gemini Hydrogen") PR_MODEL_LABEL="Hydrogen" ;;
+        "GPT-6.1 Terra") PR_MODEL_LABEL="Terra" ;;
+        "Claude Fable 5.2") PR_MODEL_LABEL="Fable" ;;
         "Gemini Argon") PR_MODEL_LABEL="Argon" ;;
         "GPT-6.1 Sol") PR_MODEL_LABEL="Sol" ;;
         "GPT-6 Astra") PR_MODEL_LABEL="Astra" ;;

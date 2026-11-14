@@ -19,9 +19,9 @@ export const AGY_IDENTITIES = [
   },
   {
     conversationId: "gamma",
-    modelName: "gemini-3.8-flash-high",
+    modelName: "gemini-4-hydrogen-high",
     transcriptPath: "/tmp/gamma.jsonl",
-    author: "agy — Gemini Flash",
+    author: "agy — Gemini Hydrogen",
   },
 ] as const;
 
