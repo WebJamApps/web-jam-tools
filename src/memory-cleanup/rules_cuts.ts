@@ -1,8 +1,9 @@
 // Classify every source span, then verify a rules-file cut before changing it.
 import { parseArgs } from "@std/cli/parse-args";
 import { dirname, join, resolve } from "@std/path";
-import { loadLimits } from "../session-load/report.ts";
+import { loadLimits, type SessionLoadLimits } from "../session-load/report.ts";
 import { appearsWordForWord } from "./low_mark.ts";
+import { ACTIVE_REPOS } from "../shared/repos.ts";
 
 const PARTS = {
   mainRules: { repo: "web-jam-tools", file: "AGENTS.md" },
@@ -10,13 +11,31 @@ const PARTS = {
   jammusicRules: { repo: "JaMmusic", file: "AGENTS.md" },
 } as const;
 
-export type RulesPart = keyof typeof PARTS;
+export type RulesPart = keyof typeof PARTS | typeof ACTIVE_REPOS[number];
+
+function rulesTarget(part: RulesPart): { repo: string; file: string } {
+  return Object.hasOwn(PARTS, part)
+    ? PARTS[part as keyof typeof PARTS]
+    : { repo: part, file: "AGENTS.md" };
+}
+
+function rulesLimit(part: RulesPart, limits: SessionLoadLimits) {
+  const target = rulesTarget(part);
+  if (part === "crossAiRules") return limits.crossAiRules;
+  if (target.repo === "web-jam-tools") return limits.mainRules;
+  if (target.repo === "JaMmusic") return limits.jammusicRules;
+  return {
+    lowMark: limits.otherRepoRules.lowMarks?.[target.repo] ?? limits.otherRepoRules.overMark,
+    overMark: limits.otherRepoRules.overMark,
+  };
+}
 export type RulesSpanKind =
   | "rule"
   | "skill-instruction"
   | "backstory"
   | "repeat"
   | "scoped-rule"
+  | "area-rule"
   | "reworded"
   | "removed-rule";
 
@@ -28,6 +47,11 @@ export interface RulesSpan {
   /** Defaults to keep for rules and drop for all other kinds. */
   action?: "keep" | "drop";
   target_skill?: string;
+  /** Area slug and repository-relative folder; the file is docs/rules/<area>.md. */
+  area?: string;
+  folder?: string;
+  /** The skill or always-read rules document that already says this rule. */
+  already_said?: string;
   repeats?: string;
   replacement?: string;
   approved?: boolean;
@@ -54,6 +78,28 @@ export interface RulesCutsResult {
   lowMark: number;
   overMark: number;
   report: string;
+  areaFiles: { path: string; before: string | null; after: string }[];
+}
+
+function areaPointer(span: RulesSpan): string {
+  return `Before changing anything under \`${span.folder}/\`, read \`docs/rules/${span.area}.md\`.`;
+}
+
+/** Refuse symlinks at every area-file component, including a missing file's parents. */
+async function readAreaFile(root: string, area: string): Promise<string | null> {
+  for (const relative of ["docs", "docs/rules", `docs/rules/${area}.md`]) {
+    try {
+      const info = await Deno.lstat(join(root, relative));
+      if (info.isSymlink) throw new Error(`Area path must not be a symlink: ${relative}`);
+      if (relative.endsWith(".md") ? !info.isFile : !info.isDirectory) {
+        throw new Error(`Invalid area path: ${relative}`);
+      }
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) return null;
+      throw error;
+    }
+  }
+  return await Deno.readTextFile(join(root, "docs/rules", `${area}.md`));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -90,6 +136,7 @@ const VALID_SPAN_KINDS: readonly RulesSpanKind[] = [
   "backstory",
   "repeat",
   "scoped-rule",
+  "area-rule",
   "reworded",
   "removed-rule",
 ];
@@ -98,8 +145,13 @@ const VALID_SPAN_KINDS: readonly RulesSpanKind[] = [
 export function parseRulesCutsPlan(value: unknown): RulesCutsPlan {
   if (!isRecord(value)) throw new Error("Plan must be an object");
   onlyKeys(value, ["part", "skills_dir", "spans"]);
-  if (typeof value.part !== "string" || !Object.hasOwn(PARTS, value.part)) {
-    throw new Error("Plan part must be mainRules, crossAiRules, or jammusicRules");
+  if (
+    typeof value.part !== "string" ||
+    (!Object.hasOwn(PARTS, value.part) && !ACTIVE_REPOS.some((repo) => repo === value.part))
+  ) {
+    throw new Error(
+      "Plan part must be mainRules, crossAiRules, jammusicRules, or an active repository",
+    );
   }
   if (
     value.skills_dir !== undefined && (typeof value.skills_dir !== "string" || !value.skills_dir)
@@ -118,6 +170,9 @@ export function parseRulesCutsPlan(value: unknown): RulesCutsPlan {
       "text",
       "action",
       "target_skill",
+      "area",
+      "folder",
+      "already_said",
       "repeats",
       "replacement",
       "approved",
@@ -150,6 +205,7 @@ export function parseRulesCutsPlan(value: unknown): RulesCutsPlan {
         (span.kind === "skill-instruction" ||
           span.kind === "backstory" ||
           span.kind === "repeat" ||
+          span.kind === "area-rule" ||
           span.kind === "scoped-rule") &&
         span.action !== "drop"
       ) {
@@ -175,6 +231,7 @@ export function parseRulesCutsPlan(value: unknown): RulesCutsPlan {
     if (
       (span.kind === "rule" ||
         span.kind === "scoped-rule" ||
+        span.kind === "area-rule" ||
         span.kind === "reworded" ||
         span.kind === "removed-rule") &&
       !span.text.trim()
@@ -198,11 +255,12 @@ export function parseRulesCutsPlan(value: unknown): RulesCutsPlan {
     }
     if (
       span.kind !== "scoped-rule" &&
+      span.kind !== "area-rule" &&
       span.kind !== "skill-instruction" &&
       (span.guard !== undefined || span.safety !== undefined || span.approval !== undefined)
     ) {
       throw new Error(
-        `Only a rule moving to a skill may name guard, safety, or approval: ${span.id}`,
+        `Only a moving rule may name guard, safety, or approval: ${span.id}`,
       );
     }
     if (span.kind === "skill-instruction" || span.kind === "scoped-rule") {
@@ -219,6 +277,28 @@ export function parseRulesCutsPlan(value: unknown): RulesCutsPlan {
       throw new Error(
         `Only a skill-instruction or scoped-rule may name target_skill: ${span.id}`,
       );
+    }
+    if (span.kind === "area-rule") {
+      if (typeof span.area !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(span.area)) {
+        throw new Error(`Span ${span.id} needs a safe area slug`);
+      }
+      if (
+        typeof span.folder !== "string" ||
+        !/^[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*$/.test(span.folder) ||
+        span.folder.split("/").some((segment) => segment === "." || segment === "..")
+      ) throw new Error(`Span ${span.id} needs a repository-relative folder`);
+      if (isApprovalOrSafetyRule(span)) {
+        throw new Error(`Approval and safety rules cannot move into an area file: ${span.id}`);
+      }
+    } else if (span.area !== undefined || span.folder !== undefined) {
+      throw new Error(`Only an area-rule may name area or folder: ${span.id}`);
+    }
+    if (span.reason === "already-said" && span.kind === "removed-rule") {
+      if (typeof span.already_said !== "string" || !span.already_said.trim()) {
+        throw new Error(`Removed rule ${span.id} must name the already_said place`);
+      }
+    } else if (span.already_said !== undefined) {
+      throw new Error(`Only an already-said removal may name already_said: ${span.id}`);
     }
     if (span.kind === "repeat") {
       if (typeof span.repeats !== "string" || !span.repeats) {
@@ -243,21 +323,23 @@ export function parseRulesCutsPlan(value: unknown): RulesCutsPlan {
     }
     if (span.kind === "removed-rule") {
       if (span.approved === true) {
-        if (span.reason !== "obsolete" && span.reason !== "hook-enforced") {
+        if (!["obsolete", "hook-enforced", "already-said"].includes(String(span.reason))) {
           throw new Error(
-            `Removed rule ${span.id} requires reason "obsolete" or "hook-enforced" when approved`,
+            `Removed rule ${span.id} requires reason "obsolete", "hook-enforced", or "already-said" when approved`,
           );
         }
       } else if (
         span.reason !== undefined &&
         span.reason !== "obsolete" &&
-        span.reason !== "hook-enforced"
+        span.reason !== "hook-enforced" && span.reason !== "already-said"
       ) {
         throw new Error(
-          `Removed rule ${span.id} reason must be "obsolete" or "hook-enforced" if provided`,
+          `Removed rule ${span.id} reason must be "obsolete", "hook-enforced", or "already-said" if provided`,
         );
       }
-    } else if (span.kind !== "scoped-rule" && span.reason !== undefined) {
+    } else if (
+      span.kind !== "scoped-rule" && span.kind !== "area-rule" && span.reason !== undefined
+    ) {
       throw new Error(`Only a removed-rule or scoped-rule may name reason: ${span.id}`);
     }
   }
@@ -269,6 +351,8 @@ export async function planRulesCuts(
   source: string,
   plan: RulesCutsPlan,
   skillsDir: string,
+  repoDir?: string,
+  limits?: SessionLoadLimits,
 ): Promise<RulesCutsResult> {
   plan = parseRulesCutsPlan(plan);
   if (plan.spans.map((span) => span.text).join("") !== source) {
@@ -297,10 +381,43 @@ export async function planRulesCuts(
     }
   }
 
+  const areaFiles: RulesCutsResult["areaFiles"] = [];
+  const pointers = new Map<string, string>();
+  for (const span of plan.spans.filter((span) => span.kind === "area-rule")) {
+    if (!repoDir) throw new Error("Area moves require the source repository directory");
+    const path = join(repoDir, "docs/rules", `${span.area}.md`);
+    const pointer = areaPointer(span);
+    if (pointers.has(path) && pointers.get(path) !== pointer) {
+      throw new Error(`Area ${span.area} must name one folder`);
+    }
+    pointers.set(path, pointer);
+    let file = areaFiles.find((file) => file.path === path);
+    if (!file) {
+      const before = await readAreaFile(repoDir, span.area!);
+      file = { path, before, after: before ?? `# ${span.area} rules\n\n` };
+      areaFiles.push(file);
+    }
+    if (!appearsWordForWord(file.after, span.text)) file.after += `\n\n${span.text}`;
+    if (!appearsWordForWord(file.after, span.text)) throw new Error("Area move lost rule text");
+  }
+  const retainedText = plan.spans.filter((span) =>
+    span.kind === "rule" || (span.kind === "reworded" && span.approved !== true) ||
+    (span.kind === "removed-rule" && span.approved !== true)
+  ).map((span) => span.text).concat(
+    plan.spans.filter((span) => span.kind === "reworded" && span.approved === true)
+      .map((span) => span.replacement!),
+  ).join("\n");
+  const addedPointers = new Set<string>();
   const keptChunks: string[] = [];
   for (const span of plan.spans) {
     if (span.kind === "rule") {
       keptChunks.push(span.text);
+    } else if (span.kind === "area-rule") {
+      const pointer = areaPointer(span);
+      if (!retainedText.split("\n").includes(pointer) && !addedPointers.has(pointer)) {
+        keptChunks.push(pointer + "\n");
+        addedPointers.add(pointer);
+      }
     } else if (span.kind === "reworded") {
       if (span.approved === true) {
         keptChunks.push(span.replacement!);
@@ -322,6 +439,7 @@ export async function planRulesCuts(
   const ruleSpans = plan.spans.filter((span) =>
     span.kind === "rule" ||
     span.kind === "scoped-rule" ||
+    span.kind === "area-rule" ||
     span.kind === "reworded" ||
     span.kind === "removed-rule"
   );
@@ -333,6 +451,11 @@ export async function planRulesCuts(
       rulesAfter.push(span.text);
     } else if (span.kind === "scoped-rule") {
       rulesAfter.push(`[moved to ${span.target_skill}] ${span.text}`);
+    } else if (span.kind === "area-rule") {
+      rulesAfter.push(`[moved to docs/rules/${span.area}.md] ${span.text}`);
+      if (after.split("\n").filter((line) => line === areaPointer(span)).length !== 1) {
+        throw new Error("Expected exactly one area pointer line");
+      }
     } else if (span.kind === "reworded") {
       if (span.approved === true) {
         rulesAfter.push(`[reworded] ${span.replacement}`);
@@ -341,7 +464,11 @@ export async function planRulesCuts(
       }
     } else if (span.kind === "removed-rule") {
       if (span.approved === true) {
-        rulesAfter.push(`[removed: ${span.reason}] ${span.text}`);
+        rulesAfter.push(
+          `[removed: ${span.reason}${
+            span.already_said ? `; ${span.already_said}` : ""
+          }] ${span.text}`,
+        );
       } else {
         rulesAfter.push(span.text);
       }
@@ -366,7 +493,7 @@ export async function planRulesCuts(
   }
 
   if (rulesBefore.length === 0) throw new Error("Plan must retain at least one rule");
-  const limit = (await loadLimits())[plan.part];
+  const limit = rulesLimit(plan.part, limits ?? await loadLimits());
   if (!Number.isSafeInteger(limit.lowMark) || limit.lowMark! <= 0) {
     throw new Error(`No usable low mark in limits.json for ${plan.part}`);
   }
@@ -376,7 +503,7 @@ export async function planRulesCuts(
 
   const rulesUnchanged = JSON.stringify(rulesBefore) === JSON.stringify(rulesAfter);
   const reportLines = [
-    `Rules file: ${PARTS[plan.part].repo}/${PARTS[plan.part].file}`,
+    `Rules file: ${rulesTarget(plan.part).repo}/${rulesTarget(plan.part).file}`,
     "Rules before:",
     JSON.stringify(rulesBefore, null, 2),
     "Rules after:",
@@ -398,6 +525,7 @@ export async function planRulesCuts(
     lowMark: limit.lowMark!,
     overMark: limit.overMark,
     report,
+    areaFiles,
   };
 }
 
@@ -420,9 +548,10 @@ async function assertFeatureWorktree(filePath: string, part: RulesPart): Promise
   const dir = dirname(filePath);
   const root = await git(dir, ["rev-parse", "--show-toplevel"]);
   const actual = await Deno.realPath(filePath);
-  if (actual !== join(await Deno.realPath(root), PARTS[part].file)) {
+  const target = rulesTarget(part);
+  if (actual !== join(await Deno.realPath(root), target.file)) {
     throw new Error(
-      `Expected ${PARTS[part].file} at the worktree root; symlink targets are refused`,
+      `Expected ${target.file} at the worktree root; symlink targets are refused`,
     );
   }
   const branch = await git(dir, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
@@ -432,10 +561,10 @@ async function assertFeatureWorktree(filePath: string, part: RulesPart): Promise
   if (gitDir === commonDir) throw new Error("Rules cuts require an isolated git worktree");
   const origin = await git(dir, ["remote", "get-url", "origin"]);
   const remoteRepo = origin.match(
-    /^(?:https:\/\/github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)WebJamApps\/(web-jam-tools|JaMmusic)(?:\.git)?$/i,
+    /^(?:https:\/\/github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)WebJamApps\/([a-zA-Z0-9_-]+?)(?:\.git)?$/i,
   )?.[1];
-  if (remoteRepo?.toLowerCase() !== PARTS[part].repo.toLowerCase()) {
-    throw new Error(`Rules part ${part} requires the ${PARTS[part].repo} repository`);
+  if (remoteRepo?.toLowerCase() !== target.repo.toLowerCase()) {
+    throw new Error(`Rules part ${part} requires the ${target.repo} repository`);
   }
   const refs = await git(dir, [
     "for-each-ref",
@@ -459,11 +588,23 @@ export async function runRulesCuts(options: {
   const skillsDir = plan.skills_dir
     ? resolve(dirname(resolve(options.planPath)), plan.skills_dir)
     : new URL("../../skills", import.meta.url).pathname;
-  const result = await planRulesCuts(source, plan, skillsDir);
+  const repoDir = resolve(dirname(filePath), plan.part === "crossAiRules" ? ".." : ".");
+  const result = await planRulesCuts(source, plan, skillsDir, repoDir);
   if (!options.dryRun) {
     await assertFeatureWorktree(filePath, plan.part);
     if (await Deno.readTextFile(filePath) !== source) {
       throw new Error("Rules file changed during validation; refusing stale plan");
+    }
+    for (const file of result.areaFiles) {
+      if (await readAreaFile(repoDir, file.path.split("/").at(-1)!.slice(0, -3)) !== file.before) {
+        throw new Error("Area file changed during validation; refusing stale plan");
+      }
+    }
+    // Preserve the rules in their destinations before removing them from the source.
+    for (const file of result.areaFiles) {
+      if (file.after === file.before) continue;
+      await Deno.mkdir(dirname(file.path), { recursive: true });
+      await Deno.writeTextFile(file.path, file.after);
     }
     await Deno.writeTextFile(filePath, result.after);
   }
@@ -487,12 +628,15 @@ export async function runCli(args: string[]): Promise<number> {
       console.log(`Usage: deno task memory-cleanup:rules-cuts --plan PATH --file PATH [--dry-run]
 
 Classify every source span as rule, skill-instruction, backstory, repeat,
-scoped-rule, reworded, or removed-rule.
-The JSON plan has part (mainRules, crossAiRules, jammusicRules), optional skills_dir,
+scoped-rule, area-rule, reworded, or removed-rule.
+The JSON plan has part (mainRules, crossAiRules, jammusicRules, or an active repo name), optional skills_dir,
 and ordered spans with id, kind, and exact text. A skill-instruction or scoped-rule
 needs target_skill; a repeat needs repeats (the id of an identical retained rule);
-reworded needs replacement when approved; removed-rule needs reason (obsolete or hook-enforced)
-when approved. Approval and safety rules cannot move into skills.
+area-rule needs area (a slug) and folder (a repository-relative directory); its text
+moves to docs/rules/<area>.md with one pointer line per area in the source.
+reworded needs replacement when approved; removed-rule needs reason (obsolete, hook-enforced, or already-said)
+when approved. already-said also needs already_said naming its existing location.
+Approval and safety rules cannot move into skills or area files.
 Moved text must already appear word for word in its target SKILL.md.
 Dry runs write nothing. Applying requires an isolated feature worktree off dev;
 finish through the draft-pr skill and let Josh review and merge the pull request.`);

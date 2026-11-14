@@ -21,6 +21,7 @@ import {
 import { findIssueCreateBodyViolation } from "../../hooks/lib/check_model_label_on_issue_create.ts";
 import { resolveSigningAuthor, type RunningModelOptions } from "../shared/codex_running_model.ts";
 import { loadModelLabels, modelLabelViolation } from "../shared/model_label_rule.ts";
+import { checkDesignBody } from "../shared/design_body.ts";
 
 export interface CreateIssueOptions {
   repo?: string;
@@ -610,6 +611,7 @@ export async function createIssueAndVerify(
   // exemptions as the hook: an Epic skips them, `Needs Design` skips the
   // deferred-verification check.
   const fileBody = await deps.readFileText(options.bodyFile);
+  await checkDesignBody(fileBody);
   const lowerLabels = (options.labels || []).map((l) => l.trim().toLowerCase());
   const isEpic = options.type?.trim().toLowerCase() === "epic" || lowerLabels.includes("epic");
   if (!isEpic) {
@@ -687,6 +689,7 @@ export async function createIssueAndVerify(
   }
   // The footer goes after every section this task adds.
   bodyText = withFooter(bodyText, options.author!);
+  await checkDesignBody(bodyText);
 
   if (options.dryRun) {
     return `dry run: would create issue "${options.title}" in ${repoInfo.full} with body:\n${bodyText}`;

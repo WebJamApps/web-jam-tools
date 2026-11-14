@@ -57,7 +57,7 @@ export async function runRankCli(args: string[], options: CliOptions = {}): Prom
 
 Read-only: ranks one repository and proposes Priority moves.
 Judgments are keyed by issue number, each with liveBroken and costlyDefect booleans
-and a one-line reason. Below 20 non-Epics, also supply levelFromTests using file-issue.
+and a one-line reason. Below 20 non-Epics, and for Epics with no child Priority (regardless of size), also supply levelFromTests using file-issue.
 The task reads inputs only from /tmp/backlog-groom. With --snapshot it makes no GitHub reads;
 snapshots must be complete, match the active repos, and be under one hour old.`,
       );

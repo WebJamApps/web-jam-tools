@@ -239,17 +239,21 @@ printf '/a.mp3\n/b.mp3\n' | deno task dropbox:link --
 link (Dropbox 409 `shared_link_already_exists` → list-and-reuse fallback),
 never a duplicate.
 
-### Auth: durable OAuth refresh token (one-time setup)
+### Auth: durable OAuth refresh token in KeePass (one-time setup)
 
-No more 4-hour throwaway access tokens. The CLI holds a **refresh token**
-that never expires and mints a fresh access token on every run — env-driven,
-no hardcoded laptop paths, secrets never committed:
+No more 4-hour throwaway access tokens, and no Dropbox credentials in shell
+environments. The three OAuth values live only in **KeePass** (entry
+`webjam-setlist-links` in `~/Dropbox/web-jam-llc/webjamllc.kdbx`, never in
+`~/.bashrc` or any file a shell loads). On every run, `deno task dropbox:link`
+reads them at run time through `keepassxc-cli` — which prompts for the KeePass
+master password — mints a fresh short-lived access token, and never prints any
+of the three values:
 
-| Env var | What it is |
+| KeePass field (`webjam-setlist-links`) | What it is |
 |---|---|
-| `DROPBOX_APP_KEY` | The `webjam-setlist-links` Dropbox app's key |
-| `DROPBOX_APP_SECRET` | That app's secret |
-| `DROPBOX_REFRESH_TOKEN` | Minted once via the offline OAuth flow below |
+| **Username** (`UserName`) | The `webjam-setlist-links` Dropbox app's key |
+| **Password** (`Password`) | That app's secret |
+| **Notes** (`Notes`) | The refresh token minted once via the offline OAuth flow below |
 
 This reuses the existing **`webjam-setlist-links`** Dropbox app (account
 `web.jam.adm@gmail.com`; scopes `files.metadata.read`, `sharing.read`,
@@ -272,11 +276,11 @@ token (one-time, or if it's ever revoked):
      -d client_id=<DROPBOX_APP_KEY> \
      -d client_secret=<DROPBOX_APP_SECRET>
    ```
-   The JSON response's `refresh_token` field is the durable
-   `DROPBOX_REFRESH_TOKEN` — it does not expire under normal use.
-4. Store all three values in **KeePass**, and set them as env vars wherever
-   the CLI runs (shell profile for local/manual runs; the hosting platform's
-   secret store for anything automated). Never commit them.
+   The JSON response's `refresh_token` field is the durable refresh token — it
+   does not expire under normal use.
+4. Store all three values in **KeePass** only (under the `webjam-setlist-links`
+   entry: Username = app key, Password = app secret, Notes = refresh token).
+   Never export them in `~/.bashrc` or any shell profile, and never commit them.
 
 ## VSCode multi-root workspace
 

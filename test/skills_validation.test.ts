@@ -175,7 +175,7 @@ Deno.test("every text span removed from a shortened skill description appears wo
       'Does NOT decide which tier a task belongs to (that routing table lives in docs/ai-team-playbook.md, migrating from global CLAUDE.md per web-jam-tools#115) — this skill only fires once a tier is chosen, so the mechanics of the handoff are never skipped. Triggered when a Fable/Opus session is about to do mechanical or contained-coding work itself, or Josh/the session says "delegate" or "hand off".',
     ],
     "draft-pr": [
-      '(Closes #N by default; Part of #N with --part-of for partial PRs, standing run-log/epic issues, and hook issues that must be confirmed firing before closing). Use this to finish ANY coding task in a WebJamApps repo across Claude Code, agy, or Codex instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you\'ve completed a coding task on a feature branch.',
+      '(`Closes #N` by default; `Part of #N (local step after merge)` with `--local-step` for post-merge local installer or laptop steps; `Part of #N` with `--part-of` for partial PRs or standing run-log/epic issues). Use this to finish ANY coding task in a WebJamApps repo across Claude Code, agy, or Codex instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you\'ve completed a coding task on a feature branch.',
     ],
     "drive-cleanup": [
       "Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a subagent (Claude Code: Haiku; agy: Flash) then classifies only the ambiguous remainder. Invoke when Josh asks (or /drive-cleanup) — it does NOT auto-run.",
@@ -193,7 +193,7 @@ Deno.test("every text span removed from a shortened skill description appears wo
       "Cross-agent memory hygiene audit. Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, global and per-repo CLAUDE.md/AGENTS.md, cross-AI rules doc/task queues, bridge-log, hooks.json, and brain scratch files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap subagent (Haiku / Flash); findings are reported as separate action/flag tables and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says \"clean up memory\".",
     ],
     "pr-review": [
-      "where reviewer tier is never below author tier (Sonnet reviews Flash/Haiku; Flash reviews Haiku; Opus reviews Sonnet/Flash on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).",
+      "where automatic reviewer selection never goes below author tier (Sonnet reviews Flash/Haiku; Flash reviews Haiku; Opus reviews Sonnet/Flash on Josh's per-PR call). Josh's direct named invocation authorizes the current reviewer; self-review and posting guards remain in place. Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).",
     ],
     "venue-mining": [
       'Three seed modes — metro (seedless sweep), artist (harvest every venue an artist played), venue (verify/enrich one venue, incl. refreshing a DB record). Propose→Josh-approves→create via POST /venue (requires street address for every venue); auto-flip outreachEligible only on a viable booking/general email from a published source (venue site, Google Maps/Business listing, swept publication) — a probed/invented domain flips it only when the page identifies itself as that venue (D-49); NEVER pitches, NEVER scrapes Facebook. Metro registry lives in sources.yaml next to this file; sweep history, cooldowns, publications, coverage areas and exclude keywords live in the backend sweep-history API. Triggered by /venue-mining <metro|artist|venue> <name>, or Josh saying "mine venues", "venue sweep", "find venues in <metro>".',
@@ -1192,38 +1192,22 @@ Deno.test("skills/design-issue/SKILL.md contains Runbook Format Requirements rul
   );
 });
 
-Deno.test("skills/design-issue/SKILL.md contains Writing Style rule", async () => {
+Deno.test("skills/design-issue/SKILL.md contains Writing Style pointer (web-jam-tools#1700)", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);
 
   assertStringIncludes(text, "### Writing Style");
-  assertStringIncludes(
-    text,
-    "- **The document states what the thing IS.** Present tense, design first. A reader who has never seen the conversation should be able to read it top to bottom and know what is being built.",
+  assertStringIncludes(text, '"Writing a design document"');
+  assertStringIncludes(text, '"Next steps"');
+  assertEquals(
+    text.includes("- **The document states what the thing IS.**"),
+    false,
+    "skills/design-issue/SKILL.md must not restate full Writing Style rules",
   );
-  assertStringIncludes(
-    text,
-    "- **The decision history goes in an appendix**, as one row per decision with its outcome — never interleaved with the design.",
-  );
-  assertStringIncludes(
-    text,
-    "- **The document never records the skill's own process state.**",
-  );
-  assertStringIncludes(
-    text,
-    '- **Never a bare label in the body.** No "per D-7" or "R-39"; labels exist so the decision table has stable row names, and nowhere else.',
-  );
-  assertStringIncludes(
-    text,
-    "- **Josh's own words are preserved where they are load-bearing** — his ruling is the authority, and a paraphrase is weaker than his actual sentence.",
-  );
-  assertStringIncludes(
-    text,
-    "- **A design document proves its own premises, and the gate will not open without them.**",
-  );
-  assertStringIncludes(
-    text,
-    "- **Consolidation happens BEFORE Gate 1, never after.**",
+  assertEquals(
+    text.includes("- **Consolidation happens BEFORE Gate 1, never after.**"),
+    false,
+    "skills/design-issue/SKILL.md must not restate consolidation rule",
   );
 });
 
@@ -1416,32 +1400,25 @@ Deno.test("skills/design-issue/SKILL.md creates undated design documents consist
   );
 });
 
-Deno.test("skills/design-issue/SKILL.md contains load-bearing-premises rule", async () => {
+Deno.test("skills/design-issue/SKILL.md contains load-bearing-premises pointers (web-jam-tools#1700)", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);
 
-  assertStringIncludes(
-    text,
-    "**A design document proves its own premises, and the gate will not open without them.**",
-  );
-  assertStringIncludes(
-    text,
-    "Every design document carries a `## Load-bearing premises` section: one row per premise the design depends on, naming what was checked and what it showed.",
-  );
-  assertStringIncludes(
-    text,
-    "The document checker fails a document that omits the section, and fails any row whose proof is empty or hedged.",
+  assertStringIncludes(text, '"Keeping worked content"');
+  assertStringIncludes(text, '"Writing a design document"');
+  assertEquals(
+    text.includes(
+      "**A design document proves its own premises, and the gate will not open without them.**",
+    ),
+    false,
+    "skills/design-issue/SKILL.md must not restate retired Writing Style premise rule",
   );
 });
 
-Deno.test("skills/design-issue/SKILL.md pins exact carried premise matching and both refusals", async () => {
+Deno.test("skills/design-issue/SKILL.md pins exact carried premise matching refusals (web-jam-tools#1700)", async () => {
   const text = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
   for (
     const fragment of [
-      "**Every premise row carries a `Proved` date; an earlier date passes only on an exact stored-row match.**",
-      "after trimming the white space around each cell; case and internal spacing matter, row order does not, and carried rows never expire",
-      "when a record exists and cannot be read or parsed, the checker refuses and names its path",
-      "`deno task design:gate1` prints the fresh and carried row counts and the date of the approval or adoption",
       "| pass a premise row dated before the presenting day unless the Gate 1 record holds that exact row from an approval or an adoption |",
       "| store a document's premise rows as adopted without Josh naming that document |",
     ]
@@ -2227,11 +2204,16 @@ export function assertBacklogGroomRules(text: string): void {
     "skills/backlog-groom/SKILL.md must state model gives reason in one line beside every move it proposes",
   );
 
-  // 11. Small-repo input contract and schema pointer
+  // 11. Small-repo input contract, Epic contract, and schema pointer
   assertStringIncludes(
     text,
     "levelFromTests",
     "skills/backlog-groom/SKILL.md must specify levelFromTests for repositories below the 20-issue floor",
+  );
+  assertStringIncludes(
+    text,
+    "Epic with no open child carrying a Priority",
+    "skills/backlog-groom/SKILL.md must specify levelFromTests for Epics with no open child carrying a Priority",
   );
   assertStringIncludes(
     text,
@@ -2364,12 +2346,21 @@ Deno.test(
       "must state model gives reason in one line beside every move it proposes",
     );
 
-    // 7. Fails when the skill loses the small-repo levelFromTests requirement
+    // 7. Fails when the skill loses the small-repo or Epic levelFromTests requirement
     const textWithoutSmallRepo = validText.replaceAll("levelFromTests", "ignoredField");
     assertThrows(
       () => assertBacklogGroomRules(textWithoutSmallRepo),
       Error,
       "must specify levelFromTests for repositories below the 20-issue floor",
+    );
+    const textWithoutEpic = validText.replaceAll(
+      "Epic with no open child carrying a Priority",
+      "ignoredField",
+    );
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutEpic),
+      Error,
+      "must specify levelFromTests for Epics with no open child carrying a Priority",
     );
   },
 );

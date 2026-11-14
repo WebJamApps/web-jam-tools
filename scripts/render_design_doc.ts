@@ -504,6 +504,7 @@ export function renderDesignDoc(
 
     @media (prefers-color-scheme: dark) {
       :root:not([data-theme="light"]) {
+        color-scheme: dark;
         --bg-color: #0d1117;
         --text-color: #c9d1d9;
         --toc-bg: #161b22;
@@ -518,6 +519,7 @@ export function renderDesignDoc(
     }
 
     :root[data-theme="dark"] {
+      color-scheme: dark;
       --bg-color: #0d1117;
       --text-color: #c9d1d9;
       --toc-bg: #161b22;

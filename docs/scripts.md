@@ -87,12 +87,13 @@ reason per issue. Keys are issue numbers in that repository:
 }
 ```
 
-`levelFromTests` is required below 20 open non-Epics: the caller selects it using
-`skills/file-issue/SKILL.md`, so this module does not duplicate those level tests. Missing or
-invalid judgments, failed GitHub reads and malformed responses refuse the run rather than making up
-facts. Pull requests are excluded; legacy `parked` labels do not exclude issues. Epics inherit the highest existing native
-Priority of their open children and are excluded from shares. An Epic with no child
-Priority supplies no proposal.
+`levelFromTests` is required below 20 open non-Epics and for any Epic with no open child carrying a
+Priority (regardless of repository size): the caller selects it using `skills/file-issue/SKILL.md`,
+so this module does not duplicate those level tests. Missing or invalid judgments, failed GitHub reads
+and malformed responses refuse the run rather than making up facts. Pull requests are excluded;
+legacy `parked` labels do not exclude issues. Epics inherit the highest existing native Priority of
+their open children and are excluded from shares. An Epic with no open child carrying a Priority
+inherits its level from `levelFromTests`.
 
 Shares are rounded independently; the last band includes any rounding remainder. Overflow is
 measured from the current snapshot: more than three above a share proposes moving up to the excess
@@ -104,6 +105,23 @@ missing focus milestone skips that step and reports why.
 Create the input file under `/tmp/backlog-groom/`, outside every repository. That is the task's only
 permitted input directory; no user home, network or write permissions are granted to Deno. The
 GitHub subprocess authenticates through the existing `gh` setup.
+
+### `block-issue` and `unblock-issue`
+
+Change one blocked-by link that Josh or an approved plan names on existing issues, in any
+repository. `--blocker` accepts an issue number in `--repo` or `owner/repo#number` for another
+repository. Removal accepts parent, ancestor and unrelated blockers alike.
+
+```sh
+deno task block-issue --repo WebJamApps/web-jam-tools --issue 10 --blocker 20 --dry-run
+deno task unblock-issue --repo WebJamApps/web-jam-tools --issue 10 --blocker OtherOrg/widgets#20 --dry-run
+```
+
+Drop `--dry-run` to apply the named change. Success prints both issue titles and the exact opposite
+command to undo it. Dry runs print the proposed change without writing. An already present link when
+adding, an absent link when removing, failed or unreadable lookups, and GitHub refusals all exit
+non-zero; GitHub's error message is retained. Both tasks run through the existing authenticated `gh`
+CLI and grant Deno only `--allow-run=gh`.
 
 ### `edit-issue.ts`
 
@@ -179,7 +197,7 @@ Reads the size of every session-load part from disk across Claude Code, agy, and
 canonical limits in `src/session-load/limits.json`, prints a `systemMessage` JSON line, and exits 0.
 
 ```sh
-deno run --allow-read --allow-env scripts/session-load-report.ts
+deno run --allow-read --allow-env --allow-run=git scripts/session-load-report.ts
 ```
 
 ### `bootstrap-project.sh`
@@ -220,8 +238,16 @@ scripts/new-agent-worktree.sh <Repo> <branch> [base]
 
 - `Repo` — sibling directory name under the workspace root (e.g. `WebJamSocketCluster`), must
   already be a git clone
-- `branch` — branch name to create for the new worktree
-- `base` — base ref to branch from (default: `dev`)
+- `branch` — branch to use for the new worktree; existing branches are never reset
+- `base` — starting ref for a new branch (default: `dev`); ignored for existing branches
+
+After fetching `origin`, the script uses the branch's existing commits when it exists remotely or
+locally. A remote branch gets a local tracking branch; an existing local branch of the same name
+must point at the same commit. If the two differ, the script refuses, prints both commits, and makes
+no worktree or local branch change. A local-only branch is used as it stands. When neither exists, a
+new branch starts from `origin/<base>`. Standard error names the case taken and says when `base` was
+ignored. An existing worktree folder is always refused; successful cases all seed the environment
+files described above.
 
 The worktree is created at `<Repo>/.claude/worktrees/<branch>` (`/` in the branch name is flattened
 to `-`). Set `WEBJAMAPPS_ROOT` to override the default workspace root (`/home/joshua/WebJamApps`).
@@ -439,6 +465,26 @@ After the pull succeeds, run the helper by its full path to install the command:
 The `agents` command also runs it, right after `update-all.sh`, whenever it creates or restarts the
 session (not when it only attaches). A failure prints a warning and the agents still start. Override
 the command with `AGENTS_UPDATE_SCRIPTS_CMD`.
+
+### `check-snap-updates` (run by the `agents` command)
+
+`deno task check-snap-updates` warns when a snap has had an update waiting for 3 days or more.
+Ubuntu's Software Updater does not update snaps, and snapd says nothing when its own refreshes stop
+working, so a stalled update otherwise goes unseen.
+
+The `agents` command runs it right after the GitHub token check, whenever it creates or restarts the
+session (not when it only attaches). A failure prints a warning and the agents still start. Override
+the command with `AGENTS_CHECK_SNAP_UPDATES_CMD`.
+
+- It reads `snap refresh --list` and records when each snap first showed there in
+  `~/.local/state/web-jam-tools/snap-updates.json`. An update waiting for less than 3 days is normal
+  and stays silent.
+- A stuck update prints a warning and sends a desktop notification that stays until dismissed,
+  because `agents` attaches to tmux straight afterwards and covers the terminal. To clear it, run
+  `sudo snap refresh`.
+- If the check itself cannot run, it says so the same way and exits 1.
+- On a machine without snap, it does nothing. If `notify-send` is missing, only the terminal warning
+  appears.
 
 ### `install-hooks.sh` — what actually gets symlinked
 

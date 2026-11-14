@@ -34,8 +34,9 @@
  *     `scripts/create-issue.ts`, title in the token, same session, same
  *     repo, not expired -> PASS (silent — see the Bash `allow` note below;
  *     the settings permission layer still evaluates the whole call).
- *   - Bash issue-creating command, any of the above false, or no --title
- *     given at all -> DENY (web-jam-tools#747: this is the Bash-path hole —
+ *   - Bash filing script with --help/-h or no title -> PASS (it cannot file).
+ *   - Bash issue-creating command, any of the above false, or raw gh issue
+ *     create with no --title -> DENY (web-jam-tools#747: this is the Bash-path hole —
  *     dropping to a shell must not walk around the gate that
  *     mcp__*__issue_write already enforces).
  *   - Bash `gh issue edit` or any other Bash command                     -> PASS
@@ -476,6 +477,18 @@ function scanBashSegments(
     const ghCreateArgs = findGhIssueCreateArgs(scTokens);
     const createArgs = ghCreateArgs ?? findCreateIssueScriptArgs(scTokens);
     if (createArgs === null) continue;
+
+    if (ghCreateArgs === null) {
+      // The script exits before filing for help or an absent/empty title.
+      // Look for every possible title value: an earlier empty --title must
+      // not exempt a later non-empty one. Whitespace still counts as a value.
+      const hasTitle = createArgs.some((arg, index) =>
+        arg === "--title"
+          ? Boolean(createArgs[index + 1])
+          : arg.startsWith("--title=") && arg.length > "--title=".length
+      );
+      if (createArgs.includes("--help") || createArgs.includes("-h") || !hasTitle) continue;
+    }
 
     const title = extractBashTitle(createArgs)?.trim() ?? "";
     if (!title) {

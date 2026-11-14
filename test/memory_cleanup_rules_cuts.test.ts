@@ -16,6 +16,7 @@ import {
   runRulesCuts,
 } from "../src/memory-cleanup/rules_cuts.ts";
 import { loadLimits } from "../src/session-load/report.ts";
+import { ACTIVE_REPOS } from "../src/shared/repos.ts";
 
 const FIXTURES = new URL("./fixtures/rules-cuts/", import.meta.url).pathname;
 const SKILLS = join(FIXTURES, "skills");
@@ -822,7 +823,11 @@ async function withWorktree(
       "add",
       "origin",
       `https://github.com/WebJamApps/${
-        part === "jammusicRules" ? "JaMmusic" : "web-jam-tools"
+        part === "jammusicRules"
+          ? "JaMmusic"
+          : part === "mainRules" || part === "crossAiRules"
+          ? "web-jam-tools"
+          : part
       }.git`,
     ]);
     await git(root, ["add", "."]);
@@ -945,5 +950,214 @@ Deno.test("CLI help and refusal paths never write", async () => {
     assertEquals(await Deno.readTextFile(filePath), source);
     await Deno.writeTextFile(planPath, JSON.stringify(plan));
     assertEquals(await runCli(["--plan", planPath, "--file", join(filePath, "missing")]), 1);
+  });
+});
+
+const POINTER = "Before changing anything under `hooks/`, read `docs/rules/hooks.md`.";
+
+function areaPlan(pointerAlreadyPresent = false): RulesCutsPlan {
+  return {
+    part: "mainRules",
+    spans: [
+      {
+        id: "keep",
+        kind: "rule",
+        text: `Keep this rule.\n${pointerAlreadyPresent ? POINTER + "\n" : ""}`,
+      },
+      {
+        id: "area1",
+        kind: "area-rule",
+        text: "Use the shared runner.\n",
+        area: "hooks",
+        folder: "hooks",
+      },
+      {
+        id: "area2",
+        kind: "area-rule",
+        text: "Keep fallback notes separate.\n",
+        area: "hooks",
+        folder: "hooks",
+      },
+    ],
+  };
+}
+
+Deno.test("area moves preview without writes, apply word for word, and leave one pointer per area", async () => {
+  for (const pointerAlreadyPresent of [false, true]) {
+    await withWorktree("mainRules", async ({ worktree, filePath, planPath }) => {
+      const plan = areaPlan(pointerAlreadyPresent);
+      const source = plan.spans.map((span) => span.text).join("");
+      await Deno.writeTextFile(filePath, source);
+      await Deno.writeTextFile(planPath, JSON.stringify(plan));
+      const areaPath = join(worktree, "docs/rules/hooks.md");
+      const preview = await runRulesCuts({ filePath, planPath, dryRun: true });
+      await assertRejects(() => Deno.stat(areaPath), Deno.errors.NotFound);
+      assertEquals(await Deno.readTextFile(filePath), source);
+      assertStringIncludes(preview.report, "moved to docs/rules/hooks.md");
+      const result = await runRulesCuts({ filePath, planPath });
+      assertEquals(result.after, preview.after);
+      assertEquals(await Deno.readTextFile(filePath), result.after);
+      assertEquals(result.after.split(POINTER).length - 1, 1);
+      const area = await Deno.readTextFile(areaPath);
+      for (const span of plan.spans.slice(1)) assertStringIncludes(area, span.text);
+      assert(!result.after.includes("Use the shared runner."));
+      assertEquals(result.rulesBefore.length, result.rulesAfter.length);
+    });
+  }
+});
+
+Deno.test("area moves preserve existing content and do not duplicate already-moved text", async () => {
+  await withWorktree("mainRules", async ({ worktree, filePath, planPath }) => {
+    const plan = areaPlan();
+    const source = plan.spans.map((span) => span.text).join("");
+    const areaPath = join(worktree, "docs/rules/hooks.md");
+    const existing = "# Existing guidance\n\nUse the shared runner.\n";
+    await Deno.mkdir(join(worktree, "docs/rules"), { recursive: true });
+    await Deno.writeTextFile(areaPath, existing);
+    await Deno.writeTextFile(filePath, source);
+    await Deno.writeTextFile(planPath, JSON.stringify(plan));
+    await runRulesCuts({ filePath, planPath });
+    const area = await Deno.readTextFile(areaPath);
+    assert(area.startsWith(existing));
+    assertEquals(area.split("Use the shared runner.").length - 1, 1);
+    assertStringIncludes(area, "Keep fallback notes separate.");
+  });
+});
+
+Deno.test("area moves refuse unsafe paths, safety rules, contradictory actions and conflicting folders", async () => {
+  const hiddenArea = areaPlan();
+  hiddenArea.spans[1].folder = ".github/workflows";
+  parseRulesCutsPlan(hiddenArea);
+  for (
+    const patch of [
+      { area: "../escape" },
+      { area: "/tmp/escape" },
+      { folder: "../hooks" },
+      { folder: "hooks/../../escape" },
+      { folder: "/hooks" },
+      { folder: "hooks`" },
+      { guard: true },
+      { approval: true },
+      { safety: true },
+      { reason: "credential-rule" },
+      { action: "keep" },
+      { target_skill: "draft-pr" },
+      { text: " " },
+      { guard: "true" },
+    ]
+  ) {
+    const plan = areaPlan();
+    Object.assign(plan.spans[1], patch);
+    assertThrows(() => parseRulesCutsPlan(plan));
+  }
+  await withWorktree("mainRules", async ({ worktree, filePath, planPath }) => {
+    const plan = areaPlan();
+    plan.spans[2].folder = "src/hooks";
+    const source = plan.spans.map((span) => span.text).join("");
+    await Deno.writeTextFile(filePath, source);
+    await Deno.writeTextFile(planPath, JSON.stringify(plan));
+    await assertRejects(() => runRulesCuts({ filePath, planPath }), Error, "one folder");
+    assertEquals(await Deno.readTextFile(filePath), source);
+    await assertRejects(
+      () => Deno.stat(join(worktree, "docs/rules/hooks.md")),
+      Deno.errors.NotFound,
+    );
+  });
+});
+
+Deno.test("area moves refuse symlinked destination ancestors and files without changing either file", async () => {
+  for (const escaped of ["docs", "docs/rules", "docs/rules/hooks.md"]) {
+    await withWorktree("mainRules", async ({ dir, worktree, filePath, planPath }) => {
+      const plan = areaPlan();
+      const source = plan.spans.map((span) => span.text).join("");
+      await Deno.writeTextFile(filePath, source);
+      await Deno.writeTextFile(planPath, JSON.stringify(plan));
+      const outside = join(dir, "outside");
+      if (escaped.endsWith(".md")) await Deno.writeTextFile(outside, "Outside rule.\n");
+      else await Deno.mkdir(outside);
+      const path = join(worktree, escaped);
+      await Deno.mkdir(join(path, ".."), { recursive: true });
+      await Deno.symlink(outside, path);
+      await assertRejects(() => runRulesCuts({ filePath, planPath }), Error, "symlink");
+      assertEquals(await Deno.readTextFile(filePath), source);
+      if (escaped.endsWith(".md")) {
+        assertEquals(await Deno.readTextFile(outside), "Outside rule.\n");
+      } else assertEquals([...Deno.readDirSync(outside)], []);
+    });
+  }
+});
+
+Deno.test("already-said removal requires a named place and the row's approval", async () => {
+  for (const approved of [true, false, undefined]) {
+    const plan: RulesCutsPlan = {
+      part: "mainRules",
+      spans: [
+        { id: "keep", kind: "rule", text: "Kept rule.\n" },
+        {
+          id: "remove",
+          kind: "removed-rule",
+          text: "Redundant rule.\n",
+          reason: "already-said",
+          already_said: "docs/cross-ai-rules.md — Files",
+          approved,
+        },
+      ],
+    };
+    const source = plan.spans.map((span) => span.text).join("");
+    const result = await planRulesCuts(source, plan, SKILLS);
+    assertEquals(result.after.includes("Redundant rule."), approved !== true);
+    if (approved) {
+      assertStringIncludes(result.report, "already-said; docs/cross-ai-rules.md — Files");
+    }
+    for (const place of [undefined, "", "   ", 5]) {
+      const invalid = structuredClone(plan);
+      Object.assign(invalid.spans[1], { already_said: place });
+      assertThrows(() => parseRulesCutsPlan(invalid));
+    }
+  }
+});
+
+Deno.test("every active repository is a cut target; other repositories use their own recorded low mark or the over mark", async () => {
+  const limits = await loadLimits();
+  limits.otherRepoRules.lowMarks = { CollegeLutheran: 100 };
+  for (const part of ACTIVE_REPOS) {
+    const text = "Rule. ".repeat(30);
+    const plan: RulesCutsPlan = { part, spans: [{ id: "keep", kind: "rule", text }] };
+    const result = await planRulesCuts(text, plan, SKILLS, undefined, limits);
+    assertStringIncludes(result.report, `Rules file: ${part}/AGENTS.md`);
+    if (part === "CollegeLutheran") {
+      assertEquals(result.lowMark, 100);
+      assertStringIncludes(result.report, "80 bytes over low mark");
+    } else if (part !== "web-jam-tools" && part !== "JaMmusic") {
+      assertEquals(result.lowMark, limits.otherRepoRules.overMark);
+    }
+  }
+  for (const part of ["../CollegeLutheran", "unknown", "__proto__"]) {
+    assertThrows(() =>
+      parseRulesCutsPlan({ part, spans: [{ id: "keep", kind: "rule", text: "Rule." }] })
+    );
+  }
+});
+
+Deno.test("a CollegeLutheran cut applies in its own feature worktree and refuses a different origin", async () => {
+  await withWorktree("CollegeLutheran", async ({ root, filePath, planPath, source }) => {
+    await runRulesCuts({ filePath, planPath });
+    assertEquals(
+      await Deno.readTextFile(filePath),
+      "# Fixture rules\n\nAlways preserve the rule text.\n\n",
+    );
+    await Deno.writeTextFile(filePath, source);
+    await git(root, [
+      "remote",
+      "set-url",
+      "origin",
+      "https://github.com/WebJamApps/AppersonAuto.git",
+    ]);
+    await assertRejects(
+      () => runRulesCuts({ filePath, planPath }),
+      Error,
+      "requires the CollegeLutheran repository",
+    );
+    assertEquals(await Deno.readTextFile(filePath), source);
   });
 });

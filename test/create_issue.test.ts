@@ -6,6 +6,31 @@ import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { TEST_AUTHOR, withPassingProbe } from "./authored_by_test_helpers.ts";
 import { AGY_IDENTITIES, withAgySigningFixture } from "./support/agy_signing_fixture.ts";
 import { MODEL_LABEL_CASES } from "./support/model_label_cases.ts";
+import { DESIGN_BODY_CASES } from "./support/design_body_cases.ts";
+
+for (const row of DESIGN_BODY_CASES) {
+  Deno.test(`create-issue one design: ${row.name}`, async () => {
+    const { deps, calls } = probeDeps(`## What this builds\n${row.body}`, { code: 0, stderr: "" });
+    const execute = () =>
+      realCreateIssueAndVerify(
+        {
+          title: "Design body fixture",
+          bodyFile: "/fixture.md",
+          labels: ["Flash"],
+          author: TEST_AUTHOR,
+          dryRun: !row.refused,
+        },
+        deps,
+        APPROVE_ALL,
+      );
+    if (row.refused) {
+      const error = await assertRejects(execute, Error, "more than one design document");
+      assertStringIncludes(error.message, "promote-gigs-design");
+      assertStringIncludes(error.message, "nodejs-deno-upgrades-design");
+    } else await execute();
+    assertEquals(calls, []);
+  });
+}
 import {
   LUNA_SIGNATURE,
   SIGNING_SESSION_ID,

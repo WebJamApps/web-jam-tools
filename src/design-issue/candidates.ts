@@ -11,7 +11,6 @@ import {
 import {
   DesignDocResolutionRefusal,
   type ExistingDesignDocMatch,
-  extractTopicFromText,
   type FindDesignDocOptions,
   findExistingDesignDoc,
   formatCanonicalDesignDocResolution,
@@ -124,62 +123,6 @@ export function formatCandidateCitation(issue: NeedsDesignIssue): string {
   return `${issue.repo}#${issue.number} "${issue.title}"`;
 }
 
-/**
- * Resolves citation details (topic slug and milestone) from an issue/epic citation or title.
- */
-export async function resolveCitationDetails(
-  citation: string,
-  runner: CommandRunner = defaultCommandRunner,
-  owner = REPO_OWNER,
-): Promise<{ topic: string; milestone?: string }> {
-  let topic = extractTopicFromText(citation);
-  let milestone: string | undefined;
-
-  // Try parsing repo#number or #number
-  const match = citation.match(/(?:([a-zA-Z0-9_-]+)\/)?([a-zA-Z0-9_-]+)?#(\d+)/);
-  if (match) {
-    const repo = match[2] || "web-jam-tools";
-    const num = match[3];
-    try {
-      const res = await runner([
-        "issue",
-        "view",
-        num,
-        "--repo",
-        `${owner}/${repo}`,
-        "--json",
-        "title,milestone",
-      ]);
-      if (res.code === 0 && res.stdout.trim()) {
-        try {
-          const parsed = JSON.parse(res.stdout.trim());
-          if (parsed.title) {
-            topic = extractTopicFromText(parsed.title) || topic;
-          }
-          if (parsed.milestone?.title) {
-            milestone = parsed.milestone.title;
-          }
-        } catch {
-          topic = extractTopicFromText(res.stdout.trim()) || topic;
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  return { topic, milestone };
-}
-
-export async function resolveTopicFromCitation(
-  citation: string,
-  runner: CommandRunner = defaultCommandRunner,
-  owner = REPO_OWNER,
-): Promise<string> {
-  const details = await resolveCitationDetails(citation, runner, owner);
-  return details.topic;
-}
-
 export async function runCandidatesCli(
   args: string[] = [],
   options: ScanCandidatesOptions = {},
@@ -187,7 +130,6 @@ export async function runCandidatesCli(
   const log = options.log ?? console.log;
   const errorLog = options.errorLog ?? console.error;
   const runner = options.runner ?? defaultCommandRunner;
-  const owner = options.owner ?? REPO_OWNER;
   const finder = options.findDesignDocImpl ?? findExistingDesignDoc;
 
   const flags = parseArgs(args, {
@@ -210,7 +152,7 @@ and matches pre-existing canonical design documents in Dropbox for Major Revisio
 
 Options:
   --epic <citation>     Resolve canonical design document for an Epic and prompt for Major Revision
-  --topic <topic>       Match existing design document by topic slug
+  --topic <topic>       Look up a path, issue citation or whole topic
   --theme <theme>       Scope design document search to a specific theme directory
   --dropbox-dir <path>  Override the design-documents root (also DESIGN_DOCS_ROOT)
   -h, --help            Show this help message
@@ -223,22 +165,22 @@ reporting "no existing design document" when it cannot tell whether one exists.`
 
   // Check if an epic or topic query was explicitly passed
   const targetQuery = flags.epic || flags.topic || flags.issue ||
-    (flags._.length > 0 ? String(flags._[0]) : "");
+    flags._.map(String).join(" ");
+  if (
+    !targetQuery &&
+    (flags.epic !== undefined || flags.issue !== undefined || flags.topic !== undefined)
+  ) {
+    errorLog("Usage: deno task design:candidates --epic <citation>");
+    return 1;
+  }
 
   if (targetQuery) {
-    const details = await resolveCitationDetails(targetQuery, runner, owner);
-    const topic = details.topic || targetQuery;
-    const theme = flags.theme || details.milestone;
-
-    // The canonical-document precondition (web-jam-tools#942): this resolution runs before any
-    // decision is put to Josh, and fails closed rather than reporting "no document found" when it
-    // cannot tell whether one exists.
     let resolution;
     try {
       resolution = await resolveCanonicalDesignDoc({
-        topic,
         title: targetQuery,
-        theme,
+        theme: flags.theme,
+        runner,
         dropboxDir: flags["dropbox-dir"] || options.dropboxDir,
       });
     } catch (err) {
@@ -246,7 +188,10 @@ reporting "no existing design document" when it cannot tell whether one exists.`
         errorLog(`[design:candidates] ${err.message}`);
         return 2;
       }
-      throw err;
+      errorLog(
+        `[design:candidates] could not tell: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return 2;
     }
 
     for (const line of formatCanonicalDesignDocResolution(resolution, "[design:candidates]")) {
@@ -259,10 +204,7 @@ reporting "no existing design document" when it cannot tell whether one exists.`
       return 0;
     }
 
-    log(
-      `A new design document may be created at ~/Dropbox/web-jam-llms/<Theme>/<topic>-design-<YYYY-MM-DD>.md`,
-    );
-    return 0;
+    return 2;
   }
 
   const { issues } = await scanNeedsDesignCandidates(options);

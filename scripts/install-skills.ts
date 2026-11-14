@@ -8,11 +8,24 @@
  * (~/.claude/skills-backups and ~/.gemini/config/plugins/webjam-tasks/skills-backups).
  * Stale backups older than the 14-day retention window are automatically pruned on each run.
  */
-import { installSkills, parseArgs } from "../src/install-skills/lib.ts";
+import { checkSkills, installSkills, parseArgs } from "../src/install-skills/lib.ts";
 
 async function main() {
   try {
     const options = parseArgs(Deno.args);
+    if (options.check) {
+      const report = await checkSkills(options);
+      if (!options.quiet || !report.ok) {
+        for (const msg of report.messages) {
+          if (report.ok) {
+            console.log(msg);
+          } else {
+            console.error(msg);
+          }
+        }
+      }
+      Deno.exit(report.ok ? 0 : 1);
+    }
     const result = await installSkills(options);
     if (!options.quiet) {
       for (const msg of result.messages) {

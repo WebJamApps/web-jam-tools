@@ -258,6 +258,29 @@ Deno.test("collector CLI publishes only complete snapshots, refuses overwrite an
       ], ["--bad"]]
     ) assertEquals(await runCollectCli(args, noRead), 1);
     assertEquals(await runCollectCli(["--help"], noRead), 0);
+    assert(lines.some((line) => line.includes("[--concurrency 12]")));
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("collector CLI defaults concurrency to 12 when omitted", async () => {
+  await Deno.mkdir("/tmp/backlog-groom", { recursive: true });
+  const dir = await Deno.makeTempDir({ dir: "/tmp/backlog-groom", prefix: "collect-concurrency-" });
+  const f = fixture();
+  const lines: string[] = [];
+  try {
+    const output = `${dir}/snapshot.json`;
+    assertEquals(
+      await runCollectCli(["--output", output], {
+        runner: f.runner,
+        log: (line) => lines.push(line),
+      }),
+      0,
+    );
+    assertEquals(f.peak(), 12);
+    const saved = await readSnapshot(output);
+    assertEquals(saved.repositories.length, 8);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

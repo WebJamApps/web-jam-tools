@@ -2963,3 +2963,62 @@ Deno.test(
     }
   },
 );
+
+Deno.test(
+  "install-hooks.sh registers block-production-media-change.sh on Claude Code and agy and writes the 10 joshandmariamusic Edit deny rules (web-jam-tools#1580)",
+  async () => {
+    const home = await Deno.makeTempDir();
+    try {
+      const hooksDir = `${home}/.claude/hooks`;
+      const settingsPath = `${home}/.claude/settings.json`;
+      const agyHooksPath = `${home}/.gemini/config/hooks.json`;
+      const res = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--hooks-dir",
+          hooksDir,
+          "--settings-path",
+          settingsPath,
+          "--agy-hooks-path",
+          agyHooksPath,
+        ],
+        { HOME: home },
+      );
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      const preToolGroups = settings?.hooks?.PreToolUse ?? [];
+      const hasClaudeHook = preToolGroups.some(
+        (g: { matcher?: string; hooks?: { command?: string }[] }) =>
+          g.matcher === "Bash|Edit|Write|NotebookEdit" &&
+          g.hooks?.some((h) =>
+            h.command === "$HOME/.claude/hooks/block-production-media-change.sh"
+          ),
+      );
+      assert(
+        hasClaudeHook,
+        "Expected Claude Code PreToolUse to include block-production-media-change.sh",
+      );
+
+      const denyList: string[] = settings?.permissions?.deny ?? [];
+      for (const ext of ["mp3", "wav", "m4a", "mp4", "mov", "jpg", "jpeg", "png", "webp", "gif"]) {
+        const pattern = `Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.${ext})`;
+        assert(denyList.includes(pattern), `Missing deny rule: ${pattern}`);
+      }
+
+      const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
+      const agyPreToolGroups = agyHooks?.hooks?.PreToolUse ?? [];
+      const expectedB64 = btoa("Bash|Edit|Write|NotebookEdit");
+      const expectedAgyCmd =
+        `$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${expectedB64} $HOME/.claude/hooks/block-production-media-change.sh`;
+      const hasAgyHook = agyPreToolGroups.some(
+        (g: { matcher?: string; hooks?: { command?: string }[] }) =>
+          g.matcher === ".*" && g.hooks?.some((h) => h.command === expectedAgyCmd),
+      );
+      assert(hasAgyHook, `Expected agy hooks.json to contain '${expectedAgyCmd}'`);
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  },
+);

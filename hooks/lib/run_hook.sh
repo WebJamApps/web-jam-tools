@@ -103,6 +103,7 @@ if [ -z "$GROUP" ]; then
     block-backend-mutation*|\
     block-human-only-credentials*|\
     block-private-folder-read*|\
+    block-production-media-change*|\
     require-approval-token-on-issue-write*|\
     block-agy-gmail-send-delete*|\
     scan-output-for-secrets*|\

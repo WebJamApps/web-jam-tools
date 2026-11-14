@@ -94,6 +94,9 @@ in_git_tree() {
   fi
 }
 
+NOTE_FILE=$(mktemp)
+trap 'rm -f "$NOTE_FILE"' EXIT
+
 tool_name="$(printf '%s' "$input" | jq -r '.tool_name // empty' 2>/dev/null || true)"
 command_text="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 via_bash=""
@@ -120,14 +123,26 @@ if [ "$tool_name" = "Bash" ]; then
   # Step 2 (Bash): no written file named -> allow. Step 3 (Bash): the first target inside a git
   # working tree is the one judged; when none is, allow.
   target_path=""
+  write_analysis="$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name opus-delegation-gate --note-file "$NOTE_FILE" deno run --no-config --allow-read --allow-env=HOME "$HOOK_DIR/lib/bash_write_targets.ts" --json 2>/dev/null || true)"
+  if [ -s "$NOTE_FILE" ]; then
+    cat "$NOTE_FILE"
+    exit 0
+  fi
+  if ! printf '%s' "$write_analysis" | jq -e '.targets | type == "array"' >/dev/null 2>&1; then
+    jq -cn '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:"Opus delegation gate: write targets could not be determined; proceeding by workflow default."}}'
+    exit 0
+  fi
   while IFS= read -r candidate; do
     [ -z "$candidate" ] && continue
     if [ "$(in_git_tree "$candidate")" = "true" ]; then
       target_path="$candidate"
       break
     fi
-  done < <(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name opus-delegation-gate deno run --no-config --allow-read --allow-env=HOME "$HOOK_DIR/lib/bash_write_targets.ts" 2>/dev/null || true)
+  done < <(printf '%s' "$write_analysis" | jq -r '.targets[], .unknownFiles[]')
   if [ -z "$target_path" ]; then
+    if [ "$(printf '%s' "$write_analysis" | jq -r '.unknownDirectory')" = "true" ]; then
+      jq -cn '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:"Opus delegation gate: the working directory of a Bash write could not be determined; proceeding. If this is an unapproved Opus repository edit, delegate it or ask Josh for approval."}}'
+    fi
     exit 0
   fi
 elif [ "$tool_name" = "apply_patch" ]; then
@@ -179,9 +194,6 @@ else
     exit 0
   fi
 fi
-
-NOTE_FILE=$(mktemp)
-trap 'rm -f "$NOTE_FILE"' EXIT
 
 # Step 4: One invocation of opus_gate.ts decides the rest.
 gate_json="$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name opus-delegation-gate --allow-with-note "The Opus delegation gate checker returned no usable decision; proceeding by workflow default. If this is an unapproved Opus repository edit, delegate it or ask Josh for approval." --note-file "$NOTE_FILE" deno run --no-config --allow-read --allow-run=timeout --allow-env --allow-write "$GATE_LIB" 2>/dev/null || true)"

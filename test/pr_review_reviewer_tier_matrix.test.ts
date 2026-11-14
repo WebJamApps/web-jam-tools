@@ -148,7 +148,7 @@ Deno.test("skills/pr-review/SKILL.md states reviewer-tier rule, default reviewer
   // Reconciled reviewer choices stated in prose
   assertStringIncludes(
     text,
-    "The reviewer choices are Flash for Haiku and Luna authors, Sol for a Flash author, Sonnet, Astra, or Opus for a Sol author, and Sol for a Sonnet author (Opus only when Josh names the pull request); Opus or Josh reviews Astra, and Josh reviews Opus.",
+    "For automatic selection, the reviewer choices are Flash for Haiku and Luna authors, Sol for a Flash author, Sonnet, Astra, or Opus for a Sol author, and Sol for a Sonnet author (Opus only when Josh names the pull request); Opus or Josh reviews Astra, and Josh reviews Opus.",
   );
 
   // Sol reviews on Codex
@@ -165,6 +165,34 @@ Deno.test("skills/pr-review/SKILL.md states reviewer-tier rule, default reviewer
   assertStringIncludes(
     text,
     "An unattended Sol review launch passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`.",
+  );
+
+  // Direct named request authorization
+  assertStringIncludes(
+    text,
+    "**Direct named requests authorize the current reviewer (Josh, 2026-10-28).**",
+  );
+  assertStringIncludes(
+    text,
+    "typed by Josh in the session, not passed on by an agent or script",
+  );
+  assertStringIncludes(
+    text,
+    "A missing tier-table entry is not an unknown contributor identity.",
+  );
+
+  // Automatic-selection scoping on Step 1 stop bullets
+  assertStringIncludes(
+    text,
+    "- For automatic selection only: Stop if the review range carries Astra contributions",
+  );
+  assertStringIncludes(
+    text,
+    "- For automatic selection only: Stop if any commit in the review range names an Opus author or co-author",
+  );
+  assertStringIncludes(
+    text,
+    "- For automatic selection only: Stop if the active model ranks below any contributor's tier in the review range",
   );
 });
 

@@ -4,7 +4,11 @@ import {
   readAuthorRoster,
   type RunningModelOptions,
 } from "../src/shared/codex_running_model.ts";
-import { parseTranscriptJsonl, selectSessionModel } from "../hooks/lib/select_transcript_entry.ts";
+import {
+  extractEntryModel,
+  parseTranscriptJsonl,
+  selectSessionModel,
+} from "../hooks/lib/select_transcript_entry.ts";
 
 function uniqueRosterModel(model: string, matches: string[]): string {
   if (matches.length === 0) throw new Error(`Model ${model} has no author roster entry`);
@@ -58,7 +62,8 @@ export async function claudeRecordedAuthor(
   const entries = parseTranscriptJsonl(await Deno.readTextFile(path));
   const latest = entries.findLast((entry) =>
     (entry.type === "assistant" || entry.message?.role === "assistant") &&
-    (helper || entry.isSidechain !== true) && entry.isApiErrorMessage !== true
+    (helper || entry.isSidechain !== true) && entry.isApiErrorMessage !== true &&
+    extractEntryModel(entry).length > 0
   );
   const model = selectSessionModel(latest ? [{ ...latest, isSidechain: false }] : []);
   if (!model) {

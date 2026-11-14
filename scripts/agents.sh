@@ -28,10 +28,20 @@
 # and warns from 14 days before expiry. A failed check only warns and never stops the agents
 # from starting. Override the command with AGENTS_CHECK_TOKEN_EXPIRY_CMD.
 #
+# Straight after that, in the same situations, it warns about snap updates that have been
+# waiting for 3 days or more, in the terminal and as a desktop notification. A failed check only
+# warns and never stops the agents from starting. Override the command with
+# AGENTS_CHECK_SNAP_UPDATES_CMD.
+#
 # Right after that, in the same situations, it runs scripts/update-scripts.sh in the
 # foreground so the installed hooks and skills are current too. A failed run prints a
 # warning and the agents start anyway; it never changes the exit code. Override the
 # command with AGENTS_UPDATE_SCRIPTS_CMD.
+#
+# Right after that, in the same situations, it fetches dev for all eight WebJamApps
+# clones so tab 1 measures their rules files from origin/dev (web-jam-tools#1738).
+# A failed fetch prints a warning and the agents start anyway. Override the
+# command with AGENTS_FETCH_REPOS_CMD.
 #
 # When `agents` is typed over SSH (SSH_CONNECTION is set) and no laptop-screen
 # window is showing the session, it also opens a gnome-terminal window on the laptop
@@ -102,7 +112,10 @@ CODEX_CMD="${AGENTS_CODEX_CMD:-codex -c 'hooks.PermissionRequest=[{matcher=\".*\
 AGY_CMD="${AGENTS_AGY_CMD:-agy}"
 UPDATE_CMD="${AGENTS_UPDATE_CMD:-$REPO_DIR/scripts/update-all.sh}"
 CHECK_TOKEN_EXPIRY_CMD="${AGENTS_CHECK_TOKEN_EXPIRY_CMD:-deno task --config "$REPO_DIR/deno.json" check-token-expiry}"
+CHECK_SNAP_UPDATES_CMD="${AGENTS_CHECK_SNAP_UPDATES_CMD:-deno task --config "$REPO_DIR/deno.json" check-snap-updates}"
 UPDATE_SCRIPTS_CMD="${AGENTS_UPDATE_SCRIPTS_CMD:-$REPO_DIR/scripts/update-scripts.sh}"
+FETCH_REPOS_CMD="${AGENTS_FETCH_REPOS_CMD:-}"
+HEALTH_REPORT_CMD="${AGENTS_HEALTH_REPORT_CMD:-deno task --config "$REPO_DIR/deno.json" health-report}"
 AGY_CONFIG_CMD="${AGENTS_AGY_CONFIG_CMD:-agy -p /config}"
 # agy skips the laptop's login keyring whenever any SSH_* variable is set, so a
 # session started over SSH (tablet or phone) made agy ask to log in again
@@ -202,6 +215,11 @@ attach_and_exit() {
   exit 0
 }
 
+# Ask for the daily health report before anything else (web-jam-tools#1660).
+if ! bash -c "$HEALTH_REPORT_CMD"; then
+  echo "warning: health-report failed; continuing anyway" >&2
+fi
+
 # If session already exists, attach to it unless --restart is requested.
 # If --restart is requested, end the existing session and fall through to create a fresh one.
 # If has-session errors for any reason other than "no session", fail closed.
@@ -267,9 +285,44 @@ if ! bash -c "$CHECK_TOKEN_EXPIRY_CMD"; then
   echo "warning: GitHub token expiry check failed; starting the agents anyway" >&2
 fi
 
+# Warn about snap updates that have stopped arriving (same situations; never blocks startup).
+if ! bash -c "$CHECK_SNAP_UPDATES_CMD"; then
+  echo "warning: snap update check failed; starting the agents anyway" >&2
+fi
+
 # Update the installed hooks right after the agents (same situations; never blocks startup).
 if ! bash -c "$UPDATE_SCRIPTS_CMD"; then
   echo "warning: update-scripts failed; starting the agents with the hooks already installed" >&2
+fi
+
+# Fetch dev for the eight clones before tab 1 opens (web-jam-tools#1738).
+# A failed fetch prints a warning and never stops the agents from starting.
+fetch_repos_dev() {
+  local base_dir="${AGENTS_WEBJAMAPPS_DIR:-$HOME/WebJamApps}"
+  local repos=(
+    "web-jam-tools"
+    "JaMmusic"
+    "CollegeLutheran"
+    "AppersonAuto"
+    "web-jam-back"
+    "WebJamSocketCluster"
+    "TimShermanMusic"
+    "HenricksonForSalem"
+  )
+  for repo in "${repos[@]}"; do
+    local repo_dir="$base_dir/$repo"
+    if ! git -C "$repo_dir" fetch origin dev 2>/dev/null; then
+      echo "warning: fetch dev failed for $repo; starting the agents anyway" >&2
+    fi
+  done
+}
+
+if [ -n "$FETCH_REPOS_CMD" ]; then
+  if ! bash -c "$FETCH_REPOS_CMD"; then
+    echo "warning: fetch dev failed; starting the agents anyway" >&2
+  fi
+else
+  fetch_repos_dev
 fi
 
 # Check agy's Tool Permission setting before creating a new session (web-jam-tools#1212).

@@ -187,7 +187,7 @@ fi
 # each into the literal command string "$HOME/.claude/hooks/<name>" (expanded
 # by the shell that runs the hook, not by this installer — matches the style
 # of the hooks already wired into settings.json).
-SESSION_START_HOOKS=(notes-sync-reminder.sh backlog-groom-reminder.sh backup-refusal-reminder.sh hook-install-drift-reminder.sh permission-wildcard-drift-reminder.sh)
+SESSION_START_HOOKS=(notes-sync-reminder.sh backlog-groom-reminder.sh backup-refusal-reminder.sh hook-install-drift-reminder.sh permission-wildcard-drift-reminder.sh business-deadline-reminder.sh)
 
 # SessionEnd hooks this installer keeps registered in settings.json (web-jam-tools#818).
 # Same flat, no-matcher shape as SESSION_START_HOOKS and STOP_HOOKS — SessionEnd
@@ -231,6 +231,7 @@ PRE_TOOL_USE_HOOKS=(
   "Bash::block-raw-gh-write.sh"
   "Bash::block-backend-mutation.sh"
   "Bash::block-private-folder-read.sh"
+  "Bash|Edit|Write|NotebookEdit::block-production-media-change.sh"
   "Bash|(?:mcp__.*__)?(issue_write|pull_request_review_write|add_comment_to_pending_review|add_reply_to_pull_request_comment|update_issue_comment|add_issue_comment)::check-issue-citation-on-write.sh"
 )
 
@@ -368,6 +369,18 @@ DENY_RULES=(
   'Edit(//home/joshua/Dropbox/WebJamApps/**)'
   'Read(//home/joshua/Dropbox/web-jam-llc/**)'
   'Edit(//home/joshua/Dropbox/web-jam-llc/**)'
+
+  # Production media in joshandmariamusic Edit deny rules (web-jam-tools#1580)
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.mp3)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.wav)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.m4a)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.mp4)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.mov)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.jpg)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.jpeg)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.png)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.webp)'
+  'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.gif)'
 
   # Heroku hard denies (R-12 & Part G)
   'Bash(heroku config:get *)'

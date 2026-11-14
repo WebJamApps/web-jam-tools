@@ -13,8 +13,106 @@ import {
   stripHeredocs,
 } from "./normalize_command.ts";
 
-const UNREADABLE_WORDS = /\b(ps|pgrep|pstree|top|htop|docker|systemctl|declare|typeset)\b|\/proc\//;
+const UNREADABLE_WORDS =
+  /\b(ps|pgrep|pstree|top|htop|docker|systemctl|declare|typeset|printenv)\b|\/proc\//;
 const CREDENTIAL_NAME = /TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|AUTH/i;
+// Literal environment reads inside interpreter one-liners only. Source searches
+// and saved scripts must not be mistaken for programs dumping their environment.
+const ENV_CALL =
+  /\b(?:Deno\s*\.\s*env\s*\.\s*get\s*\(|process\s*\.\s*env\s*\[|os\s*\.\s*(?:environ\s*(?:\[|\.\s*get\s*\()|getenv\s*\())\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1/g;
+const ENV_PROPERTY = /\bprocess\s*\.\s*env\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)/g;
+
+const NODE_VALUE_FLAGS = new Set([
+  "-r",
+  "--require",
+  "--import",
+  "--loader",
+  "--env-file",
+  "--input-type",
+  "-C",
+  "--conditions",
+  "--openssl-config",
+  "--tls-cipher-list",
+  "--diagnostic-dir",
+  "--heap-prof-dir",
+  "--cpu-prof-dir",
+  "--redirect-warnings",
+  "--title",
+  "--inspect-port",
+  "-W",
+  "-X",
+]);
+
+const PYTHON_VALUE_FLAGS = new Set([
+  "-W",
+  "-X",
+  "--check-hash-based-pycs",
+]);
+
+const DENO_EVAL_VALUE_FLAGS = new Set([
+  "--ext",
+  "--env-file",
+  "-c",
+  "--config",
+  "--import-map",
+  "--cert",
+  "--lock",
+  "--preload",
+  "--require",
+  "--conditions",
+  "--location",
+  "--seed",
+  "--node-modules-linker",
+]);
+
+function inlineProgram(name: string | undefined, args: string[]): string | undefined {
+  if (name === "deno") {
+    if (args[0] !== "eval") return undefined;
+    for (let i = 1; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === "--") return args[i + 1];
+      if (DENO_EVAL_VALUE_FLAGS.has(arg)) {
+        i++;
+        continue;
+      }
+      if (!arg.startsWith("-")) {
+        return arg;
+      }
+    }
+    return undefined;
+  }
+
+  if (name === "node") {
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === "--eval" || arg === "--print") return args[i + 1];
+      if (arg.startsWith("--eval=")) return arg.slice(7);
+      if (arg.startsWith("--print=")) return arg.slice(8);
+      const nodeCluster = arg.match(/^-([ic]*)(pe|ep|e|p)([\s\S]*)$/);
+      if (nodeCluster) {
+        return nodeCluster[3] ? nodeCluster[3] : args[i + 1];
+      }
+      if (!arg.startsWith("-") || arg === "--") break;
+      if (NODE_VALUE_FLAGS.has(arg)) i++;
+    }
+    return undefined;
+  }
+
+  if (name === "python" || name === "python3") {
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      const pyMatch = arg.match(/^-([bBdEhiIOqsSuvVx]*c)([\s\S]*)$/);
+      if (pyMatch) {
+        return pyMatch[2] ? pyMatch[2] : args[i + 1];
+      }
+      if (!arg.startsWith("-") || arg === "--" || arg === "-m") break;
+      if (PYTHON_VALUE_FLAGS.has(arg)) i++;
+    }
+    return undefined;
+  }
+
+  return undefined;
+}
 const PROC_DUMP = /^(?:\d*<)?\/proc\/[^\/]+(?:\/task\/[^\/]+)?\/(?:cmdline|environ)$/;
 const PS_COLUMNS = new Set([
   "pid",
@@ -193,6 +291,17 @@ function checkArgv(argv: string[], depth: number): string | undefined {
   const name = resolved.argv[i]?.split("/").pop();
   const args = resolved.argv.slice(i + 1);
 
+  const program = inlineProgram(name, args);
+  if (
+    program !== undefined &&
+    ([...program.matchAll(ENV_CALL)].some((match) => CREDENTIAL_NAME.test(match[2])) ||
+      [...program.matchAll(ENV_PROPERTY)].some((match) => CREDENTIAL_NAME.test(match[1])))
+  ) {
+    return "An interpreter one-liner reads a credential-named environment variable and can print credentials.";
+  }
+  if (name === "printenv" && args.some((arg) => CREDENTIAL_NAME.test(arg))) {
+    return "printenv with a credential-named variable can print credentials.";
+  }
   if (name === "ps" && !safePs(args)) {
     return "This ps form can print process arguments or environments.";
   }

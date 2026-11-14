@@ -1,6 +1,6 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { join } from "@std/path";
-import { runRunningModel } from "../scripts/running-model.ts";
+import { claudeRecordedAuthor, runRunningModel } from "../scripts/running-model.ts";
 import { readAuthorRoster, type RunningModelOptions } from "../src/shared/codex_running_model.ts";
 import { runShim } from "../hooks/lib/agy_hook_shim.ts";
 
@@ -201,12 +201,59 @@ Deno.test("running-model selects the newest main Claude assistant, ignoring help
     await succeeds(fixture, "Claude Sonnet 5.5");
   }));
 
-Deno.test("running-model refuses a newest Claude entry without a model instead of using older metadata", () =>
+Deno.test("running-model reads past an assistant entry without a model to the newest recorded model", () =>
   withFixture(async (fixture) => {
     fixture.env.CLAUDE_CODE_SESSION_ID = CLAUDE_ID;
     await fixture.claude([
       assistant("claude-opus-5-5"),
       JSON.stringify({ type: "assistant", message: { content: "I am Claude Opus" } }),
+    ].join("\n"));
+    await succeeds(fixture, "Claude Opus");
+  }));
+
+Deno.test("running-model reads past an api-request-blob newest assistant entry to the recorded model", () =>
+  withFixture(async (fixture) => {
+    fixture.env.CLAUDE_CODE_SESSION_ID = CLAUDE_ID;
+    await fixture.claude([
+      assistant("claude-sonnet-5-5"),
+      JSON.stringify({
+        type: "api-request-blob",
+        sessionId: CLAUDE_ID,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "foo" } }],
+        },
+      }),
+    ].join("\n"));
+    await succeeds(fixture, "Claude Sonnet 5.5");
+  }));
+
+Deno.test("claudeRecordedAuthor reads past an api-request-blob in helper transcript", () =>
+  withFixture(async (fixture) => {
+    const projectDir = join(fixture.home, ".claude", "projects", "one");
+    await Deno.mkdir(projectDir, { recursive: true });
+    const helperPath = join(projectDir, "helper.jsonl");
+    await Deno.writeTextFile(
+      helperPath,
+      [
+        assistant("claude-haiku-5-5", { isSidechain: true }),
+        JSON.stringify({
+          type: "api-request-blob",
+          isSidechain: true,
+          message: { role: "assistant", content: [] },
+        }),
+      ].join("\n"),
+    );
+    const author = await claudeRecordedAuthor(helperPath, fixture.options, true);
+    assertEquals(author, "Claude Haiku 5.5");
+  }));
+
+Deno.test("running-model refuses a Claude record when no assistant entry records a model", () =>
+  withFixture(async (fixture) => {
+    fixture.env.CLAUDE_CODE_SESSION_ID = CLAUDE_ID;
+    await fixture.claude([
+      JSON.stringify({ type: "assistant", message: { content: "I am Claude Opus" } }),
+      JSON.stringify({ type: "api-request-blob", message: { role: "assistant" } }),
     ].join("\n"));
     await refuses(fixture, "no recorded model");
   }));

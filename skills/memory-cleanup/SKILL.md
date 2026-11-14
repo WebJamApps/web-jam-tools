@@ -225,18 +225,21 @@ Only after approval, and only for approved rows:
 
 ## Session-load cleanup
 
-Run this when the tab 1 session-load report says the memory index is over, or when Josh asks to
-bring memories back to the low mark. The memory steps act on Claude Code's memory folder only,
+Run this when the tab 1 session-load report says a part is over, or whenever Josh chooses. It may
+run on Sonnet. The memory steps act on Claude Code's memory folder only,
 `~/.claude/projects/-home-joshua/memory/`; agy and Codex have no memory index. One run covers all
-three tools' parts, and the after-run list reports every part's size against its limit. The
-requirements are in `~/Dropbox/web-jam-llms/Token_Savings/standing-preamble-design-2026-08-08.md`,
-"What `/memory-cleanup` does" and "What it refuses to do".
+three tools and every part the report names, memories and rules files alike, and brings each back
+toward its low mark. A run ends with every over part cut, or with each part still above its over mark
+named in the after-run list with the reason it is still over. The requirements are in
+`~/Dropbox/web-jam-llms/Token_Savings/standing-preamble-design-2026-08-08.md`, "What `/memory-cleanup` does"
+and "The rules files".
 
 **Who does what.** You make the judgments and write them to a plan file; the script does the file
 work and the checks. The plan file is JSON: `merges` (`keep`, `absorb`), `moves` (`slug`,
-`target_skill`), `removals` (`slug`, `reason` of `hook-enforced` or `already-said`, `evidence`) and
-`guards` (`slug`, `kind` of `approval-gate`, `deletion-guard`, `credential-rule` or
-`spending-rule`). A move needs the memory's text to be in the target skill's `SKILL.md` first.
+`target_skill`), `removals` (`slug`, `reason` of `hook-enforced`, `already-said`, `obsolete`, or
+`work-state`, `evidence`), and `guards` (`slug`, `kind` of `approval-gate`, `deletion-guard`,
+`credential-rule`, or `spending-rule`). A move needs the memory's text to be in the target skill's
+`SKILL.md` first.
 
 1. Write the plan file, then run the script with `--dry-run` and show Josh the after-run list:
    `deno task --config ~/WebJamApps/web-jam-tools/deno.json memory-cleanup:run --dry-run --plan <plan file>`
@@ -244,34 +247,46 @@ work and the checks. The plan file is JSON: `merges` (`keep`, `absorb`), `moves`
    policy): a merge keeps the full text of both memories in the surviving file, whatever their `metadata.type`
    (including `user` and `feedback`), and a move happens only when the script finds the memory's text in the
    skill word for word. A move whose text is not found REFUSES and the memory stays where it is.
-3. A removal because a hook now enforces the memory, or because `CLAUDE.md` or a skill already says it
-   in different words, waits for Josh's yes on that row. Run it again with `--approve <slug>` for each
-   row he approves; a row without his yes leaves the file untouched.
-4. A guard rule (frontmatter `metadata.guard: true`) is never offered, merged, moved or removed. List
+3. Checkpoint files move to `~/Dropbox/web-jam-llms/resume-records/` (finished work moves to
+   `resume-records/done/`), with no approval, since their words are kept.
+4. A removal because a hook now enforces the memory, because `CLAUDE.md`, a skill, or a guard memory
+   already says it in different words, or because it is obsolete or records work state, waits for Josh's
+   yes on that row. Run it again with `--approve <slug>` for each row he approves; a row without his
+   yes leaves the file untouched.
+5. A guard rule (frontmatter `metadata.guard: true`) is never offered, merged, moved or removed. List
    each memory you mark as one of the four kinds above; the after-run list names each new mark.
-5. Removal is a move to `memory/archive/`, never a delete. After a real run the script regenerates the
+6. Removal is a move to `memory/archive/`, never a delete. After a real run the script regenerates the
    memory index with `deno task memory-index`.
-6. Print the script's after-run list for Josh: what was merged, moved or archived, what waits for his
-   yes, and every part's size against its limit. The limits are read from
+7. A run ends with the memory index at 6,500 bytes or less. When the moves that need no approval leave
+   it above that, the same run puts to Josh the rows whose yes brings it there; it never ends with the
+   index over 6,500 and those rows unasked.
+8. Print the script's after-run list for Josh: what was merged, moved or archived, what waits for his
+   yes, any new-skill suggestion, the size of every part against its limit, each part still over its mark
+   and why, the connector list and Claude Code's connector cost. The limits are read from
    `src/session-load/limits.json`; never restate a limit number.
 
 ### Rules-file cuts
 
-For the rules-file half of session-load cleanup, propose cuts to only
-`web-jam-tools/AGENTS.md`, `web-jam-tools/docs/cross-ai-rules.md`, and `JaMmusic/AGENTS.md`.
-Read their low marks from `src/session-load/limits.json`; the other six repositories' rules
-files stay as they are. This workflow prepares a pull request for Josh to review.
-A cut whose result is above the low mark is made, and the output names the
-remaining bytes over the low mark.
+For the rules-file half of session-load cleanup, propose the five steps under "The rules files" for
+every rules file the report flags: `web-jam-tools/AGENTS.md`, `web-jam-tools/docs/cross-ai-rules.md`,
+`JaMmusic/AGENTS.md`, and each of the other six repositories' rules files whenever it is over 10,000 bytes.
+Read their low marks from `src/session-load/limits.json`. This workflow prepares a pull request for
+Josh to review, one for each repository the cut changes. A cut whose result is above the low mark is
+made, and the output names the remaining bytes over the low mark. A run ends with every over part cut,
+or with each part still above its over mark named in the after-run list with the reason it is still over.
 
 1. Create an isolated feature worktree off fresh `dev` for each affected repository. Work on
-   that worktree's rules file, never the shared checkout or the home symlink. Use the
-   `draft-pr` skill to finish each repository's changes as a draft pull request to `dev`.
-   Never merge the pull request; Josh reviews and merges every rules-file cut.
+   that worktree's rules file, never the shared checkout or the home symlink. A helper may do the file
+   work and the checks; the session that holds Josh's request makes the commit, the push, and the draft
+   pull request through `draft-pr`, so the request is in the record of the session that pushes. On agy,
+   which hands nothing to a helper here, the one session does all of it. Never merge the pull request;
+   Josh reviews and merges every rules-file cut.
 2. Make the judgments in a JSON plan saved outside the repository, for example in `/tmp/`.
-   Set `part` to `mainRules`, `crossAiRules`, or `jammusicRules`. Its `spans` array must
-   reproduce the entire current file in order, with no omitted or overlapping text. Every
-   span has a unique `id`, its exact `text` including whitespace, and one `kind`:
+   Set `part` to `mainRules`, `crossAiRules`, `jammusicRules`, or the repository name for any of the other
+   six repos (e.g. `AppersonAuto`, `CollegeLutheran`, `web-jam-back`, `WebJamPg`, `WebJamSocketCluster`,
+   `tim-sherman-music`). Its `spans` array must reproduce the entire current file in order, with no
+   omitted or overlapping text. Every span has a unique `id`, its exact `text` including whitespace, and
+   one `kind`:
    - `rule`: retained unchanged. A plan that asks to drop a rule is refused.
    - `skill-instruction`: first copy the text word for word into its `target_skill`'s
      `SKILL.md`, in the tools feature worktree. Pull request mechanics belong in `draft-pr`,
@@ -282,10 +297,17 @@ remaining bytes over the low mark.
    - `scoped-rule`: moves a rule that matters only for one kind of work, word for word, into
      its `target_skill`'s `SKILL.md`. An approval or safety rule never moves: a rule about
      real outreach, spending, deletion, or credentials stays in the rules file.
+   - `area-rule`: moves a rule that matters only when changing one part of the repository, word for
+     word, into that area's rules file (`docs/rules/<area>.md` in the same repository, such as
+     `docs/rules/hooks.md` or `docs/rules/tests.md`), with `area` and `folder`. Gotchas and workarounds
+     move with it. Leaves one pointer line in the rules file: `Before changing anything under \`<folder>\`, read \`docs/rules/<area>.md\`.`.
+     An approval or safety rule never moves.
    - `reworded`: proposes a shorter wording in `replacement`. Applied only with Josh's yes on
      that row (`approved: true`); without approval, the original rule stays.
-   - `removed-rule`: proposes removal with `reason` of `obsolete` or `hook-enforced`. Applied
-     only with Josh's yes on that row (`approved: true`); without approval, the rule stays.
+   - `removed-rule`: proposes removal for one of three reasons: `obsolete`, `hook-enforced`, or
+     `already-said` (naming in `already_said` the skill, safety rules file, or cross-AI rules document
+     that already says it in different words). Applied only with Josh's yes on that row (`approved: true`);
+     without approval, the rule stays.
    - `backstory`: removed (origin blocks, issue citations with titles, quoted statements,
      error strings, and worked examples).
    - `repeat`: removed only when `repeats` names an identical retained rule span. The

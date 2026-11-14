@@ -4,7 +4,13 @@
 // only word for word, a guard rule is never touched, an ask-first removal acts only on
 // Josh's yes, removal is a move to the archive, and a dry run writes nothing.
 
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
 import { join } from "@std/path";
 import {
   appearsWordForWord,
@@ -14,6 +20,7 @@ import {
   runLowMark,
 } from "../src/memory-cleanup/low_mark.ts";
 import { loadLimits } from "../src/session-load/report.ts";
+import { readLowMarkPlan, REMOVAL_REASONS } from "../src/memory-cleanup/plan.ts";
 
 const FIXTURE = new URL("./fixtures/memory-cleanup-low-mark", import.meta.url).pathname;
 
@@ -85,6 +92,7 @@ Deno.test("merge: the surviving file keeps the full text of both, the other goes
   assertStringIncludes(merged, "First text of the keeper.");
   assertStringIncludes(merged, "Second text from the duplicate.");
   assertStringIncludes(merged, "dupe description");
+  assertStringIncludes(merged, "## Merged from dupe");
   assertEquals(result.rows.map((r) => r.status), ["merged"]);
   assertStringIncludes(await Deno.readTextFile(join(dir, "archive", "dupe.md")), "Second text");
   assert(!(await Deno.stat(join(dir, "dupe.md")).then(() => true, () => false)));
@@ -251,7 +259,7 @@ Deno.test("unparseable frontmatter fails closed: never marked, merged, moved or 
   assertEquals(await Deno.readTextFile(join(dir, "bad.md")), broken);
 });
 
-Deno.test("index regeneration: a guarded done checkpoint stays, an unguarded one is reported", async () => {
+Deno.test("cleanup moves done checkpoints to resume records and keeps guarded checkpoints immutable", async () => {
   const checkpoint = (slug: string, extra: string) =>
     `---\nname: ${slug}\ndescription: d\nmetadata:\n  type: project\n  status: done\n${extra}---\n\nBody.\n`;
   const { dir, home } = await sandbox({
@@ -263,15 +271,20 @@ Deno.test("index regeneration: a guarded done checkpoint stays, an unguarded one
   const result = await run(dir, home, { merges: [{ keep: "keeper", absorb: ["dupe"] }] });
 
   assert(await exists(join(dir, "session-checkpoint-guard.md")));
-  assertStringIncludes(await Deno.readTextFile(join(dir, "MEMORY.md")), "session-checkpoint-guard");
-  assert(await exists(join(dir, "archive", "session-checkpoint-plain.md")));
-  assert(
-    result.rows.some((r) =>
-      r.status === "archived" && r.slug === "session-checkpoint-plain" &&
-      /memory index run/.test(r.detail)
+  assert(!await exists(join(dir, "session-checkpoint-plain.md")));
+  assertEquals(
+    await Deno.readTextFile(
+      join(home, "Dropbox/web-jam-llms/resume-records/done/session-checkpoint-plain.md"),
     ),
+    checkpoint("session-checkpoint-plain", ""),
   );
-  assert(!result.rows.some((r) => r.slug === "session-checkpoint-guard"));
+  const memoryMd = await Deno.readTextFile(join(dir, "MEMORY.md"));
+  assertStringIncludes(memoryMd, "session-checkpoint-guard");
+  assert(!memoryMd.includes("session-checkpoint-plain"));
+  assert(result.rows.some((r) => r.slug === "session-checkpoint-guard" && r.status === "refused"));
+  assert(
+    result.rows.some((r) => r.slug === "session-checkpoint-plain" && r.status === "checkpoint"),
+  );
 });
 
 Deno.test("part sizes: each installed skill description is listed with its own size, below and above its limit", async () => {
@@ -383,4 +396,248 @@ Deno.test("a classified guard on a done checkpoint stays put when its mark canno
   } finally {
     await Deno.chmod(gatePath, 0o644);
   }
+});
+
+Deno.test("all removal reasons wait for their own approval and archive exact original bytes", async () => {
+  const files = Object.fromEntries(
+    REMOVAL_REASONS.map((reason) => [`${reason}.md`, memory(reason, `Evidence for ${reason}.`)]),
+  );
+  const { dir, home } = await sandbox(files);
+  const plan: LowMarkPlan = {
+    removals: REMOVAL_REASONS.map((reason) => ({
+      slug: reason,
+      reason,
+      evidence: `source for ${reason}`,
+    })),
+  };
+  const waiting = await run(dir, home, plan);
+  assertEquals(
+    waiting.rows.filter((row) => row.status === "waiting").length,
+    REMOVAL_REASONS.length,
+  );
+  for (const reason of REMOVAL_REASONS) {
+    assertEquals(await Deno.readTextFile(join(dir, `${reason}.md`)), files[`${reason}.md`]);
+  }
+  const approved = await run(dir, home, plan, { approved: [...REMOVAL_REASONS] });
+  assertEquals(
+    approved.rows.filter((row) => row.status === "archived").length,
+    REMOVAL_REASONS.length,
+  );
+  for (const reason of REMOVAL_REASONS) {
+    assertEquals(
+      await Deno.readTextFile(join(dir, "archive", `${reason}.md`)),
+      files[`${reason}.md`],
+    );
+  }
+});
+
+Deno.test("plan reader rejects malformed, unknown, traversal and unsupported removal rows before any write", async () => {
+  for (
+    const plan of [
+      null,
+      [],
+      { moves: "bad" },
+      { removals: [{ slug: "a", reason: "anything", evidence: "source" }] },
+      { removals: [{ slug: "../outside", reason: "obsolete", evidence: "source" }] },
+      { removals: [{ slug: "a", reason: "obsolete", evidence: " " }] },
+      { approvals: ["a"] },
+      { merges: [{ keep: "a", absorb: [] }] },
+    ]
+  ) {
+    assertThrows(() => readLowMarkPlan(plan));
+  }
+  const { dir, home } = await sandbox({ "a.md": memory("a", "A.") });
+  const before = await snapshot(dir);
+  const planPath = join(home, "invalid.json");
+  await Deno.writeTextFile(
+    planPath,
+    JSON.stringify({ removals: [{ slug: "a", reason: "unknown", evidence: "x" }] }),
+  );
+  assertEquals(await runCli(["--dir", dir, "--plan", planPath]), 1);
+  await assertRejects(() => run(dir, home, {}, { approved: ["a"] }));
+  assertEquals(await snapshot(dir), before);
+});
+
+Deno.test("active checkpoints move without approval; dry runs and destination collisions preserve both files", async () => {
+  const text = memory("session-checkpoint-active", "Full resume text with [[links]].");
+  const { dir, home } = await sandbox({ "session-checkpoint-active.md": text });
+  const before = await snapshot(dir);
+  const preview = await run(dir, home, {}, { dryRun: true });
+  assert(preview.rows.some((row) => row.status === "checkpoint"));
+  assertEquals(await snapshot(dir), before);
+  const resume = join(home, "Dropbox/web-jam-llms/resume-records");
+  assert(!await exists(resume));
+  await Deno.mkdir(resume, { recursive: true });
+  await Deno.writeTextFile(join(resume, "session-checkpoint-active.md"), "Older record");
+  const collision = await run(dir, home, {});
+  assert(
+    collision.rows.some((row) => row.status === "refused" && row.detail.includes("already exists")),
+  );
+  assertEquals(await Deno.readTextFile(join(dir, "session-checkpoint-active.md")), text);
+  assertEquals(
+    await Deno.readTextFile(join(resume, "session-checkpoint-active.md")),
+    "Older record",
+  );
+  const destination = join(home, "separate-resume");
+  await runLowMark({
+    dir,
+    skillsDir: join(dir, "skills"),
+    plan: {},
+    resumeDir: destination,
+    report: { homeDir: home },
+  });
+  assertEquals(await Deno.readTextFile(join(destination, "session-checkpoint-active.md")), text);
+  assert(!await exists(join(dir, "session-checkpoint-active.md")));
+});
+
+Deno.test("merges and skill moves repoint exact links and aliases, list guard references and preserve archive links", async () => {
+  const guard = memory("guard", "Keep [[dupe]] and [[move#Details|label]].", "  guard: true\n");
+  const { dir, home } = await sandbox({
+    "keeper.md": memory("keeper", "Keeper."),
+    "dupe.md": memory("dupe", "Full duplicate."),
+    "move.md": memory("move", "Skill words."),
+    "remove.md": memory("remove", "Old."),
+    "guard.md": guard,
+    "links.md": memory(
+      "links",
+      "[[dupe]] [[dupe#Details|label]] [[move]] [[move|alias]] [[dupe-other]] [[remove]] [[dupe.md|file]] [[move.md#Details]]",
+    ),
+  });
+  await Deno.writeTextFile(join(dir, "skills/demo-skill/SKILL.md"), "Skill words.");
+  const plan: LowMarkPlan = {
+    merges: [{ keep: "keeper", absorb: ["dupe"] }],
+    moves: [{ slug: "move", target_skill: "demo-skill" }],
+    removals: [{ slug: "remove", reason: "obsolete", evidence: "retired" }],
+  };
+  const before = await snapshot(dir);
+  const preview = await run(dir, home, plan, { dryRun: true, approved: ["remove"] });
+  assert(preview.rows.some((row) => row.status === "guard-link" && row.slug === "guard"));
+  assertEquals(await snapshot(dir), before);
+  const result = await run(dir, home, plan, { approved: ["remove"] });
+  const links = await Deno.readTextFile(join(dir, "links.md"));
+  assertStringIncludes(
+    links,
+    "[[keeper]] [[keeper#Details|label]] [[demo-skill]] [[demo-skill|alias]] [[dupe-other]] [[remove]] [[keeper|file]] [[demo-skill#Details]]",
+  );
+  assertEquals(await Deno.readTextFile(join(dir, "guard.md")), guard);
+  assert(result.rows.some((row) => row.status === "guard-link" && row.slug === "guard"));
+  assertStringIncludes(await Deno.readTextFile(join(dir, "archive/dupe.md")), "Full duplicate.");
+});
+
+Deno.test("low mark projection names sufficient pending rows and matches the generator after approval", async () => {
+  const files: Record<string, string> = {};
+  const slugs = Array.from(
+    { length: 110 },
+    (_, i) => `memory-${i.toString().padStart(3, "0")}-${"x".repeat(56)}`,
+  );
+  for (const slug of slugs) files[`${slug}.md`] = memory(slug, "Ordinary memory.");
+  const { dir, home } = await sandbox(files);
+  const plan: LowMarkPlan = {
+    removals: slugs.slice(0, 50).map((slug) => ({
+      slug,
+      reason: "work-state",
+      evidence: "finished issue",
+    })),
+  };
+  const preview = await run(dir, home, plan, { dryRun: true });
+  const projection = preview.indexReport;
+  assert(projection.bytes > projection.lowMark);
+  assert(projection.approvalRows.length > 0 && projection.approvalRows.length < 50);
+  assert(projection.reachable);
+  assert(projection.projectedBytes <= projection.lowMark);
+  for (const slug of projection.approvalRows) assertStringIncludes(preview.text, slug);
+  const actual = await run(dir, home, plan, { approved: projection.approvalRows });
+  const indexBytes =
+    new TextEncoder().encode(await Deno.readTextFile(join(dir, "MEMORY.md"))).length;
+  assertEquals(indexBytes, projection.projectedBytes);
+  assertEquals(actual.indexReport.bytes, indexBytes);
+  assertEquals(actual.indexReport.approvalRows, []);
+});
+
+Deno.test("insufficient approval rows or unparseable files never claim the low mark is reachable", async () => {
+  const long = "x".repeat(90);
+  const files: Record<string, string> = {};
+  for (let i = 0; i < 80; i++) {
+    files[`memory-${i}-${long}.md`] = memory(`memory-${i}-${long}`, "Text.");
+  }
+  const { dir, home } = await sandbox(files);
+  const result = await run(dir, home, {});
+  assert(!result.indexReport.reachable);
+  assertStringIncludes(result.text, "Cannot confirm the low mark");
+  const bad = await sandbox({ "bad.md": "---\ninvalid: [\n---\nBody." });
+  assert(!(await run(bad.dir, bad.home, {})).indexReport.reachable);
+});
+
+Deno.test("a merge whose survivor is a guard is refused without archiving either memory", async () => {
+  const guard = memory("guard", "Approval gate.", "  guard: true\n");
+  const other = memory("other", "Ordinary rule.");
+  const { dir, home } = await sandbox({ "guard.md": guard, "other.md": other });
+  const result = await run(dir, home, { merges: [{ keep: "guard", absorb: ["other"] }] });
+  assert(result.rows.some((row) => row.slug === "guard" && row.status === "refused"));
+  assertEquals(await Deno.readTextFile(join(dir, "guard.md")), guard);
+  assertEquals(await Deno.readTextFile(join(dir, "other.md")), other);
+  assert(!await exists(join(dir, "archive")));
+});
+
+Deno.test("runCli resolves plan-relative resume paths and requires approval for obsolete memories", async () => {
+  const { dir, home } = await sandbox({
+    "session-checkpoint-live.md": memory("checkpoint", "Continue here."),
+    "old.md": memory("old", "Obsolete rule."),
+  });
+  const planPath = join(home, "plan.json");
+  await Deno.writeTextFile(
+    planPath,
+    JSON.stringify({
+      resume_dir: "resume",
+      removals: [{ slug: "old", reason: "obsolete", evidence: "retired design" }],
+    }),
+  );
+  const previousHome = Deno.env.get("HOME");
+  Deno.env.set("HOME", home);
+  try {
+    assertEquals(await runCli(["--dir", dir, "--plan", planPath, "--dry-run"]), 0);
+    assert(!await exists(join(home, "resume")));
+    assertEquals(await runCli(["--dir", dir, "--plan", planPath, "--approve", "old"]), 0);
+    assert(await exists(join(home, "resume/session-checkpoint-live.md")));
+    assert(await exists(join(dir, "archive/old.md")));
+  } finally {
+    if (previousHome === undefined) Deno.env.delete("HOME");
+    else Deno.env.set("HOME", previousHome);
+  }
+});
+
+Deno.test("invalid resume locations, including symlink aliases, refuse before marking guards", async () => {
+  const original = memory("gate", "Ask first.");
+  const { dir, home } = await sandbox({ "gate.md": original });
+  const alias = join(home, "alias");
+  await Deno.symlink(dir, alias);
+  for (const resumeDir of [dir, join(dir, "nested"), join(alias, "nested")]) {
+    await assertRejects(
+      () =>
+        runLowMark({
+          dir,
+          resumeDir,
+          skillsDir: join(dir, "skills"),
+          plan: { guards: [{ slug: "gate", kind: "approval-gate" }] },
+          report: { homeDir: home },
+        }),
+      Error,
+      "outside the memory folder",
+    );
+    assertEquals(await Deno.readTextFile(join(dir, "gate.md")), original);
+  }
+});
+
+Deno.test("an archive collision is refused rather than offered as a pending approval row", async () => {
+  const text = memory("old", "Keep both versions.");
+  const { dir, home } = await sandbox({ "old.md": text });
+  await Deno.mkdir(join(dir, "archive"));
+  await Deno.writeTextFile(join(dir, "archive/old.md"), "Older archive");
+  const result = await run(dir, home, {
+    removals: [{ slug: "old", reason: "work-state", evidence: "finished issue" }],
+  });
+  assert(result.rows.some((row) => row.slug === "old" && row.status === "refused"));
+  assert(!result.rows.some((row) => row.status === "waiting"));
+  assertEquals(await Deno.readTextFile(join(dir, "old.md")), text);
+  assertEquals(await Deno.readTextFile(join(dir, "archive/old.md")), "Older archive");
 });

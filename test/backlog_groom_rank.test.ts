@@ -246,13 +246,44 @@ Deno.test("Epic inherits highest native open child Priority and is excluded from
   assertEquals(result.moves.find((move) => move.number === 21)?.kind, "epic");
 });
 
-Deno.test("Epic with no open children or no child levels receives no proposal", () => {
+Deno.test("Epic with no open child carrying a level takes Priority from levelFromTests", () => {
   for (const children of [[], [{ number: 2, priority: null }]]) {
-    const result = rank([issue(1, { epic: true, children })]);
+    const rows = [issue(1, { epic: true, priority: null, children })];
+    const answers = judgments(rows, { 1: { levelFromTests: "High" } });
+    const result = rankIssues("web-jam-tools", rows, answers);
+    assertEquals(result.moves, [{
+      number: 1,
+      title: "Issue 1",
+      kind: "epic",
+      from: null,
+      to: "High",
+      reason: "Caller level tests give High; Planned work",
+    }]);
+  }
+  // When the Epic's priority already matches levelFromTests, no move is proposed.
+  for (const children of [[], [{ number: 2, priority: null }]]) {
+    const result = rank([issue(1, { epic: true, priority: "Medium", children })]);
     assertEquals(result.moves, []);
   }
-  const result = rank([issue(1, { epic: true, children: [{ number: 2, priority: "Medium" }] })]);
-  assertEquals(result.moves, []);
+  // When an open child carries a Priority, the Epic inherits the child's level rather than levelFromTests.
+  const withChild = rank([
+    issue(1, {
+      epic: true,
+      priority: "Low",
+      children: [{ number: 2, priority: "Urgent" }],
+    }),
+  ], { 1: { levelFromTests: "Low" } });
+  assertEquals(withChild.moves.find((m) => m.number === 1)?.to, "Urgent");
+
+  // An Epic in a repository above the 20-issue floor still requires levelFromTests if it has no child with Priority.
+  const repoRows = issues(20);
+  repoRows.push(issue(21, { epic: true, priority: null, children: [] }));
+  const repoAnswers = judgments(repoRows, { 21: { levelFromTests: "High" } });
+  const repoResult = rankIssues("web-jam-tools", repoRows, repoAnswers);
+  assertEquals(repoResult.moves.find((m) => m.number === 21)?.to, "High");
+  assertEquals(repoResult.moves.find((m) => m.number === 21)?.kind, "epic");
+  delete repoAnswers["21"].levelFromTests;
+  assertThrows(() => rankIssues("web-jam-tools", repoRows, repoAnswers), Error, "levelFromTests");
 });
 
 Deno.test("legacy parked labels do not exclude issues from counts, ranking or judgments", () => {
@@ -548,6 +579,7 @@ Deno.test("CLI help has no filesystem or GitHub side effects", async () => {
   };
   assertEquals(await runRankCli(["--help"], options), 0);
   assertStringIncludes(options.output[0], "deno task backlog-groom:rank");
+  assertStringIncludes(options.output[0], "Epics with no child Priority");
 });
 
 Deno.test("CLI refuses invalid input, unreadable judgment file, and failed reads without proposals", async () => {

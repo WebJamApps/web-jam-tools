@@ -34,6 +34,96 @@ async function withTempTokenFile(
 
 const NO_TOKEN = "/nonexistent/token.json";
 
+Deno.test("an authorized preload never hides a forbidden mutation in the main script", async () => {
+  await withTempTokenFile(
+    { endpoints: ["/venue"], expires_at: futureExpiry() },
+    async (tokenPath) => {
+      const dir = await Deno.makeTempDir();
+      try {
+        const preload = `${dir}/pre.js`;
+        const main = `${dir}/main.js`;
+        await Deno.writeTextFile(
+          preload,
+          'fetch("https://webjamsalem.herokuapp.com/venue", {method: "POST"})',
+        );
+        await Deno.writeTextFile(
+          main,
+          'fetch("https://webjamsalem.herokuapp.com/outreach/batch", {method: "POST"})',
+        );
+        const result = checkBackendMutation(
+          JSON.stringify({
+            tool_name: "Bash",
+            tool_input: { command: `node -r ${preload} ${main}` },
+          }),
+          tokenPath,
+        );
+        assert(result.startsWith("DENY:"), result);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    },
+  );
+});
+
+Deno.test("shared script selection reaches backend guard on Claude, agy and Codex", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const safe = `${dir}/safe.ts`;
+    const mutation = `${dir}/mutation.ts`;
+    const config = `${dir}/config.json`;
+    await Deno.writeTextFile(safe, "console.log(1)");
+    await Deno.writeTextFile(config, "{}");
+    await Deno.writeTextFile(
+      mutation,
+      'fetch("https://webjamsalem.herokuapp.com/venue", {method: "POST"})',
+    );
+    const cases: Array<[string, boolean]> = [
+      [`deno run --config ${config} ${mutation}`, true],
+      [`deno run --lock lk.json ${mutation}`, true],
+      [`deno run --config ${mutation} ${safe}`, false],
+      [`python3 - ${mutation} <<'PY'\nprint(1)\nPY`, false],
+      [`node --require ${mutation} ${safe}`, true],
+      [`deno run --preload ${mutation} ${safe}`, true],
+      [
+        `node --title fixture -e 'fetch("https://webjamsalem.herokuapp.com/venue", {method: "POST"})'`,
+        true,
+      ],
+      [`deno run ${dir}/missing.ts`, false],
+    ];
+    const hook = new URL("../hooks/block-backend-mutation.sh", import.meta.url).pathname;
+    const shim = new URL("../hooks/agy-hook-shim.sh", import.meta.url).pathname;
+    for (const [command, deny] of cases) {
+      for (const surface of ["claude", "agy", "codex"]) {
+        const payload = surface === "agy"
+          ? { toolCall: { name: "run_command", args: { CommandLine: command, Cwd: dir } } }
+          : { tool_name: "Bash", cwd: dir, tool_input: { command } };
+        const child = new Deno.Command("bash", {
+          args: surface === "agy" ? [shim, "PreToolUse", btoa("Bash"), hook] : [hook],
+          env: { WJT_SURFACE: surface, BACKEND_APPROVAL_TOKEN_PATH: NO_TOKEN },
+          stdin: "piped",
+          stdout: "piped",
+          stderr: "piped",
+        }).spawn();
+        const writer = child.stdin.getWriter();
+        await writer.write(new TextEncoder().encode(JSON.stringify(payload)));
+        await writer.close();
+        const output = await child.output();
+        const label = `${surface}: ${command}: ${new TextDecoder().decode(output.stderr)}`;
+        assertEquals(output.code, surface === "agy" ? 0 : deny ? 2 : 0, label);
+        if (surface === "agy") {
+          assertEquals(
+            JSON.parse(new TextDecoder().decode(output.stdout)).decision,
+            deny ? "deny" : "allow",
+            label,
+          );
+        }
+      }
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 function futureExpiry(): string {
   return new Date(Date.now() + 3600_000).toISOString();
 }

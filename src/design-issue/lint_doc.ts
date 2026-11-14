@@ -8,7 +8,7 @@ import {
   isValidSlug,
   parseCapturedRuleMarker,
 } from "../../scripts/consume_memory_rules.ts";
-import { expandHome } from "./gate1.ts";
+import { expandHome, isDesignDocFilename } from "./gate1.ts";
 import { loadGate1Record, type PremiseRow } from "./gate1_record.ts";
 
 export interface LintViolation {
@@ -40,6 +40,8 @@ export interface LintDesignDocOptions {
   nowImpl?: () => Date;
   premiseRows?: PremiseRow[];
   stateDir?: string;
+  dropboxDir?: string;
+  designDocsRoot?: string;
 }
 
 /** A half-open character range `[start, end)` on a single line that is a mention (inline code
@@ -1177,6 +1179,319 @@ export function presentingDay(now: Date): string {
   return local < utc ? local : utc;
 }
 
+const EXCLUDED_COPIED_TEXT_FOLDERS = new Set(["resume-records", "claude-backup", "backups"]);
+const MIN_COPIED_WORD_RUN = 12;
+
+interface BodyWord {
+  norm: string;
+  raw: string;
+  line: number;
+}
+
+function isExcludedCopiedTextSectionHeading(headingText: string): boolean {
+  const h = headingText.trim();
+  if (/^Revision\s+History\b/i.test(h)) return true;
+  if (/\bdecisions?\b/i.test(h) && /\b(?:record|log|table|appendix)\b/i.test(h)) return true;
+  if (/^Decisions?\b/i.test(h)) return true;
+  if (/^Load-bearing\s+premises\b/i.test(h)) return true;
+  if (/^Both\s+surfaces\b/i.test(h)) return true;
+  if (/^Where\s+things\s+live\b/i.test(h)) return true;
+  if (/^Appendix\b/i.test(h)) return true;
+  return false;
+}
+
+function preserveNewlinesAsSpaces(match: string): string {
+  return match.replace(/[^\n]/g, " ");
+}
+
+const HTML_BLOCK_TAGS =
+  "address|article|aside|blockquote|body|center|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|html|iframe|li|main|nav|ol|p|pre|section|summary|table|tbody|td|tfoot|th|thead|tr|ul";
+const HTML_BLOCK_OPEN = new RegExp(`^ {0,3}<(${HTML_BLOCK_TAGS})(?=[\\s/>]|$)`, "i");
+
+const HTML_OPEN_TAG = /<([a-z0-9]+)(?=[\s/>])[^>]*?(\/?)>/gi;
+const HTML_CLOSE_TAG = /<\/([a-z0-9]+)\s*>/gi;
+
+/** The line a block-level HTML element closes on, or null when its tag is never closed. */
+function htmlBlockEnd(lines: string[], start: number, tag: string): number | null {
+  const targetTag = tag.toLowerCase();
+  let depth = 0;
+  for (let i = start; i < lines.length; i++) {
+    for (const open of lines[i].matchAll(HTML_OPEN_TAG)) {
+      if (open[1].toLowerCase() === targetTag && open[2] !== "/") depth++;
+    }
+    for (const close of lines[i].matchAll(HTML_CLOSE_TAG)) {
+      if (close[1].toLowerCase() === targetTag) depth--;
+    }
+    if (depth <= 0) return i;
+  }
+  return null;
+}
+
+/**
+ * Blanks every complete block-level HTML element, from its opening line to its closing line, so
+ * the text inside it is not compared. An element that is never closed ends at the next blank line.
+ * Line positions are kept.
+ */
+function blankHtmlBlocks(lines: string[]): string[] {
+  const kept = [...lines];
+  for (let i = 0; i < kept.length; i++) {
+    const open = kept[i].match(HTML_BLOCK_OPEN);
+    if (!open) continue;
+    let end = htmlBlockEnd(kept, i, open[1]);
+    if (end === null) {
+      end = i;
+      while (end + 1 < kept.length && kept[end + 1].trim() !== "") end++;
+    }
+    for (let j = i; j <= end; j++) kept[j] = "";
+    i = end;
+  }
+  return kept;
+}
+
+/**
+ * Extracts normalized consecutive words from a design document's body for "One document owns each
+ * rule". Leaves out captured rule blocks, fenced code blocks, anything in backticks or double
+ * quotes, raw HTML, verbatim quotes (`>`), the revision table, the decision record, the
+ * `Load-bearing Premises`, `Both Surfaces` and `Where Things Live` sections, and every section
+ * whose heading begins `Appendix`.
+ */
+function extractDesignBodyWords(content: string): BodyWord[] {
+  const { lines } = blankCapturedRuleBlocks(content.split(/\r?\n/));
+  const keptLines: string[] = [];
+  // The opening fence's character and length: only a fence of the same character, at least as
+  // long and with nothing after it closes the block, so a shorter fence inside it is plain text.
+  let openFence: { char: string; length: number } | null = null;
+  let excludedSectionLevel: number | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const fence = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
+    if (openFence) {
+      if (
+        fence && fence[1][0] === openFence.char && fence[1].length >= openFence.length &&
+        fence[2].trim() === ""
+      ) openFence = null;
+      keptLines.push("");
+      continue;
+    }
+    // A backtick fence's info string holds no backtick, so a line like ```code``` is inline code.
+    if (fence && !(fence[1][0] === "`" && fence[2].includes("`"))) {
+      openFence = { char: fence[1][0], length: fence[1].length };
+      keptLines.push("");
+      continue;
+    }
+
+    const headingMatch = line.match(/^\s*(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const headingText = headingMatch[2].trim();
+      if (excludedSectionLevel !== null && level <= excludedSectionLevel) {
+        excludedSectionLevel = null;
+      }
+      if (excludedSectionLevel === null && isExcludedCopiedTextSectionHeading(headingText)) {
+        excludedSectionLevel = level;
+      }
+      keptLines.push("");
+      continue;
+    }
+
+    if (excludedSectionLevel !== null || blockquoteLineRegex.test(line)) {
+      keptLines.push("");
+      continue;
+    }
+
+    keptLines.push(line);
+  }
+
+  let bodyText = blankHtmlBlocks(keptLines).join("\n");
+  // Strip raw HTML comments, multi-line SVG/style blocks, and HTML tags while preserving line count
+  bodyText = bodyText.replace(/<!--[\s\S]*?-->/g, preserveNewlinesAsSpaces);
+  bodyText = bodyText.replace(/<svg\b[\s\S]*?<\/svg>/gi, preserveNewlinesAsSpaces);
+  bodyText = bodyText.replace(/<style\b[\s\S]*?<\/style>/gi, preserveNewlinesAsSpaces);
+  bodyText = bodyText.replace(/<\/?[A-Za-z!][^>\n]*>/g, preserveNewlinesAsSpaces);
+
+  // Strip inline backtick spans and double-quoted spans (straight and curly)
+  bodyText = bodyText.replace(/(`+)(?:[^`\n]|\n(?!\s*\n))*?\1/g, preserveNewlinesAsSpaces);
+  bodyText = bodyText.replace(/"(?:\\.|[^"\\\n]|\n(?!\s*\n))*"/g, preserveNewlinesAsSpaces);
+  bodyText = bodyText.replace(
+    /\u201c(?:[^\u201d\n]|\n(?!\s*\n))*\u201d/g,
+    preserveNewlinesAsSpaces,
+  );
+
+  const cleanedLines = bodyText.split("\n");
+  const words: BodyWord[] = [];
+  for (let i = 0; i < cleanedLines.length; i++) {
+    const line = cleanedLines[i];
+    for (const match of line.matchAll(/[A-Za-z0-9]+(?:['\u2019-][A-Za-z0-9]+)*/g)) {
+      const raw = match[0];
+      const norm = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (norm) {
+        words.push({ norm, raw, line: i + 1 });
+      }
+    }
+  }
+  return words;
+}
+
+function listDesignDocsUnderRoot(rootDir: string): string[] {
+  const absRoot = path.resolve(expandHome(rootDir.trim()));
+  let rootEntries: Deno.DirEntry[];
+  try {
+    rootEntries = [...Deno.readDirSync(absRoot)];
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) {
+      return [];
+    }
+    throw new Error(
+      `Refusing design:lint-doc: design-documents root cannot be read at ${absRoot}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+
+  const found: string[] = [];
+  for (const entry of rootEntries) {
+    if (entry.name.startsWith(".") || EXCLUDED_COPIED_TEXT_FOLDERS.has(entry.name)) {
+      continue;
+    }
+    const entryPath = path.join(absRoot, entry.name);
+    if (entry.isDirectory) {
+      let themeEntries: Deno.DirEntry[];
+      try {
+        themeEntries = [...Deno.readDirSync(entryPath)];
+      } catch (err) {
+        throw new Error(
+          `Refusing design:lint-doc: theme folder cannot be read at ${entryPath}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+      for (const child of themeEntries) {
+        if (child.isFile && isDesignDocFilename(child.name)) {
+          found.push(path.join(entryPath, child.name));
+        }
+      }
+    } else if (entry.isFile && isDesignDocFilename(entry.name)) {
+      found.push(entryPath);
+    }
+  }
+
+  return found.sort();
+}
+
+function checkCopiedTextAcrossDesignDocs(
+  content: string,
+  docPath: string,
+  rootDir: string,
+): LintViolation[] {
+  const otherPaths = listDesignDocsUnderRoot(rootDir);
+  if (otherPaths.length === 0) return [];
+
+  const absDocPath = docPath ? path.resolve(expandHome(docPath.trim())) : "";
+  let realDocPath: string | null = null;
+  if (absDocPath) {
+    try {
+      realDocPath = Deno.realPathSync(absDocPath);
+    } catch {
+      realDocPath = absDocPath;
+    }
+  }
+
+  const docWords = extractDesignBodyWords(content);
+  const violations: LintViolation[] = [];
+
+  for (const otherPath of otherPaths) {
+    const resolvedOther = path.resolve(otherPath);
+    if (absDocPath && resolvedOther === absDocPath) {
+      continue;
+    }
+    if (realDocPath !== null) {
+      let realOther: string | null = null;
+      try {
+        realOther = Deno.realPathSync(resolvedOther);
+      } catch {
+        realOther = null;
+      }
+      if (realOther !== null && realOther === realDocPath) {
+        continue;
+      }
+    }
+
+    let otherContent: string;
+    try {
+      otherContent = Deno.readTextFileSync(resolvedOther);
+    } catch (err) {
+      throw new Error(
+        `Refusing design:lint-doc: another design document cannot be read at ${resolvedOther}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    if (docWords.length < MIN_COPIED_WORD_RUN) {
+      continue;
+    }
+
+    const otherWords = extractDesignBodyWords(otherContent);
+    if (otherWords.length < MIN_COPIED_WORD_RUN) {
+      continue;
+    }
+
+    const otherGrams = new Map<string, number[]>();
+    for (let j = 0; j + MIN_COPIED_WORD_RUN <= otherWords.length; j++) {
+      const gram = otherWords
+        .slice(j, j + MIN_COPIED_WORD_RUN)
+        .map((w) => w.norm)
+        .join(" ");
+      const list = otherGrams.get(gram);
+      if (list) {
+        list.push(j);
+      } else {
+        otherGrams.set(gram, [j]);
+      }
+    }
+
+    for (let i = 0; i + MIN_COPIED_WORD_RUN <= docWords.length; i++) {
+      const gram = docWords
+        .slice(i, i + MIN_COPIED_WORD_RUN)
+        .map((w) => w.norm)
+        .join(" ");
+      const matchStarts = otherGrams.get(gram);
+      if (!matchStarts) continue;
+
+      let bestLen = MIN_COPIED_WORD_RUN;
+      for (const j of matchStarts) {
+        let len = MIN_COPIED_WORD_RUN;
+        while (
+          i + len < docWords.length &&
+          j + len < otherWords.length &&
+          docWords[i + len].norm === otherWords[j + len].norm
+        ) {
+          len++;
+        }
+        if (len > bestLen) {
+          bestLen = len;
+        }
+      }
+
+      const sharedWords = docWords
+        .slice(i, i + bestLen)
+        .map((w) => w.raw)
+        .join(" ");
+      violations.push({
+        rule: "no-copied-text",
+        message: `Design document ${
+          docPath || "<document>"
+        } shares a run of ${bestLen} consecutive words with ${resolvedOther}: "${sharedWords}"`,
+        line: docWords[i].line,
+      });
+      i += bestLen - 1;
+    }
+  }
+
+  return violations;
+}
+
 /**
  * Finds captured memory rule blocks (web-jam-tools#1317). Returns the document lines with every
  * line of a well-formed block blanked (line numbers unchanged) plus one violation per malformed
@@ -1550,6 +1865,14 @@ export function lintDesignDoc(
     );
   }
 
+  // 11. Check for copied text of 12 or more consecutive words from another design document's body
+  // ("One document owns each rule", web-jam-tools#1636) when the design-documents root option is
+  // supplied.
+  const rootDir = options.dropboxDir || options.designDocsRoot;
+  if (rootDir) {
+    violations.push(...checkCopiedTextAcrossDesignDocs(content, docPath, rootDir));
+  }
+
   return {
     docPath,
     valid: violations.length === 0,
@@ -1594,11 +1917,14 @@ export async function lintDesignDocFile(
  */
 export async function runLintDocCli(
   args: string[],
-  options: Pick<LintDesignDocOptions, "nowImpl" | "stateDir"> = {},
+  options: Pick<
+    LintDesignDocOptions,
+    "nowImpl" | "stateDir" | "dropboxDir" | "designDocsRoot"
+  > = {},
 ): Promise<number> {
   const flags = parseArgs(args, {
     boolean: ["help", "json"],
-    string: ["doc", "state-dir"],
+    string: ["doc", "state-dir", "dropbox-dir"],
     alias: {
       h: "help",
       j: "json",
@@ -1627,15 +1953,18 @@ Checks a design document against the skill's body rules:
     exactly match a stored Gate 1 row. An unreadable record refuses the check.
   - Fails if the document names a target issue it was invoked on but carries no verbatim
     blockquote of that issue's directive lines.
+  - Fails if the document's body shares a run of 12 or more consecutive words with another design
+    document's body. When another design document cannot be read, refuses naming it.
 
 Arguments:
   <doc.md>        Path to design document markdown file
 
 Options:
-  --doc <path>    Explicit design document path
-  --state-dir <path>  Override Gate 1 state directory
-  -j, --json      Output result as JSON
-  -h, --help      Show this help message
+  --doc <path>          Explicit design document path
+  --state-dir <path>    Override Gate 1 state directory
+  --dropbox-dir <path>  Override design-documents root directory
+  -j, --json            Output result as JSON
+  -h, --help            Show this help message
 `);
     return 0;
   }
@@ -1651,6 +1980,7 @@ Options:
     const result = await lintDesignDocFile(docPath, {
       ...options,
       stateDir: flags["state-dir"] || options.stateDir,
+      dropboxDir: flags["dropbox-dir"] || options.dropboxDir || options.designDocsRoot,
     });
 
     if (flags.json) {

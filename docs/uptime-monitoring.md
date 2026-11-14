@@ -11,21 +11,27 @@ Uptime monitoring for WebJam LLC production websites is managed via Deno Deploy 
 | **Web Jam** | `https://web-jam.com` | `200` | HTTP status check |
 | **Web Jam Music** | `https://web-jam.com/music` | `200` | **Content-aware assertion**: Verifies HTTP 200 AND checks that page content contains expected music elements (catches SocketCluster outages where page returns 200 OK while empty) |
 | **College Lutheran** | `https://collegelutheran.org` | `200` | HTTP status check |
+| **Tim Sherman Music** | `https://timshermanmusic.com` | `200` | HTTP status check |
 
 ## How It Works
 
 1. **24/7 Edge Cron & Schedules (`src/uptime/cron.ts`)**:
-   - **30-Minute Failure Check (`*/30 * * * *`)**: Evaluates all 5 targets every 30 minutes. Silent on success; sends an immediate alert email to `joshua.v.sherman@gmail.com` and `chemmariasherman@gmail.com` on failure detailing the outage.
-   - **Daily 8:00 AM Heartbeat (`0 12 * * *`)**: Evaluates all 5 targets every morning at 8:00 AM EDT (12:00 UTC) and sends a positive status confirmation email (`[Uptime Monitor] Daily Heartbeat: All 5 Production Services Healthy`) to `joshua.v.sherman@gmail.com` and `chemmariasherman@gmail.com` confirming the monitor is active and all services are up.
+   - **30-Minute Failure Check (`*/30 * * * *`)**: Evaluates all configured targets every 30 minutes. Silent on success; sends an immediate alert email to `joshua.v.sherman@gmail.com` and `chemmariasherman@gmail.com` on failure detailing the outage.
+   - **Daily Heartbeat (`0 12 * * *`)**: Evaluates all configured targets at 12:00 UTC and checks the newest backup. Sends the daily status email to the existing alert recipients, with one backup-age line such as `Backup: newest good run is 25.0 hours old.` The site's status summary and subject remain independent of the backup warning.
+   - **Midnight Backup Check (`0 0 * * *`)**: Checks the newest backup without sending another daily heartbeat or running the site checks.
+
+   Both backup runs read public `GET https://web-jam.com/backup/status` from the same production backend address used by the site monitor. A timestamp in `newestGoodRun` gives the age; `"none"` means no good run exists. A non-success HTTP status means the backend cannot determine the backup state. The request times out after 10 seconds. A timestamp more than 26 hours old, no good run, an unknown/invalid answer, or a failed/timed-out request sends a `[Uptime Alert] MongoDB backup warning` naming that condition. Exactly 26 hours does not warn. A recent good run remains recent even if `lastRunFailed` is true; the backend reports individual failed runs separately. Noon reuses its check result in the heartbeat, including an explicit unavailable/none line when an age cannot be determined. The 30-minute job never reads backup status.
 
 2. **Alert Recipients & Credentials**:
-   - Environment variables: `GMAIL_USER`, `GMAIL_APP_PASSWORD`, and `UPTIME_TEST_KEY`.
+   - Gmail API environment settings: `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`. The shared `src/shared/gmail_send.ts` module refreshes an access token and sends mail through Gmail's HTTP API for site alerts, the daily heartbeat and backup warnings. `GMAIL_USER` and `GMAIL_APP_PASSWORD` are not used.
+   - Test endpoint setting: `UPTIME_TEST_KEY`.
    - Alert recipients: `joshua.v.sherman@gmail.com`, `chemmariasherman@gmail.com`.
 
 3. **Test Endpoints & Secret Key Protection**:
    - `/test-check` and `/test-heartbeat` test endpoints allow manual triggering of check and heartbeat routines.
    - Both test endpoints are closed to the public and require the `x-test-key` HTTP header exactly matching the secret key configured in the `UPTIME_TEST_KEY` setting.
    - Requests without `x-test-key`, with an incorrect key, or when `UPTIME_TEST_KEY` is unset or empty answer `404 Not Found` and perform no action.
+   - An authenticated `/test-heartbeat` performs the noon routine, including the backup check and any warning. An authenticated `/test-check` performs only the site checks. These endpoints send real email; use them only for an explicitly authorized delivery test. The backup-line verification runbook uses the scheduled noon email instead.
 
 ## Commands & Local Usage
 
@@ -45,11 +51,13 @@ deno task monitor:cron
      ```sh
      deno deploy . --config deno.uptime.json --prod --token "$DENO_DEPLOY_TOKEN" --non-interactive --json
      ```
-   - **One-time Secret Setup (Dashboard)**: Under Deno Deploy Project Settings -> Environment Variables for `web-jam-uptime`, add `GMAIL_USER`, `GMAIL_APP_PASSWORD`, and `UPTIME_TEST_KEY`.
+   - **One-time Secret Setup (Dashboard)**: Under Deno Deploy Project Settings -> Environment Variables for `web-jam-uptime`, configure `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, and `UPTIME_TEST_KEY`. Use the existing authorized Gmail API settings; never paste their values into commands, logs, or issue comments.
 
 2. **Verifying Live Operation**:
    - Check the **Cron** tab in the Deno Deploy dashboard (`console.deno.com` / `dash.deno.com`) to view live executions and 30-minute / daily 8:00 AM schedule status.
    - Perform live alert tests by running `deno task monitor:uptime` locally or verifying test alert email delivery to `joshua.v.sherman@gmail.com` and `chemmariasherman@gmail.com`.
+
+The numbered manual procedure for checking the delivered backup-age line is `~/Dropbox/web-jam-llms/backup-restore/status-email-backup-line-manual-steps-2026-10-07.md`.
 
 ## Changing Targets or Schedules
 

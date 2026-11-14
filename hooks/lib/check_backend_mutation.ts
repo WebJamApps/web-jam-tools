@@ -39,6 +39,8 @@
  */
 
 import {
+  findHeredocMarker,
+  readInterpreterScript,
   resolveThroughWrappers,
   splitOnOperators,
   splitShellTokens,
@@ -351,21 +353,22 @@ function readScriptFile(path: string): string | null {
   }
 }
 
-// The first non-flag argument after the program's own name (and, for
-// `deno`, after the `run` subcommand) — i.e. the script file path. Flags
-// are skipped positionally rather than by an allowlist, since deno/node/
-// python3/bash/sh flags are all `-x`/`--long`/`--long=value` single tokens
-// with no separately-tokenized value in the forms this guard needs to see
-// through (`deno run -A file.ts`, `node file.js`, `python3 file.py`,
-// `bash file.sh`).
-function extractScriptPath(prog: string, stripped: string[]): string | null {
-  const startIdx = prog === "deno" ? 2 : 1;
-  for (let i = startIdx; i < stripped.length; i++) {
+// Interpreter files (including local preloads); shells retain their own rule.
+function extractScriptPath(prog: string, stripped: string[], heredoc = false): string[] {
+  const invocation = readInterpreterScript(stripped, heredoc);
+  if (invocation) {
+    return [
+      ...invocation.preloads,
+      ...(invocation.script?.kind === "file" ? [invocation.script.path] : []),
+    ];
+  }
+  if (prog !== "bash" && prog !== "sh") return [];
+  for (let i = 1; i < stripped.length; i++) {
     const a = stripped[i];
     if (a.startsWith("-")) continue;
-    return a;
+    return [a];
   }
-  return null;
+  return [];
 }
 
 /**
@@ -676,42 +679,21 @@ function decideSegment(
         return { outcome: "pass" };
       }
     }
-
-    if (sub === "eval") {
-      const code = stripped[2] ?? "";
-      const dec = decideScriptContent(code, tokenPath, nowMs, inVenueMining, sessionId);
-      if (dec) return dec;
-    }
-
-    if (sub === "run") {
-      const scriptPath = extractScriptPath("deno", stripped);
-      if (scriptPath) {
-        const content = readScriptFile(scriptPath);
-        if (content !== null) {
-          const dec = decideScriptContent(content, tokenPath, nowMs, inVenueMining, sessionId);
-          if (dec) return dec;
-        }
-      }
-    }
   }
 
-  // 3. node / python3 — inline eval (-e / -c) or a script FILE
-  if (prog === "node" || prog === "python3") {
-    const inlineFlag = prog === "node" ? "-e" : "-c";
-    if (stripped[1] === inlineFlag) {
-      const code = stripped[2] ?? "";
+  // 3. Shared Python/Node/Deno selection. A preload's allow never skips a later deny.
+  const invocation = readInterpreterScript(stripped, findHeredocMarker(_rawSegment) !== null);
+  if (invocation) {
+    let allowed: DecisionResult | null = null;
+    const sources = extractScriptPath(prog, stripped, findHeredocMarker(_rawSegment) !== null)
+      .map(readScriptFile).filter((source): source is string => source !== null);
+    if (invocation.script?.kind === "inline") sources.push(invocation.script.code);
+    for (const code of sources) {
       const dec = decideScriptContent(code, tokenPath, nowMs, inVenueMining, sessionId);
-      if (dec) return dec;
-    } else {
-      const scriptPath = extractScriptPath(prog, stripped);
-      if (scriptPath) {
-        const content = readScriptFile(scriptPath);
-        if (content !== null) {
-          const dec = decideScriptContent(content, tokenPath, nowMs, inVenueMining, sessionId);
-          if (dec) return dec;
-        }
-      }
+      if (dec?.outcome === "deny") return dec;
+      if (dec?.outcome === "allow") allowed = dec;
     }
+    if (allowed) return allowed;
   }
 
   // 4. bash / sh — a script FILE (`bash -c "..."` is resolved to a nested
@@ -719,8 +701,7 @@ function decideSegment(
   // sees it, so only the file-argument form reaches here).
   if (prog === "bash" || prog === "sh") {
     if (stripped[1] !== "-c") {
-      const scriptPath = extractScriptPath(prog, stripped);
-      if (scriptPath) {
+      for (const scriptPath of extractScriptPath(prog, stripped)) {
         const content = readScriptFile(scriptPath);
         if (content !== null) {
           const dec = decideScriptContent(content, tokenPath, nowMs, inVenueMining, sessionId);

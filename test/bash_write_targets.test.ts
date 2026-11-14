@@ -3,17 +3,114 @@
 
 import { assertEquals } from "@std/assert";
 import {
+  analyzeBashWrites,
   bashWriteTargets,
   redirectTargets,
   resolvePath,
   scriptWriteTargets,
-  splitHeredocs,
   withoutRedirections,
 } from "../hooks/lib/bash_write_targets.ts";
 
 const CWD = "/repo";
 const HOME = "/home/j";
 const targets = (command: string) => bashWriteTargets(command, { cwd: CWD, home: HOME });
+
+Deno.test("documented gap control: a subshell cd currently persists into the following command", () => {
+  // Pin the existing limitation; this PR does not implement subshell folder scopes.
+  assertEquals(targets("(cd /tmp && echo a > f); echo b > g"), ["/tmp/f", "/tmp/g"]);
+});
+
+Deno.test("Root cause 2: a heredoc keeps its own unknown cwd despite a later repository cd", () => {
+  const command =
+    "S=/tmp/scratch/memsim; cd $S && python3 - <<'EOF'\np = 'out.txt'\nopen(p,'w').write('x')\nEOF\ncd /repo && deno task memory-index --dir $S";
+  assertEquals(analyzeBashWrites(command, { cwd: "/tmp/scratch", home: HOME }), {
+    targets: [],
+    unknownFiles: [],
+    unknownDirectory: true,
+  });
+  assertEquals(bashWriteTargets(command, { cwd: "/tmp/scratch", home: HOME }), []);
+});
+
+Deno.test("third root cause: unresolved cd clears cwd; literal and function-body cd controls resolve", () => {
+  assertEquals(
+    analyzeBashWrites('S=/tmp/scratch; cd $S/mut; echo "// x" >> test/memory_index.test.ts', {
+      cwd: CWD,
+      home: HOME,
+    }),
+    {
+      targets: [],
+      unknownFiles: [],
+      unknownDirectory: true,
+    },
+  );
+  for (
+    const command of [
+      'cd /tmp/scratch/mut; echo "// x" >> test/memory_index.test.ts',
+      'f() { cd /tmp/scratch/mut; echo "// x" >> test/memory_index.test.ts; }; f',
+    ]
+  ) assertEquals(targets(command), ["/tmp/scratch/mut/test/memory_index.test.ts"]);
+});
+
+Deno.test("Case B: a once-assigned script variable names its scratch file", () => {
+  assertEquals(
+    targets(
+      "python3 - <<'EOF'\np = '/tmp/claude-1000/s/scratchpad/1309-new.md'\nopen(p,'w').write('x')\nEOF",
+    ),
+    ["/tmp/claude-1000/s/scratchpad/1309-new.md"],
+  );
+});
+
+Deno.test("a later cd on the marker line cannot move the heredoc; a child shell cd stays local", () => {
+  assertEquals(targets("cd /tmp; python3 - <<'PY'; cd /repo\nopen('out','w')\nPY"), ["/tmp/out"]);
+  assertEquals(targets("bash <<'SH'\ncd /tmp; echo x > child\nSH\necho y > parent"), [
+    "/tmp/child",
+    "/repo/parent",
+  ]);
+});
+
+Deno.test("script file naming: argument aliases, reassignment, comments and unrelated arguments", () => {
+  for (
+    const command of [
+      `python3 -c 'import sys; p = sys.argv[1]; open(p,"w")' /tmp/a.md`,
+      `node -e 'const p = process.argv[2]; fs.writeFileSync(p,"x")' - /tmp/a.md`,
+      `deno eval 'const p = Deno.args[0]; Deno.writeTextFileSync(p,"x")' /tmp/a.md`,
+    ]
+  ) assertEquals(targets(command), ["/tmp/a.md"], command);
+  assertEquals(targets(`python3 -c 'p = "/tmp/a"; p += "b"; open(p,"w")'`), [CWD]);
+  assertEquals(targets(`python3 -c 'p = "/tmp/a"; p = "AGENTS.md"; open(p,"w")'`), [CWD]);
+  assertEquals(targets(`python3 -c 'open(p,"w"); p = "/tmp/a"'`), [CWD]);
+  assertEquals(targets(`python3 -c 'import sys; open(sys.argv[1],"w")' "$HOME/a"`), [CWD]);
+  assertEquals(targets(`python3 -c 'p = "/tmp/a"; open(p,"w") # p = "AGENTS.md"'`), ["/tmp/a"]);
+  assertEquals(targets(`python3 main.py -c 'open("AGENTS.md","w")'`), []);
+  assertEquals(targets("cd $S; echo x > /tmp/a; cd /repo && echo x > b"), ["/tmp/a", "/repo/b"]);
+});
+
+Deno.test("shared script selection: only executed inline and stdin code names write targets", () => {
+  assertEquals(targets(`python3 -W ignore -c "open('out', 'w')"`), ["/repo/out"]);
+  assertEquals(targets(`node --title fixture --eval="fs.writeFileSync('out', 'x')"`), [
+    "/repo/out",
+  ]);
+  assertEquals(targets(`deno eval --ext ts "Deno.writeTextFileSync('out', 'x')" data`), [
+    "/repo/out",
+  ]);
+  for (
+    const command of [
+      `python3 main.py -c "open('data', 'w')"`,
+      `node main.js -e "fs.writeFileSync('data','x')"`,
+      `deno run --config deno.json main.ts -e "Deno.writeTextFileSync('data','x')"`,
+      `python3 --help <<'PY'\nopen('data','w')\nPY`,
+      `python3 main.py <<'PY'\nopen('data','w')\nPY`,
+      `node -e 'console.log(1)' <<'JS'\nfs.writeFileSync('data','x')\nJS`,
+    ]
+  ) assertEquals(targets(command), [], command);
+  assertEquals(targets(`python3 - data.md <<'PY'\nopen('out','w')\nPY`), ["/repo/out"]);
+  assertEquals(targets(`node --input-type=module <<'JS'\nfs.writeFileSync('out','x')\nJS`), [
+    "/repo/out",
+  ]);
+  assertEquals(targets(`deno <<'TS'\nDeno.writeTextFileSync('out','x')\nTS`), ["/repo/out"]);
+  assertEquals(targets(`deno repl <<'TS'\nDeno.writeTextFileSync('out','x')\nTS`), ["/repo/out"]);
+  assertEquals(targets(`python3 -m code <<'PY'\nopen('out','w')\nPY`), ["/repo/out"]);
+});
 
 Deno.test("resolvePath: relative, absolute, ~, $HOME, dot segments, and unknown variables", () => {
   assertEquals(resolvePath("src/a.ts", CWD, HOME), "/repo/src/a.ts");
@@ -60,14 +157,15 @@ Deno.test("scriptWriteTargets: literal paths, variable paths judged by cwd, and 
   assertEquals(scriptWriteTargets("console.log(fs.readFileSync('a'))", CWD, HOME), []);
 });
 
-Deno.test("splitHeredocs: interpreter bodies are code, shell bodies are shell, other bodies are data", () => {
-  assertEquals(splitHeredocs("python3 - <<'EOF'\nopen('a','w')\nEOF").scripts, ["open('a','w')"]);
-  assertEquals(splitHeredocs("cat <<EOF | /usr/bin/node\nx\nEOF").scripts, ["x"]);
-  assertEquals(splitHeredocs("bash <<EOF\necho x > f\nEOF").shell, "bash <<EOF\necho x > f");
-  const data = splitHeredocs("cat > notes.md <<'EOF'\n> quoted\nEOF\necho done");
-  assertEquals(data.shell, "cat > notes.md <<'EOF'\necho done");
-  assertEquals(data.scripts, []);
-  assertEquals(splitHeredocs("cat <<-EOF\n\tbody\n\tEOF").shell, "cat <<-EOF");
+Deno.test("heredoc receivers: interpreter and shell writes are inspected; data bodies are ignored", () => {
+  assertEquals(targets("python3.11 - <<EOF\nopen('a','w')\nEOF"), ["/repo/a"]);
+  assertEquals(targets("nodejs <<EOF\nfs.writeFileSync('a','x')\nEOF"), ["/repo/a"]);
+  assertEquals(targets("perl <<EOF\nopen(FH, '>a');\nEOF"), ["/repo/a"]);
+  assertEquals(targets("ruby <<EOF\nFile.write('a','x')\nEOF"), ["/repo/a"]);
+  assertEquals(targets("cat <<EOF | /usr/bin/node\nfs.writeFileSync('a', 'x')\nEOF"), ["/repo/a"]);
+  assertEquals(targets("bash <<EOF\necho x > f\nEOF"), ["/repo/f"]);
+  assertEquals(targets("cat > notes.md <<'EOF'\n> quoted\nEOF\necho done"), ["/repo/notes.md"]);
+  assertEquals(targets("cat <<-EOF\n\tbody\n\tEOF"), []);
 });
 
 Deno.test("bashWriteTargets: the shapes Josh's gate must refuse", () => {
@@ -112,7 +210,7 @@ Deno.test("bashWriteTargets: interpreters, nesting, wrappers and cd", () => {
   assertEquals(targets(`eval "echo x > e.ts"`), ["/repo/e.ts"]);
   assertEquals(targets("cd sub && echo x > f && cd - && echo y > g"), [
     "/repo/sub/f",
-    "/repo/sub/g",
+    "/repo/g",
   ]);
   assertEquals(targets("cd && echo x > f"), ["/home/j/f"]);
   assertEquals(targets("cd /work\npython3 - <<EOF\nPath(p).write_text(s)\nEOF"), ["/work"]);
