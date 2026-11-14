@@ -7,34 +7,34 @@ import { AccountRule, BankTransaction, ImportOptions, ImportResult, Transaction 
 
 export function parseCsvRows(csvContent: string): string[][] {
   const rows: string[][] = [];
-  const lines = csvContent.split(/\r?\n/);
-
-  for (const line of lines) {
-    if (!line.trim()) continue;
-
-    const row: string[] = [];
-    let current = "";
-    let inQuotes = false;
-
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      if (char === '"') {
-        if (inQuotes && line[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else {
-          inQuotes = !inQuotes;
-        }
-      } else if (char === "," && !inQuotes) {
-        row.push(current);
-        current = "";
+  let row: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < csvContent.length; i++) {
+    const char = csvContent[i];
+    if (char === '"') {
+      if (inQuotes && csvContent[i + 1] === '"') {
+        current += '"';
+        i++;
       } else {
-        current += char;
+        inQuotes = !inQuotes;
       }
+    } else if (char === "," && !inQuotes) {
+      row.push(current);
+      current = "";
+    } else if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && csvContent[i + 1] === "\n") i++;
+      row.push(current);
+      if (row.some((field) => field.trim())) rows.push(row);
+      row = [];
+      current = "";
+    } else {
+      current += char;
     }
-    row.push(current);
-    rows.push(row);
   }
+  if (inQuotes) throw new Error("CSV contains an unterminated quoted field");
+  row.push(current);
+  if (row.some((field) => field.trim())) rows.push(row);
 
   return rows;
 }
@@ -69,8 +69,12 @@ export function parseStatementCsv(csvContent: string): BankTransaction[] {
     if (!date || !rawAmt) continue;
 
     const amount = parseFloat(rawAmt);
-    const payee = descIdx !== -1 && row[descIdx] ? row[descIdx].trim() : "Unknown Payee";
-    const memo = memoIdx !== -1 && row[memoIdx] ? row[memoIdx].trim() : undefined;
+    const payee = descIdx !== -1 && row[descIdx]
+      ? row[descIdx].trim().replace(/\s*\r?\n\s*/g, " ")
+      : "Unknown Payee";
+    const memo = memoIdx !== -1 && row[memoIdx]
+      ? row[memoIdx].trim().replace(/\s*\r?\n\s*/g, " ")
+      : undefined;
     const id = idIdx !== -1 && row[idIdx] && row[idIdx].trim() !== ""
       ? row[idIdx].trim()
       : `${date}_${amount}_${payee.replace(/\s+/g, "")}`;

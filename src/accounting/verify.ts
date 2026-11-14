@@ -5,7 +5,7 @@ import { parseJournal } from "./entry.ts";
 import { VerificationResult } from "./types.ts";
 
 export function verifyJournalBalances(journalContent: string): VerificationResult {
-  const transactions = parseJournal(journalContent);
+  const transactions = parseJournal(journalContent).sort((a, b) => a.date.localeCompare(b.date));
   const errors: string[] = [];
   let assertionsChecked = 0;
 
@@ -59,7 +59,7 @@ export function computeAccountBalances(
   journalContent: string,
   asOfDate?: string,
 ): Map<string, number> {
-  const transactions = parseJournal(journalContent);
+  const transactions = parseJournal(journalContent).sort((a, b) => a.date.localeCompare(b.date));
   const balances = new Map<string, number>();
 
   for (const tx of transactions) {

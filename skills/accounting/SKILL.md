@@ -128,3 +128,9 @@ All accounting operations run via registered `deno task` commands in `deno.json`
 - `deno task accounting:convert` — Convert QFX, OFX, QBO, or QIF bank statements to CSV.
 - `deno task accounting:import` — Import and reconcile statement transactions into the journal.
 - `deno task accounting:close-month` — Assert statement balances, snapshot the journal, and produce close reports.
+- `deno task accounting:verify` — Verify journal balances and assertions.
+- `deno task accounting:cli init-books` — Create the books directory structure.
+
+The tasks can read and write within the repository and the default books folder. Place statements
+and receipts in the books folder before using them; custom paths outside these locations require an
+explicit `deno run` invocation with permissions for those paths.

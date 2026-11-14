@@ -112,10 +112,16 @@ Commands:
           ? path.resolve(expandHome(flags.journal))
           : getDefaultJournalPath(year);
 
+        const amount = Number(flags.amount);
+        if (!flags.amount.trim() || !Number.isFinite(amount)) {
+          console.error("Error: --amount must be a finite number.");
+          return 1;
+        }
+
         const tx = createEntry({
           date,
           description: desc,
-          amount: parseFloat(flags.amount),
+          amount,
           category: flags.category,
           fromAccount: flags.from,
           purpose: flags.purpose,
@@ -219,8 +225,16 @@ Commands:
           const eqIdx = b.indexOf("=");
           if (eqIdx !== -1) {
             const acc = b.slice(0, eqIdx).trim();
-            const val = parseFloat(b.slice(eqIdx + 1).replace(/[$,]/g, "").trim());
+            const raw = b.slice(eqIdx + 1).replace(/[$,]/g, "").trim();
+            const val = Number(raw);
+            if (!acc || !raw || !Number.isFinite(val)) {
+              console.error("Error: --balance must have an account and a finite amount.");
+              return 1;
+            }
             balances[acc] = val;
+          } else {
+            console.error("Error: --balance must have an account and a finite amount.");
+            return 1;
           }
         }
 

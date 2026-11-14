@@ -90,7 +90,10 @@ Deno.test("distinct bank IDs preserve identical purchases and repeats are skippe
 Deno.test("registered accounting entry task can access HOME", async () => {
   const dir = await Deno.makeTempDir({ prefix: "accounting-task-" });
   try {
+    const books = `${dir}/Dropbox/web-jam-llms/financial/books`;
+    await Deno.mkdir(books, { recursive: true });
     const result = await new Deno.Command(Deno.execPath(), {
+      env: { HOME: dir },
       args: [
         "task",
         "accounting:entry",
@@ -101,14 +104,34 @@ Deno.test("registered accounting entry task can access HOME", async () => {
         "--category",
         "Expenses:Meals",
         "--journal",
-        `${dir}/journal`,
+        `${books}/journal`,
       ],
       stdin: "null",
       stdout: "piped",
       stderr: "piped",
     }).output();
     assertEquals(result.code, 0, new TextDecoder().decode(result.stderr));
-    assertEquals((await Deno.readTextFile(`${dir}/journal`)).includes("Fixture"), true);
+    assertEquals((await Deno.readTextFile(`${books}/journal`)).includes("Fixture"), true);
+    const denied = await new Deno.Command(Deno.execPath(), {
+      env: { HOME: dir },
+      args: [
+        "task",
+        "accounting:entry",
+        "--desc",
+        "Fixture",
+        "--amount",
+        "1",
+        "--category",
+        "Expenses:Meals",
+        "--journal",
+        `${dir}/outside-journal`,
+      ],
+      stdin: "null",
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(denied.code, 1);
+    assertEquals(new TextDecoder().decode(denied.stderr).includes("Requires write access"), true);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
