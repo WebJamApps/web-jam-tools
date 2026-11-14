@@ -253,13 +253,13 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(byName.get("Sonnet")?.modelTier, true);
   assertEquals(
     byName.get("Sonnet")?.description,
-    "Coding that needs a Claude-side capability Flash lacks; ranks above Flash but is not the default coder tier (a cost decision)",
+    "Ranks at the level as Terra for easier coding tasks",
   );
   assertEquals(byName.get("Opus")?.hex, "B392F0");
   assertEquals(byName.get("Opus")?.modelTier, true);
   assertEquals(
     byName.get("Opus")?.description,
-    "Top-tier architectural design, complex tech-lead judgment, spec/requirements alignment, and reviewing complex subagent outputs",
+    "Top-tier architectural design",
   );
   assertEquals(byName.get("Fable")?.hex, "D93F0B");
   assertEquals(byName.get("Fable")?.neverDelete, true);
