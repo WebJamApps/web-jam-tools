@@ -68,3 +68,48 @@ Deno.test("statement import applies literal rules and remains idempotent", async
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test("distinct bank IDs preserve identical purchases and repeats are skipped", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "accounting-identical-" });
+  try {
+    const statementPath = `${dir}/statement.csv`;
+    const journalPath = `${dir}/journal`;
+    await Deno.writeTextFile(
+      statementPath,
+      "date,description,amount,id\n2026-01-10,Cafe,-5,F1\n2026-01-10,Cafe,-5,F2\n",
+    );
+    const first = await importStatement({ statementPath, journalPath });
+    assertEquals([first.importedCount, first.skippedCount], [2, 0]);
+    const second = await importStatement({ statementPath, journalPath });
+    assertEquals([second.importedCount, second.skippedCount], [0, 2]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("registered accounting entry task can access HOME", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "accounting-task-" });
+  try {
+    const result = await new Deno.Command(Deno.execPath(), {
+      args: [
+        "task",
+        "accounting:entry",
+        "--desc",
+        "Fixture",
+        "--amount",
+        "1",
+        "--category",
+        "Expenses:Meals",
+        "--journal",
+        `${dir}/journal`,
+      ],
+      stdin: "null",
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(result.code, 0, new TextDecoder().decode(result.stderr));
+    assertEquals((await Deno.readTextFile(`${dir}/journal`)).includes("Fixture"), true);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
