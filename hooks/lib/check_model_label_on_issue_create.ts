@@ -470,14 +470,257 @@ export function hasNeedsDesignLabel(
   return false;
 }
 
+const STEP_AFTER_MERGE_PHRASE_RE =
+  /\b(?:after the merge|after merge|after it merges|once merged|post-merge|once installed|after installing|one-shot sessions?|on the laptop)\b/i;
+
+const STEP_AFTER_MERGE_COMMAND_WORDS = new Set([
+  "deno",
+  "claude",
+  "agy",
+  "codex",
+  "gh",
+  "git",
+  "bash",
+  "sh",
+  "sudo",
+  "apt-get",
+]);
+
+export function isStepAfterMergeCommandWord(firstWord: string): boolean {
+  if (!firstWord) return false;
+  if (STEP_AFTER_MERGE_COMMAND_WORDS.has(firstWord)) return true;
+  if (firstWord.startsWith("./") && firstWord.length > 2) return true;
+  if (firstWord.startsWith("~/") && firstWord.length > 2) return true;
+  if (firstWord.startsWith("/") && firstWord.length > 1) return true;
+  if (firstWord.startsWith("scripts/") && firstWord.length > "scripts/".length) return true;
+  return false;
+}
+
+export function describesStepAfterMerge(text: string): boolean {
+  const withoutSpansAndQuotes = text.replace(/`[^`\n]*`|"[^"\n]*"/g, " ").replace(/\s+/g, " ");
+  return STEP_AFTER_MERGE_PHRASE_RE.test(withoutSpansAndQuotes);
+}
+
+export function hasStepAfterMergeCommand(text: string): boolean {
+  for (const match of text.matchAll(/`([^`\n]+)`/g)) {
+    const trimmed = match[1].trim();
+    if (!trimmed) continue;
+    const firstWord = trimmed.split(/\s+/)[0] ?? "";
+    if (isStepAfterMergeCommandWord(firstWord)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export type StepAfterMergeViolationReason =
+  | "step-after-merge-missing-command"
+  | "step-after-merge-missing-josh";
+
+export interface IssueBodyCheckOptions {
+  hasModelLabel?: boolean;
+  hasJoshLabel?: boolean;
+  labels?: readonly string[];
+  modelLabels?: ReadonlySet<string>;
+}
+
+export function resolveStepAfterMergeLabelFlags(
+  options?: IssueBodyCheckOptions,
+): { hasModelLabel: boolean; hasJoshLabel: boolean } {
+  if (!options) {
+    return { hasModelLabel: true, hasJoshLabel: true };
+  }
+  if (options.labels !== undefined) {
+    const normalized = options.labels.map((l) => l.trim()).filter(Boolean);
+    const hasJoshLabel = options.hasJoshLabel ??
+      normalized.some((l) => l.toLowerCase() === "josh");
+    let hasModelLabel: boolean;
+    if (options.hasModelLabel !== undefined) {
+      hasModelLabel = options.hasModelLabel;
+    } else if (options.modelLabels) {
+      hasModelLabel = normalized.some((l) => options.modelLabels!.has(l));
+    } else {
+      hasModelLabel = normalized.some((l) => {
+        const lower = l.toLowerCase();
+        return lower !== "josh" && lower !== "needs design" && lower !== "blocked" &&
+          lower !== "epic";
+      });
+    }
+    return { hasModelLabel, hasJoshLabel };
+  }
+  return {
+    hasModelLabel: options.hasModelLabel ?? true,
+    hasJoshLabel: options.hasJoshLabel ?? true,
+  };
+}
+
+export function checkStepAfterMergeCriterion(
+  text: string,
+  options?: IssueBodyCheckOptions,
+): StepAfterMergeViolationReason | null {
+  const { hasModelLabel, hasJoshLabel } = resolveStepAfterMergeLabelFlags(options);
+  if (!hasModelLabel) return null;
+  if (!describesStepAfterMerge(text)) return null;
+  if (!hasStepAfterMergeCommand(text)) {
+    return "step-after-merge-missing-command";
+  }
+  if (!hasJoshLabel) {
+    return "step-after-merge-missing-josh";
+  }
+  return null;
+}
+
+export function extractIssueBodyAcceptanceCriteria(body: string): string[] {
+  const lines = body.split(/\r?\n/);
+  let inFence = false;
+  let fenceMarker = "";
+  let inCriteria = false;
+  let foundCriteriaHeading = false;
+  let criteriaLevel = 2;
+  let hasAnyHeading = false;
+
+  const sectionCriteria: string[] = [];
+  let currentSectionItem: string | null = null;
+  const flushSectionItem = () => {
+    if (currentSectionItem !== null) {
+      const trimmed = currentSectionItem.trim();
+      if (trimmed.length > 0) sectionCriteria.push(trimmed);
+      currentSectionItem = null;
+    }
+  };
+
+  const checkboxCriteria: string[] = [];
+  let currentCheckboxItem: string | null = null;
+  const flushCheckboxItem = () => {
+    if (currentCheckboxItem !== null) {
+      const trimmed = currentCheckboxItem.trim();
+      if (trimmed.length > 0) checkboxCriteria.push(trimmed);
+      currentCheckboxItem = null;
+    }
+  };
+
+  const bareLines: string[] = [];
+  let currentBareItem: string | null = null;
+  const flushBareItem = () => {
+    if (currentBareItem !== null) {
+      const trimmed = currentBareItem.trim();
+      if (trimmed.length > 0) bareLines.push(trimmed);
+      currentBareItem = null;
+    }
+  };
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      flushSectionItem();
+      flushCheckboxItem();
+      flushBareItem();
+      const marker = fenceMatch[1][0];
+      if (!inFence) {
+        inFence = true;
+        fenceMarker = marker;
+      } else if (marker === fenceMarker) {
+        inFence = false;
+        fenceMarker = "";
+      }
+      continue;
+    }
+    if (inFence) continue;
+    if (trimmed.startsWith("🤖 Authored by ")) {
+      flushSectionItem();
+      flushCheckboxItem();
+      flushBareItem();
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      hasAnyHeading = true;
+      flushCheckboxItem();
+      flushBareItem();
+      const level = headingMatch[1].length;
+      const headingText = headingMatch[2].trim();
+      if (/^Acceptance\s+criteria\b/i.test(headingText)) {
+        flushSectionItem();
+        inCriteria = true;
+        foundCriteriaHeading = true;
+        criteriaLevel = level;
+        continue;
+      }
+      if (inCriteria) {
+        flushSectionItem();
+        if (level <= criteriaLevel) {
+          inCriteria = false;
+        }
+      }
+      continue;
+    }
+
+    if (trimmed === "" || trimmed.startsWith("<!--") || trimmed.startsWith(">")) {
+      flushSectionItem();
+      flushCheckboxItem();
+      flushBareItem();
+      continue;
+    }
+
+    const isListItem = /^\s*(?:[-*+]|\d+[.)])\s+/.test(rawLine);
+    const isCheckboxItem = /^\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\]\s+/.test(rawLine);
+
+    if (inCriteria) {
+      if (isListItem) {
+        flushSectionItem();
+        currentSectionItem = trimmed;
+      } else if (currentSectionItem !== null) {
+        currentSectionItem += " " + trimmed;
+      } else {
+        currentSectionItem = trimmed;
+      }
+    }
+
+    if (isCheckboxItem) {
+      flushCheckboxItem();
+      currentCheckboxItem = trimmed;
+    } else if (currentCheckboxItem !== null && !isListItem) {
+      currentCheckboxItem += " " + trimmed;
+    } else {
+      flushCheckboxItem();
+    }
+
+    if (isListItem) {
+      flushBareItem();
+      currentBareItem = trimmed;
+    } else if (currentBareItem !== null) {
+      currentBareItem += " " + trimmed;
+    } else {
+      currentBareItem = trimmed;
+    }
+  }
+
+  flushSectionItem();
+  flushCheckboxItem();
+  flushBareItem();
+
+  if (foundCriteriaHeading) return sectionCriteria;
+  if (checkboxCriteria.length > 0) return checkboxCriteria;
+  if (!hasAnyHeading) return bareLines;
+  return [];
+}
+
 /**
  * The body checks a non-Epic issue create must pass: no unresolvable pointer
- * phrase, and — unless it carries `Needs Design` — no deferred verification.
+ * phrase, — unless it carries `Needs Design` — no deferred verification, and
+ * no acceptance criterion describing a step after the merge without its
+ * starting command or without the `Josh` label alongside a model label.
  * Returns the refusal reason, or null when the body is clean. Shared with
  * `src/create-issue/lib.ts` so `deno task create-issue` refuses with the same
- * wording (web-jam-tools#1167).
+ * wording (web-jam-tools#1167, web-jam-tools#1724).
  */
-export function findIssueCreateBodyViolation(body: string, needsDesign: boolean): string | null {
+export function findIssueCreateBodyViolation(
+  body: string,
+  needsDesign: boolean,
+  options?: IssueBodyCheckOptions,
+): string | null {
   const pointers = findUnresolvableIssuePointers(body);
   if (pointers.length) {
     return `unresolvable pointer phrase '${
@@ -490,6 +733,15 @@ export function findIssueCreateBodyViolation(body: string, needsDesign: boolean)
       return `deferred verification phrase '${
         deferred[0]
       }' in issue body. Resolve the verification before filing: rewrite the sentence as the settled fact, or present the question to Josh as a numbered decision.`;
+    }
+  }
+  for (const criterion of extractIssueBodyAcceptanceCriteria(body)) {
+    const stepViolation = checkStepAfterMergeCriterion(criterion, options);
+    if (stepViolation === "step-after-merge-missing-command") {
+      return `criterion "${criterion}" describes a step after the merge, but the command that starts the step is missing.`;
+    }
+    if (stepViolation === "step-after-merge-missing-josh") {
+      return `criterion "${criterion}" describes a step after the merge, but the issue is missing the "Josh" label.`;
     }
   }
   return null;
@@ -664,6 +916,7 @@ async function scanIssueCommandSegments(
         const violation = findIssueCreateBodyViolation(
           body,
           hasNeedsDesignLabel(toolInput, createArgs),
+          { labels, modelLabels },
         );
         if (violation) return `DENY:${violation}`;
       }
@@ -839,7 +1092,10 @@ export async function checkModelLabelOnIssueCreate(
     }
     const body = typeof rawBody === "string" ? rawBody : "";
     if (body && !isEpicType(toolInput)) {
-      const violation = findIssueCreateBodyViolation(body, hasNeedsDesignLabel(toolInput));
+      const violation = findIssueCreateBodyViolation(body, hasNeedsDesignLabel(toolInput), {
+        labels: rawLabels as string[],
+        modelLabels,
+      });
       if (violation) return `DENY:${violation}`;
     }
     const mcpTitle = typeof toolInput.title === "string" ? toolInput.title : null;

@@ -41,6 +41,10 @@ import {
   runGhCommand,
   tokenizeTitle,
 } from "../../hooks/lib/detect_duplicate_issue.ts";
+import {
+  checkStepAfterMergeCriterion,
+  type IssueBodyCheckOptions,
+} from "../../hooks/lib/check_model_label_on_issue_create.ts";
 import { defaultOpenBrowserImpl, expandHome, resolveHtmlPath } from "./gate1.ts";
 import { renderDesignDocFile } from "../../scripts/render_design_doc.ts";
 import { type Gate1StatusResult, type Gate1StatusType, getGate1Status } from "./gate1_record.ts";
@@ -334,9 +338,7 @@ export function validatePlanTable(
     checkRepo(row, activeRepos, violations);
     checkTests(row, violations);
     checkTitlePersonalName(row, violations);
-    if (designHeadings !== undefined) {
-      checkClosesWhen(row, rows, designHeadings, violations);
-    }
+    checkClosesWhen(row, rows, designHeadings, violations);
   }
 
   checkJoshPairingAndComposite(rows, violations);
@@ -565,19 +567,33 @@ export function extractDesignHeadings(markdown: string): Set<string> {
 
 export interface CriterionHeadingCheckResult {
   valid: boolean;
-  reason?: "unknown-heading" | "neither-heading-nor-command";
+  reason?:
+    | "unknown-heading"
+    | "neither-heading-nor-command"
+    | "step-after-merge-missing-command"
+    | "step-after-merge-missing-josh";
   unknownHeading?: string;
 }
 
+export interface CriterionCheckOptions extends IssueBodyCheckOptions {
+  /** Defaults to true. Set to false when designHeadings was not provided to validatePlanTable. */
+  checkHeadingAndCommand?: boolean;
+}
+
 /**
- * Validates a Closes when cell or an issue body acceptance criterion against design headings.
+ * Validates a Closes when cell or an issue body acceptance criterion against design headings
+ * and the step-after-merge rule (web-jam-tools#1724).
  * Each criterion/cell must name a design heading in double quotes or carry a backtick-quoted command.
  * Any double-quoted heading must exist in designHeadings (matched case-insensitively).
+ * Any criterion describing a step after the merge must carry the command that starts it, and
+ * its row/issue must also carry the `Josh` label alongside a model label.
  */
 export function checkCriterionOrClosesCell(
   text: string,
   designHeadings: ReadonlySet<string>,
+  options?: CriterionCheckOptions,
 ): CriterionHeadingCheckResult {
+  const checkHeadingAndCommand = options?.checkHeadingAndCommand !== false;
   const quotedHeadings: string[] = [];
   let hasCommand = false;
 
@@ -592,17 +608,27 @@ export function checkCriterionOrClosesCell(
     }
   }
 
-  for (const heading of quotedHeadings) {
-    if (heading === "" || !designHeadings.has(heading.toLowerCase())) {
-      return {
-        valid: false,
-        reason: "unknown-heading",
-        unknownHeading: heading,
-      };
+  if (checkHeadingAndCommand) {
+    for (const heading of quotedHeadings) {
+      if (heading === "" || !designHeadings.has(heading.toLowerCase())) {
+        return {
+          valid: false,
+          reason: "unknown-heading",
+          unknownHeading: heading,
+        };
+      }
     }
   }
 
-  if (quotedHeadings.length === 0 && !hasCommand) {
+  const stepViolation = checkStepAfterMergeCriterion(text, options);
+  if (stepViolation !== null) {
+    return {
+      valid: false,
+      reason: stepViolation,
+    };
+  }
+
+  if (checkHeadingAndCommand && quotedHeadings.length === 0 && !hasCommand) {
     return {
       valid: false,
       reason: "neither-heading-nor-command",
@@ -615,29 +641,37 @@ export function checkCriterionOrClosesCell(
 function checkClosesWhen(
   row: PlanTableRow,
   allRows: PlanTableRow[],
-  designHeadings: ReadonlySet<string>,
+  designHeadings: ReadonlySet<string> | undefined,
   violations: PlanTableViolation[],
 ): void {
   // Case 5: an epic closes when its children close
   if (isEpicRow(row, allRows)) return;
-  // Case 6: a manual step (Josh)
+  // Case 6: a manual step (Josh alone)
   const tier = stripMdMarkers(row.cells[COL_TIER]).trim();
-  if (tier === "Josh") return;
+  const tierParts = tier.split("/").map((p) => p.trim()).filter(Boolean);
+  if (tierParts.length > 0 && tierParts.every((p) => p.toLowerCase() === "josh")) return;
 
   const raw = row.cells[COL_CLOSES];
   const rowNum = stripMdMarkers(row.cells[COL_NUM]).trim() || String(allRows.indexOf(row) + 1);
 
   if (isMissingValue(raw)) {
-    violations.push({
-      rule: "closes-when-missing",
-      line: row.line,
-      column: "Closes when",
-      message: `Row ${rowNum}: Closes when cell is missing ("${raw}")`,
-    });
+    if (designHeadings !== undefined) {
+      violations.push({
+        rule: "closes-when-missing",
+        line: row.line,
+        column: "Closes when",
+        message: `Row ${rowNum}: Closes when cell is missing ("${raw}")`,
+      });
+    }
     return;
   }
 
-  const check = checkCriterionOrClosesCell(raw, designHeadings);
+  const hasJoshLabel = tierParts.some((p) => p.toLowerCase() === "josh");
+  const check = checkCriterionOrClosesCell(raw, designHeadings ?? new Set(), {
+    hasModelLabel: true,
+    hasJoshLabel,
+    checkHeadingAndCommand: designHeadings !== undefined,
+  });
   if (!check.valid) {
     if (check.reason === "unknown-heading") {
       violations.push({
@@ -646,6 +680,22 @@ function checkClosesWhen(
         column: "Closes when",
         message:
           `Row ${rowNum}: Closes when cell names heading "${check.unknownHeading}", which the design document does not have`,
+      });
+    } else if (check.reason === "step-after-merge-missing-command") {
+      violations.push({
+        rule: "closes-when-step-after-merge-missing-command",
+        line: row.line,
+        column: "Closes when",
+        message:
+          `Row ${rowNum}: Closes when cell "${raw.trim()}" describes a step after the merge, but the command that starts the step is missing`,
+      });
+    } else if (check.reason === "step-after-merge-missing-josh") {
+      violations.push({
+        rule: "closes-when-step-after-merge-missing-josh",
+        line: row.line,
+        column: "Closes when",
+        message:
+          `Row ${rowNum}: Closes when cell "${raw.trim()}" describes a step after the merge, but the row is missing the "Josh" label`,
       });
     } else if (check.reason === "neither-heading-nor-command") {
       violations.push({

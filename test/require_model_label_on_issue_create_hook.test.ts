@@ -7,7 +7,14 @@
 // python logic in TypeScript would test a copy, not the real guard).
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { checkModelLabelOnIssueCreate } from "../hooks/lib/check_model_label_on_issue_create.ts";
+import {
+  checkModelLabelOnIssueCreate,
+  findIssueCreateBodyViolation,
+} from "../hooks/lib/check_model_label_on_issue_create.ts";
+import {
+  STEP_AFTER_MERGE_CASES,
+  STEP_AFTER_MERGE_FIRST_REFUSED,
+} from "./support/step_after_merge_cases.ts";
 
 const SCRIPT_PATH = new URL(
   "../hooks/require-model-label-on-issue-create.sh",
@@ -1688,3 +1695,97 @@ for (const type of ["Task", "Epic"]) {
     assertEquals(good.code, 0, good.stderr);
   });
 }
+
+// --- Appendix D — "A step after the merge and its commands" (web-jam-tools#1724) ---
+
+for (const c of STEP_AFTER_MERGE_CASES) {
+  const type = c.isEpic ? "Epic" : "Task";
+  Deno.test(`Appendix D step-after-merge (hook) ${c.name}`, async () => {
+    const body =
+      `## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] ${c.criterion}\n\n🤖 Authored by Claude Code — Opus`;
+    if (type !== "Epic") {
+      const violation = findIssueCreateBodyViolation(body, false, { labels: c.labels });
+      if (c.expectedError) {
+        assertStringIncludes(violation ?? "", c.expectedError);
+        assertStringIncludes(violation ?? "", c.criterion);
+      } else {
+        assertEquals(violation, null);
+      }
+    }
+
+    const res = await runHook(
+      mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+        method: "create",
+        title: "Step after merge check",
+        type,
+        labels: c.labels,
+        escalation_reason: c.labels.includes("Opus") ? "Container epic" : undefined,
+        body,
+      }),
+    );
+    if (c.expectedError) {
+      assertEquals(res.code, 2);
+      assertBlocked(res.stderr);
+      assertStringIncludes(res.stderr, c.expectedError);
+      assertStringIncludes(res.stderr, c.criterion);
+    } else {
+      assertEquals(res.code, 0, res.stderr);
+    }
+  });
+}
+
+Deno.test("Appendix D step-after-merge (hook) case 24: unreadable body file on gh issue create is refused, naming the file", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body-file /tmp/does-not-exist-step-after-merge-24.md --label Terra --type Task`,
+    ),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertStringIncludes(res.stderr, "/tmp/does-not-exist-step-after-merge-24.md");
+});
+
+Deno.test("Appendix D step-after-merge (Bash gh issue create): enforces missing-command, missing-Josh, Hydrogen+Josh pass, and Josh-only carve-out", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const missingCmdBody = `${dir}/missing-cmd.md`;
+    await Deno.writeTextFile(
+      missingCmdBody,
+      `## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] ${STEP_AFTER_MERGE_FIRST_REFUSED}\n\n🤖 Authored by Claude Code — Opus`,
+    );
+    const blockedMissingCmd = await runHook(
+      bashCall(`gh issue create --title T --body-file ${missingCmdBody} --label Sol --type Task`),
+    );
+    assertEquals(blockedMissingCmd.code, 2);
+    assertBlocked(blockedMissingCmd.stderr);
+    assertStringIncludes(blockedMissingCmd.stderr, "command that starts the step is missing");
+
+    const joshOnlyAllowed = await runHook(
+      bashCall(`gh issue create --title T --body-file ${missingCmdBody} --label Josh --type Task`),
+    );
+    assertEquals(joshOnlyAllowed.code, 0, joshOnlyAllowed.stderr);
+
+    const withCmdBody = `${dir}/with-cmd.md`;
+    await Deno.writeTextFile(
+      withCmdBody,
+      "## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] After the merge, `deno task install-skills` exits 0.\n\n🤖 Authored by Claude Code — Opus",
+    );
+    const blockedMissingJosh = await runHook(
+      bashCall(
+        `gh issue create --title T --body-file ${withCmdBody} --label Hydrogen --type Task`,
+      ),
+    );
+    assertEquals(blockedMissingJosh.code, 2);
+    assertBlocked(blockedMissingJosh.stderr);
+    assertStringIncludes(blockedMissingJosh.stderr, 'missing the "Josh" label');
+
+    const withJoshAllowed = await runHook(
+      bashCall(
+        `gh issue create --title T --body-file ${withCmdBody} --label Hydrogen,Josh --type Task`,
+      ),
+    );
+    assertEquals(withJoshAllowed.code, 0, withJoshAllowed.stderr);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});

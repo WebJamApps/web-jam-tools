@@ -33,6 +33,7 @@ import type { Schema } from "../src/fix-labels/diff.ts";
 import { ACTIVE_REPOS } from "../src/shared/repos.ts";
 import denoJson from "../deno.json" with { type: "json" };
 import type { CommandRunner, OpenIssueSummary } from "../hooks/lib/detect_duplicate_issue.ts";
+import { STEP_AFTER_MERGE_CASES } from "./support/step_after_merge_cases.ts";
 
 // File/CLI tests never call the workstation's gh or use the live backlog.
 const emptyOpenIssues: CommandRunner = () => Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
@@ -67,6 +68,7 @@ const TEST_SCHEMA: Schema = {
   milestoneTopics: [],
   labels: [
     { name: "Haiku", hex: "0E8A16", repos: "all", modelTier: true },
+    { name: "Hydrogen", hex: "A5D6A7", repos: "all", modelTier: true },
     { name: "Sonnet", hex: "1D76DB", repos: "all", modelTier: true },
     { name: "Sol", hex: "006B75", repos: "all", modelTier: true },
     { name: "Opus", hex: "B392F0", repos: "all", modelTier: true },
@@ -1750,3 +1752,63 @@ Deno.test("Appendix D Case 6: Closes when cell `Josh confirms he ran it` on a ro
   assertEquals(findRule(violations, "closes-when-unknown-heading").length, 0);
   assertEquals(findRule(violations, "closes-when-neither-heading-nor-command").length, 0);
 });
+
+// --- Appendix D — "A step after the merge and its commands" (web-jam-tools#1724) ---
+
+const STEP_AFTER_MERGE_DESIGN_DOC = `
+# Step After Merge Design Fixture
+
+### Manual Steps & Runbooks
+
+Requirements text here.
+`;
+
+for (const c of STEP_AFTER_MERGE_CASES) {
+  Deno.test(`Appendix D step-after-merge (lint-plan) ${c.name}`, () => {
+    const headings = extractDesignHeadings(STEP_AFTER_MERGE_DESIGN_DOC);
+    if (!c.isEpic && c.tier !== "Josh") {
+      const tierParts = c.tier.split("/").map((p) => p.trim()).filter(Boolean);
+      const direct = checkCriterionOrClosesCell(c.criterion, headings, {
+        hasModelLabel: true,
+        hasJoshLabel: tierParts.includes("Josh"),
+      });
+      if (c.expectedReason) {
+        assertEquals(direct.valid, false);
+        assertEquals(direct.reason, c.expectedReason);
+      } else {
+        assertEquals(direct.valid, true);
+      }
+    }
+
+    const rows = c.isEpic
+      ? [
+        `| 1 | Coordinate delivery | Epic | ${c.tier} | High | web-jam-tools | Unit tests covering every validator rule | ${c.criterion} |`,
+        childRow({ epicChild: "row 1", closes: "the `deno task test` suite passes" }),
+      ]
+      : c.tier === "Josh"
+      ? [
+        EPIC_ROW,
+        childRow({ epicChild: "row 1", closes: "the `deno task test` suite passes" }),
+        `| 3 | Manual step | row 1 | Josh | Medium | web-jam-tools | none | ${c.criterion} |`,
+      ]
+      : [
+        EPIC_ROW,
+        childRow({ epicChild: "row 1", tier: c.tier, closes: c.criterion }),
+      ];
+
+    const violations = validate(planTableDoc(rows), { designHeadings: headings });
+    if (c.expectedReason === "step-after-merge-missing-command") {
+      const found = findRule(violations, "closes-when-step-after-merge-missing-command");
+      assertEquals(found.length, 1);
+      assertStringIncludes(found[0].message, c.criterion);
+      assertStringIncludes(found[0].message, "command that starts the step is missing");
+    } else if (c.expectedReason === "step-after-merge-missing-josh") {
+      const found = findRule(violations, "closes-when-step-after-merge-missing-josh");
+      assertEquals(found.length, 1);
+      assertStringIncludes(found[0].message, c.criterion);
+      assertStringIncludes(found[0].message, "Josh");
+    } else {
+      assertEquals(violations, []);
+    }
+  });
+}
