@@ -2003,7 +2003,7 @@ Deno.test("Workflow Status write: confirmed write and read-back proceeds to open
     const calls = await invocations();
     const hasGraphQL = calls.some((c) => c[0] === "api" && c[1] === "graphql");
     assertEquals(hasGraphQL, true);
-  });
+  }, { author: "agy — Gemini Flash" });
 });
 
 Deno.test("Workflow Status write: mutation failure makes script refuse and fail closed", async () => {
@@ -2018,7 +2018,7 @@ Deno.test("Workflow Status write: mutation failure makes script refuse and fail 
     const calls = await invocations();
     const hasPrCreate = calls.some((c) => c[0] === "pr" && c[1] === "create");
     assertEquals(hasPrCreate, false);
-  }, { failStatusMutation: true });
+  }, { author: "agy — Gemini Flash", failStatusMutation: true });
 });
 
 Deno.test("Workflow Status write: read-back mismatch makes script refuse and fail closed", async () => {
@@ -2033,7 +2033,7 @@ Deno.test("Workflow Status write: read-back mismatch makes script refuse and fai
     const calls = await invocations();
     const hasPrCreate = calls.some((c) => c[0] === "pr" && c[1] === "create");
     assertEquals(hasPrCreate, false);
-  }, { statusReadbackValue: "In progress" });
+  }, { author: "agy — Gemini Flash", statusReadbackValue: "In progress" });
 });
 
 Deno.test("Workflow Status write: legacy base64 node ID succeeds and passes issueId to mutation", async () => {
@@ -2051,7 +2051,7 @@ Deno.test("Workflow Status write: legacy base64 node ID succeeds and passes issu
     const graphQLCall = calls.find((c) => c[0] === "api" && c[1] === "graphql");
     assertEquals(Boolean(graphQLCall), true);
     assertEquals(graphQLCall?.includes("issueId=MDU6SXNzdWU0NjU3NDY2NTU="), true);
-  }, { nodeId: "MDU6SXNzdWU0NjU3NDY2NTU=" });
+  }, { author: "agy — Gemini Flash", nodeId: "MDU6SXNzdWU0NjU3NDY2NTU=" });
 });
 
 Deno.test("Workflow Status write: missing or null node ID causes script to fail closed", async () => {
@@ -2066,7 +2066,7 @@ Deno.test("Workflow Status write: missing or null node ID causes script to fail 
     const calls = await invocations();
     const hasPrCreate = calls.some((c) => c[0] === "pr" && c[1] === "create");
     assertEquals(hasPrCreate, false);
-  }, { nodeId: "null" });
+  }, { author: "agy — Gemini Flash", nodeId: "null" });
 });
 
 Deno.test("issue line table: Row 4 - parent API failure (rate limit / 500) fails closed", async () => {
