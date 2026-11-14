@@ -1,9 +1,16 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.62.3",
+  "version": "1.62.4",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
+    "accounting:entry": "deno run --allow-env=HOME --allow-read=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-write=.,$HOME/Dropbox/web-jam-llms/financial/books src/accounting/cli.ts entry",
+    "accounting:receipt": "deno run --allow-env=HOME --allow-read=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-write=.,$HOME/Dropbox/web-jam-llms/financial/books src/accounting/cli.ts receipt",
+    "accounting:convert": "deno run --allow-env=HOME --allow-read=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-write=.,$HOME/Dropbox/web-jam-llms/financial/books src/accounting/cli.ts convert",
+    "accounting:import": "deno run --allow-env=HOME --allow-read=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-write=.,$HOME/Dropbox/web-jam-llms/financial/books src/accounting/cli.ts import",
+    "accounting:close-month": "deno run --allow-env=HOME --allow-read=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-write=.,$HOME/Dropbox/web-jam-llms/financial/books src/accounting/cli.ts close-month",
+    "accounting:verify": "deno run --allow-env=HOME --allow-read=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-write=.,$HOME/Dropbox/web-jam-llms/financial/books src/accounting/cli.ts verify",
+    "accounting:cli": "deno run --allow-env=HOME --allow-read=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-write=.,$HOME/Dropbox/web-jam-llms/financial/books src/accounting/cli.ts",
     "health-report": "deno run --allow-read=.,$HOME/Dropbox/web-jam-llms,/tmp --allow-write=$HOME/Dropbox/web-jam-llms,/tmp --allow-env=HOME,HEALTH_TRACKER_FILE,HEALTH_ACTIVITIES_FILE,HEALTH_PROGRESS_SVG,HEALTH_REPORT_NOW,HEALTH_REPORT_TIMEOUT_MS,HEALTH_REPORT_CHROME_CMD,HEALTH_REPORT_SKIP_CHROME,HEALTH_REPORT_FORCE_TERMINAL,DISPLAY,XAUTHORITY,DBUS_SESSION_BUS_ADDRESS,XDG_RUNTIME_DIR --allow-run=google-chrome,systemctl src/health-tracker/main.ts",
     "check-snap-updates": "deno run --allow-run=timeout,notify-send --allow-env=HOME,XDG_RUNTIME_DIR,DBUS_SESSION_BUS_ADDRESS --allow-read=$HOME/.local/state/web-jam-tools --allow-write=$HOME/.local/state/web-jam-tools src/snap-updates/check_updates.ts",
     "check-token-expiry": "deno run --allow-run=gh --allow-env=HOME,PATH,GH_TOKEN,GITHUB_TOKEN,GITHUB_TOKEN_EXPIRY_TEST_HEADERS,GITHUB_TOKEN_EXPIRY_MOCK_FAILURE,GITHUB_TOKEN_EXPIRY_NOW src/github-token/check_expiry.ts",

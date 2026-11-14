@@ -501,7 +501,7 @@ Deno.test("installSkills installs all skills, migrates legacy backups, and prune
   });
 
   assertEquals(result.success, true);
-  assertEquals(result.skillsCount, 14);
+  assertEquals(result.skillsCount, 15);
 
   // Check legacy backups were migrated OUT of claudeDest
   let legacyExistsInClaude = false;
@@ -546,8 +546,9 @@ Deno.test("installSkills installs all skills, migrates legacy backups, and prune
   }
   assertFalse(expiredExists, "Expired backup must be pruned");
 
-  // Verify all 14 skills are symlinked in both destinations
+  // Verify all skills are symlinked in both destinations
   const expectedSkills = [
+    "accounting",
     "backlog-groom",
     "book-gig",
     "delegate",
