@@ -71,7 +71,7 @@ labels:
     modelTier: true
   - name: Sonnet
     hex: "1D76DB"
-    description: "Coding that needs a Claude-side capability Flash lacks; ranks above Flash but is not the default coder tier (a cost decision)"
+    description: "Ranks at the same level as Terra for easier coding tasks"
     repos: all
     modelTier: true
   - name: Argon
@@ -81,7 +81,7 @@ labels:
     modelTier: true
   - name: Opus
     hex: "B392F0"
-    description: "Top-tier architectural design, complex tech-lead judgment, spec/requirements alignment, and reviewing complex subagent outputs"
+    description: "Top-tier architectural design"
     repos: all
     modelTier: true
   - name: Fable
