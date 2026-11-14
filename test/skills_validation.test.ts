@@ -1550,27 +1550,15 @@ Deno.test("skills/pr-review/SKILL.md names Gemini Flash as the Flash author and 
   assertFalse(text.includes("Gemini Flash (Medium)"), "the medium author spelling must be gone");
 });
 
-Deno.test("skills/work-issue/SKILL.md model chain ranks Gemini 3.8 Flash (High) above Sonnet", async () => {
+Deno.test("work-issue uses lane eligibility and recorded working-model tracking", async () => {
   const text = await Deno.readTextFile("skills/work-issue/SKILL.md");
-
-  assertStringIncludes(text, "2. `Gemini 3.8 Flash (High)`");
-  assertStringIncludes(text, "3. `Claude Sonnet 4.6 (Thinking)`");
-
-  const flashRung = text.indexOf("2. `Gemini 3.8 Flash (High)`");
-  const sonnetRung = text.indexOf("3. `Claude Sonnet 4.6 (Thinking)`");
-  assert(
-    flashRung !== -1 && sonnetRung !== -1 && flashRung < sonnetRung,
-    "Gemini 3.8 Flash (High) must sit above Claude Sonnet 4.6 (Thinking) on the model chain",
-  );
-
-  // Ordinary coding routes to Flash, not Sonnet.
-  assertStringIncludes(text, "* *Ordinary Coding*: → `Gemini 3.8 Flash (High)`.");
-
-  // Version tokens are load-bearing in this picker list and must not be scrubbed.
-  assertFalse(
-    /`Gemini Flash \((?:High|Medium)\)`/.test(text),
-    "work-issue's model chain must carry versioned Gemini display names, never version-scrubbed ones",
-  );
+  assertStringIncludes(text, "\`Sol\`, \`Argon\` or \`Hydrogen\`");
+  assertStringIncludes(text, "\`Terra\` or \`Sonnet\`");
+  assertStringIncludes(text, "Outside the executing model’s eligible lane, ask Josh");
+  assertStringIncludes(text, "preserves all");
+  assertStringIncludes(text, "non-model labels, and reads the result back");
+  assertFalse(text.includes("Antigravity Model Chain"));
+  assertFalse(text.includes("Gemini 3.8 Flash (High)"));
 });
 
 Deno.test("skills/delegate/SKILL.md escalates coding to Sol or Sonnet and design to Opus", async () => {
@@ -2383,7 +2371,7 @@ function assertModelLabelGuidance(skill: string, text: string): void {
   }
   if (skill === "backlog-groom") assertStringIncludes(text, "must not be reduced to one label");
   if (skill === "work-issue") {
-    assertStringIncludes(text, "retain both labels and do not ask for a label override");
+    assertStringIncludes(text, "Do not retain the earlier model labels after work starts");
   }
   if (skill === "design-issue") {
     assertStringIncludes(text, "### Changing a value tools read");

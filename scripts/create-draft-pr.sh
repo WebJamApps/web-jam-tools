@@ -290,6 +290,13 @@ while [ $# -gt 0 ]; do
       # Read-only source for the running-model lookup; no git access or writes.
       printf '%s\n' "${ROSTER[@]}"
       exit 0 ;;
+    --author-label)
+      # Reuse the roster's authoritative author-to-label mapping for issue setup.
+      [ $# -ge 2 ] || { echo "ERROR: --author-label requires a value." >&2; exit 1; }
+      author_roster_check "$2"
+      [ -n "$PR_MODEL_LABEL" ] || exit 1
+      printf '%s\n' "$PR_MODEL_LABEL"
+      exit 0 ;;
     --closes)
       if [ $# -ge 2 ] && [[ "$2" != --* ]]; then
         ISSUE="$2"

@@ -167,8 +167,7 @@ agy_env_args() {
 #   AGY_MODELS="Model A|Model B" handle-agy-tasks.sh    (pipe-separated; the
 # names contain spaces, so pipes — not spaces — separate them).
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-DEFAULT_MODELS=$(deno run --allow-env "$SCRIPT_DIR/../hooks/lib/check_agy_model.ts" --default-models 2>/dev/null || echo 'Gemini 3.8 Flash (High)')
-IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
+MODELS=()
 
 # --- PR author spelling for the running model (web-jam-tools#912) ----------
 # The model chain's display names are VERSION-QUALIFIED — they come from
@@ -223,19 +222,21 @@ pr_author_for_model() {
 # which is the precise condition that produced web-jam-tools#912's alarm. The
 # check is delegated to create-draft-pr.sh's own --check-author mode so the
 # roster is read from its single source of truth, never copied here.
-for _m in "${MODELS[@]}"; do
-  _candidate="$(pr_author_for_model "$_m")"
-  if ! "$SCRIPT_DIR/create-draft-pr.sh" --check-author "$_candidate" >/dev/null 2>&1; then
-    echo "ERROR: model '$_m' yields PR author '$_candidate', which create-draft-pr.sh's" >&2
-    echo "       roster will refuse — this run could not open a PR through that script," >&2
-    echo "       so agy would be pushed into bypassing it (web-jam-tools#912)." >&2
-    echo "       Fix the model chain (AGY_MODELS / hooks/lib/check_agy_model.ts) or the" >&2
-    echo "       roster in scripts/create-draft-pr.sh so the two agree. Roster refusal:" >&2
-    "$SCRIPT_DIR/create-draft-pr.sh" --check-author "$_candidate" >&2 || true
-    exit 1
-  fi
-done
-unset _m _candidate
+check_model_chain() {
+  for _m in "${MODELS[@]}"; do
+    _candidate="$(pr_author_for_model "$_m")"
+    if ! "$SCRIPT_DIR/create-draft-pr.sh" --check-author "$_candidate" >/dev/null 2>&1; then
+      echo "ERROR: model '$_m' yields PR author '$_candidate', which create-draft-pr.sh's" >&2
+      echo "       roster will refuse — this run could not open a PR through that script," >&2
+      echo "       so agy would be pushed into bypassing it (web-jam-tools#912)." >&2
+      echo "       Fix the model chain (AGY_MODELS / hooks/lib/check_agy_model.ts) or the" >&2
+      echo "       roster in scripts/create-draft-pr.sh so the two agree. Roster refusal:" >&2
+      "$SCRIPT_DIR/create-draft-pr.sh" --check-author "$_candidate" >&2 || true
+      exit 1
+    fi
+  done
+  unset _m _candidate
+}
 
 # --- parse args ---
 # Interactive is the default. Leading flags (any order, before the optional task):
@@ -254,6 +255,7 @@ SETUP_ONLY=0
 DRY_RUN=0
 FORCE_LAND=0
 NO_LAND=0
+SETUP_AUTHOR=""
 TARGET_REPO_OVERRIDE="${AGY_TARGET_REPO:-}"
 while [ $# -gt 0 ]; do
   case "${1:-}" in
@@ -274,10 +276,23 @@ while [ $# -gt 0 ]; do
       TARGET_REPO_OVERRIDE="${1#*=}"
       shift
       ;;
+    --author)
+      [ -n "${2:-}" ] || { echo "ERROR: --author requires a value." >&2; exit 1; }
+      SETUP_AUTHOR="$2"
+      shift 2
+      ;;
+    --author=*) SETUP_AUTHOR="${1#*=}"; shift ;;
     *) break ;;
   esac
 done
 TASK_ARG="${1:-}"
+
+# Setup runs in the caller's model, without launching agy or selecting its chain.
+if [ "$SETUP_ONLY" -eq 0 ]; then
+  DEFAULT_MODELS=$(deno run --allow-env "$SCRIPT_DIR/../hooks/lib/check_agy_model.ts" --default-models 2>/dev/null || echo 'Gemini 3.8 Flash (High)')
+  IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
+  check_model_chain
+fi
 
 # --- resolve task text + target repo ---
 # GitHub issue form only: <Repo>#<num>. web-jam-tools#249 removed the
@@ -537,6 +552,12 @@ if [ ! -d "$REPO_DIR" ]; then
 fi
 cd "$REPO_DIR"
 
+if [ "$SETUP_ONLY" -eq 1 ]; then
+  SETUP_AUTHOR=$(deno run --config "$SCRIPT_DIR/../deno.json" --allow-env --allow-read --allow-run=gh,bash,deno \
+    "$SCRIPT_DIR/work-issue-setup.ts" "$REPO" "$ISSUE_NUM" "$SETUP_AUTHOR") || exit 1
+  MODELS=("$SETUP_AUTHOR")
+fi
+
 # --- worktree isolation (web-jam-tools#239 item 2) --------------------------
 # agy runs in an isolated git worktree under /tmp instead of cd-ing/branching
 # in Josh's main clone directly, so the main clone stays free (on whatever
@@ -746,6 +767,15 @@ else
   have (web-jam-tools#235)."
 fi
 
+PROMPT_AUTHOR='agy — <the model you are running as>'
+AUTHOR_INSTRUCTIONS='This agy launch exports FORCED_PR_AUTHOR with the selected author.
+  create-draft-pr.sh resolves the signing author through the recorded model.'
+if [ "$SETUP_ONLY" -eq 1 ]; then
+  PROMPT_AUTHOR="$SETUP_AUTHOR"
+  AUTHOR_INSTRUCTIONS="Setup verified the author as $SETUP_AUTHOR and recorded its model label.
+  Codex and agy signing continue to use the recorded session/conversation identity."
+fi
+
 # --- composed prompt: standing rules wrapped around the task ---
 read -r -d '' PROMPT <<EOF || true
 You are working in the $TARGET_REPO repo on branch $BRANCH, already created off the latest dev.
@@ -774,13 +804,9 @@ Rules:
   (e.g. "chore: fold /learn updates into rules") — do not open a separate PR or defer it to a follow-up step. If
   \`/learn\` makes no changes or is running on a non-Antigravity surface (e.g. Claude Code), that's fine; just continue.
 - When lint and tests are green, finish by opening a draft PR — run:
-    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "agy — <the model you are running as>" \\
+    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "$PROMPT_AUTHOR" \\
       --summary-file /tmp/pr-summary.md --test-plan-file /tmp/pr-test-plan.md --test-evidence-file /tmp/pr-test-evidence.md
-  NOTE (web-jam-tools#190): this session already exports FORCED_PR_AUTHOR with
-  the correct value, so create-draft-pr.sh will use that regardless of what you
-  pass to --author — pass the flag anyway (it's still validated against a
-  roster if the override weren't there), but don't worry about getting your own
-  model name exactly right.
+  $AUTHOR_INSTRUCTIONS
   IMPORTANT (web-jam-tools#145): a multi-line value passed inline (e.g.
   \`--test-plan "1. ...\\n2. ...\\n3. ..."\`) gets FLATTENED to one line before the
   script sees it — the newlines are lost and a numbered test plan renders as one
