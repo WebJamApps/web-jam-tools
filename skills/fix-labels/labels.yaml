@@ -71,7 +71,7 @@ labels:
     modelTier: true
   - name: Sonnet
     hex: "1D76DB"
-    description: "Coding that needs a Claude-side capability Flash lacks; ranks above Flash but is not the default coder tier (a cost decision)"
+    description: "Ranks at the level as Terra for easier coding tasks"
     repos: all
     modelTier: true
   - name: Argon
