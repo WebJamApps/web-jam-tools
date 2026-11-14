@@ -72,7 +72,7 @@ Deno.test("a forced agy name with no invocation context cannot push", () =>
     delete env.AGY_MODEL_NAME;
     delete env.AGY_TRANSCRIPT_PATH;
     delete env.WJT_SURFACE;
-    env.FORCED_PR_AUTHOR = "agy — Gemini Flash";
+    env.FORCED_PR_AUTHOR = "agy — Gemini Hydrogen";
     let pushes = 0;
     assertEquals(
       await pushWithContext([], undefined, {
@@ -107,7 +107,7 @@ for (const surface of ["claude", "agy", "codex"] as const) {
       ? "Codex — GPT-6 Luna"
       : surface === "claude"
       ? "Claude Code — Claude Opus"
-      : "agy — Gemini Flash";
+      : "agy — Gemini Hydrogen";
     try {
       await fixture.writeSession([fixCall.text]);
       const args = ["--fix-comment", comment];
@@ -141,7 +141,7 @@ for (const surface of ["claude", "agy", "codex"] as const) {
         ? "gpt-6-luna"
         : surface === "claude"
         ? "claude-opus-5-5"
-        : "gemini-3.8-flash-high";
+        : "gemini-4-hydrogen-high";
       for (const model of ["missing-model", "gpt-6-sol"]) {
         const damaged = model === "missing-model"
           ? recordedText.replace(`"${slug}"`, "null")
@@ -1268,7 +1268,7 @@ async function createFixFixture(surface: Surface) {
     CLAUDE_CODE_SESSION_ID: surface === "claude" ? fixtureThread : "",
     AGY_HOOK_RECORD_PATH: recordPath,
     AGY_CONVERSATION_ID: surface === "agy" ? fixtureThread : "",
-    AGY_MODEL_NAME: surface === "agy" ? "gemini-3.8-flash-high" : "",
+    AGY_MODEL_NAME: surface === "agy" ? "gemini-4-hydrogen-high" : "",
     AGY_TRANSCRIPT_PATH: surface === "agy" ? sessionPath : "",
     WJT_SURFACE: surface,
     PATH: `${toolsDir}:${Deno.env.get("PATH") ?? ""}`,
@@ -1333,7 +1333,7 @@ async function createFixFixture(surface: Surface) {
         JSON.stringify({
           conversationId: fixtureThread,
           transcriptPath: sessionPath,
-          modelName: "gemini-3.8-flash-high",
+          modelName: "gemini-4-hydrogen-high",
         }) + "\n",
       );
       const parent = `${userHome}/.gemini/brain/parent/.system_generated/subagents`;

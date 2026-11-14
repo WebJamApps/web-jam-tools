@@ -67,7 +67,7 @@ for (const identity of AGY_IDENTITIES) {
         {
           title: "Signing fixture",
           bodyFile: "/tmp/b.md",
-          labels: ["Flash"],
+          labels: ["Terra"],
           author: "agy — Gemini Flash",
           dryRun: true,
         },
@@ -90,7 +90,7 @@ Deno.test("agy issue creation refuses missing record before any GitHub call", ()
           {
             title: "Signing fixture",
             bodyFile: "/tmp/b.md",
-            labels: ["Flash"],
+            labels: ["Terra"],
             author: "agy — Gemini Flash",
           },
           deps,
