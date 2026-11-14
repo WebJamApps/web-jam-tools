@@ -197,6 +197,10 @@ MODELS=()
 pr_author_for_model() {
   local model="$1"
   case "$model" in
+    gemini-4-hydrogen-high)
+      printf 'agy — Gemini Hydrogen'
+      return 0
+      ;;
     gemini-*-flash-high|gemini-*-flash-tiered)
       printf 'agy — Gemini Flash'
       return 0
@@ -210,8 +214,8 @@ pr_author_for_model() {
       return 0
       ;;
   esac
-  # agy models (Gemini Flash, Gemini Argon, Claude Sonnet 5.5) run at high effort only, so the
-  # "(High)" effort suffix is dropped too: the roster names the model ("Gemini Flash",
+  # agy models (Gemini Hydrogen, Gemini Argon, Claude Sonnet 5.5) run at high effort only, so the
+  # "(High)" effort suffix is dropped too: the roster names the model ("Gemini Hydrogen",
   # "Gemini Argon", "Claude Sonnet 5.5", web-jam-tools#1202, web-jam-tools#1465). A "(Low)" or
   # "(Medium)" suffix is kept so the roster refuses it.
   printf 'agy — %s' "$(printf '%s' "$model" | sed -E 's/^([[:alpha:]]+)[[:space:]]+[0-9]+(\.[0-9]+)*[[:space:]]+/\1 /; s/[[:space:]]+\(High\)$//')"

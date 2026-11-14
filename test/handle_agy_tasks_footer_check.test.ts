@@ -314,3 +314,27 @@ Deno.test("create-draft-pr.sh --check-author is a read-only probe of the real ro
   assertEquals(await rosterAccepts("Claude Code — Claude Opus"), true);
   assertEquals(await rosterAccepts("Claude Code — Some Model That Does Not Exist"), false);
 });
+
+Deno.test("Hydrogen dispatch author and footer agree with the roster for slug and display names", async () => {
+  const expected = "agy — Gemini Hydrogen";
+  for (const model of ["gemini-4-hydrogen-high", "Gemini 4 Hydrogen (High)", "Gemini Hydrogen"]) {
+    assertEquals(await derivedAuthor(model), expected);
+    assertEquals(await rosterAccepts(await derivedAuthor(model)), true);
+    const result = await runFooterCheck(`## Summary\n- fixture\n\n🤖 Work by ${expected}`, model);
+    assertEquals(result.code, 0, result.stderr);
+    const wrong = await runFooterCheck(
+      "## Summary\n- fixture\n\n🤖 Work by agy — Gemini Argon",
+      model,
+    );
+    assertEquals(wrong.code, 1, wrong.stderr);
+  }
+  for (
+    const model of [
+      "gemini-4-hydrogen-low",
+      "gemini-4-hydrogen-medium",
+      "Gemini 4 Hydrogen (Medium)",
+    ]
+  ) {
+    assertEquals(await rosterAccepts(await derivedAuthor(model)), false, model);
+  }
+});
