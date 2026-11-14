@@ -163,9 +163,51 @@ export async function checkSnapUpdates(options: CheckOptions = {}): Promise<Chec
   await alert(
     "critical",
     "Snap updates look stuck",
-    `${stuck.join(", ")}: waiting ${STUCK_AFTER_DAYS}+ days. Run: sudo snap refresh`,
+    `${stuck.join(", ")}: waiting ${STUCK_AFTER_DAYS}+ days. Run: ${STUCK_FIX_COMMAND}`,
   );
   return "stuck";
+}
+
+export const STUCK_FIX_COMMAND = "sudo snap refresh";
+
+export interface StuckNoticeOptions {
+  stateDir?: string;
+  now?: Date;
+  runCommand?: (command: string, args: string[]) => Promise<CommandResult>;
+}
+
+/**
+ * A one-line notice naming the snaps recorded as stuck and the command that fixes them, or null
+ * when none are. Read-only: it never writes the record or sends a notification. When a snap has
+ * since been updated, a quick live query drops it; if that query fails the record is used as is.
+ */
+export async function stuckSnapsNotice(options: StuckNoticeOptions = {}): Promise<string | null> {
+  const runCommand = options.runCommand ?? runSystemCommand;
+  const now = options.now ?? new Date();
+  const stateDir = options.stateDir ?? `${Deno.env.get("HOME")}/.local/state/web-jam-tools`;
+
+  let text: string;
+  try {
+    text = await Deno.readTextFile(`${stateDir}/${STATE_FILE}`);
+  } catch {
+    return null;
+  }
+  let stuck = findStuckSnaps(parseFirstSeen(text) ?? {}, now);
+  if (stuck.length === 0) return null;
+
+  try {
+    const query = await runCommand("timeout", ["5", "snap", "refresh", "--list"]);
+    if (query.code === 0) {
+      const pending = parsePendingSnaps(`${query.stdout}\n${query.stderr}`);
+      if (pending !== null) stuck = stuck.filter((name) => pending.includes(name));
+    }
+  } catch {
+    // Keep the recorded list.
+  }
+  if (stuck.length === 0) return null;
+  return `Snap updates stuck ${STUCK_AFTER_DAYS}+ days (${
+    stuck.join(", ")
+  }). Run: ${STUCK_FIX_COMMAND}`;
 }
 
 if (import.meta.main) {
