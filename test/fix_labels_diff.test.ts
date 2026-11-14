@@ -368,7 +368,7 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     "WebJamSocketCluster",
   ]);
   const backupRestoreTopic = schema.milestoneTopics.find((t) => t.name === "backup-restore");
-  assertEquals(backupRestoreTopic?.repos, ["web-jam-tools"]);
+  assertEquals(backupRestoreTopic?.repos, ["web-jam-tools", "JaMmusic", "web-jam-back"]);
   const timShermanMusicTopic = schema.milestoneTopics.find((t) => t.name === "timshermanmusic");
   assertEquals(timShermanMusicTopic?.repos, [
     "web-jam-back",
@@ -428,11 +428,11 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   );
   assertEquals(
     schema.milestoneTopics.find((t) => t.name === "songwriting")?.repos,
-    ["web-jam-tools"],
+    ["web-jam-tools", "JaMmusic", "web-jam-back"],
   );
   assertEquals(
     schema.milestoneTopics.find((t) => t.name === "token-savings")?.repos,
-    ["web-jam-tools"],
+    ["web-jam-tools", "JaMmusic", "web-jam-back", "CollegeLutheran", "AppersonAuto"],
   );
 });
 

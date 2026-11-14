@@ -201,7 +201,7 @@ Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tool
   );
   assertEquals(
     schema.milestoneTopics.find((t) => t.name === "backup-restore")?.repos,
-    ["web-jam-tools"],
+    ["web-jam-tools", "JaMmusic", "web-jam-back"],
   );
   // web-jam-tools#300 follow-up decision: `timshermanmusic` IS canonical,
   // TimShermanMusic added per backlog-groom-design.md (web-jam-tools#1643).
@@ -259,11 +259,11 @@ Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tool
   );
   assertEquals(
     schema.milestoneTopics.find((t) => t.name === "songwriting")?.repos,
-    ["web-jam-tools"],
+    ["web-jam-tools", "JaMmusic", "web-jam-back"],
   );
   assertEquals(
     schema.milestoneTopics.find((t) => t.name === "token-savings")?.repos,
-    ["web-jam-tools"],
+    ["web-jam-tools", "JaMmusic", "web-jam-back", "CollegeLutheran", "AppersonAuto"],
   );
   // timshermanmusic now includes TimShermanMusic, placing it before CollegeLutheran in first-appearance order.
   assertEquals(milestoneTopicRepos(schema), [
