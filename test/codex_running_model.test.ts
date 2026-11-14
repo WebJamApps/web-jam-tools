@@ -11,6 +11,82 @@ import {
   withSigningFixture,
 } from "./support/codex_signing_fixture.ts";
 import { runWhoami } from "../scripts/whoami.ts";
+import { AGY_IDENTITIES, withAgySigningFixture } from "./support/agy_signing_fixture.ts";
+
+for (const identity of AGY_IDENTITIES) {
+  Deno.test(`agy signing binds ${identity.conversationId} despite typed and forced Flash names`, () =>
+    withAgySigningFixture(async (options, env) => {
+      env.FORCED_PR_AUTHOR = "agy — Gemini Flash";
+      assertEquals(await resolveSigningAuthor("agy — Gemini Flash", options), identity.author);
+      const output: string[] = [];
+      assertEquals(await runWhoami({ ...options, signing: true }, (s) => output.push(s)), 0);
+      assertEquals(output, [identity.author]);
+    }, identity));
+}
+
+for (const key of ["AGY_CONVERSATION_ID", "AGY_MODEL_NAME", "AGY_TRANSCRIPT_PATH"]) {
+  Deno.test(`agy signing refuses missing ${key}, not a typed fallback`, () =>
+    withAgySigningFixture(async (options, env) => {
+      delete env[key];
+      await assertRejects(() => resolveSigningAuthor("agy — Gemini Flash", options));
+    }));
+}
+
+for (const key of ["CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID"]) {
+  Deno.test(`agy signing refuses competing ${key}`, () =>
+    withAgySigningFixture(async (options, env) => {
+      env[key] = SESSION_ID;
+      await assertRejects(
+        () => resolveSigningAuthor("agy — Gemini Flash", options),
+        Error,
+        "two tools",
+      );
+    }));
+}
+
+Deno.test("agy signing refuses unknown, mismatched, missing and unreadable evidence and ambiguous roster", () =>
+  withAgySigningFixture(async (options, env, recordPath) => {
+    for (const model of ["gemini-4-argon-medium", "gemini-3.8-flash-high"]) {
+      env.AGY_MODEL_NAME = model;
+      await assertRejects(() => resolveSigningAuthor("agy — Gemini Flash", options));
+    }
+    env.AGY_MODEL_NAME = AGY_IDENTITIES[0].modelName;
+    await assertRejects(() =>
+      resolveSigningAuthor(undefined, { ...options, invocationContext: null })
+    );
+    await assertRejects(
+      () =>
+        resolveSigningAuthor(undefined, {
+          ...options,
+          readRoster: async () => [...await readAuthorRoster(), "Gemini Argon"],
+        }),
+      Error,
+      "Two author roster entries",
+    );
+    await assertRejects(
+      () =>
+        resolveSigningAuthor(undefined, {
+          ...options,
+          readRoster: () => Promise.reject(new Error("unreadable roster")),
+        }),
+      Error,
+      "unreadable roster",
+    );
+    await Deno.chmod(recordPath, 0o000);
+    try {
+      await assertRejects(() => resolveSigningAuthor(undefined, options), Error, "Cannot read");
+    } finally {
+      await Deno.chmod(recordPath, 0o600);
+    }
+    await Deno.writeTextFile(recordPath, "damaged\n");
+    await assertRejects(() => resolveSigningAuthor(undefined, options), Error, "Cannot read");
+    await Deno.remove(recordPath);
+    await assertRejects(
+      () => resolveSigningAuthor("agy — Gemini Flash", options),
+      Error,
+      "Cannot read",
+    );
+  }));
 
 const SESSION_ID = "01a10611-a947-7b00-87b3-414e9e2085eb";
 for (const author of ["Codex — GPT-6.1 Sol", undefined]) {

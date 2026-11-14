@@ -271,6 +271,9 @@ Deno.test("running-model rejects unsafe Claude session identifiers", () =>
 
 for (
   const [modelName, expected] of [
+    ["gemini-4-hydrogen-high", "Gemini Hydrogen"],
+    ["Gemini 4 Hydrogen (High)", "Gemini Hydrogen"],
+    ["Gemini Hydrogen", "Gemini Hydrogen"],
     ["gemini-4-argon-high", "Gemini Argon"],
     ["Gemini 4 Argon (High)", "Gemini Argon"],
     ["Gemini Argon", "Gemini Argon"],
