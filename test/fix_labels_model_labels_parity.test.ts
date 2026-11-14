@@ -54,3 +54,16 @@ Deno.test("labels.yaml and model-labels.json include Argon as a canonical model-
   const parsed = JSON.parse(raw);
   assertEquals(parsed.modelLabels.includes("Argon"), true);
 });
+
+Deno.test("current model vocabulary includes Terra, Hydrogen and Fable and excludes retired Flash", async () => {
+  const schema = await loadSchema(DEFAULT_SCHEMA_PATH);
+  const parsed = JSON.parse(await Deno.readTextFile(MODEL_LABELS_JSON_PATH));
+  for (const name of ["Terra", "Hydrogen", "Fable"]) {
+    const label = schema.labels.find((entry) => entry.name === name);
+    assertEquals(label?.modelTier, true);
+    assertEquals(label?.repos, "all");
+    assertEquals(parsed.modelLabels.includes(name), true);
+  }
+  assertEquals(schema.labels.some((entry) => entry.name === "Flash"), false);
+  assertEquals(parsed.modelLabels.includes("Flash"), false);
+});

@@ -158,14 +158,14 @@ Deno.test("parsePlanJson parses an object with epic and children", () => {
         title: "Child 1",
         type: "Task",
         priority: "High",
-        tier: "Flash",
+        tier: "Terra",
       },
       {
         id: 2,
         title: "Child 2",
         type: "Task",
         priority: "Medium",
-        tier: "Flash",
+        tier: "Terra",
         blocked_by: [1],
       },
     ],
@@ -186,7 +186,7 @@ async function fileParentFixture(plan: IssuePlanDoc) {
   const planPath = await Deno.makeTempFile({ suffix: ".json" });
   const items = [...(plan.epic ? [plan.epic] : []), ...(plan.children ?? [])];
   for (const item of items) {
-    item.labels ??= ["Flash"];
+    item.labels ??= ["Terra"];
     if (
       item.type?.toLowerCase() !== "epic" && !item.labels.includes("Josh") && item.tier !== "Josh"
     ) {
@@ -415,7 +415,7 @@ Deno.test('epics case 12: design:file-plan parent "WebJamApps/web-jam-tools#9999
         children: [
           {
             title: "Child with missing parent",
-            labels: ["Flash"],
+            labels: ["Terra"],
             parent: "WebJamApps/web-jam-tools#999999",
             body:
               "## What this builds\n\nChild with missing parent\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
@@ -474,10 +474,10 @@ for (
             repo: "web-jam-tools",
             ...(["epic", "parent"].includes(parent)
               ? {}
-              : { epic: { title: "Fixture epic", tier: "Flash" } }),
-            children: [{ title: "Valid preceding child", tier: "Flash" }, {
+              : { epic: { title: "Fixture epic", tier: "Terra" } }),
+            children: [{ title: "Valid preceding child", tier: "Terra" }, {
               title: "Invalid parent child",
-              tier: "Flash",
+              tier: "Terra",
               parent,
             }],
           }),
@@ -720,7 +720,7 @@ Deno.test("filePlan files epic first, then children attached to epic, then links
             code: 0,
             stdout: JSON.stringify({
               ...issue,
-              labels: num === 900 ? [{ name: "Opus" }] : [{ name: "Flash" }],
+              labels: num === 900 ? [{ name: "Opus" }] : [{ name: "Terra" }],
               type: { name: num === 900 ? "Epic" : "Task" },
               milestone: { title: "token-savings" },
               parent: num > 900 ? { number: 900 } : undefined,
@@ -860,7 +860,7 @@ Deno.test("filePlan links external dependency citations (e.g. web-jam-tools#747)
         {
           title: "Dependent Issue",
           type: "Task",
-          tier: "Flash",
+          tier: "Terra",
           body:
             "## What this builds\n\nDependent Issue\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
           blocked_by: ["web-jam-tools#747"],
@@ -910,7 +910,7 @@ Deno.test("filePlan links external dependency citations (e.g. web-jam-tools#747)
             number: 850,
             title: "Dependent Issue",
             type: { name: "Task" },
-            labels: [{ name: "Flash" }],
+            labels: [{ name: "Terra" }],
           }),
           stderr: "",
         });
@@ -1063,7 +1063,7 @@ Deno.test("filePlan throws when dependency linking fails", async () => {
           id: 1,
           title: "Task 1",
           type: "Task",
-          tier: "Flash",
+          tier: "Terra",
           body:
             "## What this builds\n\nTask 1\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
         },
@@ -1071,7 +1071,7 @@ Deno.test("filePlan throws when dependency linking fails", async () => {
           id: 2,
           title: "Task 2",
           type: "Task",
-          tier: "Flash",
+          tier: "Terra",
           blocked_by: [1],
           body:
             "## What this builds\n\nTask 2\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
@@ -1120,7 +1120,7 @@ Deno.test("filePlan throws when dependency linking fails", async () => {
             number: num,
             title: titlesByNum600[num] || `Task ${num}`,
             type: { name: "Task" },
-            labels: [{ name: "Flash" }],
+            labels: [{ name: "Terra" }],
           }),
           stderr: "",
         });
@@ -1261,8 +1261,8 @@ Deno.test("filePlan: pre-validation rejects plan with duplicate titles (case-ins
     JSON.stringify({
       repo: "web-jam-tools",
       children: [
-        { title: "Add rate limiting", tier: "Flash" },
-        { title: "add RATE limiting", tier: "Flash" },
+        { title: "Add rate limiting", tier: "Terra" },
+        { title: "add RATE limiting", tier: "Terra" },
       ],
     }),
   );
@@ -1292,20 +1292,20 @@ Deno.test("filePlan: resolves position and explicit id dependencies accurately w
       children: [
         {
           title: "Child A (Position 1)",
-          tier: "Flash",
+          tier: "Terra",
           body:
             "## What this builds\n\nChild A\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
         },
         {
           id: "feat-b",
           title: "Child B (Position 2, explicit id feat-b)",
-          tier: "Flash",
+          tier: "Terra",
           body:
             "## What this builds\n\nChild B\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
         },
         {
           title: "Child C (Position 3)",
-          tier: "Flash",
+          tier: "Terra",
           blocked_by: [1, "feat-b"],
           body:
             "## What this builds\n\nChild C\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
@@ -1359,7 +1359,7 @@ Deno.test("filePlan: resolves position and explicit id dependencies accurately w
             number: num,
             title: titlesByNum700[num] || `Task ${num}`,
             type: { name: "Task" },
-            labels: [{ name: "Flash" }],
+            labels: [{ name: "Terra" }],
           }),
           stderr: "",
         });
@@ -1429,7 +1429,7 @@ Deno.test('Appendix D Case 7: Body criterion `- [ ] builds "The model-label rule
         children: [
           {
             title: "Task with valid heading criterion",
-            tier: "Flash",
+            tier: "Terra",
             body:
               '## What this builds\n\nSomething\n\n## Acceptance criteria\n\n- [ ] builds "The model-label rule" as written',
           },
@@ -1457,7 +1457,7 @@ Deno.test("Appendix D Case 8: Body criterion ``- [ ] `deno task test` passes`` p
         children: [
           {
             title: "Task with command criterion",
-            tier: "Flash",
+            tier: "Terra",
             body:
               "## What this builds\n\nSomething\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes",
           },
@@ -1485,7 +1485,7 @@ Deno.test('Appendix D Case 9: Body criterion `- [ ] builds "Nope" as written` is
         children: [
           {
             title: "Task with Nope heading",
-            tier: "Flash",
+            tier: "Terra",
             body:
               '## What this builds\n\nSomething\n\n## Acceptance criteria\n\n- [ ] builds "Nope" as written',
           },
@@ -1519,7 +1519,7 @@ Deno.test("Appendix D Case 10: Body criterion `- [ ] The pull request merges` is
         children: [
           {
             title: "Task with neither heading nor command",
-            tier: "Flash",
+            tier: "Terra",
             body:
               "## What this builds\n\nSomething\n\n## Acceptance criteria\n\n- [ ] The pull request merges",
           },
@@ -1552,7 +1552,7 @@ Deno.test("Appendix D Case 11: A body with no `## Acceptance criteria` section i
         children: [
           {
             title: "Task without criteria section",
-            tier: "Flash",
+            tier: "Terra",
             body: "## What this builds\n\nOnly description here.",
           },
         ],
@@ -1590,7 +1590,7 @@ Deno.test("Appendix D Case 12: The epic item's body with criterion `- [ ] Closes
         children: [
           {
             title: "Child task",
-            tier: "Flash",
+            tier: "Terra",
             body:
               "## What this builds\n\nChild\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes",
           },
@@ -1645,7 +1645,7 @@ Deno.test("Appendix D Case 14: A plan with no `designDoc` field is refused befor
         children: [
           {
             title: "Task with no designDoc in plan",
-            tier: "Flash",
+            tier: "Terra",
             body:
               "## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes",
           },
@@ -1676,7 +1676,7 @@ Deno.test("Appendix D Case 15: A plan whose `designDoc` cannot be read is refuse
         children: [
           {
             title: "Task with missing design doc file",
-            tier: "Flash",
+            tier: "Terra",
             body:
               "## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes",
           },
@@ -1717,7 +1717,7 @@ Deno.test("validateIssueBodyCriteria: nested subsections (e.g. ### Behavior) are
         children: [
           {
             title: "Task with grouped criteria in subsections",
-            tier: "Flash",
+            tier: "Terra",
             body:
               '## What this builds\n\nTask\n\n## Acceptance criteria\n\n### Commands\n\n- [ ] `deno task test` passes\n\n### Behavior\n\n- [ ] builds "The model-label rule" as written\n\n## Files changed\n\n- src/index.ts',
           },
@@ -1745,7 +1745,7 @@ Deno.test("validateIssueBodyCriteria: nested subsections (e.g. ### Behavior) are
         children: [
           {
             title: "Task with invalid criterion in subsection",
-            tier: "Flash",
+            tier: "Terra",
             body:
               '## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n\n### Behavior\n\n- [ ] builds "Nope" as written\n\n## Files changed\n\n- src/index.ts',
           },
@@ -1779,7 +1779,7 @@ Deno.test("validateIssueBodyCriteria: wrapped criteria across continuation lines
         children: [
           {
             title: "Task with wrapped criterion",
-            tier: "Flash",
+            tier: "Terra",
             body:
               '## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] builds "The model-label rule"\n  as written\n\n## Files changed\n\n- src/index.ts',
           },
@@ -1807,7 +1807,7 @@ Deno.test("validateIssueBodyCriteria: wrapped criteria across continuation lines
         children: [
           {
             title: "Task with wrapped invalid criterion",
-            tier: "Flash",
+            tier: "Terra",
             body:
               '## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] builds "Nope"\n  as written\n\n## Files changed\n\n- src/index.ts',
           },
@@ -1841,7 +1841,7 @@ Deno.test("validateIssueBodyCriteria: indented acceptance criteria heading (e.g.
         children: [
           {
             title: "Task with indented criteria heading",
-            tier: "Flash",
+            tier: "Terra",
             body:
               '## What this builds\n\nTask\n\n  ## Acceptance criteria\n\n- [ ] builds "The model-label rule" as written\n\n## Files changed\n\n- src/index.ts',
           },
@@ -1869,7 +1869,7 @@ Deno.test("validateIssueBodyCriteria: indented subsequent heading (e.g. '  ## Fi
         children: [
           {
             title: "Task with indented next section",
-            tier: "Flash",
+            tier: "Terra",
             body:
               '## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] builds "The model-label rule" as written\n\n  ## Files changed\n\n- src/index.ts\nUnrelated text that is neither a heading nor command',
           },

@@ -15,7 +15,7 @@ for (const row of DESIGN_BODY_CASES) {
         {
           title: "Design body fixture",
           bodyFile: "/fixture.md",
-          labels: ["Flash"],
+          labels: ["Terra"],
           author: TEST_AUTHOR,
           dryRun: !row.refused,
         },
@@ -96,7 +96,7 @@ Deno.test("signing issue k: dry run replaces the typed author with Luna", () =>
       {
         title: "Signing fixture",
         bodyFile: "/tmp/b.md",
-        labels: ["Flash"],
+        labels: ["Terra"],
         author: "Codex — GPT-6.1 Sol",
         dryRun: true,
       },
@@ -119,7 +119,7 @@ Deno.test("signing issue n: missing session refuses before any GitHub call", () 
           {
             title: "Signing fixture",
             bodyFile: "/tmp/b.md",
-            labels: ["Flash"],
+            labels: ["Terra"],
             author: LUNA_SIGNATURE,
           },
           deps,
@@ -140,7 +140,7 @@ const createIssueAndVerify = (
   approvalCheck?: (repoFull: string, title: string) => ApprovalCheckResult,
 ) =>
   realCreateIssueAndVerify(
-    { author: TEST_AUTHOR, labels: ["Flash"], ...options },
+    { author: TEST_AUTHOR, labels: ["Terra"], ...options },
     withPassingProbe(deps ?? defaultExecDeps),
     approvalCheck,
   );
@@ -156,7 +156,7 @@ Deno.test("parseArgs parses all supported CLI flags and formats", () => {
     "-t",
     "Bug",
     "-l",
-    "Flash, Blocked",
+    "Terra, Blocked",
     "-m",
     "v1.2",
     "--priority",
@@ -172,7 +172,7 @@ Deno.test("parseArgs parses all supported CLI flags and formats", () => {
   assertEquals(parsed.title, "Fix everything");
   assertEquals(parsed.bodyFile, "/tmp/body.md");
   assertEquals(parsed.type, "Bug");
-  assertEquals(parsed.labels, ["Flash", "Blocked"]);
+  assertEquals(parsed.labels, ["Terra", "Blocked"]);
   assertEquals(parsed.milestone, "v1.2");
   assertEquals(parsed.priority, "High");
   assertEquals(parsed.parent, 437);
@@ -226,7 +226,7 @@ Deno.test("verifyIssueAttributes passes when all requested attributes match", ()
   const actual: IssueData = {
     number: 514,
     title: "Add create-issue script",
-    labels: [{ name: "Flash" }, { name: "Task" }],
+    labels: [{ name: "Terra" }, { name: "Task" }],
     type: { name: "Task" },
     milestone: { title: "token-savings", number: 13 },
     issue_field_values: [
@@ -242,7 +242,7 @@ Deno.test("verifyIssueAttributes passes when all requested attributes match", ()
     title: "Add create-issue script",
     bodyFile: "/tmp/b.md",
     type: "Task",
-    labels: ["Flash"],
+    labels: ["Terra"],
     milestone: "token-savings",
     priority: "High",
     parent: 437,
@@ -310,12 +310,12 @@ Deno.test("verifyIssueAttributes fails when requested label is missing", () => {
   const actual: IssueData = {
     number: 10,
     title: "Test",
-    labels: [{ name: "Flash" }],
+    labels: [{ name: "Terra" }],
   };
   const requested = {
     title: "Test",
     bodyFile: "/tmp/b.md",
-    labels: ["Flash", "Needs Design"],
+    labels: ["Terra", "Needs Design"],
   };
 
   const res = verifyIssueAttributes(actual, requested);
@@ -481,7 +481,7 @@ Deno.test("createIssueAndVerify succeeds and returns formatted issue string with
         const mockIssue: IssueData = {
           number: 515,
           title: "My New Issue",
-          labels: [{ name: "Flash" }],
+          labels: [{ name: "Terra" }],
           type: { name: "Task" },
           milestone: { title: "token-savings" },
           parent: { number: 437 },
@@ -507,7 +507,7 @@ Deno.test("createIssueAndVerify succeeds and returns formatted issue string with
     title: "My New Issue",
     bodyFile: "/tmp/body.md",
     type: "Task",
-    labels: ["Flash"],
+    labels: ["Terra"],
     milestone: "token-savings",
     priority: "High",
     parent: 437,
@@ -562,7 +562,7 @@ Deno.test("createIssueAndVerify setting type to Epic succeeds with mocked GraphQ
         const mockIssue: IssueData = {
           number: 516,
           title: "My Epic Issue",
-          labels: [{ name: "Flash" }],
+          labels: [{ name: "Terra" }],
           type: { name: "Epic" },
         };
         return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
@@ -625,7 +625,7 @@ Deno.test("createIssueAndVerify fallback GraphQL parent check when parent missin
         const mockIssue: IssueData = {
           number: 515,
           title: "My New Issue",
-          labels: [{ name: "Flash" }],
+          labels: [{ name: "Terra" }],
         };
         return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
       }
@@ -1306,7 +1306,7 @@ Deno.test("createIssueAndVerify (default approvalCheck, no third arg): succeeds 
               const mockIssue: IssueData = {
                 number: 999,
                 title: "My Approved Issue",
-                labels: [{ name: "Flash" }],
+                labels: [{ name: "Terra" }],
               };
               return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
             }
@@ -1551,7 +1551,7 @@ Deno.test("createIssueAndVerify: accepted sibling dependency is registered and v
         const issueData: IssueData = {
           number: 850,
           title: "Sibling child",
-          labels: [{ name: "Flash" }],
+          labels: [{ name: "Terra" }],
           parent: { number: 737 },
         };
         return Promise.resolve({ code: 0, stdout: JSON.stringify(issueData), stderr: "" });
@@ -1719,7 +1719,7 @@ Deno.test("createIssueAndVerify: no similar OPEN issue proceeds unchanged", asyn
         const mockIssue: IssueData = {
           number: 902,
           title: "docs: fix a broken link in the README",
-          labels: [{ name: "Flash" }],
+          labels: [{ name: "Terra" }],
         };
         return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
       }
@@ -1785,7 +1785,7 @@ Deno.test("createIssueAndVerify: --dedup-override clears a duplicate deny and re
         const mockIssue: IssueData = {
           number: 903,
           title: "skills/design-issue: support and validate structured Revision History tables",
-          labels: [{ name: "Flash" }],
+          labels: [{ name: "Terra" }],
         };
         return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
       }
@@ -1835,7 +1835,7 @@ Deno.test("createIssueAndVerify refuses a deferred-verification body before any 
   await assertRejects(
     () =>
       createIssueAndVerify(
-        { title: "T", bodyFile: "/tmp/b.md", type: "Task", labels: ["Flash"] },
+        { title: "T", bodyFile: "/tmp/b.md", type: "Task", labels: ["Terra"] },
         deps,
         APPROVE_ALL,
       ),
@@ -1850,7 +1850,7 @@ Deno.test("createIssueAndVerify refuses an unresolvable-pointer body before any 
   await assertRejects(
     () =>
       createIssueAndVerify(
-        { title: "T", bodyFile: "/tmp/b.md", type: "Task", labels: ["Flash"] },
+        { title: "T", bodyFile: "/tmp/b.md", type: "Task", labels: ["Terra"] },
         deps,
         APPROVE_ALL,
       ),
@@ -1867,7 +1867,7 @@ Deno.test("createIssueAndVerify lets a deferred-verification body through with N
       title: "T",
       bodyFile: "/tmp/b.md",
       type: "Task",
-      labels: ["Flash", "Needs Design"],
+      labels: ["Terra", "Needs Design"],
       dryRun: true,
     },
     deps,
@@ -1885,7 +1885,7 @@ Deno.test("createIssueAndVerify skips both body checks for --type Epic (web-jam-
     "See the epic. The old helper is assumed but not confirmed unused.",
   );
   const result = await createIssueAndVerify(
-    { title: "T", bodyFile: "/tmp/b.md", type: "Epic", labels: ["Flash"], dryRun: true },
+    { title: "T", bodyFile: "/tmp/b.md", type: "Epic", labels: ["Terra"], dryRun: true },
     deps,
     APPROVE_ALL,
   );
@@ -1934,7 +1934,7 @@ Deno.test("createIssueAndVerify writes the Authored-by footer as the last line, 
       bodyFile: "/tmp/b.md",
       author: "Claude Code — Opus",
       dedupOverrideReason: "different scope",
-      labels: ["Flash"],
+      labels: ["Terra"],
       dryRun: true,
     },
     deps,
@@ -1946,7 +1946,7 @@ Deno.test("createIssueAndVerify writes the Authored-by footer as the last line, 
 
 Deno.test("createIssueAndVerify: a body already ending in a footer, filed with a duplicate-search override, carries exactly one footer", async () => {
   const { deps } = probeDeps(
-    "## What this builds\nBody\n\n🤖 Authored by agy — Gemini Flash\n",
+    "## What this builds\nBody\n\n🤖 Authored by agy — Gemini Terra\n",
     { code: 0, stderr: "" },
   );
   const result = await realCreateIssueAndVerify(
@@ -1955,14 +1955,14 @@ Deno.test("createIssueAndVerify: a body already ending in a footer, filed with a
       bodyFile: "/tmp/b.md",
       author: "Claude Code — Opus",
       dedupOverrideReason: "different scope",
-      labels: ["Flash"],
+      labels: ["Terra"],
       dryRun: true,
     },
     deps,
     APPROVE_ALL,
   );
   assertEquals(result.split("🤖 Authored by").length - 1, 1, result);
-  assertEquals(result.includes("agy — Gemini Flash"), false, result);
+  assertEquals(result.includes("agy — Gemini Terra"), false, result);
   assertEquals(result.trimEnd().endsWith("🤖 Authored by Claude Code — Opus"), true, result);
   assertEquals(result.indexOf("## Duplicate check") < result.indexOf("🤖 Authored by"), true);
 });
@@ -1972,7 +1972,7 @@ Deno.test("createIssueAndVerify refuses a missing --author and files nothing", a
   await assertRejects(
     () =>
       realCreateIssueAndVerify(
-        { title: "T", bodyFile: "/tmp/b.md", labels: ["Flash"] },
+        { title: "T", bodyFile: "/tmp/b.md", labels: ["Terra"] },
         deps,
         APPROVE_ALL,
       ),
@@ -1987,7 +1987,7 @@ Deno.test("createIssueAndVerify refuses an empty --author and files nothing", as
   await assertRejects(
     () =>
       realCreateIssueAndVerify(
-        { title: "T", bodyFile: "/tmp/b.md", labels: ["Flash"], author: "  " },
+        { title: "T", bodyFile: "/tmp/b.md", labels: ["Terra"], author: "  " },
         deps,
         APPROVE_ALL,
       ),
@@ -2004,7 +2004,7 @@ Deno.test("createIssueAndVerify refuses an author not on the roster, names it an
   });
   const err = await assertRejects(() =>
     realCreateIssueAndVerify(
-      { title: "T", bodyFile: "/tmp/b.md", labels: ["Flash"], author: "Codex — GPT-6" },
+      { title: "T", bodyFile: "/tmp/b.md", labels: ["Terra"], author: "Codex — GPT-6" },
       deps,
       APPROVE_ALL,
     )
@@ -2022,7 +2022,7 @@ Deno.test("createIssueAndVerify: a probe that cannot run refuses with a differen
     const { deps, calls } = probeDeps("Body", probe);
     const err = await assertRejects(() =>
       realCreateIssueAndVerify(
-        { title: "T", bodyFile: "/tmp/b.md", labels: ["Flash"], author: "Claude Code — Opus" },
+        { title: "T", bodyFile: "/tmp/b.md", labels: ["Terra"], author: "Claude Code — Opus" },
         deps,
         APPROVE_ALL,
       )
@@ -2034,7 +2034,7 @@ Deno.test("createIssueAndVerify: a probe that cannot run refuses with a differen
   const { deps } = probeDeps("Body", { code: 1, stderr: ROSTER_REFUSAL });
   const notOnRoster = await assertRejects(() =>
     realCreateIssueAndVerify(
-      { title: "T", bodyFile: "/tmp/b.md", labels: ["Flash"], author: "X" },
+      { title: "T", bodyFile: "/tmp/b.md", labels: ["Terra"], author: "X" },
       deps,
       APPROVE_ALL,
     )
@@ -2044,7 +2044,7 @@ Deno.test("createIssueAndVerify: a probe that cannot run refuses with a differen
 });
 
 Deno.test("createIssueAndVerify: a body already ending in a footer gets exactly one, naming --author", async () => {
-  const { deps } = probeDeps("Body\n\n🤖 Authored by agy — Gemini Flash\n", {
+  const { deps } = probeDeps("Body\n\n🤖 Authored by agy — Gemini Terra\n", {
     code: 0,
     stderr: "",
   });
@@ -2052,7 +2052,7 @@ Deno.test("createIssueAndVerify: a body already ending in a footer gets exactly 
     {
       title: "T",
       bodyFile: "/tmp/b.md",
-      labels: ["Flash"],
+      labels: ["Terra"],
       author: "Claude Code — Opus",
       dryRun: true,
     },
@@ -2060,7 +2060,7 @@ Deno.test("createIssueAndVerify: a body already ending in a footer gets exactly 
     APPROVE_ALL,
   );
   assertEquals(result.split("🤖 Authored by").length - 1, 1);
-  assertEquals(result.includes("Gemini Flash"), false);
+  assertEquals(result.includes("Gemini Terra"), false);
   assertEquals(result.trimEnd().endsWith("🤖 Authored by Claude Code — Opus"), true);
 });
 
@@ -2111,7 +2111,7 @@ Deno.test("epics case 13: create-issue --parent <N> in web-jam-tools links the i
         const mockIssue: IssueData = {
           number: 300,
           title: "Same-repo child",
-          labels: [{ name: "Flash" }],
+          labels: [{ name: "Terra" }],
           parent: {
             number: 1355,
             repository: { name: "web-jam-tools", owner: { login: "WebJamApps" } },
@@ -2186,7 +2186,7 @@ Deno.test("epics case 14: create-issue --parent WebJamApps/web-jam-tools#<N> fro
         const mockIssue: IssueData = {
           number: 200,
           title: "Cross-repo child",
-          labels: [{ name: "Flash" }],
+          labels: [{ name: "Terra" }],
           parent: {
             number: 1355,
             repository: { name: "web-jam-tools", owner: { login: "WebJamApps" } },

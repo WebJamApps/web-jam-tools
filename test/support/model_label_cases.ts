@@ -2,7 +2,7 @@
 export const MODEL_LABEL_NAMES = [
   "Astra",
   "Fable",
-  "Flash",
+  "Terra",
   "Haiku",
   "Luna",
   "Opus",
@@ -15,7 +15,7 @@ export const MODEL_LABEL_CASES: Array<{
   reason?: string;
   error?: string;
 }> = [
-  { labels: ["Flash"] },
+  { labels: ["Terra"] },
   { labels: ["Sol"] },
   { labels: ["Sonnet"], reason: ESCALATION_REASON },
   { labels: ["Sonnet"], error: "Sonnet needs an escalation reason" },
@@ -25,7 +25,7 @@ export const MODEL_LABEL_CASES: Array<{
   { labels: ["Sol", "Sonnet"], reason: ESCALATION_REASON },
   { labels: ["Sonnet", "Sol"], error: "Sonnet needs an escalation reason" },
   {
-    labels: ["Sonnet", "Flash"],
+    labels: ["Sonnet", "Terra"],
     reason: "x",
     error: "a second model label outside the allowed pair",
   },

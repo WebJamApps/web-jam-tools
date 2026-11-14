@@ -1574,7 +1574,7 @@ Deno.test("Hook (per-session default, no override): DENIES (fails closed) with a
 
 // --- Fix for two real refusals hit on 2026-09-12: replace the exact-phrase list with a regex ---
 //
-// "create an issue for JaMmusic then for the work you want to dispatch to Flash" was refused before
+// "create an issue for JaMmusic then for the work you want to dispatch to Terra" was refused before
 // web-jam-tools#975 merged; "please create a new issue to constrain adding to memory..." was STILL
 // refused after #975 merged, because of the leading "please" AND the word "new". A one-phrase-at-a-time
 // literal list can never keep up, so FILE_ISSUE_INVOCATION_RE recognizes the SHAPE of an invocation
@@ -1591,7 +1591,7 @@ Deno.test("FILE_ISSUE_INVOCATION_RE: must-match — the real phrasings Josh was 
   // Refused before web-jam-tools#975 merged.
   assertEquals(
     filingSkillInvoked(
-      "create an issue for JaMmusic then for the work you want to dispatch to Flash",
+      "create an issue for JaMmusic then for the work you want to dispatch to Terra",
     ),
     "file-issue",
   );

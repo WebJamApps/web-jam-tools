@@ -86,33 +86,19 @@ labels:
     modelTier: true
   - name: Fable
     hex: "D93F0B"
-    description: "Fable 5 remains the superior model for deep reasoning, structural planning, and long-context retention - currently unavailable"
+    description: "Claude Fable 5.2 at high effort: top-tier reasoning and design, only for work Josh names"
     repos: all
     modelTier: true
-    # Retired/dormant, kept in every repo in case the model returns.
-    # DELETE-PROTECTION ONLY (Josh, 2026-07-25): missing -> still propose
-    # create; wrong color -> still propose recolor. It is just never a
-    # delete/wrong-repo-removal candidate, in any repo.
-    # web-jam-tools#300: flagged ambiguous (not one of the four prune
-    # categories, not named in the issue's explicit "Keep" list either) —
-    # Josh's call: LEAVE AS-IS, no schema change. He separately migrated all
-    # 24 open `Fable`-labelled issues to `Opus` live on GitHub (0 open
-    # issues carry `Fable` now); that was live metadata work, not a canon
-    # change, so this entry (and its neverDelete protection) is unchanged.
     neverDelete: true
 
-  # --- Model-tier — Flash, all 8 repos ---
-  # Josh's call (2026-07-31): Flash is at Sonnet quality, so it must be
-  # routable in every repo, not just the 5 front-end ones. Josh retired
-  # Flash Low on 2026-08-02. The medium level was retired and the high level
-  # renamed `Flash` (web-jam-tools#1202): Gemini Flash runs at high effort
-  # only, so the label names the model and leaves the effort to the playbook.
-  # The alias makes /fix-labels propose a rename in place, so every issue
-  # carrying the old label keeps it.
-  - name: Flash
+  - name: Terra
+    hex: "8B6F47"
+    description: "Everyday coding via Codex: GPT-6.1 Terra (gpt-6.1-terra), high effort"
+    repos: all
+    modelTier: true
+  - name: Hydrogen
     hex: "E67E22"
-    description: "Default implementation tier: full-stack coding, multi-file refactoring, complex backend/system work, and interactive work across all repos; the default lane, billed to Google rather than the constrained Anthropic budget"
-    aliases: ["Flash High"]
+    description: "Shared-lane coding via agy: Gemini 4 Hydrogen (gemini-4-hydrogen-high), high effort"
     repos: all
     modelTier: true
   - name: Sol

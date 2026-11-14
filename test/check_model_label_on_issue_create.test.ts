@@ -19,7 +19,7 @@ const MODEL_LABELS_PATH = new URL(
 Deno.test("ESCALATION_LABELS contains Sonnet and Opus", () => {
   assertEquals(ESCALATION_LABELS.has("Sonnet"), true);
   assertEquals(ESCALATION_LABELS.has("Opus"), true);
-  assertEquals(ESCALATION_LABELS.has("Flash"), false);
+  assertEquals(ESCALATION_LABELS.has("Terra"), false);
   assertEquals(ESCALATION_LABELS.has("Haiku"), false);
 });
 
@@ -122,13 +122,13 @@ Deno.test("decide: Sonnet and Opus require escalation justification", () => {
   // Opus with reason
   assertEquals(decide(["Opus"], modelLabels, "architectural design"), "PASS");
 
-  // Flash, Haiku require no reason
-  assertEquals(decide(["Flash"], modelLabels), "PASS");
+  // Terra, Haiku require no reason
+  assertEquals(decide(["Terra"], modelLabels), "PASS");
   assertEquals(decide(["Haiku"], modelLabels), "PASS");
   assertEquals(decide(["Fable"], modelLabels), "PASS");
 
-  // The retired Flash labels are no model label at all (web-jam-tools#1202)
-  for (const retired of ["Flash Med", "Flash High"]) {
+  // The retired Terra labels are no model label at all (web-jam-tools#1202)
+  for (const retired of ["Terra Med", "Terra High"]) {
     assertEquals(decide([retired], modelLabels).startsWith("DENY:no model label"), true);
   }
 
@@ -182,11 +182,11 @@ for (const mode of ["cli", "mcp"] as const) {
 
 for (
   const labels of [
-    ["Flash", "Sonnet"],
+    ["Terra", "Sonnet"],
     ["Sol", "Opus"],
     ["Sol", "Astra"],
     ["Sonnet", "Opus"],
-    ["Sol", "Sonnet", "Flash"],
+    ["Sol", "Sonnet", "Terra"],
   ]
 ) {
   Deno.test(`decide: ${labels.join(" / ")} is refused even with a reason`, () => {
@@ -344,7 +344,7 @@ Deno.test("checkModelLabelOnIssueCreate: CLI create with a similar OPEN issue is
     tool_name: "Bash",
     tool_input: {
       command:
-        'gh issue create --repo WebJamApps/web-jam-tools --title "skills/design-issue: support and validate structured Revision History tables" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Flash"',
+        'gh issue create --repo WebJamApps/web-jam-tools --title "skills/design-issue: support and validate structured Revision History tables" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Terra"',
     },
   });
   const res = await checkModelLabelOnIssueCreate(
@@ -361,7 +361,7 @@ Deno.test("checkModelLabelOnIssueCreate: CLI create using -R (gh's repo shorthan
     tool_name: "Bash",
     tool_input: {
       command:
-        'gh issue create -R WebJamApps/web-jam-tools --title "skills/design-issue: support and validate structured Revision History tables" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Flash"',
+        'gh issue create -R WebJamApps/web-jam-tools --title "skills/design-issue: support and validate structured Revision History tables" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Terra"',
     },
   });
   const res = await checkModelLabelOnIssueCreate(
@@ -378,7 +378,7 @@ Deno.test("checkModelLabelOnIssueCreate: raw gh issue create whose body file can
     tool_name: "Bash",
     tool_input: {
       command:
-        `gh issue create --repo WebJamApps/web-jam-tools --title "skills/design-issue: support and validate structured Revision History tables" --body-file ${missingPath} --type Task --label "Flash"`,
+        `gh issue create --repo WebJamApps/web-jam-tools --title "skills/design-issue: support and validate structured Revision History tables" --body-file ${missingPath} --type Task --label "Terra"`,
     },
   });
   let searched = false;
@@ -397,7 +397,7 @@ Deno.test("checkModelLabelOnIssueCreate: deno task create-issue whose body file 
     tool_name: "Bash",
     tool_input: {
       command:
-        `deno task create-issue --repo WebJamApps/web-jam-tools --title "skills/design-issue: support and validate structured Revision History tables" --body-file ${missingPath} --type Task --label "Flash"`,
+        `deno task create-issue --repo WebJamApps/web-jam-tools --title "skills/design-issue: support and validate structured Revision History tables" --body-file ${missingPath} --type Task --label "Terra"`,
     },
   });
   const denied = await checkModelLabelOnIssueCreate(
@@ -423,7 +423,7 @@ Deno.test("checkModelLabelOnIssueCreate: MCP create with a non-string body is re
       repo: "web-jam-tools",
       title: "skills/design-issue: support and validate structured Revision History tables",
       type: "Task",
-      labels: ["Flash"],
+      labels: ["Terra"],
       body: 12345,
     },
   });
@@ -440,7 +440,7 @@ Deno.test("checkModelLabelOnIssueCreate: CLI create with no similar OPEN issue p
     tool_name: "Bash",
     tool_input: {
       command:
-        'gh issue create --repo WebJamApps/web-jam-tools --title "docs: fix a broken link in the README" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Flash"',
+        'gh issue create --repo WebJamApps/web-jam-tools --title "docs: fix a broken link in the README" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Terra"',
     },
   });
   const res = await checkModelLabelOnIssueCreate(
@@ -456,7 +456,7 @@ Deno.test("checkModelLabelOnIssueCreate: CLI create is refused when the duplicat
     tool_name: "Bash",
     tool_input: {
       command:
-        'gh issue create --repo WebJamApps/web-jam-tools --title "skills/design-issue: support and validate structured Revision History tables" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Flash"',
+        'gh issue create --repo WebJamApps/web-jam-tools --title "skills/design-issue: support and validate structured Revision History tables" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Terra"',
     },
   });
   const res = await checkModelLabelOnIssueCreate(
@@ -473,7 +473,7 @@ Deno.test("checkModelLabelOnIssueCreate: CLI --dedup-override clears a duplicate
     tool_name: "Bash",
     tool_input: {
       command:
-        'gh issue create --repo WebJamApps/web-jam-tools --title "skills/design-issue: support and validate structured Revision History tables" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Flash" ' +
+        'gh issue create --repo WebJamApps/web-jam-tools --title "skills/design-issue: support and validate structured Revision History tables" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Terra" ' +
         '--dedup-override web-jam-tools#885 --dedup-override-reason "narrower scope, docs only"',
     },
   });
@@ -494,7 +494,7 @@ Deno.test("checkModelLabelOnIssueCreate: MCP create with a similar OPEN issue is
       repo: "web-jam-tools",
       title: "skills/design-issue: Revision History table support and validation",
       type: "Task",
-      labels: ["Flash"],
+      labels: ["Terra"],
     },
   });
   const res = await checkModelLabelOnIssueCreate(
@@ -514,7 +514,7 @@ Deno.test("checkModelLabelOnIssueCreate: MCP create with dedup_override_reason c
       repo: "web-jam-tools",
       title: "skills/design-issue: Revision History table support and validation",
       type: "Task",
-      labels: ["Flash"],
+      labels: ["Terra"],
       dedup_override: "web-jam-tools#885",
       dedup_override_reason: "different scope, already reviewed",
       body: SIGNED_BODY,
@@ -534,7 +534,7 @@ Deno.test("checkModelLabelOnIssueCreate: create with a generic short title skips
     tool_name: "Bash",
     tool_input: {
       command:
-        'gh issue create --repo WebJamApps/web-jam-tools --title "T" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Flash"',
+        'gh issue create --repo WebJamApps/web-jam-tools --title "T" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Terra"',
     },
   });
   const res = await checkModelLabelOnIssueCreate(payload, MODEL_LABELS_PATH, () => {
@@ -551,7 +551,7 @@ Deno.test("checkModelLabelOnIssueCreate: create with no --repo skips the dedup s
     tool_name: "Bash",
     tool_input: {
       command:
-        'gh issue create --title "A reasonably descriptive title here" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Flash"',
+        'gh issue create --title "A reasonably descriptive title here" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Terra"',
     },
   });
   const res = await checkModelLabelOnIssueCreate(payload, MODEL_LABELS_PATH, () => {

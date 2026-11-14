@@ -28,7 +28,7 @@ Deno.test("model-label vocabulary fails closed for a missing or damaged sidecar"
     await Deno.writeTextFile(file, JSON.stringify({ modelLabels: ["FutureModel"] }));
     const vocabulary = loadModelLabels(file);
     assertEquals(modelLabelViolation(["FutureModel"], vocabulary), undefined);
-    assertEquals(modelLabelViolation(["Flash"], vocabulary), "no model label");
+    assertEquals(modelLabelViolation(["Terra"], vocabulary), "no model label");
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
@@ -40,9 +40,9 @@ const cellCases: Array<[string, string[] | string]> = [
   ["Sonnet/Sol", ["Sonnet", "Sol"]],
   ["Sonnet  /  Sol", ["Sonnet", "Sol"]],
   ["**Sonnet / Sol**", ["Sonnet", "Sol"]],
-  ["Flash", ["Flash"]],
+  ["Terra", ["Terra"]],
   ["Josh", ["Josh"]],
-  ["Sonnet / Flash", ["Sonnet", "Flash"]],
+  ["Sonnet / Terra", ["Sonnet", "Terra"]],
   ["Sonnet / Bogus", "Bogus"],
   ["Sonnet / ", "empty name"],
   ["", "tier is missing"],
@@ -63,7 +63,16 @@ Deno.test("plan lint checks label combinations without requiring a reason column
     undefined,
   );
   assertStringIncludes(
-    modelLabelViolation(readPlanModelLabels("Sonnet / Flash", tiers), tiers, undefined, false)!,
+    modelLabelViolation(readPlanModelLabels("Sonnet / Terra", tiers), tiers, undefined, false)!,
     "outside the allowed pair",
   );
+});
+
+Deno.test("retired Flash is unknown to the canonical label vocabulary", () => {
+  const vocabulary = loadModelLabels();
+  assertEquals(modelLabelViolation(["Flash"], vocabulary), "no model label");
+  assertThrows(() => readPlanModelLabels("Flash", vocabulary), Error, 'Unknown model tier "Flash"');
+  for (const name of ["Terra", "Hydrogen", "Fable"]) {
+    assertEquals(vocabulary.has(name), true);
+  }
 });

@@ -176,28 +176,28 @@ Deno.test("pr_author_for_model is idempotent on an already-unversioned name", as
   assertEquals(await derivedAuthor("Gemini Flash"), ROSTER_HIGH_AUTHOR);
 });
 
-Deno.test("every model in the default chain yields an author the roster accepts", async () => {
+Deno.test("default-chain authors are checked against the roster, including retired Flash refusal", async () => {
   // The structural impossibility that caused web-jam-tools#912 was that the
-  // default chain and the roster disagreed and nothing checked. This is that
-  // check, run against both real sources.
+  // default chain and the roster disagreed and nothing checked. Retired Flash
+  // now intentionally refuses until the downstream dispatcher migration lands.
   for (const spec of DEFAULT_AGY_MODELS) {
     const author = await derivedAuthor(spec.displayName);
     assertEquals(
       await rosterAccepts(author),
-      true,
+      !author.includes("Gemini Flash"),
       `create-draft-pr.sh's roster refuses '${author}', derived from '${spec.displayName}' — ` +
         "a dispatch on this model could not open a PR through that script at all",
     );
   }
 });
 
-Deno.test("every allowed agy model (displayName and slug) yields a roster-accepted author, and low/medium names are refused", async () => {
+Deno.test("allowed agy model names stay roster-checked; retired Flash and low/medium names are refused", async () => {
   for (const spec of ALLOWED_AGY_MODELS) {
     for (const input of [spec.displayName, spec.slug]) {
       const author = await derivedAuthor(input);
       assertEquals(
         await rosterAccepts(author),
-        true,
+        !author.includes("Gemini Flash"),
         `create-draft-pr.sh's roster refuses '${author}', derived from '${input}'`,
       );
     }
