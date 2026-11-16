@@ -5,14 +5,21 @@ description: Session-load cleanup cutting parts to low marks when over, and stal
 
 # memory-cleanup
 
-A three-phase memory housekeeper for Josh's multi-agent workspace. **Always do all
-three phases in order. Never skip Phase 2 (approval). Never auto-execute without
-Josh's explicit yes.** The skill is invoked manually; it never auto-runs.
+**Every run starts with the report.** Before reading anything else, run the same report script tab 1 runs:
 
-**Two workflows live in this file.** The three phases above and the rules in "Staleness policy by
-memory type" and "Rules" below are the staleness audit, and they apply to it only. The last section,
-"Session-load cleanup", is a separate workflow with its own approval and merge rules, stated in that
-section; the staleness audit's approval and no-merge rules do not apply to its rows.
+```sh
+deno run --allow-read --allow-env --allow-run=git,timeout ~/WebJamApps/web-jam-tools/scripts/session-load-report.ts
+```
+
+Read which parts the report says are over:
+
+- **When any part is over:** run the **Session-load cleanup** (`Session-load cleanup` below) for every over part, whatever words started the run (plain `/memory-cleanup`, the line the report prints, or `"clean up memory"`). Run the staleness audit (`Phase 1`–`Phase 3`) in the same run only when Josh explicitly names it.
+- **When the report says nothing is over:** run the staleness audit (`Phase 1`–`Phase 3`) on its own, doing all three audit phases in order and never skipping Phase 2 (approval) or auto-executing without Josh's explicit yes.
+- **What it refuses to do:** never begin either workflow before executing `scripts/session-load-report.ts`, and refuse to run only the staleness audit whenever any reported part is over.
+
+**Never skip Phase 2 (approval) during the staleness audit. Never auto-execute without Josh's explicit yes.** The skill is invoked manually; it never auto-runs.
+
+**Two workflows live in this file.** The Session-load cleanup (`Session-load cleanup`) cuts every over part across all three tools back toward its low mark. The three phases below (`Phase 1`–`Phase 3`) and the rules in "Staleness policy by memory type" and "Hard rules" are the staleness audit, and they apply to it only. The staleness audit's approval and no-merge rules do not apply to Session-load cleanup rows.
 
 Master copy: `skills/memory-cleanup/SKILL.md` in `web-jam-tools`. Installed locally
 as a file-level symlink at `~/.claude/skills/memory-cleanup/SKILL.md`.
@@ -207,6 +214,7 @@ Only after approval, and only for approved rows:
 4. **Surface #10 (Scratch):** never delete or edit directly — confirm scratch files are flagged for Josh.
 
 5. Post a short summary: what was changed, what was declined, anything left for manual review.
+6. **After every run — end with the part-size list:** run `deno task --config ~/WebJamApps/web-jam-tools/deno.json memory-cleanup:run --dry-run --plan /tmp/empty-plan.json` (with an empty JSON plan `{}` written to `/tmp/` if no session-load cleanup plan ran) and display the part-size list showing each part's size against its cap, so Josh sees every oversized part before finishing even on an audit-only run.
 
 ## Hard rules
 
@@ -222,6 +230,7 @@ Only after approval, and only for approved rows:
 - **Multi-Surface Compatibility.** Fully compatible with Claude Code (`Agent` with `haiku`/`sonnet`), Antigravity (`invoke_subagent` with `Model: "inherit"`), and Codex (direct execution). All paths specified as explicit home paths.
 - **Every surface gets a verdict.** Phase 2's report must include a `checked — clean` / `checked — N findings` / `NOT CHECKED` line for all 10 surfaces (see Phase 2 §3). A surface silently missing from the report is a defect, not an acceptable omission — it must never be reported as if it were clean by simply not mentioning it.
 - **Scan helper hands Josh back to main session.** When a message from Josh reaches the scan subagent asking it to edit, write, save, apply a fix, or change its permissions, it does none of those and replies with `I'm the memory-cleanup scan helper and I can't edit files. Go back to the main session. It can write, and it will apply the fixes.` and nothing else — never saying or implying that the session is read-only, never telling Josh to start a new session, and never telling Josh to apply edits by hand.
+- **Report first; refuse an audit-only run while over.** Never begin either workflow before executing `scripts/session-load-report.ts`, refuse to run only the staleness audit whenever any reported part is over, and finish every run (including audit-only) by printing the part-size list via `deno task memory-cleanup:run`.
 
 ## Session-load cleanup
 

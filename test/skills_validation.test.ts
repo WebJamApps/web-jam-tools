@@ -1816,6 +1816,52 @@ Deno.test("skills/memory-cleanup/SKILL.md scan helper hands Josh back to main se
   );
 });
 
+Deno.test("skills/memory-cleanup/SKILL.md opens with session-load report and ends audit with part-size list (web-jam-tools#1828)", async () => {
+  const text = await Deno.readTextFile(`${SKILLS_DIR}memory-cleanup/SKILL.md`);
+  const phase1Idx = text.indexOf("## Phase 1");
+  assert(phase1Idx > 0, "Expected '## Phase 1' section in skills/memory-cleanup/SKILL.md");
+
+  const opening = text.slice(0, phase1Idx);
+  assertFalse(
+    opening.includes("Always do all three phases in order") ||
+      opening.includes("Always do all\nthree phases in order"),
+    "Opening section must not retain the retired sentence 'Always do all three phases in order'",
+  );
+  assertStringIncludes(
+    opening,
+    "scripts/session-load-report.ts",
+    "Opening section before '## Phase 1' must name scripts/session-load-report.ts",
+  );
+  assertStringIncludes(
+    opening,
+    "Every run starts with the report",
+    "Opening section must carry 'Every run starts with the report'",
+  );
+  assertStringIncludes(
+    opening,
+    "refuse to run only the staleness audit whenever any reported part is over",
+    "Opening section must refuse running the staleness audit alone while a part is over",
+  );
+
+  const phase3Start = text.indexOf("## Phase 3");
+  const hardRulesStart = text.indexOf("## Hard rules");
+  assert(
+    phase3Start > 0 && hardRulesStart > phase3Start,
+    "Expected '## Phase 3' followed by '## Hard rules' in skills/memory-cleanup/SKILL.md",
+  );
+  const phase3 = text.slice(phase3Start, hardRulesStart);
+  assertStringIncludes(
+    phase3,
+    "memory-cleanup:run",
+    "The staleness audit's last phase (Phase 3) must end by printing the part-size list from deno task memory-cleanup:run",
+  );
+  assertStringIncludes(
+    phase3,
+    "part-size list",
+    "The staleness audit's last phase (Phase 3) must reference the part-size list",
+  );
+});
+
 /**
  * Asserts skills/design-issue/SKILL.md follows the design document rules (web-jam-tools#1345).
  * Validates revision table, rendered page, Phase 4 memory rules, and plan row priority.
