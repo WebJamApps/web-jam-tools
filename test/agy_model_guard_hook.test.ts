@@ -4,7 +4,7 @@
 // tests driving REAL agy PreToolUse payloads (carrying `modelName`, per
 // finding 7) through hooks/agy-hook-shim.sh + hooks/agy-model-guard.sh,
 // asserting the shim's emitted verdict is agy's `decision:"deny"` form for
-// a non-Flash model, and `decision:"allow"` for an allowed high model.
+// a disallowed model, and `decision:"allow"` for an allowed high model.
 
 import { assert, assertEquals } from "@std/assert";
 import { checkSessionModel } from "../hooks/lib/check_agy_session_model.ts";
@@ -23,6 +23,7 @@ interface Result {
 async function runDirect(payload: unknown): Promise<Result> {
   const cmd = new Deno.Command("bash", {
     args: [DIRECT_HOOK_PATH],
+    env: { WORKFLOW_SWITCH_PATH: "/dev/null" },
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -49,6 +50,7 @@ async function runViaShim(payload: unknown): Promise<{ decision: string; reason?
     env: {
       ...Deno.env.toObject(),
       AGY_HOOK_RECORD_PATH: "off",
+      WORKFLOW_SWITCH_PATH: "/dev/null",
     },
   });
   const child = cmd.spawn();
@@ -61,13 +63,19 @@ async function runViaShim(payload: unknown): Promise<{ decision: string; reason?
 
 // --- Unit tests: checkSessionModel() ---
 
-Deno.test("checkSessionModel: allowed Flash slugs pass", () => {
-  assert(checkSessionModel("gemini-3.8-flash-high").allowed);
-  assert(checkSessionModel("gemini-3.8-flash-tiered").allowed);
-  assert(checkSessionModel("gemini-3.7-flash-high").allowed); // 3.7 floor
-  assert(!checkSessionModel("gemini-3.8-flash-medium").allowed); // retired, web-jam-tools#1202
-  assert(!checkSessionModel("gemini-3.7-flash-medium").allowed);
-  assert(checkSessionModel("gemini-3.7-flash-tiered").allowed); // 3.7 floor
+Deno.test("checkSessionModel: Hydrogen high passes; retired Flash slugs fail", () => {
+  assert(checkSessionModel("gemini-4-hydrogen-high").allowed);
+  for (
+    const slug of [
+      "gemini-3.7-flash-high",
+      "gemini-3.7-flash-tiered",
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-tiered",
+      "gemini-3.8-flash-medium",
+    ]
+  ) {
+    assert(!checkSessionModel(slug).allowed, slug);
+  }
 });
 
 Deno.test("checkSessionModel: Argon at high passes, Argon at medium or low is denied", () => {
@@ -91,14 +99,14 @@ Deno.test("checkSessionModel: missing/empty modelName fails OPEN (cost guard, no
 
 // --- Direct hook invocation (Claude/shim-normalized shape: top-level modelName) ---
 
-Deno.test("agy-model-guard.sh denies a non-Flash modelName with exit 2", async () => {
+Deno.test("agy-model-guard.sh denies a disallowed modelName with exit 2", async () => {
   const res = await runDirect({ modelName: "gemini-3.6-flash-low" });
   assertEquals(res.code, 2);
   assert(res.stderr.includes("BLOCKED (agy-model guard)"), res.stderr);
 });
 
 Deno.test("agy-model-guard.sh allows an allowed high modelName", async () => {
-  const res = await runDirect({ modelName: "gemini-3.8-flash-high" });
+  const res = await runDirect({ modelName: "gemini-4-hydrogen-high" });
   assertEquals(res.code, 0, res.stderr);
 });
 
@@ -112,9 +120,9 @@ Deno.test("agy-model-guard.sh allows gemini-4-argon-high and denies Argon at med
   }
 });
 
-Deno.test("agy-model-guard.sh allows gemini-3.8-flash-tiered", async () => {
+Deno.test("agy-model-guard.sh denies gemini-3.8-flash-tiered", async () => {
   const res = await runDirect({ modelName: "gemini-3.8-flash-tiered" });
-  assertEquals(res.code, 0, res.stderr);
+  assertEquals(res.code, 2, res.stderr);
 });
 
 Deno.test("agy-model-guard.sh allows with additionalContext when modelName is absent", async () => {
@@ -130,7 +138,7 @@ Deno.test("agy-model-guard.sh allows with additionalContext when modelName is ab
 // --- End-to-end via the shim, real agy payload shape ---
 
 Deno.test(
-  "agy-native model guard: a non-Flash modelName driven through the shim yields agy's decision:deny form",
+  "agy-native model guard: a disallowed modelName driven through the shim yields agy's decision:deny form",
   async () => {
     const verdict = await runViaShim({
       toolCall: { name: "run_command", args: { CommandLine: "ls" } },
@@ -146,20 +154,20 @@ Deno.test(
   async () => {
     const verdict = await runViaShim({
       toolCall: { name: "run_command", args: { CommandLine: "ls" } },
-      modelName: "gemini-3.8-flash-high",
+      modelName: "gemini-4-hydrogen-high",
     });
     assertEquals(verdict.decision, "allow");
   },
 );
 
 Deno.test(
-  "agy-native model guard: gemini-3.8-flash-tiered driven through the shim yields decision:allow",
+  "agy-native model guard: gemini-3.8-flash-tiered driven through the shim yields decision:deny",
   async () => {
     const verdict = await runViaShim({
       toolCall: { name: "run_command", args: { CommandLine: "ls" } },
       modelName: "gemini-3.8-flash-tiered",
     });
-    assertEquals(verdict.decision, "allow");
+    assertEquals(verdict.decision, "deny");
   },
 );
 
@@ -175,7 +183,7 @@ Deno.test(
 );
 
 // Gmail matcher coverage only: model choice/cost dialogue belongs to handle-gmails,
-// while this session guard permits Flash, Argon and Sonnet high.
+// while this session guard permits Hydrogen, Argon and Sonnet high.
 
 Deno.test(
   "haiku-only-gmail-gate.sh's matcher never matches agy's raw (unprefixed) Gmail tool names",

@@ -2,7 +2,7 @@
 //
 // Automated unit tests for hooks/lib/check_agy_session_model.ts.
 // Exercises checkSessionModel() and stdin runner across all 3 outcomes:
-// - Outcome 1: condition holds (allowed Flash models, including -tiered at >= 3.7 floor)
+// - Outcome 1: condition holds (Hydrogen, Argon and Sonnet at high)
 // - Outcome 2: condition does not hold (below-floor, flash-low, non-Flash models denied with exit 2)
 // - Outcome 3: cannot determine (missing, null, empty, or unparseable modelName fails open with exit 0)
 
@@ -23,7 +23,7 @@ async function runSessionModelCli(
 ): Promise<RunResult> {
   const cmd = new Deno.Command("deno", {
     args: ["run", "--no-config", "--allow-read", "--allow-env", "--allow-write", SCRIPT_PATH],
-    env,
+    env: { WORKFLOW_SWITCH_PATH: "/dev/null", ...env },
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -40,14 +40,34 @@ async function runSessionModelCli(
   };
 }
 
-// --- Outcome 1: condition holds (allowed Flash models) ---
+// --- Outcome 1: condition holds (allowed high models) ---
 
-Deno.test("checkSessionModel: Outcome 1 - gemini-3.8-flash-tiered and Flash models >= 3.7 are allowed", () => {
-  assertEquals(checkSessionModel("gemini-3.8-flash-tiered"), { allowed: true });
-  assertEquals(checkSessionModel("gemini-3.7-flash-tiered"), { allowed: true });
-  assertEquals(checkSessionModel("gemini-3.8-flash-high"), { allowed: true });
-  assertEquals(checkSessionModel("gemini-3.7-flash-high"), { allowed: true });
-});
+for (const slug of ["gemini-4-hydrogen-high", "gemini-4-argon-high", "claude-sonnet-5-5-high"]) {
+  Deno.test("checkSessionModel: allows exact high slug " + slug, () => {
+    assertEquals(checkSessionModel(slug), { allowed: true });
+  });
+}
+for (
+  const slug of [
+    "gemini-4-hydrogen-low",
+    "gemini-4-hydrogen-medium",
+    "gemini-4-hydrogen-xhigh",
+    "gemini-3.8-flash-high",
+    "gemini-3.8-flash-tiered",
+    "gemini-3.9-flash-high",
+    "gemini-4-argon-low",
+    "gemini-4-argon-medium",
+    "claude-sonnet-5-5-low",
+    "claude-sonnet-5-5-medium",
+    "claude-opus-5-5-high",
+    "gemini-pro-orchestrator-g1-pro",
+    "gpt-oss-120b-medium",
+  ]
+) {
+  Deno.test("checkSessionModel: refuses " + slug, () => {
+    assertEquals(checkSessionModel(slug).allowed, false, slug);
+  });
+}
 
 // --- Outcome 2: condition does not hold (denied models) ---
 
@@ -55,11 +75,11 @@ Deno.test("checkSessionModel: Outcome 2 - below-floor, flash-low, and non-Flash 
   const belowFloor = checkSessionModel("gemini-3.6-flash-tiered");
   assertEquals(belowFloor.allowed, false);
   assert(belowFloor.reason?.includes("is not an allowed agy model slug"));
-  assert(belowFloor.reason?.includes("gemini-3.8-flash-tiered"));
+  assert(belowFloor.reason?.includes("gemini-4-hydrogen-high"));
 
   const flashLow = checkSessionModel("gemini-3.8-flash-low");
   assertEquals(flashLow.allowed, false);
-  assert(flashLow.reason?.includes("gemini-3.8-flash-tiered"));
+  assert(flashLow.reason?.includes("gemini-4-hydrogen-high"));
 
   const pro = checkSessionModel("gemini-3.1-pro");
   assertEquals(pro.allowed, false);
@@ -80,14 +100,14 @@ Deno.test("checkSessionModel: Outcome 3 - missing, null, or empty modelName fail
 
 // --- CLI stdin execution tests for all three outcomes ---
 
-Deno.test("CLI stdin Outcome 1: gemini-3.8-flash-tiered exits 0 with no stderr", async () => {
-  const res = await runSessionModelCli(JSON.stringify({ modelName: "gemini-3.8-flash-tiered" }));
+Deno.test("CLI stdin Outcome 1: gemini-4-hydrogen-high exits 0 with no stderr", async () => {
+  const res = await runSessionModelCli(JSON.stringify({ modelName: "gemini-4-hydrogen-high" }));
   assertEquals(res.code, 0);
   assertEquals(res.stderr, "");
 });
 
-Deno.test("CLI stdin Outcome 1: gemini-3.7-flash-tiered exits 0 with no stderr", async () => {
-  const res = await runSessionModelCli(JSON.stringify({ modelName: "gemini-3.7-flash-tiered" }));
+Deno.test("CLI stdin Outcome 1: gemini-4-argon-high exits 0 with no stderr", async () => {
+  const res = await runSessionModelCli(JSON.stringify({ modelName: "gemini-4-argon-high" }));
   assertEquals(res.code, 0);
   assertEquals(res.stderr, "");
 });
@@ -96,14 +116,14 @@ Deno.test("CLI stdin Outcome 2: below-floor gemini-3.6-flash-tiered exits 2 with
   const res = await runSessionModelCli(JSON.stringify({ modelName: "gemini-3.6-flash-tiered" }));
   assertEquals(res.code, 2);
   assert(res.stderr.includes("BLOCKED (agy-model guard)"));
-  assert(res.stderr.includes("gemini-3.8-flash-tiered"));
+  assert(res.stderr.includes("gemini-4-hydrogen-high"));
 });
 
 Deno.test("CLI stdin Outcome 2: gemini-3.8-flash-low exits 2 with BLOCKED message", async () => {
   const res = await runSessionModelCli(JSON.stringify({ modelName: "gemini-3.8-flash-low" }));
   assertEquals(res.code, 2);
   assert(res.stderr.includes("BLOCKED (agy-model guard)"));
-  assert(res.stderr.includes("gemini-3.8-flash-tiered"));
+  assert(res.stderr.includes("gemini-4-hydrogen-high"));
 });
 
 Deno.test("CLI stdin Outcome 3: empty modelName or unparseable input exits 0", async () => {
@@ -253,10 +273,10 @@ Deno.test("CLI stdin with malformed JSON state file proceeds as absent and exits
 
 // --- Gemini 4 Argon at high (tier-order design 1.5.0, "The agy model guard") ---
 
-Deno.test("checkSessionModel: gemini-4-argon-high and gemini-3.8-flash-high are allowed", () => {
+Deno.test("checkSessionModel: gemini-4-argon-high and gemini-4-hydrogen-high are allowed", () => {
   assertEquals(checkSessionModel("gemini-4-argon-high"), { allowed: true });
   assertEquals(checkSessionModel("claude-sonnet-5-5-high"), { allowed: true });
-  assertEquals(checkSessionModel("gemini-3.8-flash-high"), { allowed: true });
+  assertEquals(checkSessionModel("gemini-4-hydrogen-high"), { allowed: true });
 });
 
 Deno.test("checkSessionModel: Argon at medium or low, and a Claude model, are denied", () => {

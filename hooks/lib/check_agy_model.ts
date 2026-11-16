@@ -15,9 +15,9 @@ export interface AgyModelSpec {
   displayName: string;
 }
 
-const FLASH_MODEL: AgyModelSpec = {
-  slug: "gemini-3.8-flash-high",
-  displayName: "Gemini 3.8 Flash (High)",
+const HYDROGEN_MODEL: AgyModelSpec = {
+  slug: "gemini-4-hydrogen-high",
+  displayName: "Gemini 4 Hydrogen (High)",
 };
 const ARGON_MODEL: AgyModelSpec = {
   slug: "gemini-4-argon-high",
@@ -28,49 +28,30 @@ const SONNET_MODEL: AgyModelSpec = {
   displayName: "Claude Sonnet 5.5 (High)",
 };
 
-/** Every model agy may run: Flash, Argon and Sonnet at high (design 1.6.0). */
-export const ALLOWED_AGY_MODELS: readonly AgyModelSpec[] = [FLASH_MODEL, ARGON_MODEL, SONNET_MODEL];
+/** Every model agy may run: Hydrogen, Argon and Sonnet at high. */
+export const ALLOWED_AGY_MODELS: readonly AgyModelSpec[] = [
+  HYDROGEN_MODEL,
+  ARGON_MODEL,
+  SONNET_MODEL,
+];
 
 /**
- * The models agy dispatches on when nothing names one: Flash only. Selecting Argon or Sonnet
+ * The models agy dispatches on when nothing names one: Hydrogen only. Selecting Argon or Sonnet
  * through AGY_MODELS or --model never adds either to the default retry chain.
  */
-export const DEFAULT_AGY_MODELS: readonly AgyModelSpec[] = [FLASH_MODEL];
+export const DEFAULT_AGY_MODELS: readonly AgyModelSpec[] = [HYDROGEN_MODEL];
 
 /**
- * Derives the runtime session slugs by combining the explicit AGY models
- * with the corresponding -tiered variant derived from each model version,
- * keeping the tiered slug in lockstep whenever ALLOWED_AGY_MODELS migrates.
+ * Runtime sessions use exactly the listed slugs; no version or helper variants are inferred.
  */
 export function deriveSessionSlugs(models: readonly AgyModelSpec[]): readonly string[] {
-  const versions = Array.from(
-    new Set(
-      models
-        .map((m) => m.slug.match(/^gemini-(\d+(?:\.\d+)*)-flash-/)?.[1])
-        .filter((v): v is string => Boolean(v)),
-    ),
-  );
-  const tieredSlugs = versions.map((v) => `gemini-${v}-flash-tiered`);
-  return [
-    ...models.map((m) => m.slug),
-    ...tieredSlugs,
-  ];
+  return models.map((model) => model.slug);
 }
 
 export const ALLOWED_SESSION_SLUGS: readonly string[] = deriveSessionSlugs(ALLOWED_AGY_MODELS);
 
 export function isAllowedModelSlug(slug: string): boolean {
-  if (ALLOWED_AGY_MODELS.some((m) => m.slug === slug)) return true;
-  const match = slug.match(/^gemini-(\d+(?:\.\d+)*)-flash-(high|tiered)$/);
-  if (!match) return false;
-  const versionStr = match[1];
-  const parts = versionStr.split(".").map((p) => parseInt(p, 10));
-  if (parts.some((p) => isNaN(p))) return false;
-  const major = parts[0] ?? 0;
-  const minor = parts[1] ?? 0;
-  if (major > 3) return true;
-  if (major === 3 && minor >= 7) return true;
-  return false;
+  return ALLOWED_SESSION_SLUGS.includes(slug);
 }
 
 const ASSIGN_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
