@@ -29,28 +29,28 @@ split lost half its replacement pair, and `Flash`'s wrong color went unnoticed i
 front-end repos. The diff is now computed by `src/fix-labels/diff.ts`, unit-tested against exactly
 those four defects (`test/fix_labels_diff.test.ts`) so they can't silently regress.
 
-## ⛔ Model tier gate — cheap tier required (Haiku / Flash) (do this FIRST)
+## ⛔ Model tier gate — Haiku (Claude Code) or agy `inherit` (do this FIRST)
 
 This is mechanical, high-volume `gh label` / `gh issue list` / `gh api .../milestones` scanning
-across the active repos, so it must run on the cheapest tier that can do it: **Haiku** on Claude Code,
-or **Flash** on Antigravity / agy. A skill cannot switch the session model itself, so the **very first
-action of this skill is to verify the running model or delegate to the cheap tier** — before scanning any repo:
+across the active repos, so it must run on **Haiku** on Claude Code, or on the session's model
+via `inherit` on Antigravity / agy. A skill cannot switch the session model itself, so the **very first
+action of this skill is to verify the running model or delegate to the allowed helper** — before scanning any repo:
 
 - **Claude Code surface:**
   - Run directly on Haiku. If running on a pricier model (e.g. Sonnet, Opus), prompt to switch to the cheap tier, or delegate the scan steps to a subagent:
     - **Claude Code surface:** `Agent` tool with `model: "haiku"`.
-    - **Antigravity (`agy`) surface:** `invoke_subagent` with `Model: "flash"`.
+    - **Antigravity (`agy`) surface:** `invoke_subagent` with `Model: "inherit"`.
 - **Antigravity (`agy`) surface:**
-  - Run directly on Flash (an agy session running on Flash), or delegate the scan steps to a subagent:
+  - Run directly in the agy session, or delegate the scan steps to a subagent:
     - **Claude Code surface:** `Agent` tool with `model: "haiku"`.
-    - **Antigravity (`agy`) surface:** `invoke_subagent` with `Model: "flash"`.
+    - **Antigravity (`agy`) surface:** `invoke_subagent` with `Model: "inherit"`.
 
 This skill runs interactively for approval and application, while mechanical scans may run inline
-on the cheap tier or via a delegated subagent.
+or via a delegated subagent.
 
 Optional, implementer's discretion, not required for this issue: a hard `PreToolUse` hook mirroring
 `hooks/haiku-only-gmail-gate.sh` or `hooks/agy-model-guard.sh` could deny `gh label` create/edit/delete calls unless the session
-is on the cheap tier (Haiku on Claude Code, Flash on Antigravity / agy), as belt-and-suspenders on top of the soft gate above. Not built here — this issue is
+is on the allowed tier (Haiku on Claude Code, or an allowed agy model on Antigravity / agy), as belt-and-suspenders on top of the soft gate above. Not built here — this issue is
 the skill file only.
 
 ## Trigger
@@ -67,7 +67,7 @@ topic names — one source of truth, not two that can drift apart.
 
 Shape, for orientation (see `labels.yaml` for the actual current values):
 
-- **Model-tier** — `Haiku` / `Sonnet` / `Opus` / `Fable` / `Flash` across all 8
+- **Model-tier** — `Luna` / `Haiku` / `Terra` / `Sonnet` / `Sol` / `Astra` / `Argon` / `Hydrogen` / `Opus` / `Fable` across all 8
   repos. `Fable` is retired/dormant and marked `neverDelete` in the schema — the scripted diff never proposes
   removing it, in any repo.
 - **Status** — `Josh` / `Blocked`, across all 8 repos. `Blocked` (capital B, `B60205`) is
@@ -124,7 +124,7 @@ added on a separate branch. Deleted rather than fixed, to remove the drift surfa
 
 ## Flow
 
-1. **Model gate** (above) — confirm cheap tier (Haiku on Claude Code, Flash on Antigravity / agy) before anything else.
+1. **Model gate** (above) — confirm Haiku on Claude Code, or an allowed model / `inherit` helper on Antigravity / agy, before anything else.
 2. **Run both tasks.**
    ```
    deno task fix-labels:diff
@@ -287,11 +287,11 @@ milestone already exists must be surfaced, not swallowed.
 ## Non-goals
 
 - Never runs unprompted — manual `/fix-labels` invocation only.
-- Runs on the cheap tier (Haiku on Claude Code, Flash on Antigravity / agy) inline or via delegated subagent (Claude Code surface: `Agent` tool with `model: "haiku"`; Antigravity / agy surface: `invoke_subagent` with `Model: "flash"`).
+- Runs on Haiku on Claude Code, or on the session's model on Antigravity / agy, inline or via delegated subagent (Claude Code surface: `Agent` tool with `model: "haiku"`; Antigravity / agy surface: `invoke_subagent` with `Model: "inherit"`).
 - Never auto-applies anything, including creates that look obviously safe.
 - Never deletes or removes a label without first computing and showing its blast radius.
 - Never touches `Fable` — retired/dormant, but always kept.
-- Never adds `Flash` outside its scoped repo list in `labels.yaml` above (all 8 repos).
+- Never adds a model-tier label outside its scoped repo list in `labels.yaml` above (all 8 repos).
 - Never invents a new label name/color or topic milestone name outside the canonical schema in this
   file — if a repo has a label or milestone that doesn't map cleanly to any schema entry, it's a
   non-canonical candidate, not a judgment call to reclassify on the fly.

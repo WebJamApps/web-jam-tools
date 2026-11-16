@@ -35,7 +35,7 @@ not actioned.
 
 ---
 
-## Phase 1 — Scan (deterministic pre-pass first; Haiku/Flash only for judgment)
+## Phase 1 — Scan (deterministic pre-pass first; Haiku / agy inherit only for judgment)
 
 **Step 1 — run the deterministic mechanical scan (no model, no subagent spawn):**
 
@@ -344,5 +344,5 @@ or with each part still above its over mark named in the after-run list with the
 ## Description Detail & Triggers
 
 ```
-Cross-agent memory hygiene audit. Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, global and per-repo CLAUDE.md/AGENTS.md, cross-AI rules doc/task queues, bridge-log, hooks.json, and brain scratch files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap subagent (Haiku / Flash); findings are reported as separate action/flag tables and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says "clean up memory".
+Cross-agent memory hygiene audit. Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, global and per-repo CLAUDE.md/AGENTS.md, cross-AI rules doc/task queues, bridge-log, hooks.json, and brain scratch files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a subagent (Haiku on Claude Code; inherit on agy); findings are reported as separate action/flag tables and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says "clean up memory".
 ```

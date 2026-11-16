@@ -9,20 +9,20 @@ told nothing exists yet).
 
 ## Why this file exists (web-jam-tools#235)
 
-Each frontend repo's PRs include a "How to test locally" section. Flash (the
-model that authors most of those PRs) used to write that section by
+Each frontend repo's PRs include a "How to test locally" section. An agy
+session (which authors many of those PRs) used to write that section by
 restating what it changed in the diff, because that's the only thing it
 actually knew — it had neither the **operational run recipe** (start
 WebJamSocketCluster, start the frontend, how they wire together) nor **how to
 deliberately induce an error condition** (e.g. point a mongo env var at a bad
 value, then restore it). That knowledge lives in Josh's head and the
-runtime, not in any diff, and Flash cannot safely invent it.
+runtime, not in any diff, and the agent cannot safely invent it.
 
-The fix: bank that knowledge once, in a doc, and hand Flash the doc instead
+The fix: bank that knowledge once, in a doc, and hand the agent the doc instead
 of asking it to invent the recipe. This file is the **shared half** of that
 doc split (see `docs/local-testing.md` convention below for the other half).
 `scripts/handle-agy-tasks.sh` reads both and injects them into the composed
-dispatch prompt so Flash writes real steps drawn from real material.
+dispatch prompt so agy writes real steps drawn from real material.
 
 ## The two-doc split (no duplication)
 
@@ -39,11 +39,11 @@ dispatch prompt so Flash writes real steps drawn from real material.
   so on), single-sourced here so every per-repo doc stays in sync by
   reference instead of drifting copies.
 
-## How a recipe gets added (Opus judgment, Flash's hands)
+## How a recipe gets added (Opus judgment, agy's hands)
 
 Per the locked design in web-jam-tools#235:
 
-1. Before dispatching a Flash task (headless path), Opus checks whether this
+1. Before dispatching an agy task (headless path), Opus checks whether this
    file (plus the target repo's `docs/local-testing.md`) already covers what
    the feature being dispatched needs to test.
 2. If there's a gap, Opus fills it **at dispatch time** — pulling the
@@ -51,10 +51,10 @@ Per the locked design in web-jam-tools#235:
    supplies the recipe text to `handle-agy-tasks.sh` (e.g. via the
    `AGY_EXTRA_RECIPE` env var) for that one run, so the run is never blocked
    waiting on a doc PR to land first.
-3. Flash's dispatch prompt instructs it to commit that recipe text into this
+3. The agy dispatch prompt instructs it to commit that recipe text into this
    file as a **second, docs-only web-jam-tools PR** in the same run (the
    per-repo half, if any, rides inside its own frontend feature PR instead).
-   Flash commits; it does not invent.
+   agy commits; it does not invent.
 4. Once merged, the recipe is here for every future run to reuse — the
    expensive knowledge is banked once, not re-derived per PR.
 

@@ -7,7 +7,7 @@ This guide documents how to set up and maintain the local AI-assisted developmen
 The WebJamApps development workflow relies on multiple AI coding assistants, MCP servers, and audio production tools:
 
 1. **Claude Code CLI (`claude`)** — Anthropic's interactive CLI agent for terminal-based development and subagent delegation.
-2. **Antigravity CLI (`agy`)** — Google's coding agent CLI (Gemini Flash / Pro), utilized for headless task dispatch and high-efficiency full-stack implementation.
+2. **Antigravity CLI (`agy`)** — Google's coding agent CLI (Gemini 4 Hydrogen / Gemini 4 Argon / Claude Sonnet 5.5), utilized for headless task dispatch and high-efficiency full-stack implementation.
 3. **OpenAI Codex CLI (`codex`)** — OpenAI's terminal-based coding assistant.
 4. **Cockos REAPER DAW (`reaper` & `reaper-update`)** — Digital audio workstation used for music projects, MIDI generation, stem bounces, and live tracking via the Reaper MCP server.
 5. **GitHub MCP (`github-mcp-server`)** — GitHub's released server program, used by agy.
