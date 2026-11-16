@@ -9,10 +9,12 @@
 // - deno task design:lint-plan <plan.md> --design-doc <doc.md> (web-jam-tools#796, #1156)
 // - deno task design:file-plan <plan.json> (web-jam-tools#748)
 // - deno task design:verify-citations <doc.md> (web-jam-tools#1025)
+// - deno task design:check-copies (web-jam-tools#1813)
 
 import * as path from "@std/path";
 import { parseArgs } from "@std/cli/parse-args";
 import { runCandidatesCli } from "./candidates.ts";
+import { runCheckCopiesCli } from "./check_copies.ts";
 import { runFilePlanCli } from "./file_plan.ts";
 import {
   DesignDocResolutionRefusal,
@@ -39,6 +41,7 @@ import { runVerifyCitationsCli } from "./verify_citations.ts";
 
 export {
   runCandidatesCli,
+  runCheckCopiesCli,
   runFilePlanCli,
   runLintDocCli,
   runLintPlanCli,
@@ -481,6 +484,10 @@ export async function runCli(
     return await runLintDocCli(args.slice(1), {
       dropboxDir: options?.dropboxDir ?? resolveDesignDocsRoot(),
     });
+  }
+
+  if (firstArg === "check-copies" || firstArg === "check_copies") {
+    return await runCheckCopiesCli(args.slice(1));
   }
 
   if (firstArg === "verify-citations" || firstArg === "verify_citations") {
