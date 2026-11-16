@@ -65,6 +65,11 @@ The lane sets and working-model tracking follow
 
 ## Startability test
 
+For routine recovery from stale issue-body blocker wording and authorization supplied by the first
+invocation, follow [docs/rules/work-issue.md](../../docs/rules/work-issue.md). This applies before setup
+and when setup refuses that wording; the separate stale `Blocked` label and design-conflict checks
+below retain their explicit approval gates.
+
 An issue `<Repo>#<num>` is **startable** when it passes all four checks below:
 
 1. **Still open**:
@@ -311,8 +316,10 @@ When an issue's deliverables are strictly external documents (such as manual ver
    ```
 
    The branch is **already created and checked out in the isolated `/tmp` worktree** off fresh `dev`.
-   The main clone (`MAIN_CLONE`) remains untouched. If the script exits non-zero (dirty tree, missing repo,
-   bad/missing issue argument), stop and report its error to the user — do not improvise.
+   The main clone (`MAIN_CLONE`) remains untouched. For a refusal caused only by verified stale
+   issue-body blocker wording, follow the recovery in `docs/rules/work-issue.md` and retry setup.
+   For other non-zero exits (dirty tree, missing repo, bad/missing issue argument), stop and report
+   its error to the user — do not improvise.
 
 3. **Apply Model Label Check & Approval above.** Setup has already checked lane eligibility and
    recorded the actual working model; keep that verified model and author for implementation and
