@@ -145,7 +145,8 @@ function checkSegments(cmd: string, inheritedEnv: string | null, depth: number):
     let i = 0;
     while (i < argv.length && ASSIGN_RE.test(argv[i])) i++;
     if (i >= argv.length) continue;
-    if (argv[i].split("/").pop() !== "agy") continue;
+    const executable = argv[i].split("/").pop();
+    if (executable !== "agy" && executable !== "handle-agy-tasks.sh") continue;
     const args = argv.slice(i + 1);
 
     if (envAgyModels !== null) {
@@ -155,6 +156,9 @@ function checkSegments(cmd: string, inheritedEnv: string | null, depth: number):
         return "BLOCK_ENV:" + envAgyModels;
       }
     }
+
+    // The known launcher selects its chain through AGY_MODELS, not agy's --model flag.
+    if (executable !== "agy") continue;
 
     let j = 0;
     while (j < args.length) {

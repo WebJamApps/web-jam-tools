@@ -28,10 +28,9 @@
 # Fires wherever a command runs `agy`: as the first word (bare `agy` or a path ending in
 # /agy, e.g. ~/.local/bin/agy), behind `timeout`, `nice`, `nohup`, `env`, `command`, `exec`,
 # `time` or `sudo`, after `cd x &&`, or inside a `bash -c` / `sh -c` payload. A command that
-# mentions agy and cannot be parsed is refused (fails closed). It does NOT fire on wrapper scripts like
-# scripts/handle-agy-tasks.sh that happen to shell out to agy internally;
-# those are a separate command as far as the Bash tool (and this hook) is
-# concerned. Exit 2 = block (stderr is shown to the model), matching
+# mentions agy and cannot be parsed is refused (fails closed). AGY_MODELS on the known
+# handle-agy-tasks.sh launcher is checked too; arbitrary scripts that invoke agy internally
+# are outside this command parser's scope. Exit 2 = block (stderr is shown to the model), matching
 # hooks/block-secret-dumps.sh's convention.
 set -euo pipefail
 

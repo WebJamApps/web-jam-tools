@@ -294,7 +294,7 @@ Deno.test("AGY_MODELS naming the retired medium slug is blocked, alone or beside
   }
 });
 
-// --- out of scope: wrapper scripts that merely mention/invoke agy internally ---
+// --- known launcher model chains and unrelated commands ---
 
 Deno.test(
   "handle-agy-tasks.sh invocation is untouched (not a literal agy command)",
@@ -305,12 +305,13 @@ Deno.test(
 );
 
 Deno.test(
-  "AGY_MODELS prefix on a non-agy command (the wrapper script) is untouched — only a literal agy invocation is in scope",
+  "AGY_MODELS prefix on the known launcher is checked before it starts agy",
   async () => {
     const res = await runHook(
       "AGY_MODELS='claude-opus-4-6-thinking' ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless Repo#123",
     );
-    assertEquals(res.code, 0, res.stderr);
+    assertEquals(res.code, 2, res.stderr);
+    assertBlocked(res.stderr);
   },
 );
 

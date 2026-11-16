@@ -120,6 +120,7 @@ const REFUSED_COMMANDS = [
   `agy --model gemini-3.8-flash-high -p="x"`,
   `agy --model gemini-3.8-flash-tiered -p="x"`,
   `AGY_MODELS='Gemini 3.8 Flash (High)' agy -p="x"`,
+  `AGY_MODELS='Gemini 3.8 Flash (High)' scripts/handle-agy-tasks.sh --headless "web-jam-tools#fixture"`,
   `agy --model gemini-pro-orchestrator-g1-pro -p="x"`,
   `nohup agy --model gemini-3.8-flash-high -p="x"`,
   `agy --model claude-sonnet-5-5-low -p="x"`,
