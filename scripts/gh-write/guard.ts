@@ -9,6 +9,7 @@
  * never check whether its findings are correct — that stays the reviewing
  * model's job, never the transport's.
  */
+import { findBareWriteRefs } from "../../hooks/lib/detect_bare_issue_refs.ts";
 import { findCredentialLiteral } from "../../hooks/lib/detect_credential_literal.ts";
 import {
   isAgySession,
@@ -22,6 +23,19 @@ export const REVIEW_SUMMARY_HEADER = "## PR Review Summary";
 export interface GuardResult {
   ok: boolean;
   error?: string;
+}
+
+/** Checks the loaded body, including URL citations, before publishing. */
+export function checkIssueCitations(body: string): GuardResult {
+  const offenders = findBareWriteRefs(body);
+  return offenders.length
+    ? {
+      ok: false,
+      error: `refusing to post: bare issue/PR citation(s): ${
+        offenders.join(", ")
+      }. Use repo#number "title".`,
+    }
+    : { ok: true };
 }
 
 /** Refuses an empty body — an empty write is never intentional. */
@@ -211,6 +225,9 @@ export function runFormGuards(body: string, opts: FormGuardOptions = {}): GuardR
 
   const noCredential = checkNoCredentialLiteral(body);
   if (!noCredential.ok) return noCredential;
+
+  const citations = checkIssueCitations(body);
+  if (!citations.ok) return citations;
 
   if (opts.requireReviewHeader) {
     const hasHeader = checkReviewSummaryHeader(body);

@@ -16,7 +16,7 @@
  * fails open (allowing with a note) when an input or file is unparseable.
  */
 
-import { findBareIssueRefs } from "./detect_bare_issue_refs.ts";
+import { findBareWriteRefs } from "./detect_bare_issue_refs.ts";
 import { splitOnOperators, splitShellTokens, stripHeredocs } from "./normalize_command.ts";
 
 const ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -181,30 +181,6 @@ function taskWorkingDirectory(tokens: string[], cwd?: string): string | undefine
     if (parent === directory) return cwd;
     directory = parent;
   }
-}
-
-/** Normalize URL citations to the shared detector's repo#number input format. */
-function findBareWriteRefs(body: string): string[] {
-  const urls = new Map<string, string>();
-  const normalized = body
-    .replace(
-      /\[([^\]\n]+)\]\((https:\/\/github\.com\/[^/\s]+\/([\w.-]+)\/(?:issues|pull)\/(\d+))\)/g,
-      (_match, label: string, url: string, repo: string, number: string) => {
-        const token = `${repo}#${number}`;
-        urls.set(token, url);
-        // A URL used as its own label supplies no title.
-        return label === url ? token : `${token} "${label.replaceAll('"', "'")}"`;
-      },
-    )
-    .replace(
-      /https:\/\/github\.com\/[^/\s]+\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:[?#][^\s<>)]*)?/g,
-      (url: string, repo: string, number: string) => {
-        const token = `${repo}#${number}`;
-        urls.set(token, url);
-        return token;
-      },
-    );
-  return findBareIssueRefs(normalized).map((token) => urls.get(token) ?? token);
 }
 
 export function isTargetGhWriteCommand(tokens: string[]): boolean {
