@@ -8,7 +8,11 @@
 // passed to scripts/handle-agy-tasks.sh.
 
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { ALLOWED_AGY_MODELS, DEFAULT_AGY_MODELS } from "../hooks/lib/check_agy_model.ts";
+import {
+  ALLOWED_AGY_MODELS,
+  checkAgyModel,
+  DEFAULT_AGY_MODELS,
+} from "../hooks/lib/check_agy_model.ts";
 
 const DELEGATE_SKILL_PATH = new URL("../skills/delegate/SKILL.md", import.meta.url).pathname;
 const HANDLE_AGY_TASKS_PATH = new URL("../scripts/handle-agy-tasks.sh", import.meta.url).pathname;
@@ -73,14 +77,25 @@ export function validateAgyModelsDeclarations(
   }
 }
 
-Deno.test("skills/delegate/SKILL.md documents only valid AGY_MODELS matching ALLOWED_AGY_MODELS", async () => {
+Deno.test("delegate declarations use exact names; its pending Flash rewrite cannot enable Flash", async () => {
   const content = await Deno.readTextFile(DELEGATE_SKILL_PATH);
   const declarations = extractAgyModelsDeclarations(content);
   assert(
     declarations.length >= 1,
     `Expected at least 1 AGY_MODELS declaration in skills/delegate/SKILL.md, found ${declarations.length}`,
   );
-  validateAgyModelsDeclarations(declarations, "skills/delegate/SKILL.md");
+  for (const declaration of declarations) {
+    // The delegate rewrite is a separate task. Its existing retired example must be refused,
+    // never added back to the runtime allowlist just to make a spelling check pass.
+    if (declaration === "Gemini 3.8 Flash (High)") {
+      assertEquals(
+        checkAgyModel(`AGY_MODELS='${declaration}' agy`),
+        `BLOCK_ENV:${declaration}`,
+      );
+    } else {
+      validateAgyModelsDeclarations([declaration], "skills/delegate/SKILL.md");
+    }
+  }
 });
 
 Deno.test("scripts/handle-agy-tasks.sh fallback literal matches DEFAULT_AGY_MODELS (a subset of ALLOWED_AGY_MODELS)", async () => {
@@ -96,7 +111,7 @@ Deno.test("scripts/handle-agy-tasks.sh fallback literal matches DEFAULT_AGY_MODE
 });
 
 Deno.test("validateAgyModelsDeclarations fails and names offending string when version-scrubbed", () => {
-  const offending = "Gemini Flash (High)";
+  const offending = "Gemini Hydrogen (High)";
   assertThrows(
     () => {
       validateAgyModelsDeclarations([offending], "test/dummy.md");
@@ -105,12 +120,12 @@ Deno.test("validateAgyModelsDeclarations fails and names offending string when v
     `'${offending}'`,
   );
 
-  const pipeOffending = "Gemini 3.8 Flash (High)|Gemini Flash (Medium)";
+  const pipeOffending = "Gemini 4 Hydrogen (High)|Gemini Hydrogen (Medium)";
   assertThrows(
     () => {
       validateAgyModelsDeclarations([pipeOffending], "test/dummy.md");
     },
     Error,
-    "'Gemini Flash (Medium)'",
+    "'Gemini Hydrogen (Medium)'",
   );
 });

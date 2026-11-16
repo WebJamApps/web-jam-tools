@@ -10,10 +10,10 @@
 # This is the runtime counterpart to hooks/block-agy-non-flash-model.sh,
 # which only sees a literal `agy --model ...` Bash invocation FROM Claude
 # Code and cannot see what model an already-running agy session switched to.
-# Both share the same allowed-slug floor via hooks/lib/check_agy_model.ts so
+# Both share the same exact allowed slugs via hooks/lib/check_agy_model.ts so
 # they can't drift apart.
 #
-# Flash, Argon and Sonnet at high pass this session guard. It does not grant Gmail actions or
+# Hydrogen, Argon and Sonnet at high pass this session guard. It does not grant Gmail actions or
 # provide the Gmail skill's cost confirmation; those belong to the separate Gmail fences and
 # model-choice workflow in the hooks design, "Gmail model choice and connections".
 set -euo pipefail

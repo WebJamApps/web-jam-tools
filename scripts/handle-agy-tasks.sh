@@ -159,11 +159,9 @@ agy_env_args() {
   done
 }
 
-# Model chain (Antigravity PAID account — Josh's prepaid Google
-# credit): Gemini Flash (high effort only) is the default lane; the medium level is retired
-# (web-jam-tools#1202) and 3.1 Pro was removed as too expensive. Claude models are deliberately
-# NOT in the default chain (they drain the credit fastest — the old
-# most-capable-first order was a free-tier assumption). Override with:
+# Model chain: Hydrogen at high is the sole default on Josh's Gemini allowance.
+# Argon and Sonnet at high are allowed when explicitly selected, and are never
+# added to the default retry chain. Override with:
 #   AGY_MODELS="Model A|Model B" handle-agy-tasks.sh    (pipe-separated; the
 # names contain spaces, so pipes — not spaces — separate them).
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -293,7 +291,7 @@ TASK_ARG="${1:-}"
 
 # Setup runs in the caller's model, without launching agy or selecting its chain.
 if [ "$SETUP_ONLY" -eq 0 ]; then
-  DEFAULT_MODELS=$(deno run --allow-env "$SCRIPT_DIR/../hooks/lib/check_agy_model.ts" --default-models 2>/dev/null || echo 'Gemini 3.8 Flash (High)')
+  DEFAULT_MODELS=$(deno run --allow-env "$SCRIPT_DIR/../hooks/lib/check_agy_model.ts" --default-models 2>/dev/null || echo 'Gemini 4 Hydrogen (High)')
   IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
   check_model_chain
 fi

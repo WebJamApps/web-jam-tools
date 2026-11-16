@@ -4,7 +4,7 @@
  * Reads a shim-normalized PreToolUse payload (hooks/lib/agy_hook_shim.ts)
  * from stdin and checks its `modelName` field — carried directly in agy's
  * own payload (finding 7, unlike Claude Code, which exposes no model field
- * to hooks at all) — against the same Flash/Argon/Sonnet high allowlist already used by
+ * to hooks at all) — against the same Hydrogen/Argon/Sonnet high allowlist already used by
  * hooks/block-agy-non-flash-model.sh (hooks/lib/check_agy_model.ts), so the
  * two guards can never drift apart on what counts as an allowed model.
  *
