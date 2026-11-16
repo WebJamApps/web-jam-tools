@@ -126,6 +126,7 @@ Deno.test("fresh home: exact 28 nested registrations, matcher fidelity, sandbox 
         ["Bash|Write|Edit|NotebookEdit", "opus-delegation-gate.sh"],
         ["Bash|mcp__.*__(issue_write|sub_issue_write)", "require-approval-token-on-issue-write.sh"],
         ["Bash", "block-raw-gh-write.sh"],
+        ["Bash", "block-canonical-clone-change.sh"],
         ["Bash", "block-backend-mutation.sh"],
         ["Bash", "block-private-folder-read.sh"],
         ["Bash|Edit|Write|NotebookEdit", "block-production-media-change.sh"],
@@ -376,7 +377,7 @@ Deno.test("literal array reader rejects shell expansion, malformed entries and m
       HOOKS.replace("PRE_TOOL_USE_HOOKS=(", "PRE_TOOL_USE_HOOKS=(\n# comment"),
       "/tmp/home",
     ).PreToolUse.length,
-    20,
+    21,
   );
 });
 

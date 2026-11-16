@@ -73,6 +73,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   // PreToolUse guard (web-jam-tools#1021) — prevents unauthorized HTTP mutations
   // against the production backend and enforces venue-mining skill boundaries.
   "block-backend-mutation.sh",
+  // PreToolUse guard (web-jam-tools#1819) — refuses a git command that changes
+  // the web-jam-tools canonical clone's checkout or history on Claude Code and Codex.
+  "block-canonical-clone-change.sh",
   "block-dangerous-git-deploy.sh",
   "block-human-only-credentials.sh",
   "block-irreversible-operations.sh",

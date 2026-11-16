@@ -229,6 +229,7 @@ PRE_TOOL_USE_HOOKS=(
   "Bash|Write|Edit|NotebookEdit::opus-delegation-gate.sh"
   "Bash|mcp__.*__(issue_write|sub_issue_write)::require-approval-token-on-issue-write.sh"
   "Bash::block-raw-gh-write.sh"
+  "Bash::block-canonical-clone-change.sh"
   "Bash::block-backend-mutation.sh"
   "Bash::block-private-folder-read.sh"
   "Bash|Edit|Write|NotebookEdit::block-production-media-change.sh"
