@@ -42,6 +42,7 @@
     "design:match-design": "deno run -A src/design-issue/cli.ts match-design",
     "design:cli": "deno run -A src/design-issue/cli.ts",
     "design:lint-doc": "deno run -A src/design-issue/cli.ts lint-doc",
+    "design:check-copies": "deno run -A src/design-issue/cli.ts check-copies",
     "design:lint-runbook": "deno run -A src/design-issue/cli.ts lint-runbook",
     "design:candidates": "deno run -A src/design-issue/cli.ts candidates",
     "design:stale-bodies": "deno run -A src/design-issue/cli.ts stale-bodies",

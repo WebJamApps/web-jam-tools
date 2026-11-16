@@ -79,6 +79,31 @@ if [ "${#REF_RANGES[@]}" -gt 0 ]; then
     [ -n "$FAILURE_MSG" ] && echo "$FAILURE_MSG" >&2
     exit 1
   fi
+
+  DENO_BIN="${DENO_BIN:-$(command -v deno 2>/dev/null || echo "$HOME/.deno/bin/deno")}"
+  if [ -z "${CHECK_COPIES_SCRIPT:-}" ] && [ ! -x "$DENO_BIN" ]; then
+    echo "🛑 PUSH REFUSED: deno binary not found: $DENO_BIN" >&2
+    exit 1
+  fi
+
+  ANY_COPY_FAILURE=0
+  for range in "${REF_RANGES[@]}"; do
+    STATUS=0
+    if [ -n "${CHECK_COPIES_SCRIPT:-}" ]; then
+      OUT=$("$CHECK_COPIES_SCRIPT" --repo "$REPO_ROOT" --range "$range" 2>&1) || STATUS=$?
+    else
+      OUT=$("$DENO_BIN" task --config "$WJT_ROOT/deno.json" design:check-copies --repo "$REPO_ROOT" --range "$range" 2>&1) || STATUS=$?
+    fi
+    if [ "$STATUS" -ne 0 ]; then
+      ANY_COPY_FAILURE=1
+      [ -n "$OUT" ] && echo "$OUT" >&2
+    fi
+  done
+
+  if [ "$ANY_COPY_FAILURE" -eq 1 ]; then
+    echo "🛑 PUSH REFUSED: copied design-document wording detected (or copy check failed)." >&2
+    exit 1
+  fi
 fi
 
 # Run repository's own hooks/pre-push if present and executable

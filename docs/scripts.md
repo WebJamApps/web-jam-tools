@@ -310,6 +310,18 @@ credential leaks before they can leave the machine (web-jam-tools#1404):
 bash scripts/prove-push-guard.sh
 ```
 
+### `design:check-copies`
+
+Checks pushed lines in `skills/`, `docs/`, `AGENTS.md`, or `CLAUDE.md` (or named files via
+`--whole-file`) against design-document bodies under `DESIGN_DOCS_ROOT` (default
+`~/Dropbox/web-jam-llms`), refusing any run of 12 or more consecutive shared words. Called
+automatically by `git-hooks/pre-push` for every pushed ref range without `--whole-file`.
+
+```sh
+deno task design:check-copies
+deno task design:check-copies --whole-file skills/design-issue/SKILL.md
+```
+
 ### `reaper-update.sh`
 
 Downloads and installs the latest REAPER version to a specified prefix. Detects the currently

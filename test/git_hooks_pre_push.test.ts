@@ -52,9 +52,11 @@ async function createStub(
   dir: string,
   exitCode: number,
   outputMessage = "",
+  scriptName = "stub-gitleaks.sh",
+  logName = "gitleaks-call.log",
 ): Promise<{ stubPath: string; logPath: string }> {
-  const stubPath = path.join(dir, "stub-gitleaks.sh");
-  const logPath = path.join(dir, "gitleaks-call.log");
+  const stubPath = path.join(dir, scriptName);
+  const logPath = path.join(dir, logName);
   const scriptContent = `#!/usr/bin/env bash
 for arg in "$@"; do
   printf '%s\\n' "$arg" >> "${logPath}"
@@ -66,6 +68,11 @@ exit ${exitCode}
   await Deno.writeTextFile(stubPath, scriptContent);
   await Deno.chmod(stubPath, 0o755);
   return { stubPath, logPath };
+}
+
+async function createCleanCopyStub(dir: string): Promise<string> {
+  const { stubPath } = await createStub(dir, 0, "", "stub-copy-clean.sh", "copy-clean.log");
+  return stubPath;
 }
 
 // --- Preserved cases from install_git_secret_hook.test.ts ---
@@ -99,6 +106,7 @@ Deno.test("refs/heads/feat <sha> refs/heads/feat 0000000000000000000000000000000
   try {
     await runCmd(["git", "init", "-q"], tempDir);
     const { stubPath, logPath } = await createStub(tempDir, 0);
+    const copyStub = await createCleanCopyStub(tempDir);
 
     const sha = "a1b2c3d4e5f6789012345678901234567890abcd";
     const stdinLine = `refs/heads/feat ${sha} refs/heads/feat ${ZERO_OID}\n`;
@@ -107,7 +115,7 @@ Deno.test("refs/heads/feat <sha> refs/heads/feat 0000000000000000000000000000000
       ["bash", HOOK_PATH, "origin", "https://github.com/WebJamApps/test.git"],
       tempDir,
       stdinLine,
-      { GITLEAKS_SCRIPT: stubPath },
+      { GITLEAKS_SCRIPT: stubPath, CHECK_COPIES_SCRIPT: copyStub },
     );
 
     assertEquals(res.code, 0, `Hook failed: ${res.stderr}`);
@@ -125,6 +133,7 @@ Deno.test("refs/heads/feat <new> refs/heads/feat <old> scans <old>..<new>", asyn
   try {
     await runCmd(["git", "init", "-q"], tempDir);
     const { stubPath, logPath } = await createStub(tempDir, 0);
+    const copyStub = await createCleanCopyStub(tempDir);
 
     const oldSha = "1111111111111111111111111111111111111111";
     const newSha = "2222222222222222222222222222222222222222";
@@ -134,7 +143,7 @@ Deno.test("refs/heads/feat <new> refs/heads/feat <old> scans <old>..<new>", asyn
       ["bash", HOOK_PATH, "origin", "https://github.com/WebJamApps/test.git"],
       tempDir,
       stdinLine,
-      { GITLEAKS_SCRIPT: stubPath },
+      { GITLEAKS_SCRIPT: stubPath, CHECK_COPIES_SCRIPT: copyStub },
     );
 
     assertEquals(res.code, 0, `Hook failed: ${res.stderr}`);
@@ -177,6 +186,7 @@ Deno.test("refs/tags/v1 <sha> refs/tags/v1 0000000000000000000000000000000000000
   try {
     await runCmd(["git", "init", "-q"], tempDir);
     const { stubPath, logPath } = await createStub(tempDir, 0);
+    const copyStub = await createCleanCopyStub(tempDir);
 
     const tagSha = "4444444444444444444444444444444444444444";
     const stdinLine = `refs/tags/v1 ${tagSha} refs/tags/v1 ${ZERO_OID}\n`;
@@ -185,7 +195,7 @@ Deno.test("refs/tags/v1 <sha> refs/tags/v1 0000000000000000000000000000000000000
       ["bash", HOOK_PATH, "origin", "https://github.com/WebJamApps/test.git"],
       tempDir,
       stdinLine,
-      { GITLEAKS_SCRIPT: stubPath },
+      { GITLEAKS_SCRIPT: stubPath, CHECK_COPIES_SCRIPT: copyStub },
     );
 
     assertEquals(res.code, 0, `Hook failed: ${res.stderr}`);
@@ -262,6 +272,7 @@ Deno.test("Stubbed scripts/gitleaks.sh exit 0: proceeds; exit 2: refused with wa
   const tempDir = await Deno.makeTempDir({ prefix: "pre-push-outcomes-" });
   try {
     await runCmd(["git", "init", "-q"], tempDir);
+    const copyStub = await createCleanCopyStub(tempDir);
     const sha = "7777777777777777777777777777777777777777";
     const stdinLine = `refs/heads/main ${sha} refs/heads/main ${ZERO_OID}\n`;
 
@@ -271,7 +282,7 @@ Deno.test("Stubbed scripts/gitleaks.sh exit 0: proceeds; exit 2: refused with wa
       ["bash", HOOK_PATH, "origin", "https://github.com/WebJamApps/test.git"],
       tempDir,
       stdinLine,
-      { GITLEAKS_SCRIPT: stub0 },
+      { GITLEAKS_SCRIPT: stub0, CHECK_COPIES_SCRIPT: copyStub },
     );
     assertEquals(res0.code, 0);
 
@@ -332,6 +343,7 @@ Deno.test("An executable .git/hooks/pre-push in the repository runs after a clea
 
     const repoHookPath = path.join(tempDir, ".git", "hooks", "pre-push");
     const repoLogPath = path.join(tempDir, "repo-hook-receipts.log");
+    const copyStub = await createCleanCopyStub(tempDir);
 
     // Create repo-level pre-push hook that logs arguments and stdin, then exits with custom code
     const repoHookScript = `#!/usr/bin/env bash
@@ -353,7 +365,7 @@ exit \${REPO_HOOK_EXIT:-0}
       ["bash", HOOK_PATH, ...hookArgs],
       tempDir,
       stdinLine,
-      { GITLEAKS_SCRIPT: stubPath, REPO_HOOK_EXIT: "0" },
+      { GITLEAKS_SCRIPT: stubPath, CHECK_COPIES_SCRIPT: copyStub, REPO_HOOK_EXIT: "0" },
     );
     assertEquals(resClean.code, 0, `Push should succeed: ${resClean.stderr}`);
 
@@ -367,7 +379,7 @@ exit \${REPO_HOOK_EXIT:-0}
       ["bash", HOOK_PATH, ...hookArgs],
       tempDir,
       stdinLine,
-      { GITLEAKS_SCRIPT: stubPath, REPO_HOOK_EXIT: "42" },
+      { GITLEAKS_SCRIPT: stubPath, CHECK_COPIES_SCRIPT: copyStub, REPO_HOOK_EXIT: "42" },
     );
     assertEquals(
       resRefused.code,
@@ -392,6 +404,7 @@ Deno.test("An executable .git/hooks/pre-push in the common repository directory 
 
     const repoHookPath = path.join(mainDir, ".git", "hooks", "pre-push");
     const repoLogPath = path.join(mainDir, "worktree-hook-receipts.log");
+    const copyStub = await createCleanCopyStub(mainDir);
 
     const repoHookScript = `#!/usr/bin/env bash
 echo "ARGS: $@" > "${repoLogPath}"
@@ -419,7 +432,7 @@ exit \${REPO_HOOK_EXIT:-0}
       ["bash", HOOK_PATH, ...hookArgs],
       worktreeDir,
       stdinLine,
-      { GITLEAKS_SCRIPT: stubPath, REPO_HOOK_EXIT: "0" },
+      { GITLEAKS_SCRIPT: stubPath, CHECK_COPIES_SCRIPT: copyStub, REPO_HOOK_EXIT: "0" },
     );
     assertEquals(resClean.code, 0, `Push from linked worktree should succeed: ${resClean.stderr}`);
 
@@ -433,7 +446,7 @@ exit \${REPO_HOOK_EXIT:-0}
       ["bash", HOOK_PATH, ...hookArgs],
       worktreeDir,
       stdinLine,
-      { GITLEAKS_SCRIPT: stubPath, REPO_HOOK_EXIT: "42" },
+      { GITLEAKS_SCRIPT: stubPath, CHECK_COPIES_SCRIPT: copyStub, REPO_HOOK_EXIT: "42" },
     );
     assertEquals(
       resRefused.code,
@@ -448,7 +461,7 @@ exit \${REPO_HOOK_EXIT:-0}
       ["bash", HOOK_PATH, ...hookArgs],
       worktreeDir,
       stdinLine,
-      { GITLEAKS_SCRIPT: stubPath },
+      { GITLEAKS_SCRIPT: stubPath, CHECK_COPIES_SCRIPT: copyStub },
     );
     assertEquals(
       resSymlink.code,
@@ -459,5 +472,137 @@ exit \${REPO_HOOK_EXIT:-0}
     await runCmd(["git", "worktree", "remove", "--force", worktreeDir], mainDir).catch(() => {});
     await Deno.remove(worktreeDir, { recursive: true }).catch(() => {});
     await Deno.remove(mainDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("git-hooks/pre-push invokes copy check for each pushed range without --whole-file and refuses on non-zero exit", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "pre-push-copy-stub-" });
+  try {
+    await runCmd(["git", "init", "-q"], tempDir);
+    const { stubPath: gitleaksStub } = await createStub(tempDir, 0);
+    const { stubPath: copyPassStub, logPath: copyPassLog } = await createStub(
+      tempDir,
+      0,
+      "",
+      "stub-copy-pass.sh",
+      "copy-pass.log",
+    );
+
+    const sha1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const sha2 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const sha3 = "cccccccccccccccccccccccccccccccccccccccc";
+    const stdinContent = `refs/heads/feat-a ${sha1} refs/heads/feat-a ${ZERO_OID}\n` +
+      `refs/heads/feat-b ${sha3} refs/heads/feat-b ${sha2}\n` +
+      `(delete) ${ZERO_OID} refs/heads/old ${sha2}\n`;
+
+    const resPass = await runCmd(
+      ["bash", HOOK_PATH, "origin", "https://github.com/WebJamApps/test.git"],
+      tempDir,
+      stdinContent,
+      { GITLEAKS_SCRIPT: gitleaksStub, CHECK_COPIES_SCRIPT: copyPassStub },
+    );
+    assertEquals(resPass.code, 0, `Clean copy check should pass: ${resPass.stderr}`);
+
+    const log = await Deno.readTextFile(copyPassLog);
+    assertStringIncludes(log, `--repo\n${tempDir}`);
+    assertStringIncludes(log, `--range\n${sha1} --not --remotes`);
+    assertStringIncludes(log, `--range\n${sha2}..${sha3}`);
+    assert(!log.includes("--whole-file"), "pre-push must never pass --whole-file");
+
+    const { stubPath: copyFailStub } = await createStub(
+      tempDir,
+      1,
+      "Copy violation in skills/design-issue/SKILL.md",
+      "stub-copy-fail.sh",
+      "copy-fail.log",
+    );
+    const resFail = await runCmd(
+      ["bash", HOOK_PATH, "origin", "https://github.com/WebJamApps/test.git"],
+      tempDir,
+      stdinContent,
+      { GITLEAKS_SCRIPT: gitleaksStub, CHECK_COPIES_SCRIPT: copyFailStub },
+    );
+    assertEquals(resFail.code, 1);
+    assertStringIncludes(resFail.stderr, "Copy violation in skills/design-issue/SKILL.md");
+    assertStringIncludes(resFail.stderr, "PUSH REFUSED");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("git-hooks/pre-push runs real design:check-copies against pushed range and refuses copied wording", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "pre-push-copy-e2e-" });
+  const designRoot = path.join(tempDir, "design-docs");
+  const bareRepo = path.join(tempDir, "remote.git");
+  const workRepo = path.join(tempDir, "work");
+  const copiedLine =
+    "The lookup debounces typing and asks the backend with a key only the server holds and returns the exact position";
+  try {
+    const themeDir = path.join(designRoot, "Token_Savings");
+    await Deno.mkdir(themeDir, { recursive: true });
+    const designDoc = path.join(themeDir, "sample-design-2026-08-23.md");
+    await Deno.writeTextFile(
+      designDoc,
+      `# Sample\n\n## What it is\n\n${copiedLine}\n\n## Both surfaces\n\nAll.\n`,
+    );
+
+    await runCmd(["git", "init", "--bare", "-q", bareRepo]);
+    await Deno.mkdir(workRepo, { recursive: true });
+    await runCmd(["git", "init", "-q", "-b", "dev"], workRepo);
+    await runCmd(["git", "config", "user.email", "test@example.com"], workRepo);
+    await runCmd(["git", "config", "user.name", "Test User"], workRepo);
+    await runCmd(["git", "remote", "add", "origin", bareRepo], workRepo);
+
+    const skillPath = path.join(workRepo, "skills", "design-issue", "SKILL.md");
+    await Deno.mkdir(path.dirname(skillPath), { recursive: true });
+    await Deno.writeTextFile(skillPath, "# Design Issue\n\nBase text.\n");
+    await runCmd(["git", "add", "skills/design-issue/SKILL.md"], workRepo);
+    await runCmd(["git", "commit", "-m", "base on dev"], workRepo);
+    await runCmd(["git", "push", "-q", "origin", "dev"], workRepo);
+
+    await runCmd(["git", "checkout", "-q", "-b", "feat/copy"], workRepo);
+    await Deno.writeTextFile(skillPath, `# Design Issue\n\n${copiedLine}\n`);
+    await runCmd(["git", "add", "skills/design-issue/SKILL.md"], workRepo);
+    await runCmd(["git", "commit", "-m", "add copied line"], workRepo);
+    const headSha = (await runCmd(["git", "rev-parse", "HEAD"], workRepo)).stdout.trim();
+
+    const { stubPath: gitleaksStub } = await createStub(tempDir, 0);
+    const stdinLine = `refs/heads/feat/copy ${headSha} refs/heads/feat/copy ${ZERO_OID}\n`;
+
+    const resFail = await runCmd(
+      ["bash", HOOK_PATH, "origin", bareRepo],
+      workRepo,
+      stdinLine,
+      {
+        GITLEAKS_SCRIPT: gitleaksStub,
+        DESIGN_DOCS_ROOT: designRoot,
+        DENO_BIN: Deno.execPath(),
+      },
+    );
+    assertEquals(resFail.code, 1, `Expected push refusal, got stdout=${resFail.stdout}`);
+    assertStringIncludes(resFail.stderr, "skills/design-issue/SKILL.md");
+    assertStringIncludes(resFail.stderr, designDoc);
+    assertStringIncludes(resFail.stderr, copiedLine);
+    assertStringIncludes(resFail.stderr, "PUSH REFUSED");
+
+    // Remove copied line in a new commit and verify clean push passes
+    await Deno.writeTextFile(skillPath, "# Design Issue\n\nClean pointer only.\n");
+    await runCmd(["git", "add", "skills/design-issue/SKILL.md"], workRepo);
+    await runCmd(["git", "commit", "-m", "remove copied line"], workRepo);
+    const cleanSha = (await runCmd(["git", "rev-parse", "HEAD"], workRepo)).stdout.trim();
+
+    const resPass = await runCmd(
+      ["bash", HOOK_PATH, "origin", bareRepo],
+      workRepo,
+      `refs/heads/feat/copy ${cleanSha} refs/heads/feat/copy ${ZERO_OID}\n`,
+      {
+        GITLEAKS_SCRIPT: gitleaksStub,
+        DESIGN_DOCS_ROOT: designRoot,
+        DENO_BIN: Deno.execPath(),
+      },
+    );
+    assertEquals(resPass.code, 0, `Clean push should succeed: ${resPass.stderr}`);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
   }
 });
