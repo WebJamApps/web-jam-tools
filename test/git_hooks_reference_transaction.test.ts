@@ -85,6 +85,18 @@ async function setupCanonicalCloneFixture(
   return { root, upstream, clone, otherRepo, env };
 }
 
+// Git < 2.40 prints `fatal: in 'prepared'|'preparing' phase, update aborted by the reference-transaction hook`,
+// while newer git (>= 2.41+) prints `fatal: ref updates aborted by hook`.
+const GIT_ABORTED_RE =
+  /fatal: (?:ref updates aborted by hook|in 'prepar(?:ed|ing)' phase, update aborted by the reference-transaction hook)/;
+
+function assertHookAborted(stderr: string): void {
+  assert(
+    GIT_ABORTED_RE.test(stderr),
+    `expected git reference-transaction abort message in stderr, got:\n${stderr}`,
+  );
+}
+
 async function currentHeadRef(repoDir: string, env: Record<string, string>): Promise<string> {
   const res = await runGit(["symbolic-ref", "-q", "HEAD"], repoDir, env);
   return res.stdout.trim();
@@ -95,7 +107,8 @@ Deno.test("Row 1: git switch -c other in canonical clone is refused and leaves b
   try {
     const res = await runGit(["switch", "-c", "other"], fx.clone, fx.env);
     assert(res.code !== 0, "expected git switch -c other to fail");
-    assertStringIncludes(res.stderr, "fatal: ref updates aborted by hook");
+    assertHookAborted(res.stderr);
+    assertStringIncludes(res.stderr, "BLOCKED (reference-transaction)");
     assertStringIncludes(res.stderr, "-c core.hooksPath=/dev/null");
     assertStringIncludes(res.stderr, "Report the clone's state to Josh");
     assertStringIncludes(res.stderr, "NEVER reset");
@@ -117,7 +130,8 @@ Deno.test("Row 2: git switch other (existing branch) in canonical clone is refus
     assertEquals((await runGit(["branch", "other"], fx.clone, fx.env)).code, 0);
     const res = await runGit(["switch", "other"], fx.clone, fx.env);
     assert(res.code !== 0, "expected git switch other to fail");
-    assertStringIncludes(res.stderr, "fatal: ref updates aborted by hook");
+    assertHookAborted(res.stderr);
+    assertStringIncludes(res.stderr, "BLOCKED (reference-transaction)");
     assertEquals(await currentHeadRef(fx.clone, fx.env), "refs/heads/dev");
   } finally {
     await Deno.remove(fx.root, { recursive: true }).catch(() => {});
@@ -129,7 +143,8 @@ Deno.test("Row 3: git checkout HEAD~0 (detached) in canonical clone is refused",
   try {
     const res = await runGit(["checkout", "HEAD~0"], fx.clone, fx.env);
     assert(res.code !== 0, "expected detached checkout to fail");
-    assertStringIncludes(res.stderr, "fatal: ref updates aborted by hook");
+    assertHookAborted(res.stderr);
+    assertStringIncludes(res.stderr, "BLOCKED (reference-transaction)");
     assertEquals(await currentHeadRef(fx.clone, fx.env), "refs/heads/dev");
   } finally {
     await Deno.remove(fx.root, { recursive: true }).catch(() => {});
@@ -142,7 +157,8 @@ Deno.test("Row 4: git commit --allow-empty -m x in canonical clone is refused", 
     const before = (await runGit(["rev-parse", "HEAD"], fx.clone, fx.env)).stdout.trim();
     const res = await runGit(["commit", "--allow-empty", "-m", "x"], fx.clone, fx.env);
     assert(res.code !== 0, "expected git commit on canonical dev to fail");
-    assertStringIncludes(res.stderr, "fatal: ref updates aborted by hook");
+    assertHookAborted(res.stderr);
+    assertStringIncludes(res.stderr, "BLOCKED (reference-transaction)");
     const after = (await runGit(["rev-parse", "HEAD"], fx.clone, fx.env)).stdout.trim();
     assertEquals(after, before);
   } finally {
@@ -166,7 +182,8 @@ Deno.test("Row 5: git cherry-pick that applies cleanly in canonical clone is ref
     const before = (await runGit(["rev-parse", "refs/heads/dev"], fx.clone, fx.env)).stdout.trim();
     const res = await runGit(["cherry-pick", sha], fx.clone, fx.env);
     assert(res.code !== 0, "expected clean cherry-pick onto canonical dev to fail");
-    assertStringIncludes(res.stderr, "fatal: ref updates aborted by hook");
+    assertHookAborted(res.stderr);
+    assertStringIncludes(res.stderr, "BLOCKED (reference-transaction)");
     const after = (await runGit(["rev-parse", "refs/heads/dev"], fx.clone, fx.env)).stdout.trim();
     assertEquals(after, before);
   } finally {
@@ -224,7 +241,7 @@ Deno.test("Row 6: git cherry-pick that conflicts leaves files conflicted without
     const res = await runGit(["cherry-pick", conflictSha], fx.clone, fx.env);
     assert(res.code !== 0, "expected conflicting cherry-pick to exit non-zero");
     assert(
-      !res.stderr.includes("fatal: ref updates aborted by hook"),
+      !GIT_ABORTED_RE.test(res.stderr) && !res.stderr.includes("BLOCKED (reference-transaction)"),
       `conflicting cherry-pick should stop in files before hook refusal: ${res.stderr}`,
     );
     const unmerged = await runGit(["diff", "--name-only", "--diff-filter=U"], fx.clone, fx.env);
@@ -365,7 +382,7 @@ exit 1
 
     const res = await runGit(["pull", "--ff-only", "-q", "origin", "dev"], fx.clone, fx.env);
     assert(res.code !== 0, "expected repo .git/hooks/reference-transaction exit 1 to refuse pull");
-    assertStringIncludes(res.stderr, "fatal: ref updates aborted by hook");
+    assertHookAborted(res.stderr);
     const recorded = await Deno.readTextFile(logPath);
     assertStringIncludes(recorded, "STATE:prepared");
     assertStringIncludes(recorded, "refs/");
@@ -389,7 +406,8 @@ Deno.test("canonical guard: blocks -C from outside and subdirs, allows .claude/w
     await Deno.mkdir(sub);
     const subRes = await runGit(["switch", "-c", "sub-br"], sub, fx.env);
     assert(subRes.code !== 0, "subdirectory switch should be refused");
-    assertStringIncludes(subRes.stderr, "fatal: ref updates aborted by hook");
+    assertHookAborted(subRes.stderr);
+    assertStringIncludes(subRes.stderr, "BLOCKED (reference-transaction)");
 
     // git -C <canonical> from outside is still blocked.
     const dashC = await runGit(
@@ -398,12 +416,14 @@ Deno.test("canonical guard: blocks -C from outside and subdirs, allows .claude/w
       fx.env,
     );
     assert(dashC.code !== 0, "git -C commit in canonical clone should be refused");
-    assertStringIncludes(dashC.stderr, "fatal: ref updates aborted by hook");
+    assertHookAborted(dashC.stderr);
+    assertStringIncludes(dashC.stderr, "BLOCKED (reference-transaction)");
 
     // Commit message mentioning "worktree add" does not bypass is_git_worktree_add.
     const spoof = await runGit(["commit", "--allow-empty", "-m", "worktree add"], fx.clone, fx.env);
     assert(spoof.code !== 0, "spoofed commit message should be refused");
-    assertStringIncludes(spoof.stderr, "fatal: ref updates aborted by hook");
+    assertHookAborted(spoof.stderr);
+    assertStringIncludes(spoof.stderr, "BLOCKED (reference-transaction)");
 
     // Linked worktree nested under .claude/worktrees/ passes cleanly.
     assertEquals(
