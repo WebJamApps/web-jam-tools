@@ -19,7 +19,6 @@ export const EXCLUDED_COPIED_TEXT_FOLDERS = new Set([
 ]);
 export const MIN_COPIED_WORD_RUN = 12;
 
-const EMPTY_TREE_OID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const BLOCKQUOTE_LINE_RE = /^\s*>/;
 
 export interface BodyWord {
@@ -307,7 +306,7 @@ export function listDesignDocsUnderRoot(rootDir: string, label = "design:lint-do
   try {
     rootEntries = [...Deno.readDirSync(absRoot)];
   } catch (err) {
-    if (err instanceof Deno.errors.NotFound) {
+    if (err instanceof Deno.errors.NotFound && label === "design:lint-doc") {
       return [];
     }
     throw new Error(
@@ -554,25 +553,17 @@ function runGit(
   repoDir: string,
   args: string[],
 ): { code: number; stdout: string; stderr: string } {
-  const out = new Deno.Command("git", {
+  const res = new Deno.Command("git", {
     args: ["-C", repoDir, ...args],
     stdin: "null",
     stdout: "piped",
     stderr: "piped",
   }).outputSync();
   return {
-    code: out.code,
-    stdout: new TextDecoder().decode(out.stdout),
-    stderr: new TextDecoder().decode(out.stderr),
+    code: res.code,
+    stdout: new TextDecoder().decode(res.stdout),
+    stderr: new TextDecoder().decode(res.stderr),
   };
-}
-
-function resolveCommitParentOrEmptyTree(repoDir: string, commitOid: string): string {
-  const parent = runGit(repoDir, ["rev-parse", "--verify", "--quiet", `${commitOid}^`]);
-  if (parent.code === 0) {
-    return parent.stdout.trim();
-  }
-  return EMPTY_TREE_OID;
 }
 
 interface CheckedFileSlice {
@@ -632,6 +623,152 @@ function collectDiffSlicesForCommitPair(
   return slices;
 }
 
+function listUpstreamExclusions(repoDir: string, tipSha: string): string[] {
+  const remotes = runGit(repoDir, [
+    "for-each-ref",
+    "--format=%(objectname) %(refname)",
+    "refs/remotes",
+  ]);
+  const exclusions: string[] = [];
+  if (remotes.code === 0 && remotes.stdout.trim() !== "") {
+    for (const line of remotes.stdout.trim().split(/\r?\n/)) {
+      const [sha, refName] = line.split(/\s+/, 2);
+      if (!sha || !refName || sha === tipSha) continue;
+      const isDescendant = runGit(repoDir, ["merge-base", "--is-ancestor", tipSha, sha]);
+      if (isDescendant.code === 1) {
+        exclusions.push(refName);
+      }
+    }
+    return exclusions;
+  }
+
+  for (const branch of ["refs/heads/dev", "refs/heads/main"]) {
+    const rev = runGit(repoDir, ["rev-parse", "--verify", "--quiet", branch]);
+    if (rev.code !== 0) continue;
+    const sha = rev.stdout.trim();
+    if (sha === tipSha) continue;
+    const isDescendant = runGit(repoDir, ["merge-base", "--is-ancestor", tipSha, sha]);
+    if (isDescendant.code === 1) {
+      exclusions.push(branch);
+    }
+  }
+  return exclusions;
+}
+
+function blameLinesFromCommits(
+  repoDir: string,
+  tipSha: string,
+  filePath: string,
+  targetCommits: Set<string>,
+): Array<{ start: number; end: number }> {
+  const blameRes = runGit(repoDir, ["blame", "--line-porcelain", tipSha, "--", filePath]);
+  if (blameRes.code !== 0) {
+    throw new Error(
+      `Refusing design:check-copies: git blame failed for ${filePath} at ${tipSha}: ${blameRes.stderr.trim()}`,
+    );
+  }
+  const addedLines: number[] = [];
+  let expectingHeader = true;
+  for (const line of blameRes.stdout.split("\n")) {
+    if (expectingHeader) {
+      const match = line.match(/^([0-9a-f]{40}) \d+ (\d+)(?: \d+)?$/);
+      if (match) {
+        if (targetCommits.has(match[1])) {
+          addedLines.push(Number(match[2]));
+        }
+        expectingHeader = false;
+      }
+    } else if (line.startsWith("\t")) {
+      expectingHeader = true;
+    }
+  }
+
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (const lineNum of addedLines) {
+    const last = ranges[ranges.length - 1];
+    if (last && lineNum === last.end + 1) {
+      last.end = lineNum;
+    } else {
+      ranges.push({ start: lineNum, end: lineNum });
+    }
+  }
+  return ranges;
+}
+
+function collectEffectiveTipSlices(
+  repoDir: string,
+  targetCommits: Set<string>,
+  tipSha: string,
+): CheckedFileSlice[] {
+  if (targetCommits.size === 0) return [];
+
+  const allCommits = Array.from(targetCommits);
+  const candidateSet = new Set<string>();
+  const CHUNK_SIZE = 100;
+  for (let i = 0; i < allCommits.length; i += CHUNK_SIZE) {
+    const chunk = allCommits.slice(i, i + CHUNK_SIZE);
+    const changedRes = runGit(
+      repoDir,
+      [
+        "-c",
+        "core.quotePath=false",
+        "log",
+        "--no-walk",
+        "--name-only",
+        "-m",
+        "--format=",
+        ...chunk,
+      ],
+    );
+    if (changedRes.code !== 0) {
+      throw new Error(
+        `Refusing design:check-copies: failed to inspect commits at ${tipSha}: ${changedRes.stderr.trim()}`,
+      );
+    }
+    for (const line of changedRes.stdout.split(/\r?\n/)) {
+      const filePath = line.trim();
+      if (filePath !== "" && isTargetCopyCheckFile(filePath)) {
+        candidateSet.add(filePath);
+      }
+    }
+  }
+
+  const candidateFiles = Array.from(candidateSet);
+  if (candidateFiles.length === 0) return [];
+
+  const existingRes = runGit(
+    repoDir,
+    ["-c", "core.quotePath=false", "ls-tree", "-r", "--name-only", tipSha, "--", ...candidateFiles],
+  );
+  if (existingRes.code !== 0) {
+    throw new Error(
+      `Refusing design:check-copies: git ls-tree failed at ${tipSha}: ${existingRes.stderr.trim()}`,
+    );
+  }
+  const existingFiles = existingRes.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const slices: CheckedFileSlice[] = [];
+  for (const filePath of existingFiles) {
+    const showRes = runGit(repoDir, ["show", `${tipSha}:${filePath}`]);
+    if (showRes.code !== 0) {
+      throw new Error(
+        `Refusing design:check-copies: could not read ${filePath} at ${tipSha}: ${showRes.stderr.trim()}`,
+      );
+    }
+    const addedRanges = blameLinesFromCommits(repoDir, tipSha, filePath, targetCommits);
+    if (addedRanges.length === 0) continue;
+    slices.push({
+      displayPath: filePath,
+      content: showRes.stdout,
+      addedRanges,
+    });
+  }
+  return slices;
+}
+
 function collectAddedSlicesForRange(repoDir: string, range: string): CheckedFileSlice[] {
   const tokens = range.trim().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) {
@@ -650,27 +787,23 @@ function collectAddedSlicesForRange(repoDir: string, range: string): CheckedFile
         `Refusing design:check-copies: invalid commit "${newRev}" in range "${range}": ${verifyNew.stderr.trim()}`,
       );
     }
-    const isAncestor = runGit(repoDir, ["merge-base", "--is-ancestor", oldRev, newRev]);
-    if (isAncestor.code === 0) {
-      const merges = runGit(repoDir, ["rev-list", "--merges", tokens[0]]);
-      if (merges.code !== 0) {
-        throw new Error(
-          `Refusing design:check-copies: git rev-list failed for "${range}": ${merges.stderr.trim()}`,
-        );
-      }
-      if (merges.stdout.trim() === "") {
-        return collectDiffSlicesForCommitPair(repoDir, oldRev, newRev);
-      }
-      // If a branch merged dev, check only the branch's own non-merge commits still relevant to newRev.
-      return collectSlicesFromCommits(repoDir, [tokens[0]]);
+    const verifyOld = runGit(repoDir, ["rev-parse", "--verify", `${oldRev}^{commit}`]);
+    if (verifyOld.code !== 0) {
+      throw new Error(
+        `Refusing design:check-copies: invalid commit "${oldRev}" in range "${range}": ${verifyOld.stderr.trim()}`,
+      );
     }
-    if (isAncestor.code === 1) {
-      // Force-pushed / rebased branch: evaluate commits on newRev not on oldRev or remotes.
-      return collectSlicesFromCommits(repoDir, [newRev, "--not", oldRev, "--remotes"], newRev);
+    const tipSha = verifyNew.stdout.trim();
+    const oldSha = verifyOld.stdout.trim();
+    const exclusions = listUpstreamExclusions(repoDir, tipSha);
+    const revList = runGit(repoDir, ["rev-list", tipSha, "--not", oldSha, ...exclusions]);
+    if (revList.code !== 0) {
+      throw new Error(
+        `Refusing design:check-copies: git rev-list failed for "${range}": ${revList.stderr.trim()}`,
+      );
     }
-    throw new Error(
-      `Refusing design:check-copies: could not resolve range "${range}": ${isAncestor.stderr.trim()}`,
-    );
+    const targetCommits = new Set(revList.stdout.trim().split(/\r?\n/).filter(Boolean));
+    return collectEffectiveTipSlices(repoDir, targetCommits, tipSha);
   }
 
   // `<sha> --not --remotes` or general rev-list range expression
@@ -684,75 +817,26 @@ function collectAddedSlicesForRange(repoDir: string, range: string): CheckedFile
       `Refusing design:check-copies: invalid commit "${targetRev}" in range "${range}": ${verifyTarget.stderr.trim()}`,
     );
   }
+  const tipSha = verifyTarget.stdout.trim();
 
-  const merges = runGit(repoDir, ["rev-list", "--merges", ...tokens]);
-  if (merges.code !== 0) {
-    throw new Error(
-      `Refusing design:check-copies: git rev-list failed for "${range}": ${merges.stderr.trim()}`,
-    );
-  }
-  if (merges.stdout.trim() === "") {
-    const revList = runGit(repoDir, ["rev-list", "--topo-order", "--reverse", ...tokens]);
-    if (revList.code !== 0) {
-      throw new Error(
-        `Refusing design:check-copies: git rev-list failed for "${range}": ${revList.stderr.trim()}`,
-      );
+  const revListArgs = [...tokens];
+  const remotes = runGit(repoDir, ["for-each-ref", "--format=%(refname)", "refs/remotes"]);
+  if (remotes.code === 0 && remotes.stdout.trim() === "") {
+    const localExclusions = listUpstreamExclusions(repoDir, tipSha);
+    if (localExclusions.length > 0) {
+      if (!revListArgs.includes("--not")) revListArgs.push("--not");
+      revListArgs.push(...localExclusions);
     }
-    const commits = revList.stdout.trim().split(/\r?\n/).filter(Boolean);
-    if (commits.length === 0) return [];
-    const baseRev = resolveCommitParentOrEmptyTree(repoDir, commits[0]);
-    return collectDiffSlicesForCommitPair(repoDir, baseRev, targetRev);
   }
 
-  return collectSlicesFromCommits(repoDir, tokens, targetRev);
-}
-
-function collectSlicesFromCommits(
-  repoDir: string,
-  revListArgs: string[],
-  fallbackTip?: string,
-): CheckedFileSlice[] {
-  const revList = runGit(repoDir, [
-    "rev-list",
-    "--topo-order",
-    "--reverse",
-    "--no-merges",
-    ...revListArgs,
-  ]);
+  const revList = runGit(repoDir, ["rev-list", ...revListArgs]);
   if (revList.code !== 0) {
     throw new Error(
-      `Refusing design:check-copies: git rev-list failed: ${revList.stderr.trim()}`,
+      `Refusing design:check-copies: git rev-list failed for "${range}": ${revList.stderr.trim()}`,
     );
   }
-  const commits = revList.stdout.trim().split(/\r?\n/).filter(Boolean);
-  if (commits.length === 0) {
-    if (fallbackTip && revListArgs.includes("--remotes")) {
-      // Fallback when remote refs are unavailable/empty for force-push comparison.
-      const withoutRemotes = revListArgs.filter((a) => a !== "--remotes");
-      const retry = runGit(repoDir, [
-        "rev-list",
-        "--topo-order",
-        "--reverse",
-        "--no-merges",
-        ...withoutRemotes,
-      ]);
-      if (retry.code === 0) {
-        const retryCommits = retry.stdout.trim().split(/\r?\n/).filter(Boolean);
-        if (retryCommits.length > 0) {
-          const baseRev = resolveCommitParentOrEmptyTree(repoDir, retryCommits[0]);
-          return collectDiffSlicesForCommitPair(repoDir, baseRev, fallbackTip);
-        }
-      }
-    }
-    return [];
-  }
-
-  const slices: CheckedFileSlice[] = [];
-  for (const commit of commits) {
-    const parent = resolveCommitParentOrEmptyTree(repoDir, commit);
-    slices.push(...collectDiffSlicesForCommitPair(repoDir, parent, commit));
-  }
-  return slices;
+  const targetCommits = new Set(revList.stdout.trim().split(/\r?\n/).filter(Boolean));
+  return collectEffectiveTipSlices(repoDir, targetCommits, tipSha);
 }
 
 function collectDefaultBranchSlices(repoDir: string): CheckedFileSlice[] {

@@ -550,3 +550,143 @@ Deno.test("check-copies CLI supports --help and rejects combining --whole-file a
     assertStringIncludes(errors.join("\n"), "--whole-file and --range cannot be combined");
   });
 });
+
+Deno.test("merge commit introducing copied wording is refused for both old..merge-tip and merge-tip --not --remotes", async () => {
+  await withPushFixture(async ({ designRoot, designDocPath, repoDir, baseSha }) => {
+    const branchA = await writeAndCommit(
+      repoDir,
+      { "docs/branch-a.md": "# Branch A\n\nClean text A.\n" },
+      "clean branch A",
+    );
+    git(repoDir, ["checkout", "-q", "-b", "feat/branch-b", baseSha]);
+    await writeAndCommit(
+      repoDir,
+      { "docs/branch-b.md": "# Branch B\n\nClean text B.\n" },
+      "clean branch B",
+    );
+    git(repoDir, ["checkout", "-q", "feat/copy-test"]);
+    git(repoDir, ["merge", "--no-commit", "--no-ff", "feat/branch-b"]);
+    const mergeGuide = path.join(repoDir, "docs/merge-guide.md");
+    await Deno.writeTextFile(mergeGuide, `# Merge Guide\n\n${COPIED_LINE}\n`);
+    git(repoDir, ["add", "docs/merge-guide.md"]);
+    git(repoDir, ["commit", "-m", "merge branch B with copied wording"]);
+    const mergeTip = git(repoDir, ["rev-parse", "HEAD"]);
+
+    for (const range of [`${branchA}..${mergeTip}`, `${mergeTip} --not --remotes`]) {
+      const res = checkCopies({ repoDir, range, dropboxDir: designRoot });
+      assertEquals(res.ok, false, `Expected refusal for range: ${range}`);
+      assertStringIncludes(res.violations[0].message, "docs/merge-guide.md");
+      assertStringIncludes(res.violations[0].message, designDocPath);
+      assertStringIncludes(res.violations[0].message, COPIED_LINE);
+    }
+  });
+});
+
+Deno.test("unrelated feature merging existing copy from dev is allowed on old..merge-tip and merge-tip --not --remotes", async () => {
+  await withPushFixture(async ({ designRoot, repoDir }) => {
+    // Feature branches off baseSha and pushes its own clean commit
+    const oldFeat = await writeAndCommit(
+      repoDir,
+      { "src/feature.ts": "export const f = 1;\n" },
+      "clean feature commit",
+    );
+
+    // Meanwhile dev lands an existing copy in docs/existing.md
+    git(repoDir, ["checkout", "-q", "dev"]);
+    await writeAndCommit(
+      repoDir,
+      { "docs/existing.md": `# Existing\n\n${COPIED_LINE}\n` },
+      "pre-existing copy on dev",
+    );
+
+    // Feature merges dev and pushes oldFeat..mergeTip
+    git(repoDir, ["checkout", "-q", "feat/copy-test"]);
+    git(repoDir, ["merge", "--no-edit", "dev"]);
+    const mergeTip = git(repoDir, ["rev-parse", "HEAD"]);
+
+    for (const range of [`${oldFeat}..${mergeTip}`, `${mergeTip} --not --remotes`]) {
+      const res = checkCopies({ repoDir, range, dropboxDir: designRoot });
+      assertEquals(res.ok, true, `Unexpected violation for ${range}: ${JSON.stringify(res)}`);
+    }
+
+    // Same check with a bare remote where origin/dev and origin/feat exist
+    const bareDir = path.join(path.dirname(repoDir), "bare.git");
+    git(repoDir, ["init", "--bare", "-q", bareDir]);
+    git(repoDir, ["remote", "add", "origin", bareDir]);
+    git(repoDir, ["push", "-q", "origin", "dev"]);
+    git(repoDir, ["push", "-q", "origin", `${oldFeat}:refs/heads/feat/copy-test`]);
+
+    const resRemote = checkCopies({
+      repoDir,
+      range: `${oldFeat}..${mergeTip}`,
+      dropboxDir: designRoot,
+    });
+    assertEquals(resRemote.ok, true);
+    const resNew = checkCopies({
+      repoDir,
+      range: `${mergeTip} --not --remotes`,
+      dropboxDir: designRoot,
+    });
+    assertEquals(resNew.ok, true);
+  });
+});
+
+Deno.test("feature that adds then removes a copy before merging dev is allowed", async () => {
+  await withPushFixture(async ({ designRoot, repoDir, baseSha }) => {
+    await writeAndCommit(
+      repoDir,
+      { "docs/draft.md": `# Draft\n\n${COPIED_LINE}\n` },
+      "temporarily add copy",
+    );
+    await writeAndCommit(
+      repoDir,
+      { "docs/draft.md": "# Draft\n\nClean replacement.\n" },
+      "remove copy before merge",
+    );
+
+    git(repoDir, ["checkout", "-q", "dev"]);
+    await writeAndCommit(
+      repoDir,
+      { "docs/unrelated.md": "# Unrelated\n\nClean dev line.\n" },
+      "advance dev",
+    );
+
+    git(repoDir, ["checkout", "-q", "feat/copy-test"]);
+    git(repoDir, ["merge", "--no-edit", "dev"]);
+    const mergeTip = git(repoDir, ["rev-parse", "HEAD"]);
+
+    const res = checkCopies({
+      repoDir,
+      range: `${baseSha}..${mergeTip}`,
+      dropboxDir: designRoot,
+    });
+    assertEquals(res.ok, true, JSON.stringify(res));
+  });
+});
+
+Deno.test("unavailable design-documents root is refused while existing empty root passes", async () => {
+  await withPushFixture(async ({ designRoot, repoDir, baseSha }) => {
+    const headSha = await writeAndCommit(
+      repoDir,
+      { "docs/guide.md": `# Guide\n\n${COPIED_LINE}\n` },
+      "add copied line to docs/guide.md",
+    );
+    const missingRoot = path.join(path.dirname(designRoot), "missing-design-docs");
+    const errors: string[] = [];
+    const exitCode = runCheckCopiesCli(
+      ["--repo", repoDir, "--range", `${baseSha}..${headSha}`, "--dropbox-dir", missingRoot],
+      { errorLog: (m) => errors.push(m) },
+    );
+    assertEquals(exitCode, 1);
+    assertStringIncludes(errors.join("\n"), missingRoot);
+
+    const emptyRoot = path.join(path.dirname(designRoot), "empty-design-docs");
+    await Deno.mkdir(emptyRoot, { recursive: true });
+    const emptyRes = checkCopies({
+      repoDir,
+      range: `${baseSha}..${headSha}`,
+      dropboxDir: emptyRoot,
+    });
+    assertEquals(emptyRes.ok, true);
+  });
+});
