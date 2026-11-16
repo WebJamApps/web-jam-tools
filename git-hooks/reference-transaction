@@ -84,7 +84,7 @@ refuse_canonical_update() {
   exit 1
 }
 
-if [ "$STATE" = "prepared" ] && [ -n "$CURRENT_GIT_DIR" ] && [ "$CURRENT_GIT_DIR" = "$CANONICAL_GIT_DIR" ]; then
+if { [ "$STATE" = "prepared" ] || [ "$STATE" = "preparing" ]; } && [ -n "$CURRENT_GIT_DIR" ] && [ "$CURRENT_GIT_DIR" = "$CANONICAL_GIT_DIR" ]; then
   ORIGIN_DEV_OID="$(git rev-parse --verify -q refs/remotes/origin/dev 2>/dev/null || true)"
   WORKTREE_ADD_CHECKED=0
   WORKTREE_ADD=1

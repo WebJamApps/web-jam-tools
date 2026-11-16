@@ -384,7 +384,10 @@ exit 1
     assert(res.code !== 0, "expected repo .git/hooks/reference-transaction exit 1 to refuse pull");
     assertHookAborted(res.stderr);
     const recorded = await Deno.readTextFile(logPath);
-    assertStringIncludes(recorded, "STATE:prepared");
+    assert(
+      /^STATE:prepar(?:ed|ing)$/m.test(recorded),
+      `expected STATE:prepared or STATE:preparing in repo hook log, got:\n${recorded}`,
+    );
     assertStringIncludes(recorded, "refs/");
   } finally {
     await Deno.remove(fx.root, { recursive: true }).catch(() => {});
