@@ -15,9 +15,8 @@ const CWD = "/repo";
 const HOME = "/home/j";
 const targets = (command: string) => bashWriteTargets(command, { cwd: CWD, home: HOME });
 
-Deno.test("documented gap control: a subshell cd currently persists into the following command", () => {
-  // Pin the existing limitation; this PR does not implement subshell folder scopes.
-  assertEquals(targets("(cd /tmp && echo a > f); echo b > g"), ["/tmp/f", "/tmp/g"]);
+Deno.test("subshell cd does not persist into the following command (web-jam-tools#1819)", () => {
+  assertEquals(targets("(cd /tmp && echo a > f); echo b > g"), ["/tmp/f", "/repo/g"]);
 });
 
 Deno.test("Root cause 2: a heredoc keeps its own unknown cwd despite a later repository cd", () => {

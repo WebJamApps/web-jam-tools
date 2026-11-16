@@ -327,3 +327,167 @@ Deno.test("git global flags and pull/checkout edge cases", () => {
     "allow-with-note",
   );
 });
+
+Deno.test("subshell scoping: restores parent cwd in both directions on Claude Code and Codex shapes", () => {
+  const worktree = "/tmp/wjt-x";
+  const fromCanonical = "(cd /tmp/wjt-x && git status); git commit -m x";
+  const fromWorktree = `(cd ${CANONICAL} && git status); git commit -m x`;
+
+  for (
+    const payload of [
+      { cwd: CANONICAL, tool_name: "Bash", tool_input: { command: fromCanonical } },
+      {
+        cwd: worktree,
+        tool_name: "Bash",
+        tool_input: { command: fromCanonical, workdir: CANONICAL },
+      },
+    ]
+  ) {
+    const res = evaluatePayload(JSON.stringify(payload), { home: "/home/joshua" });
+    assertEquals(res.outcome, "refuse");
+    if (res.outcome === "refuse") {
+      assertEquals(res.command, "commit");
+      assertStringIncludes(res.message, CANONICAL);
+    }
+  }
+
+  for (
+    const payload of [
+      { cwd: worktree, tool_name: "Bash", tool_input: { command: fromWorktree } },
+      {
+        cwd: CANONICAL,
+        tool_name: "Bash",
+        tool_input: { command: fromWorktree, workdir: worktree },
+      },
+    ]
+  ) {
+    assertEquals(
+      evaluatePayload(JSON.stringify(payload), { home: "/home/joshua" }),
+      { outcome: "allow" },
+    );
+  }
+});
+
+Deno.test("nested subshells, heredoc subshells, brace groups, functions, pushd/popd, and unknown-dir syntax", () => {
+  assertEquals(
+    checkCanonicalCloneCommand(
+      "((cd /tmp/wjt-x && git status); git status); git commit -m x",
+      CANONICAL,
+      {
+        home: "/home/joshua",
+      },
+    ).outcome,
+    "refuse",
+  );
+  assertEquals(
+    checkCanonicalCloneCommand(
+      "(cd /tmp/wjt-x && cat <<'EOF'\nhi\nEOF\n); git commit -m x",
+      CANONICAL,
+      { home: "/home/joshua" },
+    ).outcome,
+    "refuse",
+  );
+  assertEquals(
+    checkCanonicalCloneCommand(
+      `(cd ${CANONICAL} && git commit -m x); git status`,
+      "/tmp/wjt-x",
+      { home: "/home/joshua" },
+    ).outcome,
+    "refuse",
+  );
+  assertEquals(
+    checkCanonicalCloneCommand("{ cd /tmp/wjt-x && git status; }; git commit -m x", CANONICAL, {
+      home: "/home/joshua",
+    }),
+    { outcome: "allow" },
+  );
+  assertEquals(
+    checkCanonicalCloneCommand("{ cd /tmp/wjt-x; } | cat; git commit -m x", CANONICAL, {
+      home: "/home/joshua",
+    }).outcome,
+    "refuse",
+  );
+  assertEquals(
+    checkCanonicalCloneCommand("f() { cd /tmp/wjt-x; }; git commit -m x", CANONICAL, {
+      home: "/home/joshua",
+    }).outcome,
+    "refuse",
+  );
+  assertEquals(
+    checkCanonicalCloneCommand("f() { cd /tmp/wjt-x; }; f; git commit -m x", CANONICAL, {
+      home: "/home/joshua",
+    }).outcome,
+    "allow-with-note",
+  );
+  assertEquals(
+    checkCanonicalCloneCommand(
+      "pushd /tmp/wjt-x && git status && popd && git commit -m x",
+      CANONICAL,
+      {
+        home: "/home/joshua",
+      },
+    ).outcome,
+    "refuse",
+  );
+  assertEquals(
+    checkCanonicalCloneCommand(
+      `pushd ${CANONICAL} && git status && popd && git commit -m x`,
+      "/tmp/wjt-x",
+      { home: "/home/joshua" },
+    ),
+    { outcome: "allow" },
+  );
+  assertEquals(
+    checkCanonicalCloneCommand("cd /tmp/wjt-x | git commit -m x", CANONICAL, {
+      home: "/home/joshua",
+    }).outcome,
+    "refuse",
+  );
+  assertEquals(
+    checkCanonicalCloneCommand("cd /tmp/wjt-x & git commit -m x", CANONICAL, {
+      home: "/home/joshua",
+    }).outcome,
+    "refuse",
+  );
+  assertEquals(
+    checkCanonicalCloneCommand("cd /tmp/wjt-x || git commit -m x", CANONICAL, {
+      home: "/home/joshua",
+    }).outcome,
+    "refuse",
+  );
+  assertEquals(
+    checkCanonicalCloneCommand(
+      `if true; then cd ${CANONICAL} && git commit -m x; fi`,
+      "/tmp/wjt-x",
+      { home: "/home/joshua" },
+    ).outcome,
+    "refuse",
+  );
+  assertEquals(
+    checkCanonicalCloneCommand(
+      "if true; then (cd /tmp/wjt-x && git status); fi; git commit -m x",
+      CANONICAL,
+      { home: "/home/joshua" },
+    ).outcome,
+    "refuse",
+  );
+
+  for (
+    const cmd of [
+      "cat | cd /tmp/wjt-x; git commit -m x",
+      "false && cd /tmp/wjt-x; git commit -m x",
+      "true || cd /tmp/wjt-x; git commit -m x",
+      "cd /tmp/wjt-x || echo err; git commit -m x",
+      "if false; then cd /tmp/wjt-x; fi; git commit -m x",
+      'case "$X" in a) cd /tmp/wjt-x ;; esac; git commit -m x',
+      "pushd +1; git commit -m x",
+      "popd; git commit -m x",
+    ]
+  ) {
+    const res = checkCanonicalCloneCommand(cmd, CANONICAL, { home: "/home/joshua" });
+    assertEquals(res.outcome, "allow-with-note", cmd);
+    if (res.outcome === "allow-with-note") {
+      assertStringIncludes(res.note, "folder");
+    }
+  }
+});

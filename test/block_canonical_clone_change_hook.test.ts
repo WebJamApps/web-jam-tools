@@ -306,3 +306,50 @@ Deno.test("agy shim translates refusal without claiming agy honours refusals", a
   assertEquals(verdict.decision, "deny");
   assertStringIncludes(verdict.reason, CANONICAL);
 });
+
+Deno.test("hook shell script: subshell cd restores parent cwd in both directions on Claude Code and Codex shapes", async () => {
+  const worktree = "/tmp/wjt-x";
+  const fromCanonical = "(cd /tmp/wjt-x && git status); git commit -m x";
+  const fromWorktree = `(cd ${CANONICAL} && git status); git commit -m x`;
+
+  for (
+    const payload of [
+      { cwd: CANONICAL, tool_name: "Bash", tool_input: { command: fromCanonical } },
+      {
+        cwd: worktree,
+        tool_name: "Bash",
+        tool_input: { command: fromCanonical, workdir: CANONICAL },
+      },
+    ]
+  ) {
+    const res = await runHook(payload);
+    assertEquals(res.code, 2, res.stdout);
+    assertStringIncludes(res.stderr, CANONICAL);
+    assertStringIncludes(res.stderr, "commit");
+  }
+
+  for (
+    const payload of [
+      { cwd: worktree, tool_name: "Bash", tool_input: { command: fromWorktree } },
+      {
+        cwd: CANONICAL,
+        tool_name: "Bash",
+        tool_input: { command: fromWorktree, workdir: worktree },
+      },
+    ]
+  ) {
+    const res = await runHook(payload);
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(res.stdout.trim(), "");
+  }
+
+  const indeterminate = await runHook({
+    cwd: CANONICAL,
+    tool_name: "Bash",
+    tool_input: { command: "if false; then cd /tmp/wjt-x; fi; git commit -m x" },
+  });
+  assertEquals(indeterminate.code, 0, indeterminate.stderr);
+  const parsed = JSON.parse(indeterminate.stdout.trim());
+  assertEquals(parsed.hookSpecificOutput.hookEventName, "PreToolUse");
+  assertStringIncludes(parsed.hookSpecificOutput.additionalContext, "folder");
+});
