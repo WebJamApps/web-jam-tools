@@ -105,6 +105,9 @@ rules and do not reconstruct them from memory or from this file.
     an agent command runner that attaches an open PTY/stdin. Always redirect stdin from `/dev/null`
     (`deno task test < /dev/null` or `deno test ... < /dev/null`) so `prompt()` immediately receives
     EOF instead of hanging the test run.
+28. **Read Target Worktree `AGENTS.md` Upon Entering `REPO_DIR`:** Sessions launched from
+    `/home/joshua` (such as agy) load `~/.agents/AGENTS.md`, which can be stale or truncated; read
+    the target worktree's `AGENTS.md` after setup rather than relying on the home-directory copy.
 ## Opening pull requests (all WebJamApps repos)
 
 Open every PR through the `draft-pr` skill (`skills/draft-pr/SKILL.md`), never `gh pr create`
