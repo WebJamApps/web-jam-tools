@@ -6,7 +6,7 @@
 # chat-communication rule that has ever reliably held is the one enforced by
 # a Stop hook, not the one written down in CLAUDE.md/docs. This hook reads
 # the transcript path from stdin (same Stop-hook payload shape), extracts
-# the LAST assistant message's text, and mechanically checks four rules
+# the LAST assistant message's text, and mechanically checks five rules
 # that are decidable without a judgment call (see the detector's docstring
 # for the full rationale, including the deliberate decision on "rhetorical
 # questions"):
@@ -20,6 +20,8 @@
 #      bold-run label starting a line) in a reply that is also over a
 #      configurable length — several topics jumbled into one message. A
 #      list, however long, is one topic; list items never count as leads.
+#   5. Pointing Josh to an earlier message for a pending decision instead of
+#      laying the decision out in full in this reply.
 #
 # Detection lives in hooks/lib/detect_clear_communication_violations.ts so
 # the string/regex logic is independently unit-testable (same split as

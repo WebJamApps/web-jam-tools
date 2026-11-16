@@ -217,9 +217,10 @@ skill.
   context, not only design runs, every decision or question put to Josh carries: (1) the facts it
   turns on, checked first, with no "not verified" left that a cheap check can settle; (2) every
   option, with what it costs, what work it creates and what it risks; (3) the agent's
-  recommendation, last, with its reason. A re-ask counts too: a decision raised again after a block,
-  an interruption or any turn in between is laid out in full again, never as "see above". When
-  several decisions are open, show a short index and then lay out each one in full, one at a time.
+  recommendation, last, with its reason. For re-asking a pending decision, see
+  `~/Dropbox/web-jam-llms/AI_Misbehaves/hooks-design-2026-09-15.md`, "Pointing back at a pending
+  decision". When several decisions are open, show a short index and then lay out each one in full,
+  one at a time.
 - **MAINTAINABILITY AND NON-DUPLICATION ARE FIRST-ORDER DESIGN CRITERIA — NOT AFTERTHOUGHTS.**
   Every design decision is judged on who has to keep the result in step and what happens when they
   don't. A design that is correct on the day it ships and rots quietly afterwards has failed. Five
