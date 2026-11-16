@@ -1,4 +1,4 @@
-# agy (Antigravity/Flash) Hook Contract & Gmail Fence
+# agy (Antigravity) Hook Contract & Gmail Fence
 
 *Created for [web-jam-tools#432](https://github.com/WebJamApps/web-jam-tools/issues/432).*
 
@@ -50,12 +50,12 @@ under a control/test A/B, not by what the model said.
    `{"hookSpecificOutput":{"permissionDecision":"deny"}}` are both ignored — the tool call runs
    either way.
 6. **agy has its own veto, and it works.** A hook that prints
-   `{"decision":"deny","reason":"..."}` on stdout and exits 0 hard-blocks the call, and Flash
+   `{"decision":"deny","reason":"..."}` on stdout and exits 0 hard-blocks the call, and agy
    reports *"The command was denied by a system hook"* with the reason text. Contract:
    `PreToolHookResult{decision, reason, overwrite, permissionOverrides, allowTool}`, decision enum
    `allow | deny | ask | force_ask | deny_unless_prior_grant`. Stop hooks take a separate enum,
    `stop | continue | block`.
-7. **agy exposes `modelName` to hooks** (e.g. `gemini-3.6-flash-low`) directly in the payload —
+7. **agy exposes `modelName` to hooks** (e.g. `gemini-4-hydrogen-high`) directly in the payload —
    Claude Code does not expose the current model to hooks at all.
 8. **`PostToolUse` fires, but cannot see tool output.** Its payload carries `toolCall`, `error`,
    `modelName`, `stepIdx`, `transcriptPath` — no tool result. `PostToolHookResult` carries no
@@ -132,8 +132,7 @@ depend on agy-native payload fields Claude Code's hook payload doesn't carry):
 
 - **`hooks/agy-model-guard.sh`** — matcher `.*` (every tool call). Checks the selected model
   **in-session**, using the `modelName` field agy's own payload carries (finding 7). Shares its
-  allowed-slug list (the 3.7 Flash floor, `gemini-3.7-flash-*` or newer, plus
-  `gemini-4-argon-high` and `claude-sonnet-5-5-high`)
+  allowed-slug list (`gemini-4-hydrogen-high`, `gemini-4-argon-high` and `claude-sonnet-5-5-high`)
   with `hooks/block-agy-non-flash-model.sh` (which sees an `agy --model ...` Bash invocation from
   Claude Code, including one behind `timeout`, `sudo`, `bash -c` and the like, not a running
   agy session's live model) via `hooks/lib/check_agy_model.ts`, so the two can't drift apart.
@@ -152,7 +151,7 @@ depend on agy-native payload fields Claude Code's hook payload doesn't carry):
 
 ## 5. Gmail model choice and the session guard
 
-The session guard permits Flash, Argon and Sonnet at high; it supplies no Gmail-specific cost
+The session guard permits Hydrogen, Argon and Sonnet at high; it supplies no Gmail-specific cost
 confirmation or action approval. The chosen-model workflow and expensive-model question are owned
 by `~/Dropbox/web-jam-llms/AI_Misbehaves/hooks-design-2026-09-15.md`, “Gmail model choice and
 connections”. Their implementation is tracked separately by web-jam-tools#1225
@@ -217,7 +216,7 @@ tracing is disabled before and after sourcing. No Docker container is involved.
 ### Applying it — reproducible from this repo, but Josh's action to take
 
 **This change is deliberately NOT applied to any live config by this repo's automation.**
-Connecting a new MCP server to a Flash surface requires Josh's explicit authorization naming that
+Connecting a new MCP server to an agy surface requires Josh's explicit authorization naming that
 connection — working this issue is not that authorization. `scripts/install-agy-config.sh` exists
 so the change is reproducible instead of a hand-applied, untracked laptop edit, but it is not wired
 into `scripts/install-hooks.sh` or run by any agent session. When Josh is ready:
@@ -240,7 +239,7 @@ file is backed up before being replaced by the symlink.
 
 The five irreversible Gmail actions (`send_email`, `delete_email`, `batch_delete_emails`,
 `delete_filter`, and `delete_label`) are denied unconditionally on the Antigravity surface by
-`hooks/block-agy-gmail-send-delete.sh` (§4) — Flash never gets outbound mail identity or destructive
+`hooks/block-agy-gmail-send-delete.sh` (§4) — agy never gets outbound mail identity or destructive
 deletion capability on Josh's personal inbox, independent of which model is active. Moving mail to
 Trash requires a real permission prompt; because agy's permission prompt is unverified, Trash additions
 are also refused. Removing Trash, archiving, reads, drafts, and ordinary labels pass this fence and
@@ -261,7 +260,7 @@ hook" section for the same disclosure on a related agy-native hook):
   `{"decision":...}` matches agy's documented contract (§2, finding 6) — not against a live,
   interactive `agy` session actually attempting one of these tool calls. Confirming that a real
   agy session reports "denied by a system hook" for `send_email`/`delete_email`/
-  `batch_delete_emails` and for a non-Flash model switch, and that Gmail read/label/archive still
+  `batch_delete_emails` and for a disallowed model switch, and that Gmail read/label/archive still
   works, needs Josh to run it after applying §6 and restarting agy.
 
 ## 9. Live Tool-Name & GitHub MCP Probe (2026-10-12, web-jam-tools#1055)
@@ -297,7 +296,7 @@ unknown-name alarm remain separate work in web-jam-tools#1653 "hooks/agy-hook-sh
 file-changing call by what its arguments hold, and log the new name".
 
 No installer change is needed: the installed shim and guard already reach these modules. After
-merge, with the canonical clone on the merged commit, the one-shot Flash session in "What this does
+merge, with the canonical clone on the merged commit, the one-shot agy session in "What this does
 to normal Flash work" must confirm real edits, writes and artifact writes pass without a new prompt,
 and a `dev` edit is refused with the file unchanged. Post that result on web-jam-tools#1057
 "hooks/agy-hook-shim: run Edit, Write and issue-write guards on agy's own tool names" before

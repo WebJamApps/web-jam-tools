@@ -2,7 +2,7 @@
 
 *Created for [web-jam-tools#353](https://github.com/WebJamApps/web-jam-tools/issues/353). Last updated 2026-08-03.*
 
-This document details the configuration and operational guidelines for using the official **Microsoft Playwright MCP Server** (`@playwright/mcp`) across the AI team (AGY/Flash and Claude/Sonnet) for live browser automation and production site debugging.
+This document details the configuration and operational guidelines for using the official **Microsoft Playwright MCP Server** (`@playwright/mcp`) across the AI team (agy, Claude Code, and Codex) for live browser automation and production site debugging.
 
 ---
 

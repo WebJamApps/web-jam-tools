@@ -22,18 +22,18 @@ reading, checking, the report, and approved edits; it does not repeat this dispa
 | Claude Code | Opus | a Sonnet helper the session starts |
 | Claude Code | Sonnet | a Sonnet helper the session starts |
 | Claude Code | Haiku | a Haiku helper the session starts |
-| agy | Flash | a Flash helper the session starts |
+| agy | Hydrogen, Argon, or Sonnet | an `inherit` helper the session starts |
 | Codex | Astra | a Sol helper the session starts |
 | Codex | Sol | a Sol helper the session starts |
 | Codex | Luna | a Luna helper the session starts |
 
 The primary runs `deno task running-model` to learn its model from the session record, never
 from its own account of itself. If detection cannot tell, start a Sonnet helper on Claude Code
-or a Sol helper on Codex; agy starts a Flash helper. Helpers run at high effort.
+or a Sol helper on Codex; agy starts an `inherit` helper. Helpers run at high effort.
 
 Use the surface's native background child mechanism: Claude Code `Agent` with the table's
 `model`, Codex `collaboration.spawn_agent` with the table's model named in the request, or agy
-`invoke_subagent` with `Model: "flash"`. On Codex, when specifying a different model, provide a
+`invoke_subagent` with `Model: "inherit"`. On Codex, when specifying a different model, provide a
 self-contained task with `fork_turns: "none"`. Pass this skill, the requested focus milestone,
 the report path, and the strict per-item approval gate. Do not run a blocking CLI in the primary
 session as a substitute for a background helper. If the native mechanism is unavailable,
@@ -58,9 +58,9 @@ and passes his per-item approvals back to that same helper. The helper makes onl
 The audit inspects every open issue across all 8 repositories against six core categories:
 
 ### 1. Model-Label Drift
-- **Missing or Misaligned Model Label:** Issue has no model-tier label from `skills/fix-labels/model-labels.json` (unless it is a `Josh` manual step) or carries a label that differs from the triage table in `docs/ai-team-playbook.md`. The skill compares each open coding issue's label with the triage table and proposes a relabel per issue, asking Josh per item. It does not apply `Flash` by default.
+- **Missing or Misaligned Model Label:** Issue has no model-tier label from `skills/fix-labels/model-labels.json` (unless it is a `Josh` manual step) or carries a label that differs from the triage table in `docs/ai-team-playbook.md`. The skill compares each open coding issue's label with the triage table and proposes a relabel per issue, asking Josh per item. It does not apply any single model label by default.
 - **Multiple Model Labels:** Report two or more model labels as drift only when they are not the allowed pair in `~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`, "How the order is used". The allowed pair is valid and must not be reduced to one label.
-- **Retired / Deprecated Labels:** Issue carries retired or non-canonical model labels (e.g. old `Flash-lane`, `GPT-4`, `Claude-2` or mismatched tier spellings).
+- **Retired / Deprecated Labels:** Issue carries retired or non-canonical model labels (e.g. retired `Flash`, `Flash-lane`, `GPT-4`, `Claude-2` or mismatched tier spellings).
 
 ### 2. Native Dependencies & Blocked Label Drift
 - **Stale Blocks:** Issue is labeled `Blocked` (or has body text indicating blocked status), but all referenced blocking issues in native GitHub dependencies (`blocked_by` API) or external prerequisites are already `CLOSED` / satisfied.
@@ -138,7 +138,7 @@ Render a clear, numbered Markdown table in chat along with per-repo untyped rati
 
 | # | Repo | Issue | Category | Finding / Drift | Proposed Action |
 |---|------|-------|----------|-----------------|-----------------|
-| 1 | JaMmusic | #102 | Model Label Drift | Missing model label (screens/styling) | Apply `Flash` label per triage table |
+| 1 | JaMmusic | #102 | Model Label Drift | Missing model label (screens/styling) | Apply `Terra` or `Sonnet` label per triage table |
 | 2 | JaMmusic | #1243 | Dependency Drift | Labeled `Blocked` & body says "do not start", but blocker web-jam-back#990 "Add PATCH /venue/:id (the honest verb for our partial-merge update)" is CLOSED | Remove `Blocked` label & reconcile body (note web-jam-back#990 closed; preserve deploy step) |
 | 3 | CollegeLutheran | #88 | Spec Quality | Body relies on "see comment for details" | Recommend spec inline edit or `Needs Design` |
 | 4 | web-jam-tools | #380 | Untyped Issue | Native Type is unset | Set native Type to `Task` |

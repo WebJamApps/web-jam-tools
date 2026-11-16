@@ -53,10 +53,10 @@ The sweep process never edits `sources.yaml`.
    Collect venue names with dates/acts as evidence. Subagents do the fetching
    so the churn stays out of the main context:
    - **Claude Code surface:** `Agent` tool with `model: "haiku"`.
-   - **Antigravity (`agy`) surface:** `invoke_subagent` with `Model: "flash"`.
+   - **Antigravity (`agy`) surface:** `invoke_subagent` with `Model: "inherit"`.
    When `publication.type` is supported by `deno task venue-mining:sweep`, use the CLI
    instead of manual subagents. When `publication.type` is unsupported or null, fall back
-   to parallel cheap subagents (Claude Code: `Agent` with `model: "haiku"`; Antigravity / agy: `invoke_subagent` with `Model: "flash"`) for harvest.
+   to parallel cheap subagents (Claude Code: `Agent` with `model: "haiku"`; Antigravity / agy: `invoke_subagent` with `Model: "inherit"`) for harvest.
 3. **Dedupe** — `GET /venue`; match **by name** (never a remembered `_id` —
    AI-recalled ids are wrong). Drop venues already in the DB, active OR archived.
 4. **Verify** (delegate: cheap tier subagents, batched) — for each new candidate: real venue,
@@ -64,7 +64,7 @@ The sweep process never edits `sources.yaml`.
    find email + phone + website
    + **street address**. Lookups run on cheap subagents:
    - **Claude Code surface:** `Agent` tool with `model: "haiku"`.
-   - **Antigravity (`agy`) surface:** `invoke_subagent` with `Model: "flash"`.
+   - **Antigravity (`agy`) surface:** `invoke_subagent` with `Model: "inherit"`.
    Look for a website and booking email by every route
    open and narrow nothing at the point of discovery:
    - **Query Google Maps / Google Places metadata**: check the venue's public
@@ -281,11 +281,11 @@ Locate the associated outreach record for the venue (or target booking cycle) an
 - API: `https://webjamsalem.herokuapp.com`, Bearer token at
   `~/WebJamApps/web-jam-llms/web-jam-llm.token`. Venue writes prompt for
   permission — run them from the main session, batched.
-- **Delegation:** harvest/verify runs on cheap subagents (Haiku on Claude Code, Flash on Antigravity / agy);
+- **Delegation:** harvest/verify runs on subagents (Haiku on Claude Code; `inherit` on Antigravity / agy);
   the main session only resolves the source, reviews subagent output, talks to Josh, and does the
   batched writes. Subagent prompts must be self-contained (they have no session context) — see the delegate skill:
   - **Claude Code surface:** `Agent` tool with `model: "haiku"`.
-  - **Antigravity (`agy`) surface:** `invoke_subagent` with `Model: "flash"`.
+  - **Antigravity (`agy`) surface:** `invoke_subagent` with `Model: "inherit"`.
 - **Backend Mutation Guard & Outreach Boundary (web-jam-tools#1021):** All HTTP mutations
   (`POST`, `PATCH`, `PUT`, `DELETE`) against the production backend
   (`https://webjamsalem.herokuapp.com`) are protected by a safety guard hook

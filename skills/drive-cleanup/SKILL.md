@@ -11,7 +11,7 @@ A three-phase Drive housekeeper. **Always do all three phases in order. Never sk
 
 Authoritative storage split:
 
-- **Local Dropbox** (`/home/joshua/Dropbox/web-jam-llms/`, symlinked at `/home/joshua/WebJamApps/web-jam-llms/`): `claude-opus-tasks.txt`, `claude-fable-tasks.txt`. Claude Code reads these directly via local FS. (`agy-tasks.txt` was retired here too — web-jam-tools#249 — agy/Flash dispatch is GitHub-issues-only now. Cross-AI operational rules live in `web-jam-tools/docs/cross-ai-rules.md` — repo-resident, not a Drive/Dropbox mirror.)
+- **Local Dropbox** (`/home/joshua/Dropbox/web-jam-llms/`, symlinked at `/home/joshua/WebJamApps/web-jam-llms/`): `claude-opus-tasks.txt`, `claude-fable-tasks.txt`. Claude Code reads these directly via local FS. (`agy-tasks.txt` was retired here too — web-jam-tools#249 — agy dispatch is GitHub-issues-only now. Cross-AI operational rules live in `web-jam-tools/docs/cross-ai-rules.md` — repo-resident, not a Drive/Dropbox mirror.)
 - **Local Dropbox** (`/home/joshua/Dropbox/joshandmariamusic/JoshMariaMusic/`): all venue deliverables — pitch templates, sent outreach, DRAFTs, research, project log, social copy. Authoritative since Task 42 migration 2026-05-21.
 - **Local Dropbox** (`/home/joshua/Dropbox/joshandmariamusic/MariaParty/`): retired retirement-party docs (RSVP MASTER, Master Plan v2, Banner Decision, etc.). Project complete 2026-05-21 except for food scheduling — Sonnet has no involvement going forward.
 - **Drive** (My Drive root): `claude-sonnet-tasks.txt` (phone Sonnet's own queue — Drive is authoritative). Phone Sonnet also drops cross-queue task contributions into Drive root using `for-opus-<name>.txt` (or the older `claude-opus-tasks-YYYY-MM-DD-HHMM.txt` pattern); drive-cleanup is the bridge that pulls them into Dropbox.
@@ -19,7 +19,7 @@ Authoritative storage split:
 
 The Drive originals of `claude-opus-tasks.txt` were trashed 2026-05-21 — they had no readers. The Drive `MariaParty/` folder was also trashed 2026-05-21 (project complete; no Sonnet involvement). Only the 4-file JMM mirror remains as a Drive snapshot — phone Sonnet consults it. (Cross-AI rules moved from the old `SHARED.md` Drive snapshot to `web-jam-tools/docs/cross-ai-rules.md`, read directly from GitHub — no Drive mirror needed.)
 
-## Phase 1 — Analyze (deterministic pre-pass first; cheap tier (Haiku / Flash) only for the remainder)
+## Phase 1 — Analyze (deterministic pre-pass first; subagent (Haiku on Claude Code; `inherit` on agy) only for the remainder)
 
 **Step 1 — run the deterministic rclone pre-pass (no model, no MCP calls):**
 
@@ -41,7 +41,7 @@ exact `rclone` command), an **Ambiguous** list, and `### Status: CLEAN` or
 
 Classify ambiguous items using a cheap subagent or direct execution:
 - **Claude Code surface:** `Agent` tool with `model: "haiku"`.
-- **Antigravity (`agy`) surface:** `invoke_subagent` with `Model: "flash"`.
+- **Antigravity (`agy`) surface:** `invoke_subagent` with `Model: "inherit"`.
 - **Codex surface:** execute directly.
 
 Read file content via `rclone cat gdrive:"<path>"` to bucket
@@ -82,7 +82,7 @@ Check at minimum:
 
 ### C. Task-queue health scan (BOTH remaining Dropbox queues)
 
-**Always run this every invocation, even if there were no Drive-side bridges.** Scan both local Dropbox queues (`agy-tasks.txt` was retired — web-jam-tools#249 — agy/Flash dispatch is GitHub-issues-only now, no queue file to scan):
+**Always run this every invocation, even if there were no Drive-side bridges.** Scan both local Dropbox queues (`agy-tasks.txt` was retired — web-jam-tools#249 — agy dispatch is GitHub-issues-only now, no queue file to scan):
 
 - `~/Dropbox/web-jam-llms/claude-opus-tasks.txt`
 - `~/Dropbox/web-jam-llms/claude-fable-tasks.txt`
@@ -243,5 +243,5 @@ After all actions, post a short summary: what was done, what was declined, and a
 
 ## Description Detail & Triggers
 
-Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a subagent (Claude Code: Haiku; agy: Flash) then classifies only the ambiguous remainder. Invoke when Josh asks (or /drive-cleanup) — it does NOT auto-run.
+Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a subagent (Claude Code: Haiku; agy: inherit) then classifies only the ambiguous remainder. Invoke when Josh asks (or /drive-cleanup) — it does NOT auto-run.
 

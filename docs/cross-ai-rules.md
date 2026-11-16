@@ -131,7 +131,7 @@ skill.
   Incorrect: `Closes web-jam-tools#784 "some title"`
 
 - **NO AGENT CONNECTS A NEW ACCOUNT, CREDENTIAL, OR MCP SERVER WITHOUT AUTHORIZATION:** No agent
-  adds a connector, account, credential, or MCP server to any Claude or Flash surface without Josh's
+  adds a connector, account, credential, or MCP server to any Claude or agy surface without Josh's
   explicit authorization naming it. Discovering that something _could_ be connected is never
   permission to connect it. This applies to new OAuth grants, new MCP servers, new API tokens, and
   widening the scope of an existing connection. - **NO GUARD IS EVER LOOSENED TO REDUCE JOSH'S FRICTION:** When Josh is frustrated at being asked,
@@ -198,7 +198,7 @@ skill.
   naming that step. An agent writes the issue body to a file (or shows it in chat) and waits; the
   `gh issue create` call (or MCP `issue_write` create) follows only the words "file it" (or
   equivalent). A dispatch (starting work on an issue by spawning a subagent or handing it to
-  agy/Flash) follows only an explicit instruction to dispatch. Once Josh has said go on a piece of
+  agy) follows only an explicit instruction to dispatch. Once Josh has said go on a piece of
   work, the session doing it may hand parts of that same work to a helper at the same level or
   cheaper without a new go — that carries out an approved step, it does not open a new gate. A single "go" is ambiguous across gates and must never be read as
   covering more than one — the expensive, hard-to-reverse half (issue noise, spawned tokens) is
