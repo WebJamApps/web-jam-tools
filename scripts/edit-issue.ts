@@ -28,7 +28,7 @@ import {
   resolveSigningAuthor,
   type RunningModelOptions,
 } from "../src/shared/codex_running_model.ts";
-import { checkNoCredentialLiteral, checkNotEmpty } from "./gh-write/guard.ts";
+import { checkIssueCitations, checkNoCredentialLiteral, checkNotEmpty } from "./gh-write/guard.ts";
 import { type RunCmd, runWithRetry } from "./gh-write/gh_runner.ts";
 
 export interface Options {
@@ -215,6 +215,11 @@ export async function run(args: string[], deps: Deps): Promise<number> {
     const notEmpty = checkNotEmpty(bodyText);
     if (!notEmpty.ok) {
       console.error(notEmpty.error);
+      return 1;
+    }
+    const citations = checkIssueCitations(bodyText);
+    if (!citations.ok) {
+      console.error(citations.error);
       return 1;
     }
     // Authored-by footer (web-jam-tools#1205): the replacement body names the editing model.

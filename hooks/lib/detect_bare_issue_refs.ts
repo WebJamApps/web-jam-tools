@@ -65,6 +65,30 @@ export function findBareIssueRefs(text: string): string[] {
   return offenders;
 }
 
+/** Normalize URL citations to the shared detector's repo#number input format. */
+export function findBareWriteRefs(body: string): string[] {
+  const urls = new Map<string, string>();
+  const normalized = body
+    .replace(
+      /\[([^\]\n]+)\]\((https:\/\/github\.com\/[^/\s]+\/([\w.-]+)\/(?:issues|pull)\/(\d+))\)/g,
+      (_match, label: string, url: string, repo: string, number: string) => {
+        const token = `${repo}#${number}`;
+        urls.set(token, url);
+        // A URL used as its own label supplies no title.
+        return label === url ? token : `${token} "${label.replaceAll('"', "'")}"`;
+      },
+    )
+    .replace(
+      /https:\/\/github\.com\/[^/\s]+\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:[?#][^\s<>)]*)?/g,
+      (url: string, repo: string, number: string) => {
+        const token = `${repo}#${number}`;
+        urls.set(token, url);
+        return token;
+      },
+    );
+  return findBareIssueRefs(normalized).map((token) => urls.get(token) ?? token);
+}
+
 if (import.meta.main) {
   const raw = Deno.env.get("MSG_FOR_PY") || Deno.args[0] || "";
   for (const tok of findBareIssueRefs(raw)) {

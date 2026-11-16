@@ -22,6 +22,7 @@ import { findIssueCreateBodyViolation } from "../../hooks/lib/check_model_label_
 import { resolveSigningAuthor, type RunningModelOptions } from "../shared/codex_running_model.ts";
 import { loadModelLabels, modelLabelViolation } from "../shared/model_label_rule.ts";
 import { checkDesignBody } from "../shared/design_body.ts";
+import { checkIssueCitations } from "../../scripts/gh-write/guard.ts";
 
 export interface CreateIssueOptions {
   repo?: string;
@@ -621,6 +622,8 @@ export async function createIssueAndVerify(
       }`,
     );
   }
+  const citations = checkIssueCitations(fileBody);
+  if (!citations.ok) throw new Error(citations.error);
   await checkDesignBody(fileBody);
   const lowerLabels = (options.labels || []).map((l) => l.trim().toLowerCase());
   const isEpic = options.type?.trim().toLowerCase() === "epic" || lowerLabels.includes("epic");
