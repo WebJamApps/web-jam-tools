@@ -10,3 +10,7 @@
 
 1. web-jam-tools#485 "new skill record-song" — the design's REAPER control section defines the
    skill, and row 1 builds and proves it. Not resolved: nothing. Remove the label?
+
+## Steps after the merge
+
+none

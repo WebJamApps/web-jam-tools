@@ -2174,3 +2174,123 @@ for (const c of OUTCOME_WORDING_CASES) {
     }
   });
 }
+
+// --- Appendix D — "The plan's steps after the merge" (web-jam-tools#1801, Cases 8–9) ---
+
+const FIRST_PASSING_PLAN_MD = `# Gate 2 Plan
+
+## Phase 2
+
+| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |
+|---|---|---|---|---|---|---|---|
+| 1 | Coordinate skill updates | Epic | Opus | High | web-jam-tools | Unit tests cover validator rules | all children close |
+| 2 | Update skill installers | row 1 | Hydrogen / Josh | High | web-jam-tools | Unit tests verify the installers | \`deno task install-skills\` and \`deno task install-codex\` pass |
+| 3 | Add unit tests for plan check | row 1 | Terra | High | web-jam-tools | Unit tests cover every case | \`deno task test\` passes |
+
+## Steps after the merge
+
+- row 2: \`deno task install-skills\` and \`deno task install-codex\`
+`;
+
+Deno.test("Appendix D plan steps after merge case 8: row 2 holding install-skills in a criterion and no install-codex -> design:file-plan refuses before filing, naming row 2 and deno task install-codex", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planDocPath = path.join(tmpDir, "plan.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, STEP_AFTER_MERGE_DESIGN_DOC);
+    await Deno.writeTextFile(planDocPath, FIRST_PASSING_PLAN_MD);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        planDoc: planDocPath,
+        epic: {
+          title: "Coordinate skill updates",
+          type: "Epic",
+          tier: "Opus",
+          escalationReason: "Container epic",
+          body:
+            "## What this builds\n\nEpic\n\n## Acceptance criteria\n\n- [ ] Closes when all children close\n",
+        },
+        children: [
+          {
+            title: "Update skill installers",
+            labels: ["Hydrogen", "Josh"],
+            body:
+              "## What this builds\n\nRun installers after merge.\n\n## Acceptance criteria\n\n- [ ] After the merge, `deno task install-skills` runs on the laptop.\n",
+          },
+          {
+            title: "Add unit tests for plan check",
+            tier: "Terra",
+            body:
+              "## What this builds\n\nTests\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
+          },
+        ],
+      }),
+    );
+
+    const calls: string[][] = [];
+    const noGhDeps: ExecDeps = {
+      readFileText: (p) => Deno.readTextFile(p),
+      runCmd: (cmd) => {
+        calls.push(cmd);
+        throw new Error("Unexpected gh call");
+      },
+    };
+    const error = await assertRejects(
+      () => filePlan({ planPath, dryRun: false, approvalCheck: APPROVE_ALL, deps: noGhDeps }),
+      Error,
+      "Refused to file plan",
+    );
+    assertStringIncludes(error.message, "row 2");
+    assertStringIncludes(error.message, "deno task install-codex");
+    assertEquals(calls, []);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Appendix D plan steps after merge case 9: row 2 holding both commands in criteria -> design:file-plan files it", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planDocPath = path.join(tmpDir, "plan.md");
+    await Deno.writeTextFile(designPath, STEP_AFTER_MERGE_DESIGN_DOC);
+    await Deno.writeTextFile(planDocPath, FIRST_PASSING_PLAN_MD);
+
+    const { result } = await fileParentFixture({
+      repo: "web-jam-tools",
+      designDoc: designPath,
+      planDoc: planDocPath,
+      epic: {
+        title: "Coordinate skill updates",
+        type: "Epic",
+        labels: ["Opus"],
+        escalationReason: "Container epic",
+        body:
+          "## What this builds\n\nEpic\n\n## Acceptance criteria\n\n- [ ] Closes when all children close\n",
+      },
+      children: [
+        {
+          title: "Update skill installers",
+          labels: ["Hydrogen", "Josh"],
+          body:
+            "## What this builds\n\nRun installers after merge.\n\n## Acceptance criteria\n\n- [ ] After the merge, `deno task install-skills` and `deno task install-codex` run on the laptop.\n",
+        },
+        {
+          title: "Add unit tests for plan check",
+          labels: ["Terra"],
+          body:
+            "## What this builds\n\nTests\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
+        },
+      ],
+    });
+    assertEquals(result.totalIssuesFiled, 3);
+    assertEquals(result.epic?.title, "Coordinate skill updates");
+    assertEquals(result.children.length, 2);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});

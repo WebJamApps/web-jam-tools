@@ -60,8 +60,10 @@ const HEADER_LINE =
   "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |";
 const ALIGNMENT_LINE = "|---|---|---|---|---|---|---|---|";
 
-function planTableDoc(rows: string[]): string {
-  return `# Plan\n\n## Phase 2\n\n${HEADER_LINE}\n${ALIGNMENT_LINE}\n${rows.join("\n")}\n`;
+function planTableDoc(rows: string[], stepsAfterMerge: string | null = "none"): string {
+  const base = `# Plan\n\n## Phase 2\n\n${HEADER_LINE}\n${ALIGNMENT_LINE}\n${rows.join("\n")}\n`;
+  if (stepsAfterMerge === null) return base;
+  return `${base}\n## Steps after the merge\n\n${stepsAfterMerge}\n`;
 }
 
 /** A minimal, deterministic model-tier schema -- decoupled from the live labels.yaml file so
@@ -1920,4 +1922,127 @@ Deno.test("findOutcomeWordingViolation matches all banned phrases in any capital
     assertStringIncludes((err as Error).message, 'issue "Item X"');
     assertStringIncludes((err as Error).message, "Unable To Determine");
   }
+
+// --- Appendix D — "The plan's steps after the merge" (web-jam-tools#1801, Cases 1–7) ---
+
+function threeRowPlanDoc(opts: {
+  row2Tier: string;
+  row2Tests?: string;
+  row2Closes?: string;
+  stepsAfterMerge: string | null;
+}): string {
+  const row2Tests = opts.row2Tests ??
+    (opts.row2Tier === "Josh" ? "none — manual step" : "Unit tests verify the installers");
+  const row2Closes = opts.row2Closes ??
+    (opts.row2Tier === "Josh"
+      ? "Josh confirms he ran them"
+      : "`deno task install-skills` and `deno task install-codex` succeed");
+  return planTableDoc(
+    [
+      "| 1 | Coordinate skill updates | Epic | Opus | High | web-jam-tools | Unit tests cover validator rules | all children close |",
+      `| 2 | Update skill installers | row 1 | ${opts.row2Tier} | High | web-jam-tools | ${row2Tests} | ${row2Closes} |`,
+      "| 3 | Add unit tests for plan check | row 1 | Terra | High | web-jam-tools | Unit tests cover every case | `deno task test` passes |",
+    ],
+    opts.stepsAfterMerge,
+  );
+}
+
+async function lintTempPlanMarkdown(markdown: string) {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = path.join(tmpDir, "plan.md");
+    await Deno.writeTextFile(planFile, markdown);
+    return await lintPlanTableFile(planFile, { schema: TEST_SCHEMA });
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+}
+
+Deno.test("Appendix D plan steps after merge case 1: No ## Steps after the merge section refuses, naming the section", async () => {
+  const result = await lintTempPlanMarkdown(
+    threeRowPlanDoc({ row2Tier: "Hydrogen / Josh", stepsAfterMerge: null }),
+  );
+  assertEquals(result.valid, false);
+  const found = findRule(result.violations, "steps-after-merge-section-missing");
+  assertEquals(found.length, 1);
+  assertStringIncludes(found[0].message, "## Steps after the merge");
+});
+
+Deno.test("Appendix D plan steps after merge case 2: The section reads none -> pass", async () => {
+  const result = await lintTempPlanMarkdown(
+    threeRowPlanDoc({
+      row2Tier: "Hydrogen",
+      row2Closes: "`deno task test` passes",
+      stepsAfterMerge: "none",
+    }),
+  );
+  assertEquals(result.valid, true, JSON.stringify(result.violations));
+  assertEquals(result.violations, []);
+});
+
+Deno.test("Appendix D plan steps after merge case 3: - row 2 with install-skills and install-codex, row 2 tier Hydrogen / Josh -> pass", async () => {
+  const result = await lintTempPlanMarkdown(
+    threeRowPlanDoc({
+      row2Tier: "Hydrogen / Josh",
+      stepsAfterMerge: "- row 2: `deno task install-skills` and `deno task install-codex`",
+    }),
+  );
+  assertEquals(result.valid, true, JSON.stringify(result.violations));
+  assertEquals(result.violations, []);
+});
+
+Deno.test("Appendix D plan steps after merge case 4: - row 2 with commands, row 2 tier Hydrogen -> refused, naming row 2 and missing Josh label", async () => {
+  const result = await lintTempPlanMarkdown(
+    threeRowPlanDoc({
+      row2Tier: "Hydrogen",
+      stepsAfterMerge: "- row 2: `deno task install-skills` and `deno task install-codex`",
+    }),
+  );
+  assertEquals(result.valid, false);
+  const found = findRule(result.violations, "steps-after-merge-missing-josh");
+  assertEquals(found.length, 1);
+  assertStringIncludes(found[0].message, "row 2");
+  assertStringIncludes(found[0].message, "missing");
+  assertStringIncludes(found[0].message, "Josh");
+});
+
+Deno.test("Appendix D plan steps after merge case 5: - row 2 with commands, row 2 tier Josh -> refused, naming row 2 and missing model label", async () => {
+  const result = await lintTempPlanMarkdown(
+    threeRowPlanDoc({
+      row2Tier: "Josh",
+      stepsAfterMerge: "- row 2: `deno task install-skills` and `deno task install-codex`",
+    }),
+  );
+  assertEquals(result.valid, false);
+  const found = findRule(result.violations, "steps-after-merge-missing-model-label");
+  assertEquals(found.length, 1);
+  assertStringIncludes(found[0].message, "row 2");
+  assertStringIncludes(found[0].message, "missing");
+  assertStringIncludes(found[0].message, "model label");
+});
+
+Deno.test("Appendix D plan steps after merge case 6: - row 4 with install-skills -> refused, naming row 4", async () => {
+  const result = await lintTempPlanMarkdown(
+    threeRowPlanDoc({
+      row2Tier: "Hydrogen / Josh",
+      stepsAfterMerge: "- row 4: `deno task install-skills`",
+    }),
+  );
+  assertEquals(result.valid, false);
+  const found = findRule(result.violations, "steps-after-merge-unknown-row");
+  assertEquals(found.length, 1);
+  assertStringIncludes(found[0].message, "row 4");
+});
+
+Deno.test("Appendix D plan steps after merge case 7: - row 2: install the skill -> refused, naming row 2: no command", async () => {
+  const result = await lintTempPlanMarkdown(
+    threeRowPlanDoc({
+      row2Tier: "Hydrogen / Josh",
+      stepsAfterMerge: "- row 2: install the skill",
+    }),
+  );
+  assertEquals(result.valid, false);
+  const found = findRule(result.violations, "steps-after-merge-missing-command");
+  assertEquals(found.length, 1);
+  assertStringIncludes(found[0].message, "row 2: no command");
 });

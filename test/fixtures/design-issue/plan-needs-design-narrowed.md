@@ -12,3 +12,7 @@
    skill, and row 1 builds and proves it. Not resolved: "setup things based on previous recordings"
    is limited to the know-how list the design names (input indices, track layout, 48 kHz 24-bit
    takes, ffmpeg mixes). Remove the label?
+
+## Steps after the merge
+
+none

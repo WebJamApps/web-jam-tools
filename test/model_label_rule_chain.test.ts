@@ -116,6 +116,10 @@ for (const [cell, expectedLabels] of ALLOWED_NO_REASON_CELLS) {
           "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |",
           "|---|---|---|---|---|---|---|---|",
           ...rows,
+          "",
+          "## Steps after the merge",
+          "",
+          "none",
         ].join("\n"),
       );
       const logs: string[] = [];
@@ -178,6 +182,10 @@ Deno.test("model-label chain: Opus / Fable top lane preserves both labels and es
         "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |",
         "|---|---|---|---|---|---|---|---|",
         '| 1 | Share the model-label reader | web-jam-tools#900 "Fixture epic" | Opus / Fable | High | web-jam-tools | Unit tests cover every literal case | `deno task test` passes |',
+        "",
+        "## Steps after the merge",
+        "",
+        "none",
       ].join("\n"),
     );
     const logs: string[] = [];

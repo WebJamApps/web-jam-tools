@@ -111,6 +111,8 @@ export interface LintPlanOptions {
   designDocMarkdown?: string;
   /** Explicit design document headings set for checking Closes when headings. */
   designHeadings?: ReadonlySet<string>;
+  /** Full plan markdown content, used to validate `## Steps after the merge`. */
+  markdown?: string;
   /** Gate 1 state directory override (for testing). */
   stateDir?: string;
 }
@@ -345,6 +347,9 @@ export function validatePlanTable(
   checkJoshPairingAndComposite(rows, violations);
   checkEpicBelonging(rows, violations);
   checkCrossRepoEpic(rows, violations);
+  if (options.markdown !== undefined) {
+    violations.push(...checkStepsAfterMerge(options.markdown, rows, canonicalTiers));
+  }
 
   return violations;
 }
@@ -1042,6 +1047,7 @@ export async function lintPlanTableFile(
     modelLabels: options?.modelLabels ?? (options?.schema ? undefined : loadModelLabels()),
     activeRepos: options?.activeRepos,
     designHeadings,
+    markdown,
   });
   violations.push(
     ...await checkNeedsDesignRemovals(markdown, options?.fetchIssueBody ?? ghIssueBody),
@@ -1294,6 +1300,259 @@ export async function checkNeedsDesignRemovals(
   return violations;
 }
 
+// --- Steps after the merge (web-jam-tools#1801) ---
+
+const STEPS_AFTER_MERGE_HEADING = /^(#{1,6})\s+Steps after the merge\b\s*(?:#+\s*)?$/i;
+const STEP_ROW_LINE = /^\s*[-*]\s+row\s+(\d+)\s*:\s*(.*)$/i;
+
+/** One parsed row entry from a plan file's `## Steps after the merge` section. */
+export interface StepAfterMergeEntry {
+  /** 1-based line number in the plan markdown file. */
+  line: number;
+  /** Row number cited in `- row <n>:`. */
+  rowNumber: number;
+  /** Backtick-quoted command spans listed on that line. */
+  commands: string[];
+}
+
+/** Parsed result of a plan file's `## Steps after the merge` section. */
+export interface ParsedStepsAfterMerge {
+  foundSection: boolean;
+  sectionLine: number;
+  isNone: boolean;
+  emptySection: boolean;
+  entries: StepAfterMergeEntry[];
+  invalidLines: Array<{ line: number; text: string }>;
+}
+
+/** Extracts non-empty trimmed backtick spans from a markdown text string. */
+export function extractBacktickCommands(text: string): string[] {
+  const cmds: string[] = [];
+  for (const match of text.matchAll(/`([^`\n]+)`/g)) {
+    const cmd = match[1].trim();
+    if (cmd.length > 0) cmds.push(cmd);
+  }
+  return cmds;
+}
+
+/** Indexes parsed plan-table rows by their numeric `#` cell when numeric, or 1-based position otherwise. */
+export function indexPlanRowsByNumber(rows: readonly PlanTableRow[]): Map<number, PlanTableRow> {
+  const map = new Map<number, PlanTableRow>();
+  const hasNumeric = rows.some((r) => /^\d+$/.test(stripMdMarkers(r.cells[COL_NUM]).trim()));
+  rows.forEach((row, idx) => {
+    const rawNum = stripMdMarkers(row.cells[COL_NUM]).trim();
+    const num = hasNumeric && /^\d+$/.test(rawNum) ? Number(rawNum) : idx + 1;
+    if (!map.has(num)) {
+      map.set(num, row);
+    }
+  });
+  return map;
+}
+
+/** Parses the required `## Steps after the merge` section from a Gate 2 plan markdown file. */
+export function parseStepsAfterMerge(markdown: string): ParsedStepsAfterMerge {
+  const lines = markdown.split(/\r?\n/);
+  let inFence = false;
+  let fenceMarker = "";
+  let foundSection = false;
+  let sectionLevel = 0;
+  let sectionLine = 0;
+  let inSection = false;
+  const contentLines: Array<{ line: number; raw: string; trimmed: string }> = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const trimmed = rawLine.trim();
+    const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1][0];
+      if (!inFence) {
+        inFence = true;
+        fenceMarker = marker;
+      } else if (marker === fenceMarker) {
+        inFence = false;
+        fenceMarker = "";
+      }
+      continue;
+    }
+    if (inFence) continue;
+
+    const heading = rawLine.match(/^\s*(#{1,6})\s+(.+?)\s*$/);
+    if (heading) {
+      if (!foundSection && STEPS_AFTER_MERGE_HEADING.test(rawLine.trim())) {
+        foundSection = true;
+        sectionLevel = heading[1].length;
+        sectionLine = i + 1;
+        inSection = true;
+      } else if (inSection && heading[1].length <= sectionLevel) {
+        inSection = false;
+      }
+      continue;
+    }
+
+    if (!inSection) continue;
+    if (trimmed === "" || trimmed.startsWith("<!--")) continue;
+    contentLines.push({ line: i + 1, raw: rawLine, trimmed });
+  }
+
+  if (!foundSection) {
+    return {
+      foundSection: false,
+      sectionLine: 0,
+      isNone: false,
+      emptySection: false,
+      entries: [],
+      invalidLines: [],
+    };
+  }
+
+  if (contentLines.length === 0) {
+    return {
+      foundSection: true,
+      sectionLine,
+      isNone: false,
+      emptySection: true,
+      entries: [],
+      invalidLines: [],
+    };
+  }
+
+  if (
+    contentLines.length === 1 &&
+    /^none\.?$/i.test(stripMdMarkers(contentLines[0].trimmed))
+  ) {
+    return {
+      foundSection: true,
+      sectionLine,
+      isNone: true,
+      emptySection: false,
+      entries: [],
+      invalidLines: [],
+    };
+  }
+
+  const entries: StepAfterMergeEntry[] = [];
+  const invalidLines: Array<{ line: number; text: string }> = [];
+  for (const item of contentLines) {
+    const match = item.raw.match(STEP_ROW_LINE);
+    if (!match) {
+      invalidLines.push({ line: item.line, text: item.trimmed });
+      continue;
+    }
+    entries.push({
+      line: item.line,
+      rowNumber: Number(match[1]),
+      commands: extractBacktickCommands(match[2]),
+    });
+  }
+
+  return {
+    foundSection: true,
+    sectionLine,
+    isNone: false,
+    emptySection: false,
+    entries,
+    invalidLines,
+  };
+}
+
+/** Validates the `## Steps after the merge` section against the parsed plan table rows. */
+export function checkStepsAfterMerge(
+  markdown: string,
+  rows: readonly PlanTableRow[],
+  canonicalTiers: readonly string[],
+): PlanTableViolation[] {
+  const parsed = parseStepsAfterMerge(markdown);
+  if (!parsed.foundSection) {
+    return [{
+      rule: "steps-after-merge-section-missing",
+      line: 1,
+      message:
+        'Plan is missing required "## Steps after the merge" section -- write "none" or list each row with steps after the merge as "- row <n>: `<command>`"',
+    }];
+  }
+
+  const violations: PlanTableViolation[] = [];
+  if (parsed.emptySection) {
+    violations.push({
+      rule: "steps-after-merge-section-empty",
+      line: parsed.sectionLine,
+      message:
+        '"## Steps after the merge" section is empty -- write "none" or list each row as "- row <n>: `<command>`"',
+    });
+    return violations;
+  }
+
+  for (const bad of parsed.invalidLines) {
+    violations.push({
+      rule: "steps-after-merge-invalid-line",
+      line: bad.line,
+      message:
+        `Invalid line in "## Steps after the merge" ("${bad.text}") -- expected "none" or "- row <n>: \`<command>\`"`,
+    });
+  }
+
+  if (parsed.isNone) return violations;
+
+  const rowByNumber = indexPlanRowsByNumber(rows);
+  const modelVocabulary = canonicalTiers.length > 0
+    ? new Set(canonicalTiers.filter((name) => name !== "Josh"))
+    : undefined;
+
+  for (const entry of parsed.entries) {
+    const row = rowByNumber.get(entry.rowNumber);
+    if (!row) {
+      violations.push({
+        rule: "steps-after-merge-unknown-row",
+        line: entry.line,
+        message:
+          `## Steps after the merge names row ${entry.rowNumber}, which the plan table does not have`,
+      });
+      continue;
+    }
+
+    if (entry.commands.length === 0) {
+      violations.push({
+        rule: "steps-after-merge-missing-command",
+        line: entry.line,
+        message:
+          `## Steps after the merge lists row ${entry.rowNumber}: no command found (expected backtick-quoted command(s))`,
+      });
+    }
+
+    const rawTier = row.cells[COL_TIER];
+    const cleanTier = stripMdMarkers(rawTier);
+    const tierParts = isMissingValue(rawTier)
+      ? []
+      : cleanTier.split("/").map((p) => p.trim()).filter(Boolean);
+    const hasJosh = tierParts.some((p) => p.toLowerCase() === "josh");
+    const hasModelLabel = modelVocabulary
+      ? tierParts.some((p) => modelVocabulary.has(p))
+      : tierParts.some((p) => p.toLowerCase() !== "josh");
+
+    if (!hasJosh) {
+      violations.push({
+        rule: "steps-after-merge-missing-josh",
+        line: row.line,
+        column: "Model tier",
+        message:
+          `Steps after the merge lists row ${entry.rowNumber}, whose Model tier cell ("${cleanTier}") is missing the "Josh" label`,
+      });
+    }
+    if (!hasModelLabel) {
+      violations.push({
+        rule: "steps-after-merge-missing-model-label",
+        line: row.line,
+        column: "Model tier",
+        message:
+          `Steps after the merge lists row ${entry.rowNumber}, whose Model tier cell ("${cleanTier}") is missing the model label beside "Josh"`,
+      });
+    }
+  }
+
+  return violations;
+}
+
 /** Default `IssueBodyFetcher`: a read-only `gh issue view`. Throws on any non-zero exit. */
 export async function ghIssueBody(repo: string, number: number): Promise<string> {
   const slug = repo.includes("/") ? repo : `WebJamApps/${repo}`;
@@ -1368,6 +1627,8 @@ Validates the Gate 2 plan table's cell values in a design document:
   - a "Needs Design label removals" item whose "Not resolved" part quotes or
     narrows a directive line of that issue's own body (read with gh; a body
     that cannot be read fails the check)
+  - a required "## Steps after the merge" section ("none", or "- row <n>:" lines
+    with backtick commands whose listed rows hold both Josh and a model label)
 
 When validation passes, renders <plan>.html and opens it in Google Chrome.
 
