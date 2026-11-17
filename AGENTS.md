@@ -204,4 +204,8 @@ Read the Deno Deploy CLI and runtime rules in [docs/uptime-monitoring.md](docs/u
   outreach commands (like `--send`), always provide explicit recipient filtering/exclusion options
   (`--venues`, `--skip`) so the user can selectively dispatch only approved candidates, ensuring
   code strictly supports the human-approval safety guarantees described in skill documentation.
+- **Non-Interactive Command Execution (Avoid Stdin Hangs)**: When running test suites or CLI tools
+  in background shells (`deno task test`, installers), close stdin (`< /dev/null`) or pass
+  non-interactive flags unless input is expected. Always set a short timer or check stalled
+  background tasks promptly with `manage_task` rather than hanging silently on a prompt.
 
