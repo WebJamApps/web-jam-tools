@@ -257,10 +257,10 @@ Deno.test("Conversation record: holds /work-issue web-jam-tools#1304, then yes -
   assertEquals(isOpen, true);
 });
 
-Deno.test("Conversation record: holds /work-issue web-jam-tools#1304, then /config -> not open", () => {
+Deno.test("Conversation record: holds /work-issue web-jam-tools#1304, then /config -> remains open", () => {
   const messages = ["/work-issue web-jam-tools#1304", "/config"];
   const isOpen = evaluateUserMessages(messages, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
-  assertEquals(isOpen, false);
+  assertEquals(isOpen, true);
 });
 
 Deno.test("Conversation record: holds /config, then /pr-review -> open", () => {
@@ -269,9 +269,14 @@ Deno.test("Conversation record: holds /config, then /pr-review -> open", () => {
   assertEquals(isOpen, true);
 });
 
-Deno.test("Conversation record: holds only please fix this PR and leave a comment -> not open", () => {
+Deno.test("Conversation record: holds only please fix this PR and leave a comment -> open", () => {
   const messages = ["please fix this PR and leave a comment"];
   const isOpen = evaluateUserMessages(messages, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+  assertEquals(isOpen, true);
+});
+
+Deno.test("Conversation record: empty userMessages -> not open", () => {
+  const isOpen = evaluateUserMessages([], MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
   assertEquals(isOpen, false);
 });
 
@@ -287,7 +292,11 @@ Deno.test("Helper agent: holds nothing Josh typed, message folder names starting
     await Deno.mkdir(parentDir, { recursive: true });
     const parentTranscript = join(parentDir, "transcript.jsonl");
     const parentContent = [
-      JSON.stringify({ type: "USER_INPUT", content: "/work-issue web-jam-tools#1304" }),
+      JSON.stringify({
+        type: "USER_INPUT",
+        source: "USER_EXPLICIT",
+        content: "/work-issue web-jam-tools#1304",
+      }),
       JSON.stringify({
         type: "GENERIC",
         content: `Created the following subagents:\n{"conversationId": "${helperId}"}`,
@@ -1031,9 +1040,11 @@ Deno.test("Helper agent: four steps up to the conversation Josh typed in -> not 
 
       let content = "";
       if (i === 0) {
-        content =
-          JSON.stringify({ type: "USER_INPUT", content: "/work-issue web-jam-tools#1304" }) +
-          "\n";
+        content = JSON.stringify({
+          type: "USER_INPUT",
+          source: "USER_EXPLICIT",
+          content: "/work-issue web-jam-tools#1304",
+        }) + "\n";
       } else {
         content = JSON.stringify({ type: "PLANNER_RESPONSE", content: "Helper step" }) + "\n";
       }
@@ -1117,13 +1128,17 @@ Deno.test("handlePreToolUse: commands and hook answers closed cases", async () =
     const openTranscript = join(tmpDir, "open_transcript.jsonl");
     await Deno.writeTextFile(
       openTranscript,
-      JSON.stringify({ type: "USER_INPUT", content: "/work-issue web-jam-tools#1304" }) + "\n",
+      JSON.stringify({
+        type: "USER_INPUT",
+        source: "USER_EXPLICIT",
+        content: "/work-issue web-jam-tools#1304",
+      }) + "\n",
     );
 
     const closedTranscript = join(tmpDir, "closed_transcript.jsonl");
     await Deno.writeTextFile(
       closedTranscript,
-      JSON.stringify({ type: "USER_INPUT", content: "/config" }) + "\n",
+      JSON.stringify({ type: "PLANNER_RESPONSE", content: "No user input yet" }) + "\n",
     );
 
     const cases: Array<{
@@ -1336,7 +1351,11 @@ Deno.test("E2E hooks/agy-skill-run-hook.sh: rewrites open command and exits 0", 
     const tPath = join(tmpDir, "transcript.jsonl");
     await Deno.writeTextFile(
       tPath,
-      JSON.stringify({ type: "USER_INPUT", content: "/work-issue web-jam-tools#1304" }) + "\n",
+      JSON.stringify({
+        type: "USER_INPUT",
+        source: "USER_EXPLICIT",
+        content: "/work-issue web-jam-tools#1304",
+      }) + "\n",
     );
 
     const payload = {
@@ -1386,7 +1405,11 @@ Deno.test("E2E hooks/agy-skill-run-hook.sh: rewrites helper subagent command whe
     await Deno.writeTextFile(
       parentTranscript,
       [
-        JSON.stringify({ type: "USER_INPUT", content: "/work-issue web-jam-tools#1304" }),
+        JSON.stringify({
+          type: "USER_INPUT",
+          source: "USER_EXPLICIT",
+          content: "/work-issue web-jam-tools#1304",
+        }),
         JSON.stringify({
           type: "GENERIC",
           content: `Created the following subagents:\n{"conversationId": "${helperId}"}`,
@@ -1533,7 +1556,7 @@ Deno.test("Helper agent with captured helper input format: handlePreToolUse rewr
     await Deno.writeTextFile(
       parentTranscript,
       [
-        JSON.stringify({ type: "USER_INPUT", content: "/pr-review" }),
+        JSON.stringify({ type: "USER_INPUT", source: "USER_EXPLICIT", content: "/pr-review" }),
         makeAuthenticCreationResult(childId),
       ].join("\n") + "\n",
     );
@@ -1582,7 +1605,7 @@ Deno.test("Helper of a helper with captured helper input format: 2 steps up rewr
     await Deno.writeTextFile(
       join(conv0Logs, "transcript.jsonl"),
       [
-        JSON.stringify({ type: "USER_INPUT", content: "/pr-review" }),
+        JSON.stringify({ type: "USER_INPUT", source: "USER_EXPLICIT", content: "/pr-review" }),
         makeAuthenticCreationResult(conv1Id),
       ].join("\n") + "\n",
     );
@@ -1636,20 +1659,91 @@ Deno.test("Helper of a helper with captured helper input format: 2 steps up rewr
   }
 });
 
-Deno.test("Helper of a helper with captured helper input format: does NOT rewrite when starting conv did not open skill run", async () => {
+Deno.test("Helper of a helper with captured helper input format: rewrites pwd when starting conv holds Josh's plain request", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-helper-chain-plain-open-" });
+  try {
+    const conv0Id = "root-conv-0";
+    const conv1Id = "helper-conv-1";
+    const conv2Id = "grandchild-conv-2";
+
+    // conv0: Josh typed plain message
+    const conv0Logs = join(tmpDir, conv0Id, ".system_generated", "logs");
+    await Deno.mkdir(conv0Logs, { recursive: true });
+    await Deno.writeTextFile(
+      join(conv0Logs, "transcript.jsonl"),
+      [
+        JSON.stringify({
+          type: "USER_INPUT",
+          source: "USER_EXPLICIT",
+          content: "please fix this PR and leave a comment",
+        }),
+        makeAuthenticCreationResult(conv1Id),
+      ].join("\n") + "\n",
+    );
+
+    // conv1: helper 1, created conv2
+    const conv1Logs = join(tmpDir, conv1Id, ".system_generated", "logs");
+    const conv1Msgs = join(tmpDir, conv1Id, ".system_generated", "messages");
+    await Deno.mkdir(conv1Logs, { recursive: true });
+    await Deno.mkdir(conv1Msgs, { recursive: true });
+    await Deno.writeTextFile(
+      join(conv1Logs, "transcript.jsonl"),
+      [
+        CAPTURED_CHILD_LAUNCH_ENTRY,
+        makeAuthenticCreationResult(conv2Id),
+      ].join("\n") + "\n",
+    );
+    await Deno.writeTextFile(
+      join(conv1Msgs, "msg.json"),
+      makeHelperCreationMessage(conv1Id, conv0Id),
+    );
+
+    // conv2: helper of a helper
+    const conv2Logs = join(tmpDir, conv2Id, ".system_generated", "logs");
+    const conv2Msgs = join(tmpDir, conv2Id, ".system_generated", "messages");
+    await Deno.mkdir(conv2Logs, { recursive: true });
+    await Deno.mkdir(conv2Msgs, { recursive: true });
+    const conv2Transcript = join(conv2Logs, "transcript.jsonl");
+    await Deno.writeTextFile(conv2Transcript, CAPTURED_CHILD_LAUNCH_ENTRY + "\n");
+    await Deno.writeTextFile(
+      join(conv2Msgs, "msg.json"),
+      makeHelperCreationMessage(conv2Id, conv1Id),
+    );
+
+    const payload = {
+      toolCall: {
+        name: "run_command",
+        args: { CommandLine: "pwd" },
+      },
+      transcriptPath: conv2Transcript,
+      conversationId: conv2Id,
+    };
+
+    const res = handlePreToolUse(payload, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.decision, "allow");
+    assertEquals(
+      res.overwrite?.CommandLine,
+      `/home/joshua/.claude/hooks/agy-skill-run.sh --conversation-id '${conv2Id}' --transcript-path '${conv2Transcript}' 'pwd'`,
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Helper of a helper with captured helper input format: does NOT rewrite when starting conv holds no USER_INPUT/USER_EXPLICIT", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "agy-helper-chain-no-open-" });
   try {
     const conv0Id = "root-conv-0";
     const conv1Id = "helper-conv-1";
     const conv2Id = "grandchild-conv-2";
 
-    // conv0: Josh typed plain message (not a skill run)
+    // conv0: automated/system entry only, nothing Josh typed
     const conv0Logs = join(tmpDir, conv0Id, ".system_generated", "logs");
     await Deno.mkdir(conv0Logs, { recursive: true });
     await Deno.writeTextFile(
       join(conv0Logs, "transcript.jsonl"),
       [
-        JSON.stringify({ type: "USER_INPUT", content: "please fix this PR and leave a comment" }),
+        JSON.stringify({ type: "PLANNER_RESPONSE", content: "Automated startup" }),
         makeAuthenticCreationResult(conv1Id),
       ].join("\n") + "\n",
     );
@@ -1713,9 +1807,11 @@ Deno.test("Helper ancestry with captured helper input format: 3 steps up is open
 
       let content: string;
       if (i === 0) {
-        content =
-          JSON.stringify({ type: "USER_INPUT", content: "/work-issue web-jam-tools#1304" }) +
-          "\n";
+        content = JSON.stringify({
+          type: "USER_INPUT",
+          source: "USER_EXPLICIT",
+          content: "/work-issue web-jam-tools#1304",
+        }) + "\n";
       } else {
         content = CAPTURED_CHILD_LAUNCH_ENTRY + "\n";
       }
@@ -1811,7 +1907,11 @@ Deno.test("E2E hooks/agy-skill-run-hook.sh: rewrites helper subagent command wit
     await Deno.writeTextFile(
       join(parentLogs, "transcript.jsonl"),
       [
-        JSON.stringify({ type: "USER_INPUT", content: "/work-issue web-jam-tools#1304" }),
+        JSON.stringify({
+          type: "USER_INPUT",
+          source: "USER_EXPLICIT",
+          content: "/work-issue web-jam-tools#1304",
+        }),
         makeAuthenticCreationResult(helperId),
       ].join("\n") + "\n",
     );
@@ -2323,19 +2423,19 @@ Deno.test("Full-handler regression: helper launch prompt /pr-review + parent ass
   }
 });
 
-Deno.test("Full-handler regression: helper launch prompt /pr-review + parent latest command was /config -> allow, NO rewrite", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "agy-regress-parent-config-" });
+Deno.test("Full-handler regression: helper launch prompt /pr-review + parent holds no USER_EXPLICIT USER_INPUT -> allow, NO rewrite", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-regress-parent-non-explicit-" });
   try {
     const parentId = "parent-conv-123";
     const helperId = "child-helper-456";
 
-    // Parent authentically listed child, but Josh's latest message in parent was /config
+    // Parent authentically listed child, but holds no USER_INPUT entry with source USER_EXPLICIT
     const parentLogs = join(tmpDir, parentId, ".system_generated", "logs");
     await Deno.mkdir(parentLogs, { recursive: true });
     await Deno.writeTextFile(
       join(parentLogs, "transcript.jsonl"),
       [
-        JSON.stringify({ type: "USER_INPUT", content: "/config" }),
+        JSON.stringify({ type: "USER_INPUT", source: "SYSTEM", content: "/pr-review" }),
         makeAuthenticCreationResult(helperId),
       ].join("\n") + "\n",
     );
@@ -2388,7 +2488,7 @@ Deno.test("Full-handler regression: helper launch prompt /pr-review + parent lat
     await Deno.writeTextFile(
       join(parentLogs, "transcript.jsonl"),
       [
-        JSON.stringify({ type: "USER_INPUT", content: "/pr-review" }),
+        JSON.stringify({ type: "USER_INPUT", source: "USER_EXPLICIT", content: "/pr-review" }),
         makeAuthenticCreationResult(helperId),
       ].join("\n") + "\n",
     );
@@ -2673,6 +2773,7 @@ Deno.test("Full-handler preservation: legitimate top-level conversation with no 
       transcriptPath,
       JSON.stringify({
         type: "USER_INPUT",
+        source: "USER_EXPLICIT",
         content: "/pr-review https://github.com/WebJamApps/web-jam-tools/pull/1323",
       }) + "\n",
     );
@@ -2714,6 +2815,7 @@ Deno.test("Full-handler preservation: legitimate top-level conversation with emp
       transcriptPath,
       JSON.stringify({
         type: "USER_INPUT",
+        source: "USER_EXPLICIT",
         content: "/pr-review https://github.com/WebJamApps/web-jam-tools/pull/1323",
       }) + "\n",
     );
@@ -2880,6 +2982,7 @@ Deno.test("handlePreToolUse: includes modelName flag when modelName is in payloa
       transcriptPath,
       JSON.stringify({
         type: "USER_INPUT",
+        source: "USER_EXPLICIT",
         content: "/work-issue web-jam-tools#1304",
       }) + "\n",
     );
@@ -2895,6 +2998,351 @@ Deno.test("handlePreToolUse: includes modelName flag when modelName is in payloa
     assertEquals(
       res.overwrite?.CommandLine,
       `/home/joshua/.claude/hooks/agy-skill-run.sh --conversation-id '${convId}' --model-name 'gemini-4-argon-high' --transcript-path '${transcriptPath}' 'deno task running-model'`,
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 8. Design doc rev 1.14.0 table of 13 cases (web-jam-tools#1789)
+// ---------------------------------------------------------------------------
+
+async function createTopLevelTranscript(
+  tmpDir: string,
+  convId: string,
+  entries: Record<string, unknown>[],
+): Promise<string> {
+  const logsDir = join(tmpDir, convId, ".system_generated", "logs");
+  await Deno.mkdir(logsDir, { recursive: true });
+  const tPath = join(logsDir, "transcript.jsonl");
+  await Deno.writeTextFile(tPath, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  return tPath;
+}
+
+Deno.test("Design table case 1: Josh's own plain request -> allow, rewritten", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-design-case1-" });
+  try {
+    const convId = "conv-case-1";
+    const transcriptPath = await createTopLevelTranscript(tmpDir, convId, [
+      {
+        type: "USER_INPUT",
+        source: "USER_EXPLICIT",
+        content: "please fix and post a comment on the PR when done",
+      },
+    ]);
+    const cmd = "git -C /tmp/agy-worktrees/pr-1451 status";
+    const res = handlePreToolUse({
+      toolCall: { name: "run_command", args: { CommandLine: cmd } },
+      transcriptPath,
+      conversationId: convId,
+    });
+    assertEquals(res.decision, "allow");
+    assertEquals(
+      res.overwrite?.CommandLine,
+      `${INSTALLED_SCRIPT_PATH} --conversation-id '${convId}' --transcript-path '${transcriptPath}' '${cmd}'`,
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Design table case 2: Josh's own slash command -> allow, rewritten", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-design-case2-" });
+  try {
+    const convId = "conv-case-2";
+    const transcriptPath = await createTopLevelTranscript(tmpDir, convId, [
+      {
+        type: "USER_INPUT",
+        source: "USER_EXPLICIT",
+        content: "/webjam-tasks:work-issue fix the sidebar",
+      },
+    ]);
+    const res = handlePreToolUse({
+      toolCall: { name: "run_command", args: { CommandLine: "deno task test" } },
+      transcriptPath,
+      conversationId: convId,
+    });
+    assertEquals(res.decision, "allow");
+    assertEquals(
+      res.overwrite?.CommandLine,
+      `${INSTALLED_SCRIPT_PATH} --conversation-id '${convId}' --transcript-path '${transcriptPath}' 'deno task test'`,
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Design table case 3: Josh's own hi then yes -> allow, rewritten", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-design-case3-" });
+  try {
+    const convId = "conv-case-3";
+    const transcriptPath = await createTopLevelTranscript(tmpDir, convId, [
+      { type: "USER_INPUT", source: "USER_EXPLICIT", content: "hi" },
+      { type: "PLANNER_RESPONSE", content: "Hi! How can I help?" },
+      { type: "USER_INPUT", source: "USER_EXPLICIT", content: "yes" },
+    ]);
+    const res = handlePreToolUse({
+      toolCall: { name: "run_command", args: { CommandLine: "npm test" } },
+      transcriptPath,
+      conversationId: convId,
+    });
+    assertEquals(res.decision, "allow");
+    assertEquals(
+      res.overwrite?.CommandLine,
+      `${INSTALLED_SCRIPT_PATH} --conversation-id '${convId}' --transcript-path '${transcriptPath}' 'npm test'`,
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Design table case 4: single quote escaped as '\\'' -> allow, rewritten", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-design-case4-" });
+  try {
+    const convId = "conv-case-4";
+    const transcriptPath = await createTopLevelTranscript(tmpDir, convId, [
+      { type: "USER_INPUT", source: "USER_EXPLICIT", content: "hi" },
+      { type: "USER_INPUT", source: "USER_EXPLICIT", content: "yes" },
+    ]);
+    const res = handlePreToolUse({
+      toolCall: { name: "run_command", args: { CommandLine: `echo "it's ok" && pwd` } },
+      transcriptPath,
+      conversationId: convId,
+    });
+    assertEquals(res.decision, "allow");
+    assertEquals(
+      res.overwrite?.CommandLine,
+      `${INSTALLED_SCRIPT_PATH} --conversation-id '${convId}' --transcript-path '${transcriptPath}' 'echo "it'\\''s ok" && pwd'`,
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Design table case 5: helper with message folder naming starter and starter listing helper -> allow, rewritten", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-design-case5-" });
+  try {
+    const starterId = "starter-case-5";
+    const helperId = "helper-case-5";
+    await Deno.mkdir(join(tmpDir, starterId, ".system_generated", "logs"), { recursive: true });
+    await Deno.writeTextFile(
+      join(tmpDir, starterId, ".system_generated", "logs", "transcript.jsonl"),
+      [
+        JSON.stringify({
+          type: "USER_INPUT",
+          source: "USER_EXPLICIT",
+          content: "check tests",
+        }),
+        makeAuthenticCreationResult(helperId),
+      ].join("\n") + "\n",
+    );
+    const helperLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const helperMsgs = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(helperLogs, { recursive: true });
+    await Deno.mkdir(helperMsgs, { recursive: true });
+    const helperTranscript = join(helperLogs, "transcript.jsonl");
+    await Deno.writeTextFile(helperTranscript, CAPTURED_CHILD_LAUNCH_ENTRY + "\n");
+    await Deno.writeTextFile(
+      join(helperMsgs, "msg.json"),
+      makeHelperCreationMessage(helperId, starterId),
+    );
+    const res = handlePreToolUse({
+      toolCall: { name: "run_command", args: { CommandLine: "npm test" } },
+      transcriptPath: helperTranscript,
+      conversationId: helperId,
+    });
+    assertEquals(res.decision, "allow");
+    assertEquals(
+      res.overwrite?.CommandLine,
+      `${INSTALLED_SCRIPT_PATH} --conversation-id '${helperId}' --transcript-path '${helperTranscript}' 'npm test'`,
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Design table case 6: helper whose starter record does not list it -> allow, no rewrite", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-design-case6-" });
+  try {
+    const starterId = "starter-case-6";
+    const helperId = "helper-case-6";
+    await Deno.mkdir(join(tmpDir, starterId, ".system_generated", "logs"), { recursive: true });
+    await Deno.writeTextFile(
+      join(tmpDir, starterId, ".system_generated", "logs", "transcript.jsonl"),
+      JSON.stringify({
+        type: "USER_INPUT",
+        source: "USER_EXPLICIT",
+        content: "check tests",
+      }) + "\n",
+    );
+    const helperLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const helperMsgs = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(helperLogs, { recursive: true });
+    await Deno.mkdir(helperMsgs, { recursive: true });
+    const helperTranscript = join(helperLogs, "transcript.jsonl");
+    await Deno.writeTextFile(helperTranscript, CAPTURED_CHILD_LAUNCH_ENTRY + "\n");
+    await Deno.writeTextFile(
+      join(helperMsgs, "msg.json"),
+      makeHelperCreationMessage(helperId, starterId),
+    );
+    const res = handlePreToolUse({
+      toolCall: { name: "run_command", args: { CommandLine: "npm test" } },
+      transcriptPath: helperTranscript,
+      conversationId: helperId,
+    });
+    assertEquals(res.decision, "allow");
+    assertEquals(res.overwrite, undefined);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Design table case 7: helper four steps below starter -> allow, no rewrite", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-design-case7-" });
+  try {
+    const convs = ["c0", "c1", "c2", "c3", "c4"];
+    for (let i = 0; i < convs.length; i++) {
+      const id = convs[i];
+      const logsDir = join(tmpDir, id, ".system_generated", "logs");
+      await Deno.mkdir(logsDir, { recursive: true });
+      let lines = i === 0
+        ? JSON.stringify({ type: "USER_INPUT", source: "USER_EXPLICIT", content: "run tests" }) +
+          "\n"
+        : CAPTURED_CHILD_LAUNCH_ENTRY + "\n";
+      if (i < convs.length - 1) {
+        lines += makeAuthenticCreationResult(convs[i + 1]) + "\n";
+      }
+      await Deno.writeTextFile(join(logsDir, "transcript.jsonl"), lines);
+      if (i > 0) {
+        const msgsDir = join(tmpDir, id, ".system_generated", "messages");
+        await Deno.mkdir(msgsDir, { recursive: true });
+        await Deno.writeTextFile(
+          join(msgsDir, "msg.json"),
+          makeHelperCreationMessage(id, convs[i - 1]),
+        );
+      }
+    }
+    const conv4Transcript = join(tmpDir, "c4", ".system_generated", "logs", "transcript.jsonl");
+    const res = handlePreToolUse({
+      toolCall: { name: "run_command", args: { CommandLine: "npm test" } },
+      transcriptPath: conv4Transcript,
+      conversationId: "c4",
+    });
+    assertEquals(res.decision, "allow");
+    assertEquals(res.overwrite, undefined);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Design table case 8: non-helper holding no USER_INPUT entry with source USER_EXPLICIT -> allow, no rewrite", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-design-case8-" });
+  try {
+    const convId = "conv-case-8";
+    const transcriptPath = await createTopLevelTranscript(tmpDir, convId, [
+      { type: "USER_INPUT", source: "SYSTEM", content: "automated input" },
+      { type: "USER_INPUT", content: "missing source field" },
+      { type: "PLANNER_RESPONSE", content: "reply" },
+    ]);
+    const res = handlePreToolUse({
+      toolCall: { name: "run_command", args: { CommandLine: "npm test" } },
+      transcriptPath,
+      conversationId: convId,
+    });
+    assertEquals(res.decision, "allow");
+    assertEquals(res.overwrite, undefined);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Design table case 9: conversation record missing -> allow, no rewrite", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-design-case9-" });
+  try {
+    const missingTranscript = join(
+      tmpDir,
+      "missing",
+      ".system_generated",
+      "logs",
+      "transcript.jsonl",
+    );
+    const res = handlePreToolUse({
+      toolCall: { name: "run_command", args: { CommandLine: "npm test" } },
+      transcriptPath: missingTranscript,
+      conversationId: "missing",
+    });
+    assertEquals(res.decision, "allow");
+    assertEquals(res.overwrite, undefined);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Design table case 10: conversation record not JSON lines -> allow, no rewrite", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-design-case10-" });
+  try {
+    const convId = "conv-case-10";
+    const logsDir = join(tmpDir, convId, ".system_generated", "logs");
+    await Deno.mkdir(logsDir, { recursive: true });
+    const tPath = join(logsDir, "transcript.jsonl");
+    await Deno.writeTextFile(tPath, "this is not json lines\n{bad json\n");
+    const res = handlePreToolUse({
+      toolCall: { name: "run_command", args: { CommandLine: "npm test" } },
+      transcriptPath: tPath,
+      conversationId: convId,
+    });
+    assertEquals(res.decision, "allow");
+    assertEquals(res.overwrite, undefined);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Design table case 11: full installed script path -> deny", () => {
+  const res = handlePreToolUse({
+    toolCall: {
+      name: "run_command",
+      args: { CommandLine: "/home/joshua/.claude/hooks/agy-skill-run.sh 'ls'" },
+    },
+  });
+  assertEquals(res.decision, "deny");
+});
+
+Deno.test("Design table case 12: tilde installed script path -> deny", () => {
+  const res = handlePreToolUse({
+    toolCall: {
+      name: "run_command",
+      args: { CommandLine: "bash ~/.claude/hooks/agy-skill-run.sh 'ls'" },
+    },
+  });
+  assertEquals(res.decision, "deny");
+});
+
+Deno.test("Design table case 13: repository copy scripts/agy-skill-run.sh in Josh's conversation -> allow, rewritten", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-design-case13-" });
+  try {
+    const convId = "conv-case-13";
+    const transcriptPath = await createTopLevelTranscript(tmpDir, convId, [
+      {
+        type: "USER_INPUT",
+        source: "USER_EXPLICIT",
+        content: "please fix and post a comment on the PR when done",
+      },
+    ]);
+    const res = handlePreToolUse({
+      toolCall: {
+        name: "run_command",
+        args: { CommandLine: "bash scripts/agy-skill-run.sh 'ls'" },
+      },
+      cwd: "/home/joshua/WebJamApps/web-jam-tools",
+      transcriptPath,
+      conversationId: convId,
+    });
+    assertEquals(res.decision, "allow");
+    assertEquals(
+      res.overwrite?.CommandLine,
+      `${INSTALLED_SCRIPT_PATH} --conversation-id '${convId}' --transcript-path '${transcriptPath}' 'bash scripts/agy-skill-run.sh '\\''ls'\\'''`,
     );
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
