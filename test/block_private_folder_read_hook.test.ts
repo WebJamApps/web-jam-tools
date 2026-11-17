@@ -757,7 +757,11 @@ for (const [index, entry] of SHELL_SYNTAX_CASES.entries()) {
             SCRIPT_PATH,
           ]
           : [SCRIPT_PATH],
-        env: { CLAUDE_SETTINGS_PATH: FIXTURE_SETTINGS_PATH, WJT_SURFACE: surface },
+        env: {
+          AGY_HOOK_RECORD_PATH: path.join(FIXTURE_DIR, "agy-hook-invocations.jsonl"),
+          CLAUDE_SETTINGS_PATH: FIXTURE_SETTINGS_PATH,
+          WJT_SURFACE: surface,
+        },
         stdin: "piped",
         stdout: "piped",
         stderr: "piped",
@@ -1523,6 +1527,7 @@ for (const entry of REVISION_227_CASES) {
             ]
             : [SCRIPT_PATH],
           env: {
+            AGY_HOOK_RECORD_PATH: path.join(FIXTURE_DIR, "agy-hook-invocations.jsonl"),
             HOME: testHome,
             DENO_DIR: Deno.env.get("DENO_DIR") ??
               path.join(Deno.env.get("HOME") || "/home/joshua", ".cache/deno"),
