@@ -18,10 +18,14 @@ import {
   stripFooter,
   withFooter,
 } from "../../hooks/lib/authored_by_footer.ts";
-import { findIssueCreateBodyViolation } from "../../hooks/lib/check_model_label_on_issue_create.ts";
+import {
+  findIssueCreateBodyViolation,
+  resolveStepAfterMergeLabelFlags,
+} from "../../hooks/lib/check_model_label_on_issue_create.ts";
 import { resolveSigningAuthor, type RunningModelOptions } from "../shared/codex_running_model.ts";
 import { loadModelLabels, modelLabelViolation } from "../shared/model_label_rule.ts";
-import { checkDesignBody } from "../shared/design_body.ts";
+import { checkDesignBody, designPathsInBody } from "../shared/design_body.ts";
+import { extractDesignHeadings, validateIssueBodyCriteria } from "../design-issue/lint_plan.ts";
 import { checkIssueCitations } from "../../scripts/gh-write/guard.ts";
 
 export interface CreateIssueOptions {
@@ -635,6 +639,35 @@ export async function createIssueAndVerify(
     );
     if (violation) {
       throw new Error(`Refused to file issue — ${violation}`);
+    }
+    const { hasModelLabel, hasJoshLabel } = resolveStepAfterMergeLabelFlags({
+      labels: options.labels ?? [],
+      modelLabels,
+    });
+    const isJoshOnly = !hasModelLabel && hasJoshLabel;
+    if (!isJoshOnly) {
+      const designPaths = designPathsInBody(fileBody);
+      if (designPaths.length === 1) {
+        const designPath = designPaths[0];
+        let designDocContent: string;
+        try {
+          designDocContent = await deps.readFileText(designPath);
+        } catch (err) {
+          throw new Error(
+            `Refused to file issue — design document at "${designPath}" cannot be read: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+        const designHeadings = extractDesignHeadings(designDocContent);
+        validateIssueBodyCriteria(options.title, fileBody, designHeadings, {
+          labels: options.labels ?? [],
+          modelLabels,
+          checkOutcomeWording: true,
+          requireAcceptanceCriteriaSection: false,
+          commandPrefix: "Refused to file issue",
+        });
+      }
     }
   }
 

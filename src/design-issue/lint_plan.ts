@@ -44,6 +44,7 @@ import {
 import {
   checkStepAfterMergeCriterion,
   type IssueBodyCheckOptions,
+  resolveStepAfterMergeLabelFlags,
 } from "../../hooks/lib/check_model_label_on_issue_create.ts";
 import { defaultOpenBrowserImpl, expandHome, resolveHtmlPath } from "./gate1.ts";
 import { renderDesignDocFile } from "../../scripts/render_design_doc.ts";
@@ -571,18 +572,41 @@ export interface CriterionHeadingCheckResult {
     | "unknown-heading"
     | "neither-heading-nor-command"
     | "step-after-merge-missing-command"
-    | "step-after-merge-missing-josh";
+    | "step-after-merge-missing-josh"
+    | "outcome-wording";
   unknownHeading?: string;
+  outcomeWord?: string;
 }
 
 export interface CriterionCheckOptions extends IssueBodyCheckOptions {
   /** Defaults to true. Set to false when designHeadings was not provided to validatePlanTable. */
   checkHeadingAndCommand?: boolean;
+  /** Defaults to false. Set to true when checking issue bodies against a design document (create-issue & design:file-plan). */
+  checkOutcomeWording?: boolean;
+}
+
+const OUTCOME_WORDING_REGEX =
+  /\b(?:outcome|refuse|proceed|fails\s+closed|fails\s+open|cannot\s+tell|cannot\s+be\s+read|unable\s+to\s+determine)[a-z]*/i;
+
+/**
+ * Strips double-quoted spans and backtick spans from a criterion line and returns the first
+ * outcome-wording match in what remains, or null when clean or exempt (web-jam-tools#1775).
+ */
+export function findOutcomeWordingViolation(
+  text: string,
+  options?: IssueBodyCheckOptions,
+): string | null {
+  const { hasModelLabel } = resolveStepAfterMergeLabelFlags(options);
+  if (!hasModelLabel) return null;
+  const stripped = text.replace(/`([^`\n]*)`|"([^"\n]*)"/g, " ");
+  const match = stripped.match(OUTCOME_WORDING_REGEX);
+  return match ? match[0] : null;
 }
 
 /**
- * Validates a Closes when cell or an issue body acceptance criterion against design headings
- * and the step-after-merge rule (web-jam-tools#1724).
+ * Validates a Closes when cell or an issue body acceptance criterion against design headings,
+ * the step-after-merge rule (web-jam-tools#1724), and outcome wording when enabled
+ * (web-jam-tools#1775).
  * Each criterion/cell must name a design heading in double quotes or carry a backtick-quoted command.
  * Any double-quoted heading must exist in designHeadings (matched case-insensitively).
  * Any criterion describing a step after the merge must carry the command that starts it, and
@@ -628,6 +652,17 @@ export function checkCriterionOrClosesCell(
     };
   }
 
+  if (options?.checkOutcomeWording) {
+    const outcomeWord = findOutcomeWordingViolation(text, options);
+    if (outcomeWord !== null) {
+      return {
+        valid: false,
+        reason: "outcome-wording",
+        outcomeWord,
+      };
+    }
+  }
+
   if (checkHeadingAndCommand && quotedHeadings.length === 0 && !hasCommand) {
     return {
       valid: false,
@@ -636,6 +671,167 @@ export function checkCriterionOrClosesCell(
   }
 
   return { valid: true };
+}
+
+export interface IssueBodyCriteriaOptions extends CriterionCheckOptions {
+  /** Defaults to "Refused to file plan". */
+  commandPrefix?: string;
+  /** Defaults to true (design:file-plan requires ## Acceptance criteria). */
+  requireAcceptanceCriteriaSection?: boolean;
+}
+
+/**
+ * Validates every acceptance criterion in an issue body against design headings,
+ * the step-after-merge rule, and outcome wording when enabled (web-jam-tools#1775).
+ * Shared by `design:file-plan` and `create-issue`.
+ */
+export function validateIssueBodyCriteria(
+  title: string,
+  body: string,
+  designHeadings: ReadonlySet<string>,
+  options?: IssueBodyCriteriaOptions,
+): void {
+  const prefix = options?.commandPrefix ?? "Refused to file plan";
+  const requireSection = options?.requireAcceptanceCriteriaSection !== false;
+  const checkOptions: CriterionCheckOptions = {
+    ...options,
+    checkOutcomeWording: options?.checkOutcomeWording ?? true,
+  };
+  const { hasModelLabel, hasJoshLabel } = resolveStepAfterMergeLabelFlags(checkOptions);
+  if (!hasModelLabel && hasJoshLabel) {
+    return;
+  }
+  const lines = body.split(/\r?\n/);
+  let inCriteria = false;
+  let foundCriteriaSection = false;
+  let criteriaLevel = 2;
+  const sectionCriteria: { text: string; lineNum: number }[] = [];
+  const checkboxCriteria: { text: string; lineNum: number }[] = [];
+  let currentCriterion: { text: string; lineNum: number } | null = null;
+  let currentCheckbox: { text: string; lineNum: number } | null = null;
+
+  const flushSection = () => {
+    if (currentCriterion !== null) {
+      const trimmedText = currentCriterion.text.trim();
+      if (trimmedText.length > 0) {
+        sectionCriteria.push({ text: trimmedText, lineNum: currentCriterion.lineNum });
+      }
+      currentCriterion = null;
+    }
+  };
+
+  const flushCheckbox = () => {
+    if (currentCheckbox !== null) {
+      const trimmedText = currentCheckbox.text.trim();
+      if (trimmedText.length > 0) {
+        checkboxCriteria.push({ text: trimmedText, lineNum: currentCheckbox.lineNum });
+      }
+      currentCheckbox = null;
+    }
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const trimmed = rawLine.trim();
+
+    if (!inCriteria) {
+      const criteriaHeaderMatch = trimmed.match(/^(#{1,6})\s+Acceptance\s+criteria\b/i);
+      if (criteriaHeaderMatch) {
+        flushCheckbox();
+        inCriteria = true;
+        foundCriteriaSection = true;
+        criteriaLevel = criteriaHeaderMatch[1].length;
+        continue;
+      }
+      if (!requireSection && !foundCriteriaSection) {
+        if (trimmed === "" || trimmed.startsWith("<!--") || trimmed.startsWith("🤖 Authored by ")) {
+          flushCheckbox();
+          continue;
+        }
+        if (/^(#{1,6})\s+/.test(trimmed)) {
+          flushCheckbox();
+          continue;
+        }
+        const isCheckbox = /^\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\]\s+/.test(rawLine);
+        const isListItem = /^\s*(?:[-*+]|\d+[.)])\s+/.test(rawLine);
+        if (isCheckbox) {
+          flushCheckbox();
+          currentCheckbox = { text: trimmed, lineNum: i + 1 };
+        } else if (currentCheckbox !== null && !isListItem) {
+          currentCheckbox.text += " " + trimmed;
+        } else {
+          flushCheckbox();
+        }
+      }
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      if (level <= criteriaLevel) {
+        flushSection();
+        inCriteria = false;
+        continue;
+      } else {
+        // Nested subsection within Acceptance criteria (e.g. ### Behavior)
+        flushSection();
+        continue;
+      }
+    }
+
+    if (trimmed === "" || trimmed.startsWith("<!--") || trimmed.startsWith("🤖 Authored by ")) {
+      flushSection();
+      continue;
+    }
+
+    const isListItem = /^\s*(?:[-*+]|\d+[.)])\s+/.test(rawLine);
+    if (isListItem) {
+      flushSection();
+      currentCriterion = { text: trimmed, lineNum: i + 1 };
+    } else if (currentCriterion !== null) {
+      currentCriterion.text += " " + trimmed;
+    } else {
+      currentCriterion = { text: trimmed, lineNum: i + 1 };
+    }
+  }
+
+  flushSection();
+  flushCheckbox();
+
+  if (requireSection && (!foundCriteriaSection || sectionCriteria.length === 0)) {
+    throw new Error(
+      `${prefix} — issue "${title}" body has no "## Acceptance criteria" section.`,
+    );
+  }
+
+  const criteria = foundCriteriaSection ? sectionCriteria : checkboxCriteria;
+  for (const { text, lineNum } of criteria) {
+    const check = checkCriterionOrClosesCell(text, designHeadings, checkOptions);
+    if (!check.valid) {
+      if (check.reason === "unknown-heading") {
+        throw new Error(
+          `${prefix} — issue "${title}" criterion line ${lineNum} ("${text}"): names heading "${check.unknownHeading}", which does not exist in the design document.`,
+        );
+      } else if (check.reason === "step-after-merge-missing-command") {
+        throw new Error(
+          `${prefix} — issue "${title}" criterion line ${lineNum} ("${text}"): describes a step after the merge, but the command that starts the step is missing.`,
+        );
+      } else if (check.reason === "step-after-merge-missing-josh") {
+        throw new Error(
+          `${prefix} — issue "${title}" criterion line ${lineNum} ("${text}"): describes a step after the merge, but the issue is missing the "Josh" label.`,
+        );
+      } else if (check.reason === "outcome-wording") {
+        throw new Error(
+          `${prefix} — issue "${title}" criterion line ${lineNum} ("${text}"): contains outcome wording ("${check.outcomeWord}"); point to a design heading in quotation marks or a backtick-quoted command instead.`,
+        );
+      } else {
+        throw new Error(
+          `${prefix} — issue "${title}" criterion line ${lineNum} ("${text}"): neither a heading nor a command.`,
+        );
+      }
+    }
+  }
 }
 
 function checkClosesWhen(

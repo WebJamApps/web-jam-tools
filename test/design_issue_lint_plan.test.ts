@@ -16,12 +16,14 @@ import {
   checkNeedsDesignRemovals,
   extractDesignHeadings,
   findNarrowedDirective,
+  findOutcomeWordingViolation,
   type IssueBodyFetcher,
   type LintPlanOptions,
   lintPlanTableFile as lintPlanFile,
   parseNeedsDesignRemovals,
   type PlanTableViolation,
   runLintPlanCli as lintPlanCli,
+  validateIssueBodyCriteria,
   validatePlanTable,
 } from "../src/design-issue/lint_plan.ts";
 import {
@@ -34,6 +36,10 @@ import { ACTIVE_REPOS } from "../src/shared/repos.ts";
 import denoJson from "../deno.json" with { type: "json" };
 import type { CommandRunner, OpenIssueSummary } from "../hooks/lib/detect_duplicate_issue.ts";
 import { STEP_AFTER_MERGE_CASES } from "./support/step_after_merge_cases.ts";
+import {
+  OUTCOME_WORDING_CASES,
+  OUTCOME_WORDING_DESIGN_DOC,
+} from "./support/outcome_wording_cases.ts";
 
 // File/CLI tests never call the workstation's gh or use the live backlog.
 const emptyOpenIssues: CommandRunner = () => Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
@@ -1831,3 +1837,87 @@ for (const c of STEP_AFTER_MERGE_CASES) {
     }
   });
 }
+
+// --- Appendix D — "Outcome wording in a criterion" (web-jam-tools#1775) ---
+
+for (const c of OUTCOME_WORDING_CASES) {
+  Deno.test(`Appendix D "Outcome wording in a criterion" (lint_plan helper) ${c.name}`, () => {
+    const headings = extractDesignHeadings(OUTCOME_WORDING_DESIGN_DOC);
+    if (c.unreadableDesign || c.isEpic) return;
+    if (c.namesDesign === false) {
+      const result = checkCriterionOrClosesCell(c.criterion, headings, {
+        labels: c.labels,
+        checkHeadingAndCommand: false,
+        checkOutcomeWording: false,
+      });
+      assertEquals(result.valid, true);
+      return;
+    }
+    const direct = checkCriterionOrClosesCell(c.criterion, headings, {
+      labels: c.labels,
+      checkHeadingAndCommand: c.labels.includes("Sol"),
+      checkOutcomeWording: true,
+    });
+    if (c.expectedOutcomeWord) {
+      assertEquals(direct.valid, false);
+      assertEquals(direct.reason, "outcome-wording");
+      assertEquals(direct.outcomeWord, c.expectedOutcomeWord);
+    } else {
+      assertEquals(direct.valid, true);
+    }
+  });
+}
+
+Deno.test("findOutcomeWordingViolation matches all banned phrases in any capitalisation outside quotes/backticks", () => {
+  for (
+    const phrase of [
+      "outcome",
+      "outcomes",
+      "OUTCOME",
+      "refuse",
+      "refused",
+      "Refuses",
+      "proceed",
+      "proceeds",
+      "PROCEEDING",
+      "fails closed",
+      "Fails Closed",
+      "FAILS OPEN",
+      "cannot tell",
+      "Cannot Tell",
+      "cannot be read",
+      "CANNOT BE READ",
+      "unable to determine",
+      "Unable To Determine",
+    ]
+  ) {
+    const hit = findOutcomeWordingViolation(`- [ ] check ${phrase} on "Priority Levels"`);
+    assertEquals(hit !== null, true, `Expected violation for "${phrase}"`);
+    assertEquals(
+      findOutcomeWordingViolation(`- [ ] builds "${phrase}" as written`),
+      null,
+      `Double-quoted "${phrase}" must be ignored`,
+    );
+    assertEquals(
+      findOutcomeWordingViolation(`- [ ] \`cmd --flag-${phrase.replace(/\s+/g, "-")}\` passes`),
+      null,
+      `Backtick-quoted "${phrase}" must be ignored`,
+    );
+  }
+  assertEquals(findOutcomeWordingViolation("- [ ] builds unrefused rows"), null);
+  assertEquals(findOutcomeWordingViolation("- [ ] Josh proceeds", { labels: ["Josh"] }), null);
+  // Smoke-check validateIssueBodyCriteria throws on outcome wording when enabled
+  const headings = extractDesignHeadings(OUTCOME_WORDING_DESIGN_DOC);
+  try {
+    validateIssueBodyCriteria(
+      "Item X",
+      "## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] Unable To Determine state fails",
+      headings,
+      { checkOutcomeWording: true },
+    );
+    throw new Error("Expected refusal");
+  } catch (err) {
+    assertStringIncludes((err as Error).message, 'issue "Item X"');
+    assertStringIncludes((err as Error).message, "Unable To Determine");
+  }
+});
