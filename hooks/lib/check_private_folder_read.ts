@@ -166,6 +166,60 @@ export function checkCommandForPrivateFolder(command: string, folders: string[])
 const ALLOWED_FOLDERS = new Set(["joshandmariamusic", "web-jam-llms", "mark_henrickson"]);
 const INTERPRETERS = new Set(["python", "python3", "node", "deno", "bash", "sh"]);
 const MAX_SCRIPT_BYTES = 1_000_000;
+const CMD_VALUE = "__WJT_CMD_VAL__";
+const COULD_NOT_READ_REFUSAL = "cannot resolve command paths or inspect script — refusing";
+const SHELL_KEYWORDS = new Set(["while", "until", "if", "elif", "then", "do", "else"]);
+
+function protectSingleQuotedMetachars(text: string): string {
+  let out = "";
+  let quote = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote === '"' && ch === "\\" && i + 1 < text.length) {
+      const next = text[i + 1];
+      // In double quotes, bash preserves '\' unless escaping '"', '\', '$', '`', or newline.
+      out += `\\${'"\\$`\n'.includes(next) ? "" : "\\"}${next}`;
+      i++;
+      continue;
+    }
+    if (quote !== "'" && ch === "\\" && i + 1 < text.length) {
+      out += text.slice(i, i + 2);
+      i++;
+      continue;
+    }
+    if (!quote) {
+      if (ch === "'" || ch === '"') quote = ch;
+      out += ch;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = "";
+      out += ch;
+      continue;
+    }
+    if (ch === "'") {
+      quote = "";
+      out += ch;
+    } else if (ch === "$") out += "__WJT_SQ_DOLLAR__";
+    else if (ch === "`") out += "__WJT_SQ_BACKTICK__";
+    else if (ch === "*") out += "__WJT_SQ_STAR__";
+    else if (ch === "?") out += "__WJT_SQ_QMARK__";
+    else if (ch === "[") out += "__WJT_SQ_LBRACK__";
+    else if (ch === "]") out += "__WJT_SQ_RBRACK__";
+    else out += ch;
+  }
+  return out;
+}
+
+function unprotectSingleQuotedMetachars(text: string): string {
+  return text
+    .replaceAll("__WJT_SQ_DOLLAR__", "$")
+    .replaceAll("__WJT_SQ_BACKTICK__", "`")
+    .replaceAll("__WJT_SQ_STAR__", "*")
+    .replaceAll("__WJT_SQ_QMARK__", "?")
+    .replaceAll("__WJT_SQ_LBRACK__", "[")
+    .replaceAll("__WJT_SQ_RBRACK__", "]");
+}
 
 interface InspectionContext {
   cwd: string;
@@ -197,8 +251,8 @@ function namedSocket(text: string): boolean {
   return /\.dropbox\/(?:command_socket|iface_socket)(?=$|[\s"'`),;\/])/m.test(text);
 }
 
-/** Resolve existing ancestors too, so a new file cannot conceal a symlink traversal. */
-function expandedPath(value: string, context: InspectionContext): string {
+/** Resolve variables and tilde without prepending cwd yet, preserving CMD_VALUE semantics. */
+function expandRawPath(value: string, context: InspectionContext): string {
   const resolveVariables = (text: string, seen = new Set<string>()): string =>
     text.replace(
       /\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g,
@@ -215,6 +269,12 @@ function expandedPath(value: string, context: InspectionContext): string {
     );
   const expanded = resolveVariables(value.replace(/^~(?=\/|$)/, context.home));
   if (expanded.includes("$") || expanded.includes("`")) throw new Error("unresolved path");
+  return expanded;
+}
+
+/** Resolve existing ancestors too, so a new file cannot conceal a symlink traversal. */
+function expandedPath(value: string, context: InspectionContext): string {
+  const expanded = expandRawPath(value, context);
   // Keep '..' until realPath has followed symlinks: normalizing it first can
   // hide an escape through an allowed-folder symlink followed by '/..'.
   return path.isAbsolute(expanded) ? expanded : `${context.cwd}${path.SEPARATOR}${expanded}`;
@@ -261,35 +321,66 @@ function resolvedPath(value: string, context: InspectionContext): string {
   return current;
 }
 
+function isRelativeInside(base: string, target: string): string | null {
+  const relative = path.relative(base, target);
+  if (
+    relative === ".." || relative.startsWith(`..${path.SEPARATOR}`) || path.isAbsolute(relative)
+  ) {
+    return null;
+  }
+  return relative;
+}
+
 function privatePath(value: string, context: InspectionContext, allowRoot = false): string | null {
   // Unknown values inside script text are not paths we can establish. Explicit
   // Dropbox prefixes are checked separately before any such value is skipped.
-  if (context.scriptText) {
-    try {
-      expandedPath(value, context);
-    } catch {
-      return null;
-    }
+  let rawExpanded: string;
+  try {
+    rawExpanded = expandRawPath(value, context);
+  } catch (err) {
+    if (context.scriptText) return null;
+    throw err;
   }
-  const targets = [expandedPath(value, context), resolvedPath(value, context)];
+  const hasCmdValue = rawExpanded.includes(CMD_VALUE);
   const roots = [path.join(context.home, "Dropbox"), "/home/joshua/Dropbox"].flatMap((root) => [
     root,
     resolvedPath(root, context),
   ]);
+  const homes = [context.home, "/home/joshua"].flatMap((home) => [
+    home,
+    resolvedPath(home, context),
+  ]);
+  // A bare/relative command-produced value (e.g. `cat "$x"`) that was not prefixed by
+  // home or Dropbox is skipped unless cwd itself sits at Dropbox root.
+  if (
+    hasCmdValue && !path.isAbsolute(rawExpanded) && !rawExpanded.startsWith("..") &&
+    !/^Dropbox(?:\/|$)/.test(rawExpanded)
+  ) {
+    const cwdInDropboxRoot = roots.some((root) => isRelativeInside(root, context.cwd) === "");
+    if (!cwdInDropboxRoot) return null;
+  }
+  const targets = [expandedPath(value, context), resolvedPath(value, context)];
   for (const target of targets) {
     for (const root of roots) {
-      const relative = path.relative(root, target);
-      if (
-        relative === ".." || relative.startsWith(`..${path.SEPARATOR}`) || path.isAbsolute(relative)
-      ) {
-        continue;
-      }
+      const relative = isRelativeInside(root, target);
+      if (relative === null) continue;
       if (!relative) {
         if (!allowRoot) return "Dropbox root";
         continue;
       }
       const folder = relative.split(path.SEPARATOR)[0];
+      if (folder.includes(CMD_VALUE)) {
+        throw new Error("cannot resolve Dropbox folder from command output");
+      }
       if (!ALLOWED_FOLDERS.has(folder)) return folder;
+    }
+    if (hasCmdValue) {
+      for (const home of homes) {
+        const relative = isRelativeInside(home, target);
+        if (relative && relative.split(path.SEPARATOR)[0].includes(CMD_VALUE)) {
+          throw new Error("cannot resolve home subfolder from command output");
+        }
+      }
     }
   }
   return null;
@@ -532,6 +623,90 @@ function inspectFile(
   );
 }
 
+function globSegmentToRegExp(segment: string): RegExp {
+  let pattern = "^";
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i];
+    if (ch === "*") pattern += ".*";
+    else if (ch === "?") pattern += ".";
+    else if (ch === "[") {
+      const close = segment.indexOf("]", i + 1);
+      if (close > i + 1) {
+        let cls = segment.slice(i + 1, close);
+        if (cls.startsWith("!")) cls = "^" + cls.slice(1);
+        pattern += `[${cls}]`;
+        i = close;
+        continue;
+      }
+      pattern += "\\[";
+    } else {
+      pattern += ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  return new RegExp(pattern + "$");
+}
+
+function isDirEntry(dir: string, entry: Deno.DirEntry): boolean {
+  if (entry.isDirectory) return true;
+  if (!entry.isSymlink) return false;
+  try {
+    return Deno.statSync(path.join(dir, entry.name)).isDirectory;
+  } catch {
+    return false;
+  }
+}
+
+function expandWildcardWord(rawWord: string, context: InspectionContext): string[] {
+  const expanded = expandRawPath(rawWord, context);
+  if (expanded.includes(CMD_VALUE) || !/[*?[]/.test(expanded)) return [expanded];
+  // Check wildcard paths directly under Dropbox before reading any directory on disk.
+  if (privatePath(expanded, context) !== null) return [expanded];
+
+  const isAbs = path.isAbsolute(expanded);
+  const trailingSlash = expanded.endsWith("/");
+  const trimmed = expanded.replace(/\/+$/, "");
+  const segments = (isAbs ? trimmed.slice(1) : trimmed).split("/").filter(Boolean);
+  let prefixes = [isAbs ? "/" : ""];
+
+  for (let idx = 0; idx < segments.length; idx++) {
+    const seg = segments[idx];
+    const isLast = idx === segments.length - 1;
+    const next: string[] = [];
+    if (!/[*?[]/.test(seg)) {
+      for (const prefix of prefixes) {
+        next.push(prefix === "/" ? `/${seg}` : prefix ? `${prefix}/${seg}` : seg);
+      }
+      prefixes = next;
+      continue;
+    }
+    const regex = globSegmentToRegExp(seg);
+    const includeHidden = seg.startsWith(".");
+    for (const prefix of prefixes) {
+      const fsDir = prefix
+        ? (isAbs ? prefix : path.join(context.cwd, prefix))
+        : (isAbs ? "/" : context.cwd);
+      let entries: Deno.DirEntry[];
+      try {
+        entries = [...Deno.readDirSync(fsDir)];
+      } catch {
+        throw new Error("cannot read wildcard loop directory");
+      }
+      for (const entry of entries) {
+        if (!includeHidden && entry.name.startsWith(".")) continue;
+        if (!regex.test(entry.name)) continue;
+        if ((!isLast || trailingSlash) && !isDirEntry(fsDir, entry)) continue;
+        next.push(
+          prefix === "/" ? `/${entry.name}` : prefix ? `${prefix}/${entry.name}` : entry.name,
+        );
+      }
+    }
+    prefixes = next;
+  }
+
+  if (prefixes.length === 0) return [rawWord];
+  return prefixes.map((p) => (trailingSlash && !p.endsWith("/") ? `${p}/` : p)).sort();
+}
+
 function inspectLiteralLoop(
   text: string,
   context: InspectionContext,
@@ -544,16 +719,52 @@ function inspectLiteralLoop(
   if (!loop) return { found: false, denied: null };
   const prefix = inspectShell(text.slice(0, loop.index), context, depth);
   if (prefix) return { found: true, denied: prefix };
-  if (/[$`*?[\]]/.test(loop[2])) {
-    if (!context.scriptText) throw new Error("cannot resolve loop words");
-    const denied = inspectShell(loop[3], context, depth + 1);
+
+  const wordSubs = shellSubstitutions(loop[2]);
+  for (const subCmd of wordSubs.commands) {
+    const denied = inspectShell(subCmd, { ...context }, depth + 1);
     if (denied) return { found: true, denied };
-  } else {
-    for (const word of splitShellTokens(loop[2])) {
-      const variables = new Map(context.variables).set(loop[1], word);
-      const denied = inspectShell(loop[3], { ...context, variables }, depth + 1);
-      if (denied) return { found: true, denied };
+  }
+  const normalizedList = protectSingleQuotedMetachars(wordSubs.text)
+    .replaceAll(/\$\?__WJT_SUBSTITUTION_\d+__/g, CMD_VALUE)
+    .replaceAll(/__WJT_SUBSTITUTION_\d+__/g, "");
+
+  const words: string[] = [];
+  for (const token of splitShellTokens(normalizedList)) {
+    let candidate = token;
+    if (token.includes("$")) {
+      try {
+        candidate = expandRawPath(token, context);
+      } catch (err) {
+        if (!context.scriptText) throw err;
+        // Visible Dropbox prefixes in the raw loop header stay enforced by checkCommandForPrivateFolder/privatePath.
+        if (token.includes("Dropbox")) {
+          const denied = privatePath(token, context);
+          if (denied) return { found: true, denied };
+        }
+        candidate = CMD_VALUE;
+      }
     }
+    const splitWords = !token.startsWith('"') && !token.startsWith("'") && /\s/.test(candidate)
+      ? candidate.trim().split(/\s+/).filter(Boolean)
+      : [candidate];
+    for (const word of splitWords) {
+      if (/[*?[]/.test(word)) {
+        if (context.scriptText && privatePath(word, context) === null) {
+          words.push(CMD_VALUE);
+        } else {
+          words.push(...expandWildcardWord(word, context));
+        }
+      } else {
+        words.push(unprotectSingleQuotedMetachars(word));
+      }
+    }
+  }
+
+  for (const word of words) {
+    const variables = new Map(context.variables).set(loop[1], word);
+    const denied = inspectShell(loop[3], { ...context, variables }, depth + 1);
+    if (denied) return { found: true, denied };
   }
   return {
     found: true,
@@ -730,6 +941,15 @@ function shellSyntax(text: string): { text: string; patterns: string[]; redirect
       continue;
     }
     if (quote) {
+      if (quote === '"' && text.startsWith("$((", i)) {
+        const end = closingParenthesis(text, i + 1);
+        const raw = text.slice(i, end + 1);
+        patterns.push(raw);
+        result += "0" +
+          [...raw.matchAll(/__WJT_SUBSTITUTION_\d+__/g)].map((match) => match[0]).join("");
+        i = end;
+        continue;
+      }
       result += ch;
       if (ch === quote) quote = "";
       continue;
@@ -775,7 +995,14 @@ function shellSyntax(text: string): { text: string; patterns: string[]; redirect
     if (text.startsWith("$((", i) || text.startsWith("((", i)) {
       const start = ch === "$" ? i + 1 : i;
       const end = closingParenthesis(text, start);
-      result += keepPattern(text.slice(i, end + 1), ch === "$" ? "0" : " ");
+      const raw = text.slice(i, end + 1);
+      if (ch === "$") {
+        patterns.push(raw);
+        result += "0" +
+          [...raw.matchAll(/__WJT_SUBSTITUTION_\d+__/g)].map((match) => match[0]).join("");
+      } else {
+        result += keepPattern(raw, " ");
+      }
       i = end;
       continue;
     }
@@ -815,6 +1042,29 @@ function shellSyntax(text: string): { text: string; patterns: string[]; redirect
   return { text: result, patterns, redirects };
 }
 
+function parseReadVars(argv: string[]): string[] | null {
+  if (argv[0] !== "read") return null;
+  const vars: string[] = [];
+  let options = true;
+  for (let i = 1; i < argv.length; i++) {
+    const arg = argv[i];
+    if (options && arg === "--") {
+      options = false;
+      continue;
+    }
+    if (options && arg.startsWith("-") && arg.length > 1) {
+      if (arg === "-a" && i + 1 < argv.length) {
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(argv[++i])) vars.push(argv[i]);
+      } else if (/^-[rse]*[nNtpdui]$/.test(arg)) {
+        i++;
+      }
+      continue;
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(arg)) vars.push(arg);
+  }
+  return vars.length > 0 ? vars : ["REPLY"];
+}
+
 function inspectShell(
   command: string,
   context: InspectionContext,
@@ -823,7 +1073,7 @@ function inspectShell(
   if (depth > MAX_WRAPPER_RECURSION_DEPTH) throw new Error("script/wrapper nesting limit");
   if (namedSocket(command)) return "Dropbox desktop socket";
   const text = withoutWebAddresses(stripHeredocs(command.replace(/\\\r?\n/g, ""))).replace(
-    /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
+    /\$\{([A-Za-z_][A-Za-z0-9_]*)\}(?![A-Za-z0-9_])/g,
     (_, name) => `$${name}`,
   );
   const loop = inspectLiteralLoop(text, context, depth);
@@ -865,13 +1115,18 @@ function inspectShell(
   if (parsed.unterminated) throw new Error("unparseable shell command");
   const cwdDenied = privatePath(context.cwd, context, true);
   if (cwdDenied) return cwdDenied;
+  const replaceSubstitutions = (token: string) =>
+    token.replaceAll(/\$\?__WJT_SUBSTITUTION_\d+__/g, CMD_VALUE).replaceAll(
+      /__WJT_SUBSTITUTION_\d+__/g,
+      "",
+    );
   for (const segment of parsed.segments) {
     const parentContext = context;
     context = { ...parentContext, variables: new Map(parentContext.variables) };
     const named = checkCommandForPrivateFolder(segment, context.folders);
     if (named) return named;
-    const rawTokens = splitShellTokens(segment);
-    const tokens = rawTokens.map((token) => token.replaceAll(/__WJT_SUBSTITUTION_\d+__/g, ""))
+    const rawTokens = splitShellTokens(protectSingleQuotedMetachars(segment));
+    const tokens = rawTokens.map(replaceSubstitutions)
       .filter((token) => token && !/^__WJT_REDIRECT_\d+__$/.test(token));
     let assignments = 0;
     while (assignments < tokens.length && ASSIGN_RE.test(tokens[assignments])) {
@@ -896,16 +1151,17 @@ function inspectShell(
     for (const token of rawTokens) {
       const redirect = /^__WJT_REDIRECT_(\d+)__$/.exec(token);
       if (!redirect) continue;
-      const target = syntax.redirects[Number(redirect[1])].replaceAll(
-        /__WJT_SUBSTITUTION_\d+__/g,
-        "",
+      const target = replaceSubstitutions(
+        protectSingleQuotedMetachars(syntax.redirects[Number(redirect[1])]),
       );
       const denied = privatePath(target, context);
       if (denied) return denied;
     }
-    const patternCommand = ["grep", "sed"].includes(path.basename(tokens[assignments] ?? ""));
+    let cmdStart = assignments;
+    while (cmdStart < tokens.length && SHELL_KEYWORDS.has(tokens[cmdStart])) cmdStart++;
+    const patternCommand = ["grep", "sed"].includes(path.basename(tokens[cmdStart] ?? ""));
     for (
-      const token of patternCommand ? pathOperands(tokens.slice(assignments), context) : tokens
+      const token of patternCommand ? pathOperands(tokens.slice(cmdStart), context) : tokens
     ) {
       for (const candidate of literalPaths(token)) {
         const denied = privatePath(candidate, context);
@@ -918,27 +1174,48 @@ function inspectShell(
       continue;
     }
     const invocation = tokens.slice();
-    while (invocation.length && (ASSIGN_RE.test(invocation[0]) || invocation[0] === "exec")) {
+    while (
+      invocation.length &&
+      (ASSIGN_RE.test(invocation[0]) || invocation[0] === "exec" ||
+        SHELL_KEYWORDS.has(invocation[0]))
+    ) {
       invocation.shift();
     }
     if (!context.scriptText) checkUnresolvedShellCommand(invocation);
     const resolved = resolveThroughWrappers(invocation);
     if (resolved.kind === "cap-exceeded") throw new Error("wrapper nesting limit");
     if (resolved.kind === "nested") {
-      const denied = inspectShell(resolved.command, { ...context }, depth + 1);
+      const denied = inspectShell(
+        unprotectSingleQuotedMetachars(resolved.command),
+        { ...context },
+        depth + 1,
+      );
       if (denied) return denied;
       context = parentContext;
       continue;
     }
     const argv = resolved.argv.slice();
-    while (argv.length && (ASSIGN_RE.test(argv[0]) || argv[0] === "exec")) argv.shift();
+    while (
+      argv.length &&
+      (ASSIGN_RE.test(argv[0]) || argv[0] === "exec" || SHELL_KEYWORDS.has(argv[0]))
+    ) argv.shift();
+    const readVars = parseReadVars(argv);
+    if (readVars !== null) {
+      for (const variable of readVars) parentContext.variables.set(variable, CMD_VALUE);
+      context = parentContext;
+      continue;
+    }
     const name = argv[0] === "." ? "." : path.basename(argv[0] ?? "");
     if (name === "dropbox") return "Dropbox desktop command";
     if (sweepCommand(argv, context)) return "whole-home sweep";
     if (name === "bash" || name === "sh") {
       const inline = argv.findIndex((arg) => /^-[a-z]*c[a-z]*$/.test(arg));
       if (inline >= 0 && argv[inline + 1]) {
-        const denied = inspectShell(argv[inline + 1], { ...context }, depth + 1);
+        const denied = inspectShell(
+          unprotectSingleQuotedMetachars(argv[inline + 1]),
+          { ...context },
+          depth + 1,
+        );
         if (denied) return denied;
         context = parentContext;
         continue;
@@ -970,8 +1247,14 @@ function inspectShell(
       ) {
         throw new Error("cannot resolve cd target");
       }
+      const cdDenied = privatePath(destination, context, true);
+      if (cdDenied) return cdDenied;
       try {
-        parentContext.cwd = resolvedPath(destination, context);
+        const rawDest = expandRawPath(destination, context);
+        parentContext.cwd =
+          rawDest.includes(CMD_VALUE) && !path.isAbsolute(rawDest) && !rawDest.startsWith("..")
+            ? `/${CMD_VALUE}`
+            : resolvedPath(destination, context);
       } catch (error) {
         if (context.scriptText) continue;
         throw error;
@@ -1002,6 +1285,7 @@ function inspectShell(
       if (privateScript) return privateScript;
       let filename: string;
       try {
+        if (expandRawPath(file, context).includes(CMD_VALUE)) continue;
         filename = resolvedPath(file, context);
       } catch (error) {
         if (context.scriptText) continue;
@@ -1016,7 +1300,7 @@ function inspectShell(
       );
       if (denied) return denied;
     }
-    const scriptCall = readInterpreterScript(argv);
+    const scriptCall = readInterpreterScript(argv.map(unprotectSingleQuotedMetachars));
     if (scriptCall?.script?.kind === "inline") {
       const denied = inspectScript(scriptCall.script.code, { ...context }, depth + 1);
       if (denied) return denied;
@@ -1024,6 +1308,17 @@ function inspectShell(
     context = parentContext;
   }
   return null;
+}
+
+function writeCouldNotReadRefusal(detail: string): never {
+  console.error(
+    `BLOCKED (private-folder read guard): could not read the command (${detail}); nothing protected was found.`,
+  );
+  console.error(
+    "You may restate the same action in a form this guard can read. The restated command must be checked by this same guard.",
+  );
+  console.error("Do not change what the command does. Report this gap at the end of the turn.");
+  Deno.exit(2);
 }
 
 export function checkPrivateFolderCommand(
@@ -1040,7 +1335,8 @@ export function checkPrivateFolderCommand(
     );
   } catch (error) {
     if (error instanceof UnreadableScript) return error.message;
-    return "cannot resolve command paths or inspect script — refusing";
+    const msg = error instanceof Error ? error.message : String(error);
+    return `${COULD_NOT_READ_REFUSAL} (${msg})`;
   }
 }
 
@@ -1115,10 +1411,7 @@ export async function main(): Promise<void> {
   }
 
   if (invalidInput) {
-    console.error(
-      "BLOCKED (private-folder read guard): cannot establish command or working directory.",
-    );
-    Deno.exit(2);
+    writeCouldNotReadRefusal("cannot establish command or working directory");
   }
 
   // If no command text was passed, allow (exit 0)
@@ -1144,6 +1437,9 @@ export async function main(): Promise<void> {
     if (matchedFolder.startsWith("Cannot read the script ")) {
       console.error(`BLOCKED (private-folder read guard): ${matchedFolder}`);
       Deno.exit(2);
+    }
+    if (matchedFolder.startsWith(COULD_NOT_READ_REFUSAL)) {
+      writeCouldNotReadRefusal(matchedFolder);
     }
     console.error(
       `BLOCKED (private-folder read guard): protected Dropbox location or operation '${matchedFolder}'.`,
