@@ -38,8 +38,8 @@ rules and do not reconstruct them from memory or from this file.
 
 ## Collaboration Rules
 
-- For invoked tasks and stale setup blocker wording, read
-  [docs/rules/work-issue.md](docs/rules/work-issue.md) before stopping for another confirmation.
+- For invoked tasks, stale setup blocker wording, and stale `/tmp/agy-hook-invocations.jsonl`
+  refusals, read [docs/rules/work-issue.md](docs/rules/work-issue.md) before stopping for another confirmation.
 
 1. **Rclone Mount:** Google Drive is mounted at `~/gdrive` via a systemd user service
    (`rclone-gdrive.service`).
