@@ -222,7 +222,7 @@ Deno.test("Row 6: git cherry-pick that conflicts leaves files conflicted without
     );
     await runGit(["fetch", "-q", helper, "dev"], fx.clone, fx.env);
 
-    // Wait: we want file.txt to differ cleanly at merge base vs cherry-pick commit so cherry-pick conflicts.
+    // Commit a competing change to file.txt on clone dev so cherry-picking conflictSha conflicts.
     assertEquals(
       (await runGit(["-c", "core.hooksPath=/dev/null", "checkout", "-q", "dev"], fx.clone, fx.env))
         .code,
@@ -395,9 +395,50 @@ exit 1
 });
 
 Deno.test("git-hooks/reference-transaction is committed with 100755 executable permissions", async () => {
+  const lsFiles = await runGit(["ls-files", "-s", "git-hooks/reference-transaction"], ROOT_DIR);
+  assertEquals(lsFiles.code, 0, lsFiles.stderr);
+  assert(
+    lsFiles.stdout.startsWith("100755 "),
+    `expected git index mode 100755, got: ${lsFiles.stdout}`,
+  );
   const info = await Deno.stat(path.join(HOOKS_DIR, "reference-transaction"));
   assert(info.isFile);
   assert(info.mode !== null && (info.mode & 0o111) !== 0, "must have executable bit set");
+});
+
+Deno.test("git pack-refs --all and git gc succeed without BLOCKED when origin/dev is ahead", async () => {
+  const fx = await setupCanonicalCloneFixture("rt-pack-refs-");
+  try {
+    const pusher = path.join(fx.root, "pusher");
+    assertEquals((await runGit(["clone", "-q", fx.upstream, pusher], fx.root, fx.env)).code, 0);
+    await runGit(["config", "user.name", "Test User"], pusher, fx.env);
+    await runGit(["config", "user.email", "test@example.com"], pusher, fx.env);
+    await Deno.writeTextFile(path.join(pusher, "file.txt"), "ahead\n");
+    assertEquals((await runGit(["commit", "-am", "advance origin"], pusher, fx.env)).code, 0);
+    assertEquals((await runGit(["push", "-q", "origin", "dev"], pusher, fx.env)).code, 0);
+
+    // Fetch without pulling so origin/dev is ahead of local dev (normal pre-worktree clone state).
+    assertEquals((await runGit(["fetch", "-q", "origin"], fx.clone, fx.env)).code, 0);
+
+    const packRes = await runGit(["pack-refs", "--all"], fx.clone, fx.env);
+    assertEquals(packRes.code, 0, `pack-refs --all failed: ${packRes.stderr}`);
+    assert(
+      !packRes.stderr.includes("BLOCKED"),
+      `unexpected BLOCKED in pack-refs stderr: ${packRes.stderr}`,
+    );
+
+    const gcRes = await runGit(["gc"], fx.clone, fx.env);
+    assertEquals(gcRes.code, 0, `git gc failed: ${gcRes.stderr}`);
+    assert(!gcRes.stderr.includes("BLOCKED"), `unexpected BLOCKED in gc stderr: ${gcRes.stderr}`);
+
+    // Deleting refs/heads/dev outside pack-refs must still be refused.
+    const delRes = await runGit(["update-ref", "-d", "refs/heads/dev"], fx.clone, fx.env);
+    assert(delRes.code !== 0, "expected git update-ref -d refs/heads/dev to fail");
+    assertHookAborted(delRes.stderr);
+    assertStringIncludes(delRes.stderr, "BLOCKED (reference-transaction)");
+  } finally {
+    await Deno.remove(fx.root, { recursive: true }).catch(() => {});
+  }
 });
 
 Deno.test("canonical guard: blocks -C from outside and subdirs, allows .claude/worktrees, and ignores spoofed messages", async () => {

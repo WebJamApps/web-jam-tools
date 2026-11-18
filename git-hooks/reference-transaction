@@ -22,9 +22,10 @@ if [ -n "$CURRENT_GIT_DIR_RAW" ]; then
   CURRENT_GIT_DIR="$(readlink -f "$CURRENT_GIT_DIR_RAW" 2>/dev/null || echo "$CURRENT_GIT_DIR_RAW")"
 fi
 
-# Walk up ancestor processes and inspect NUL-delimited argv to tell
-# `git worktree add` apart from `git switch` / `git checkout` (premise P-4).
-is_git_worktree_add() {
+# Walk up ancestor processes and inspect NUL-delimited argv to identify the
+# enclosing git subcommand (premise P-4), e.g. `worktree add` or `pack-refs`.
+has_git_ancestor() {
+  local want1="$1" want2="${2:-}"
   local pid="${PPID:-}" depth=0
   while [ -n "$pid" ] && [ "$pid" -gt 1 ] && [ "$depth" -lt 8 ]; do
     if [ -r "/proc/$pid/cmdline" ]; then
@@ -32,6 +33,9 @@ is_git_worktree_add() {
       mapfile -d '' -t args < "/proc/$pid/cmdline" 2>/dev/null || true
       if [ "${#args[@]}" -gt 0 ]; then
         local cmd="${args[0]##*/}"
+        if [ "$cmd" = "git-${want1}" ] && [ -z "$want2" ]; then
+          return 0
+        fi
         if [ "$cmd" = "git" ]; then
           local i=1 expect_val=0 sub="" sub2=""
           while [ "$i" -lt "${#args[@]}" ]; do
@@ -62,7 +66,7 @@ is_git_worktree_add() {
             esac
             i=$((i + 1))
           done
-          if [ "$sub" = "worktree" ] && [ "$sub2" = "add" ]; then
+          if [ "$sub" = "$want1" ] && { [ -z "$want2" ] || [ "$sub2" = "$want2" ]; }; then
             return 0
           fi
         fi
@@ -86,18 +90,21 @@ refuse_canonical_update() {
 
 if [ "$STATE" = "prepared" ] && [ -n "$CURRENT_GIT_DIR" ] && [ "$CURRENT_GIT_DIR" = "$CANONICAL_GIT_DIR" ]; then
   ORIGIN_DEV_OID="$(git rev-parse --verify -q refs/remotes/origin/dev 2>/dev/null || true)"
+  LOCAL_DEV_OID="$(git rev-parse --verify -q refs/heads/dev 2>/dev/null || true)"
   WORKTREE_ADD_CHECKED=0
   WORKTREE_ADD=1
+  PACK_REFS_CHECKED=0
+  PACK_REFS=1
 
   while IFS= read -r line; do
     [ -z "$line" ] && continue
-    read -r _old_val new_val ref_name _rest <<< "$line"
+    read -r old_val new_val ref_name _rest <<< "$line"
     case "$ref_name" in
       HEAD)
         if [ "$new_val" != "ref:refs/heads/dev" ]; then
           if [ "$WORKTREE_ADD_CHECKED" -eq 0 ]; then
             WORKTREE_ADD_CHECKED=1
-            if is_git_worktree_add; then
+            if has_git_ancestor "worktree" "add"; then
               WORKTREE_ADD=0
             fi
           fi
@@ -107,6 +114,20 @@ if [ "$STATE" = "prepared" ] && [ -n "$CURRENT_GIT_DIR" ] && [ "$CURRENT_GIT_DIR
         fi
         ;;
       refs/heads/dev)
+        if [ -n "$LOCAL_DEV_OID" ] && [ "$new_val" = "$LOCAL_DEV_OID" ]; then
+          continue
+        fi
+        if [[ "$new_val" =~ ^0+$ ]] && [ -n "$LOCAL_DEV_OID" ] && [ "$old_val" = "$LOCAL_DEV_OID" ]; then
+          if [ "$PACK_REFS_CHECKED" -eq 0 ]; then
+            PACK_REFS_CHECKED=1
+            if has_git_ancestor "pack-refs"; then
+              PACK_REFS=0
+            fi
+          fi
+          if [ "$PACK_REFS" -eq 0 ]; then
+            continue
+          fi
+        fi
         if [ -z "$ORIGIN_DEV_OID" ] || [ "$new_val" != "$ORIGIN_DEV_OID" ]; then
           refuse_canonical_update "$ref_name" "$new_val"
         fi
