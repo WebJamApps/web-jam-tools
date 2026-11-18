@@ -19,6 +19,27 @@ Deno.test("subshell cd does not persist into the following command (web-jam-tool
   assertEquals(targets("(cd /tmp && echo a > f); echo b > g"), ["/tmp/f", "/repo/g"]);
 });
 
+Deno.test("cd || exit/return resolves following writes to cd target; non-exiting || goes unknown", () => {
+  assertEquals(analyzeBashWrites("cd /repo || exit 1; echo x > f", { cwd: "/w", home: HOME }), {
+    targets: ["/repo/f"],
+    unknownFiles: [],
+    unknownDirectory: false,
+  });
+  assertEquals(
+    analyzeBashWrites("cd /repo || { echo no; exit 1; }\necho x > f", { cwd: "/w", home: HOME }),
+    {
+      targets: ["/repo/f"],
+      unknownFiles: [],
+      unknownDirectory: false,
+    },
+  );
+  assertEquals(analyzeBashWrites("cd /repo || echo no; echo x > f", { cwd: "/w", home: HOME }), {
+    targets: [],
+    unknownFiles: [],
+    unknownDirectory: true,
+  });
+});
+
 Deno.test("Root cause 2: a heredoc keeps its own unknown cwd despite a later repository cd", () => {
   const command =
     "S=/tmp/scratch/memsim; cd $S && python3 - <<'EOF'\np = 'out.txt'\nopen(p,'w').write('x')\nEOF\ncd /repo && deno task memory-index --dir $S";

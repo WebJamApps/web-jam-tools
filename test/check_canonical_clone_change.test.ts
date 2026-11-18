@@ -478,6 +478,11 @@ Deno.test("nested subshells, heredoc subshells, brace groups, functions, pushd/p
       "false && cd /tmp/wjt-x; git commit -m x",
       "true || cd /tmp/wjt-x; git commit -m x",
       "cd /tmp/wjt-x || echo err; git commit -m x",
+      "cd /tmp/wjt-x || (exit 1); git commit -m x",
+      "cd /tmp/wjt-x || { echo no && exit 1; }; git commit -m x",
+      "cd /tmp/wjt-x || { if false; then exit 1; fi; }; git commit -m x",
+      "cd /tmp/wjt-x || echo no || exit 1; git commit -m x",
+      "cd /tmp/wjt-x || { echo no; exit 1; } | cat; git commit -m x",
       "if false; then cd /tmp/wjt-x; fi; git commit -m x",
       'case "$X" in a) cd /tmp/wjt-x ;; esac; git commit -m x',
       "pushd +1; git commit -m x",
@@ -489,5 +494,49 @@ Deno.test("nested subshells, heredoc subshells, brace groups, functions, pushd/p
     if (res.outcome === "allow-with-note") {
       assertStringIncludes(res.note, "folder");
     }
+  }
+});
+
+Deno.test("cd || exit/return fallback sets post-list directory to cd target", () => {
+  const worktree = "/tmp/wjt-x";
+  for (
+    const cmd of [
+      `cd ${CANONICAL} || exit 1; git commit -m x`,
+      `cd ${CANONICAL} || exit 1\ngit commit -m x`,
+      `cd ${CANONICAL} ||\n  exit 1\ngit commit -m x`,
+      `cd ${CANONICAL} || return 1; git commit -m x`,
+      `cd ${CANONICAL} || { echo no; exit 1; }; git commit -m x`,
+    ]
+  ) {
+    for (
+      const payload of [
+        { cwd: worktree, tool_name: "Bash", tool_input: { command: cmd } },
+        {
+          cwd: CANONICAL,
+          tool_name: "Bash",
+          tool_input: { command: cmd, workdir: worktree },
+        },
+      ]
+    ) {
+      const res = evaluatePayload(JSON.stringify(payload), { home: "/home/joshua" });
+      assertEquals(res.outcome, "refuse", cmd);
+      if (res.outcome === "refuse") {
+        assertEquals(res.command, "commit");
+        assertStringIncludes(res.message, CANONICAL);
+      }
+    }
+  }
+
+  for (
+    const cmd of [
+      "cd /tmp/wjt-x || exit 1; git commit -m x",
+      "cd /tmp/wjt-x || { echo no; exit 1; }; git commit -m x",
+    ]
+  ) {
+    assertEquals(
+      checkCanonicalCloneCommand(cmd, CANONICAL, { home: "/home/joshua" }),
+      { outcome: "allow" },
+      cmd,
+    );
   }
 });

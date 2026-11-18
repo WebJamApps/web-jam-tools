@@ -353,3 +353,37 @@ Deno.test("hook shell script: subshell cd restores parent cwd in both directions
   assertEquals(parsed.hookSpecificOutput.hookEventName, "PreToolUse");
   assertStringIncludes(parsed.hookSpecificOutput.additionalContext, "folder");
 });
+
+Deno.test("hook shell script: cd || exit fallback keeps cd target for subsequent commands", async () => {
+  const worktree = "/tmp/wjt-x";
+  for (
+    const cmd of [
+      `cd ${CANONICAL} || exit 1; git commit -m x`,
+      `cd ${CANONICAL} || { echo no; exit 1; }; git commit -m x`,
+    ]
+  ) {
+    for (
+      const payload of [
+        { cwd: worktree, tool_name: "Bash", tool_input: { command: cmd } },
+        {
+          cwd: CANONICAL,
+          tool_name: "Bash",
+          tool_input: { command: cmd, workdir: worktree },
+        },
+      ]
+    ) {
+      const res = await runHook(payload);
+      assertEquals(res.code, 2, res.stdout + res.stderr);
+      assertStringIncludes(res.stderr, CANONICAL);
+      assertStringIncludes(res.stderr, "commit");
+    }
+  }
+
+  const allowed = await runHook({
+    cwd: CANONICAL,
+    tool_name: "Bash",
+    tool_input: { command: "cd /tmp/wjt-x || exit 1; git commit -m x" },
+  });
+  assertEquals(allowed.code, 0, allowed.stderr);
+  assertEquals(allowed.stdout.trim(), "");
+});

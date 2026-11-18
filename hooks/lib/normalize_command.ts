@@ -693,6 +693,112 @@ function resolveDirectoryCommand(
   return { cwd: nextCwd, previousCwd: state.cwd, dirStack: nextStack };
 }
 
+function isExitOrReturnCommand(segment: string): boolean {
+  const tokens = splitShellTokens(segment).filter((token) => token !== "{" && token !== "}");
+  if (tokens.length === 0) return false;
+  const cmdTokens = [...tokens];
+  while (SHELL_FLOW_PREFIXES.has(cmdTokens[0] ?? "")) cmdTokens.shift();
+  const resolved = resolveThroughWrappers(cmdTokens);
+  if (resolved.kind !== "argv") return false;
+  let start = 0;
+  while (
+    ASSIGN_RE.test(resolved.argv[start] ?? "") ||
+    resolved.argv[start] === "builtin"
+  ) {
+    start++;
+  }
+  const argv = stripRedirectionTokens(resolved.argv.slice(start));
+  const cmdName = argv[0]?.split("/").pop() ?? "";
+  return cmdName === "exit" || cmdName === "return";
+}
+
+/**
+ * True when the `||` fallback starting at `startIdx` unconditionally exits the
+ * current shell/function (`exit`/`return`, bare or as the last unconditional
+ * statement of a `{ ...; }` group that is not piped or backgrounded).
+ */
+function orFallbackAlwaysExits(
+  segments: string[],
+  operators: string[],
+  startIdx: number,
+): boolean {
+  let cursor = startIdx;
+  while (cursor < segments.length && segments[cursor].trim() === "" && operators[cursor] === "\n") {
+    cursor++;
+  }
+  if (cursor >= segments.length) return false;
+
+  const first = segments[cursor] ?? "";
+  const firstOp = operators[cursor] ?? "";
+  if (first.trim() !== "") {
+    if (firstOp === "|" || firstOp === "&" || firstOp === "(" || firstOp === "{") return false;
+    return isExitOrReturnCommand(first);
+  }
+  if (firstOp !== "{") return false;
+
+  let braceDepth = 1;
+  let parenDepth = 0;
+  let controlDepth = 0;
+  let prevOp = "{";
+  const topLevelSegments: Array<{ text: string; leadingOp: string; trailingOp: string }> = [];
+
+  for (let k = cursor + 1; k < segments.length; k++) {
+    const segText = segments[k] ?? "";
+    const op = operators[k] ?? "";
+    const rawToks = splitShellTokens(segText).filter((token) => token !== "{" && token !== "}");
+    const lead = rawToks[0];
+
+    if (braceDepth === 1 && parenDepth === 0) {
+      if (
+        lead === "if" ||
+        lead === "while" ||
+        lead === "until" ||
+        lead === "for" ||
+        lead === "case"
+      ) {
+        controlDepth++;
+      } else if ((lead === "fi" || lead === "done" || lead === "esac") && controlDepth > 0) {
+        controlDepth--;
+      }
+      if (controlDepth === 0 && rawToks.length > 0) {
+        topLevelSegments.push({ text: segText, leadingOp: prevOp, trailingOp: op });
+      }
+    }
+
+    if (op === "(") parenDepth++;
+    else if (op === ")" && parenDepth > 0) parenDepth--;
+    else if (op === "{") braceDepth++;
+    else if (op === "}") {
+      braceDepth--;
+      if (braceDepth === 0) {
+        const afterText = segments[k + 1] ?? "";
+        const afterOp = operators[k + 1] ?? "";
+        if (afterText.trim() === "" && (afterOp === "|" || afterOp === "&" || afterOp === "||")) {
+          return false;
+        }
+        const last = topLevelSegments.at(-1);
+        if (!last) return false;
+        if (last.leadingOp !== "{" && last.leadingOp !== ";" && last.leadingOp !== "\n") {
+          return false;
+        }
+        if (last.trailingOp !== ";" && last.trailingOp !== "\n" && last.trailingOp !== "}") {
+          return false;
+        }
+        return isExitOrReturnCommand(last.text);
+      }
+    }
+    prevOp = op;
+  }
+  return false;
+}
+
+interface OrBranchPending {
+  targetState: DirState;
+  exits: boolean;
+  braceDepth: number;
+  waitingStart: boolean;
+}
+
 /** Keep every shell part and interpreter body beside the folder in effect when it runs. */
 export function commandPartsInFolders(
   command: string,
@@ -706,7 +812,7 @@ export function commandPartsInFolders(
     controlDepth: number;
     braceDepth: number;
     conditionalAndMutated: boolean;
-    orBranchPending: boolean;
+    orPending: OrBranchPending | null;
     funcCandidate: string | null;
   }> = [];
   const braceStack: Array<{
@@ -725,7 +831,7 @@ export function commandPartsInFolders(
   }> = [];
   const mutatedFunctions = new Set<string>();
   let conditionalAndMutated = false;
-  let orBranchPending = false;
+  let orPending: OrBranchPending | null = null;
   let lastClosedFuncName: string | null = null;
   let justClosedBraceSavedDir: DirState | null = null;
   let heredocInvocations: InterpreterInvocation[] = [];
@@ -874,8 +980,16 @@ export function commandPartsInFolders(
             state = unknownDirState();
             markScopeMutated();
           } else if (trailingOp === "||") {
-            // In `cd X || fallback`, `fallback` only runs if `cd X` failed (still in parent cwd).
-            orBranchPending = true;
+            // In `cd X || fallback`, `fallback` runs only if `cd X` failed (parent cwd).
+            // If `fallback` always exits (`exit`/`return`), commands after the list run in `X`.
+            const targetState = resolveDirectoryCommand(cmdName, argv.slice(1), state, home) ??
+              unknownDirState();
+            orPending = {
+              targetState,
+              exits: orFallbackAlwaysExits(segments, operators, idx + 1),
+              braceDepth: braceStack.length,
+              waitingStart: true,
+            };
             startedOrBranchThisSegment = true;
             markScopeMutated();
           } else {
@@ -888,10 +1002,26 @@ export function commandPartsInFolders(
       }
 
       if (
-        !startedOrBranchThisSegment && orBranchPending && trailingOp !== "||" && trailingOp !== ")"
+        !startedOrBranchThisSegment &&
+        orPending &&
+        orPending.waitingStart &&
+        text.trim() === "" &&
+        trailingOp === "\n"
       ) {
-        state = unknownDirState();
-        orBranchPending = false;
+        // Blank newline directly after `||` continues the fallback expression.
+      } else {
+        if (orPending) orPending.waitingStart = false;
+        if (
+          !startedOrBranchThisSegment &&
+          orPending &&
+          braceStack.length <= orPending.braceDepth &&
+          trailingOp !== "||" &&
+          trailingOp !== ")" &&
+          trailingOp !== "{"
+        ) {
+          state = orPending.exits ? orPending.targetState : unknownDirState();
+          orPending = null;
+        }
       }
       if (
         conditionalAndMutated &&
@@ -912,7 +1042,7 @@ export function commandPartsInFolders(
           controlDepth: controlStack.length,
           braceDepth: braceStack.length,
           conditionalAndMutated,
-          orBranchPending,
+          orPending: orPending ? { ...orPending } : null,
           funcCandidate: funcMatch ? funcMatch[1] : null,
         });
         lastClosedFuncName = null;
@@ -923,12 +1053,12 @@ export function commandPartsInFolders(
           controlStack.length = popped.controlDepth;
           braceStack.length = popped.braceDepth;
           conditionalAndMutated = popped.conditionalAndMutated;
-          orBranchPending = popped.orBranchPending;
+          orPending = popped.orPending;
           lastClosedFuncName = trimmed === "" ? popped.funcCandidate : null;
         } else {
           state = unknownDirState();
           conditionalAndMutated = false;
-          orBranchPending = false;
+          orPending = null;
           lastClosedFuncName = null;
         }
       } else if (trailingOp === "{") {
