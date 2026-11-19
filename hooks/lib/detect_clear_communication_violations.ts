@@ -2,7 +2,7 @@
  * Shared clear-communication violation detector (web-jam-tools#531).
  *
  * Used by hooks/require-clear-communication.sh (a BLOCKING Stop hook) to
- * answer "does this reply violate one of the four mechanically-decidable
+ * answer "does this reply violate one of the five mechanically-decidable
  * chat-communication rules?" — same shape as
  * hooks/lib/detect_bare_issue_refs.ts's "does this text cite an issue/PR
  * without its title?".
@@ -28,6 +28,9 @@
  *          A list (however long) is one topic, not one per item — list-item
  *          lines never count as section leads, and neither do table rows or
  *          bold used mid-sentence for emphasis.
+ * Rule 5 — pointing back at a pending decision: sending Josh to an earlier
+ *          message for a decision instead of laying it out in full in this
+ *          reply (outside quotes, `>` blockquotes, fenced/inline code, and URLs).
  *
  * DECISION on "rhetorical questions" (design-constraints text lists these
  * alongside quoted/coded/URL question marks as a false-positive risk for
@@ -237,6 +240,61 @@ export function findSectionLeadViolations(
   return leads;
 }
 
+// --- rule 5: pointing back at a pending decision ---
+
+export interface DecisionPointerViolation {
+  phrase: string;
+  matched: string;
+}
+
+const DECISION_POINTER_PHRASES = [
+  "previous message",
+  "my last message",
+  "earlier message",
+  "message above",
+  "see above",
+  "still needs your answer",
+  "still awaiting your answer",
+] as const;
+
+const DECISION_STILL_RE =
+  /\bdecision\s+\d+\b(?:[^A-Za-z0-9\n]*\b[A-Za-z0-9_'-]+\b){0,3}[^A-Za-z0-9\n]*\bstill\s+(?:open|pending)\b/gi;
+
+/**
+ * Rule 5: matches pointers to an earlier message for a pending decision outside
+ * code, quotes, `>` blockquotes, and URLs (via `stripNonProse`).
+ */
+export function findDecisionPointerViolations(text: string): DecisionPointerViolation[] {
+  const cleaned = stripNonProse(text);
+  const violations: DecisionPointerViolation[] = [];
+  const seen = new Set<string>();
+
+  for (const phrase of DECISION_POINTER_PHRASES) {
+    const pattern = phrase.split(" ").map(escapeRegExp).join("\\s+");
+    const re = new RegExp(`\\b${pattern}\\b`, "gi");
+    const match = re.exec(cleaned);
+    if (match) {
+      const matched = match[0].replace(/\s+/g, " ").trim();
+      const key = phrase.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        violations.push({ phrase, matched });
+      }
+    }
+  }
+
+  for (const match of cleaned.matchAll(DECISION_STILL_RE)) {
+    const matched = match[0].replace(/\s+/g, " ").trim();
+    const key = matched.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      violations.push({ phrase: matched, matched });
+    }
+  }
+
+  return violations;
+}
+
 // --- config ---
 
 export interface ClearCommunicationConfig {
@@ -317,7 +375,7 @@ export function loadConfig(yamlPath: string): ClearCommunicationConfig {
 // --- report formatting ---
 
 /**
- * Runs all four rules against `text` and returns a fully-formatted,
+ * Runs all five rules against `text` and returns a fully-formatted,
  * human-readable report body naming every offending rule + token, or ""
  * if nothing fired. The calling hook wraps this with a generic
  * BLOCKED/rewrite header and footer (same split as detect_bare_issue_refs.ts,
@@ -381,6 +439,23 @@ export function buildReport(text: string, config: ClearCommunicationConfig): str
     }
     lines.push(
       "(rule: one-topic-per-message — split this into separate replies, or trim to a single lead)",
+    );
+    lines.push("");
+  }
+
+  const pointerViolations = findDecisionPointerViolations(text);
+  if (pointerViolations.length > 0) {
+    lines.push(
+      `Rule 5 — pointing Josh to an earlier message for a pending decision (${pointerViolations.length} found):`,
+    );
+    for (const v of pointerViolations) {
+      const label = v.matched.toLowerCase() === v.phrase.toLowerCase()
+        ? `"${v.matched}"`
+        : `"${v.matched}" (${v.phrase})`;
+      lines.push(`  - ${label}`);
+    }
+    lines.push(
+      "(rule: no-pending-decision-pointer — lay the decision out in full in this reply instead of sending Josh to an earlier message)",
     );
     lines.push("");
   }
