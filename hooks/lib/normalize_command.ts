@@ -564,21 +564,32 @@ function splitPlainOperators(
   return { segments, operators, unterminated: inSquote || inDquote };
 }
 
-export function splitOnOperators(text: string): { segments: string[]; unterminated: boolean } {
+function splitOnOperatorsWithDelimiters(text: string): {
+  segments: string[];
+  operators: string[];
+  unterminated: boolean;
+} {
   const parsed = commandRegions(text);
   const segments: string[] = [];
+  const operators: string[] = [];
   let unterminated = parsed.unterminated;
   for (const region of parsed.regions) {
     if (region.kind === "data" && region.closing !== undefined) continue;
     const result = region.kind === "shell" && region.closing !== undefined
-      ? splitOnOperators(region.text)
+      ? splitOnOperatorsWithDelimiters(region.text)
       : splitPlainOperators(region.text, region.kind !== "script");
     segments.push(...result.segments);
+    operators.push(...result.operators);
     // An interpreter body's quotes never alter the enclosing shell's state. Its code remains
     // available to the existing positional matchers, without stripping native comments or
     // interpreting JavaScript regex/template syntax. This does not evaluate interpreter APIs.
     if (region.kind !== "script") unterminated ||= result.unterminated;
   }
+  return { segments, operators, unterminated };
+}
+
+export function splitOnOperators(text: string): { segments: string[]; unterminated: boolean } {
+  const { segments, unterminated } = splitOnOperatorsWithDelimiters(text);
   return { segments, unterminated };
 }
 
@@ -607,6 +618,187 @@ export function resolveCommandPath(raw: string, cwd: string | null, home: string
   return `/${parts.join("/")}`;
 }
 
+interface DirState {
+  cwd: string | null;
+  previousCwd: string | null;
+  dirStack: Array<string | null>;
+}
+
+const cloneDirState = (s: DirState): DirState => ({
+  cwd: s.cwd,
+  previousCwd: s.previousCwd,
+  dirStack: [...s.dirStack],
+});
+
+const unknownDirState = (): DirState => ({
+  cwd: null,
+  previousCwd: null,
+  dirStack: [],
+});
+
+const REDIR_OP_ONLY_RE = /^(?:\d+)?(?:>>?|<<?|<&|>&|<>|&>>?)$/;
+const REDIR_INLINE_RE = /^(?:\d+)?(?:>>?|<<?|<&|>&|<>|&>>?).+/;
+const DIR_BUILTINS = new Set(["cd", "pushd", "popd"]);
+const SHELL_FLOW_PREFIXES = new Set(["if", "then", "else", "elif", "while", "until", "do", "!"]);
+
+function stripRedirectionTokens(tokens: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (REDIR_OP_ONLY_RE.test(tokens[i])) {
+      i++;
+      continue;
+    }
+    if (REDIR_INLINE_RE.test(tokens[i])) continue;
+    out.push(tokens[i]);
+  }
+  return out;
+}
+
+function resolveDirectoryCommand(
+  cmdName: string,
+  args: string[],
+  state: DirState,
+  home: string,
+): DirState | null {
+  if (cmdName === "cd") {
+    const dashDash = args.indexOf("--");
+    const flags = dashDash >= 0
+      ? args.slice(0, dashDash)
+      : args.filter((a) => a.startsWith("-") && a !== "-");
+    const positionals = dashDash >= 0
+      ? args.slice(dashDash + 1)
+      : args.filter((a) => !a.startsWith("-") || a === "-");
+    if (flags.some((f) => !/^-[LP]+$/.test(f)) || positionals.length > 1) return null;
+    const target = positionals[0];
+    const nextCwd = target === "-"
+      ? state.previousCwd
+      : resolveCommandPath(target ?? home, state.cwd, home);
+    return { cwd: nextCwd, previousCwd: state.cwd, dirStack: [...state.dirStack] };
+  }
+  if (cmdName === "pushd") {
+    if (args.length === 0) {
+      if (state.dirStack.length === 0) return null;
+      const nextStack = [...state.dirStack];
+      const top = nextStack.pop()!;
+      nextStack.push(state.cwd);
+      return { cwd: top, previousCwd: state.cwd, dirStack: nextStack };
+    }
+    if (args.length > 1 || args[0].startsWith("-") || args[0].startsWith("+")) return null;
+    const nextCwd = resolveCommandPath(args[0], state.cwd, home);
+    return { cwd: nextCwd, previousCwd: state.cwd, dirStack: [...state.dirStack, state.cwd] };
+  }
+  if (args.length > 0 || state.dirStack.length === 0) return null;
+  const nextStack = [...state.dirStack];
+  const nextCwd = nextStack.pop()!;
+  return { cwd: nextCwd, previousCwd: state.cwd, dirStack: nextStack };
+}
+
+function isExitOrReturnCommand(segment: string): boolean {
+  const tokens = splitShellTokens(segment).filter((token) => token !== "{" && token !== "}");
+  if (tokens.length === 0) return false;
+  const cmdTokens = [...tokens];
+  while (SHELL_FLOW_PREFIXES.has(cmdTokens[0] ?? "")) cmdTokens.shift();
+  const resolved = resolveThroughWrappers(cmdTokens);
+  if (resolved.kind !== "argv") return false;
+  let start = 0;
+  while (
+    ASSIGN_RE.test(resolved.argv[start] ?? "") ||
+    resolved.argv[start] === "builtin"
+  ) {
+    start++;
+  }
+  const argv = stripRedirectionTokens(resolved.argv.slice(start));
+  const cmdName = argv[0]?.split("/").pop() ?? "";
+  return cmdName === "exit" || cmdName === "return";
+}
+
+/**
+ * True when the `||` fallback starting at `startIdx` unconditionally exits the
+ * current shell/function (`exit`/`return`, bare or as the last unconditional
+ * statement of a `{ ...; }` group that is not piped or backgrounded).
+ */
+function orFallbackAlwaysExits(
+  segments: string[],
+  operators: string[],
+  startIdx: number,
+): boolean {
+  let cursor = startIdx;
+  while (cursor < segments.length && segments[cursor].trim() === "" && operators[cursor] === "\n") {
+    cursor++;
+  }
+  if (cursor >= segments.length) return false;
+
+  const first = segments[cursor] ?? "";
+  const firstOp = operators[cursor] ?? "";
+  if (first.trim() !== "") {
+    if (firstOp === "|" || firstOp === "&" || firstOp === "(" || firstOp === "{") return false;
+    return isExitOrReturnCommand(first);
+  }
+  if (firstOp !== "{") return false;
+
+  let braceDepth = 1;
+  let parenDepth = 0;
+  let controlDepth = 0;
+  let prevOp = "{";
+  const topLevelSegments: Array<{ text: string; leadingOp: string; trailingOp: string }> = [];
+
+  for (let k = cursor + 1; k < segments.length; k++) {
+    const segText = segments[k] ?? "";
+    const op = operators[k] ?? "";
+    const rawToks = splitShellTokens(segText).filter((token) => token !== "{" && token !== "}");
+    const lead = rawToks[0];
+
+    if (braceDepth === 1 && parenDepth === 0) {
+      if (
+        lead === "if" ||
+        lead === "while" ||
+        lead === "until" ||
+        lead === "for" ||
+        lead === "case"
+      ) {
+        controlDepth++;
+      } else if ((lead === "fi" || lead === "done" || lead === "esac") && controlDepth > 0) {
+        controlDepth--;
+      }
+      if (controlDepth === 0 && rawToks.length > 0) {
+        topLevelSegments.push({ text: segText, leadingOp: prevOp, trailingOp: op });
+      }
+    }
+
+    if (op === "(") parenDepth++;
+    else if (op === ")" && parenDepth > 0) parenDepth--;
+    else if (op === "{") braceDepth++;
+    else if (op === "}") {
+      braceDepth--;
+      if (braceDepth === 0) {
+        const afterText = segments[k + 1] ?? "";
+        const afterOp = operators[k + 1] ?? "";
+        if (afterText.trim() === "" && (afterOp === "|" || afterOp === "&" || afterOp === "||")) {
+          return false;
+        }
+        const last = topLevelSegments.at(-1);
+        if (!last) return false;
+        if (last.leadingOp !== "{" && last.leadingOp !== ";" && last.leadingOp !== "\n") {
+          return false;
+        }
+        if (last.trailingOp !== ";" && last.trailingOp !== "\n" && last.trailingOp !== "}") {
+          return false;
+        }
+        return isExitOrReturnCommand(last.text);
+      }
+    }
+    prevOp = op;
+  }
+  return false;
+}
+
+interface OrBranchPending {
+  targetState: DirState;
+  exits: boolean;
+  braceDepth: number;
+  waitingStart: boolean;
+}
+
 /** Keep every shell part and interpreter body beside the folder in effect when it runs. */
 export function commandPartsInFolders(
   command: string,
@@ -614,11 +806,53 @@ export function commandPartsInFolders(
   home: string,
 ): CommandPart[] {
   const parts: CommandPart[] = [];
-  let cwd = initialCwd;
-  let previousCwd: string | null = null;
+  let state: DirState = { cwd: initialCwd, previousCwd: null, dirStack: [] };
+  const subshellStack: Array<{
+    dir: DirState;
+    controlDepth: number;
+    braceDepth: number;
+    conditionalAndMutated: boolean;
+    orPending: OrBranchPending | null;
+    funcCandidate: string | null;
+  }> = [];
+  const braceStack: Array<{
+    isFunction: boolean;
+    funcName?: string;
+    savedDir: DirState;
+    mutated: boolean;
+    controlDepth: number;
+  }> = [];
+  const controlStack: Array<{
+    kind: "if" | "loop" | "case";
+    baseState: DirState;
+    conditionMutated: boolean;
+    branchMutated: boolean;
+    inCondition: boolean;
+  }> = [];
+  const mutatedFunctions = new Set<string>();
+  let conditionalAndMutated = false;
+  let orPending: OrBranchPending | null = null;
+  let lastClosedFuncName: string | null = null;
+  let justClosedBraceSavedDir: DirState | null = null;
   let heredocInvocations: InterpreterInvocation[] = [];
   let legacyHeredoc = false;
   let heredocCwd = initialCwd;
+
+  const markScopeMutated = () => {
+    const minControlDepth = subshellStack.at(-1)?.controlDepth ?? 0;
+    for (let k = controlStack.length - 1; k >= minControlDepth; k--) {
+      const frame = controlStack[k];
+      if (frame.inCondition) frame.conditionMutated = true;
+      else frame.branchMutated = true;
+      break;
+    }
+    const minBraceDepth = subshellStack.at(-1)?.braceDepth ?? 0;
+    for (let k = braceStack.length - 1; k >= minBraceDepth; k--) {
+      braceStack[k].mutated = true;
+      break;
+    }
+  };
+
   for (const region of commandRegions(command).regions) {
     if (region.kind === "data" && !legacyHeredoc) continue;
     if (region.kind === "script" || (legacyHeredoc && region.closing !== undefined)) {
@@ -632,22 +866,234 @@ export function commandPartsInFolders(
       parts.push(...commandPartsInFolders(region.text, heredocCwd, home));
       continue;
     }
-    for (const text of splitOnOperators(region.text).segments) {
-      parts.push({ text, cwd });
-      if (findHeredocMarker(text)) heredocCwd = cwd;
-      const tokens = splitShellTokens(text).filter((token) => token !== "{" && token !== "}");
-      const resolved = resolveThroughWrappers(tokens);
-      if (resolved.kind !== "argv") continue;
-      let start = 0;
-      while (ASSIGN_RE.test(resolved.argv[start] ?? "")) start++;
-      const argv = resolved.argv.slice(start);
-      if (argv[0]?.split("/").pop() !== "cd") continue;
-      const args = argv.slice(1);
-      const oldCwd = cwd;
-      cwd = args.includes("-")
-        ? previousCwd
-        : resolveCommandPath(args.find((arg) => !arg.startsWith("-")) ?? home, cwd, home);
-      previousCwd = oldCwd;
+    let leadingOp = "\n";
+    const { segments, operators } = splitOnOperatorsWithDelimiters(region.text);
+    for (let idx = 0; idx < segments.length; idx++) {
+      const text = segments[idx];
+      const trailingOp = operators[idx] ?? "";
+      const rawTokens = splitShellTokens(text).filter((token) => token !== "{" && token !== "}");
+      const lead = rawTokens[0];
+      const topControl = controlStack.at(-1);
+
+      // Inside `case ... esac`, `;;` ends the current arm; the next arm starts at `baseState`.
+      if (
+        topControl?.kind === "case" && leadingOp === ";" && trailingOp === ";" &&
+        rawTokens.length === 0
+      ) {
+        state = topControl.conditionMutated
+          ? unknownDirState()
+          : cloneDirState(topControl.baseState);
+      }
+
+      // Restore directory across `{ ... } | ...` or `{ ... } & ...` (pipeline/bg subshell).
+      if (
+        justClosedBraceSavedDir && rawTokens.length === 0 &&
+        (trailingOp === "|" || trailingOp === "&")
+      ) {
+        state = justClosedBraceSavedDir;
+      }
+      justClosedBraceSavedDir = null;
+
+      // Apply control-flow branch entries before emitting this segment's part.
+      if (lead === "elif" || lead === "else") {
+        const top = controlStack.at(-1);
+        if (top?.kind === "if") {
+          state = top.conditionMutated ? unknownDirState() : cloneDirState(top.baseState);
+          top.inCondition = lead === "elif";
+        } else {
+          state = unknownDirState();
+        }
+      } else if (lead === "fi" || lead === "done" || lead === "esac") {
+        const expected = lead === "fi" ? "if" : lead === "done" ? "loop" : "case";
+        const top = controlStack.at(-1);
+        if (top?.kind === expected) {
+          controlStack.pop();
+          if (top.conditionMutated || top.branchMutated) {
+            state = unknownDirState();
+            markScopeMutated();
+          }
+        } else {
+          state = unknownDirState();
+        }
+      } else if (lead === "if") {
+        controlStack.push({
+          kind: "if",
+          baseState: cloneDirState(state),
+          conditionMutated: false,
+          branchMutated: false,
+          inCondition: true,
+        });
+      } else if (lead === "while" || lead === "until" || lead === "for") {
+        controlStack.push({
+          kind: "loop",
+          baseState: cloneDirState(state),
+          conditionMutated: false,
+          branchMutated: false,
+          inCondition: true,
+        });
+      } else if (lead === "case") {
+        controlStack.push({
+          kind: "case",
+          baseState: cloneDirState(state),
+          conditionMutated: false,
+          branchMutated: false,
+          inCondition: false,
+        });
+      } else if (lead === "then" && controlStack.at(-1)?.kind === "if") {
+        controlStack.at(-1)!.inCondition = false;
+      } else if (lead === "do" && controlStack.at(-1)?.kind === "loop") {
+        controlStack.at(-1)!.inCondition = false;
+      }
+
+      parts.push({ text, cwd: state.cwd });
+      if (findHeredocMarker(text)) heredocCwd = state.cwd;
+
+      const cmdTokens = [...rawTokens];
+      while (SHELL_FLOW_PREFIXES.has(cmdTokens[0] ?? "")) cmdTokens.shift();
+      const resolved = resolveThroughWrappers(cmdTokens);
+
+      let startedOrBranchThisSegment = false;
+      if (resolved.kind === "nested") {
+        let aIdx = 0;
+        while (aIdx < cmdTokens.length && ASSIGN_RE.test(cmdTokens[aIdx] ?? "")) aIdx++;
+        if (cmdTokens[aIdx] === "eval" && /\b(?:cd|pushd|popd)\b|[$`]/.test(resolved.command)) {
+          state = unknownDirState();
+          markScopeMutated();
+        }
+      } else if (resolved.kind === "argv") {
+        let start = 0;
+        while (
+          ASSIGN_RE.test(resolved.argv[start] ?? "") ||
+          resolved.argv[start] === "builtin"
+        ) {
+          start++;
+        }
+        const argv = stripRedirectionTokens(resolved.argv.slice(start));
+        const cmdName = argv[0]?.split("/").pop() ?? "";
+        if (mutatedFunctions.has(cmdName) && trailingOp !== "(") {
+          state = unknownDirState();
+          markScopeMutated();
+        } else if (DIR_BUILTINS.has(cmdName)) {
+          if (trailingOp === "|" || trailingOp === "&") {
+            // Left side of a pipe or background command executes in a subshell.
+          } else if (leadingOp === "|" || leadingOp === "||") {
+            state = unknownDirState();
+            markScopeMutated();
+          } else if (trailingOp === "||") {
+            // In `cd X || fallback`, `fallback` runs only if `cd X` failed (parent cwd).
+            // If `fallback` always exits (`exit`/`return`), commands after the list run in `X`.
+            const targetState = resolveDirectoryCommand(cmdName, argv.slice(1), state, home) ??
+              unknownDirState();
+            orPending = {
+              targetState,
+              exits: orFallbackAlwaysExits(segments, operators, idx + 1),
+              braceDepth: braceStack.length,
+              waitingStart: true,
+            };
+            startedOrBranchThisSegment = true;
+            markScopeMutated();
+          } else {
+            const next = resolveDirectoryCommand(cmdName, argv.slice(1), state, home);
+            state = next ?? unknownDirState();
+            if (leadingOp === "&&") conditionalAndMutated = true;
+            markScopeMutated();
+          }
+        }
+      }
+
+      if (
+        !startedOrBranchThisSegment &&
+        orPending &&
+        orPending.waitingStart &&
+        text.trim() === "" &&
+        trailingOp === "\n"
+      ) {
+        // Blank newline directly after `||` continues the fallback expression.
+      } else {
+        if (orPending) orPending.waitingStart = false;
+        if (
+          !startedOrBranchThisSegment &&
+          orPending &&
+          braceStack.length <= orPending.braceDepth &&
+          trailingOp !== "||" &&
+          trailingOp !== ")" &&
+          trailingOp !== "{"
+        ) {
+          state = orPending.exits ? orPending.targetState : unknownDirState();
+          orPending = null;
+        }
+      }
+      if (
+        conditionalAndMutated &&
+        trailingOp !== "&&" &&
+        trailingOp !== "(" &&
+        trailingOp !== ")" &&
+        trailingOp !== ""
+      ) {
+        state = unknownDirState();
+        conditionalAndMutated = false;
+      }
+
+      const trimmed = text.trim();
+      if (trailingOp === "(") {
+        const funcMatch = /^(?:function\s+)?([A-Za-z_][A-Za-z0-9_-]*)$/.exec(trimmed);
+        subshellStack.push({
+          dir: cloneDirState(state),
+          controlDepth: controlStack.length,
+          braceDepth: braceStack.length,
+          conditionalAndMutated,
+          orPending: orPending ? { ...orPending } : null,
+          funcCandidate: funcMatch ? funcMatch[1] : null,
+        });
+        lastClosedFuncName = null;
+      } else if (trailingOp === ")") {
+        const popped = subshellStack.pop();
+        if (popped) {
+          state = popped.dir;
+          controlStack.length = popped.controlDepth;
+          braceStack.length = popped.braceDepth;
+          conditionalAndMutated = popped.conditionalAndMutated;
+          orPending = popped.orPending;
+          lastClosedFuncName = trimmed === "" ? popped.funcCandidate : null;
+        } else {
+          state = unknownDirState();
+          conditionalAndMutated = false;
+          orPending = null;
+          lastClosedFuncName = null;
+        }
+      } else if (trailingOp === "{") {
+        const funcKeyword = /^function\s+([A-Za-z_][A-Za-z0-9_-]*)$/.exec(trimmed);
+        const isFunc = Boolean(funcKeyword) || (trimmed === "" && lastClosedFuncName !== null);
+        braceStack.push({
+          isFunction: isFunc,
+          funcName: funcKeyword?.[1] ??
+            (trimmed === "" ? lastClosedFuncName ?? undefined : undefined),
+          savedDir: cloneDirState(state),
+          mutated: false,
+          controlDepth: controlStack.length,
+        });
+        lastClosedFuncName = null;
+      } else if (trailingOp === "}") {
+        const poppedBrace = braceStack.pop();
+        if (poppedBrace) {
+          if (poppedBrace.isFunction) {
+            if (poppedBrace.mutated && poppedBrace.funcName) {
+              mutatedFunctions.add(poppedBrace.funcName);
+            }
+            state = poppedBrace.savedDir;
+            controlStack.length = poppedBrace.controlDepth;
+          } else {
+            justClosedBraceSavedDir = poppedBrace.savedDir;
+          }
+        } else {
+          state = unknownDirState();
+        }
+        lastClosedFuncName = null;
+      } else if (trimmed !== "") {
+        lastClosedFuncName = null;
+      }
+
+      leadingOp = trailingOp;
     }
     // commandRegions ends this shell region at the marker line, before its body.
     const header = region.text.split("\n").at(-1) ?? "";

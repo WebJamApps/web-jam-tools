@@ -319,6 +319,19 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
       }) as its real matcher, got: ${secretLiteralsCmd}`,
     );
 
+    const canonicalEntries = settings.hooks.PreToolUse.flatMap(
+      (entry: { matcher: string; hooks: Array<{ command: string }> }) =>
+        entry.hooks.filter((h) => h.command.endsWith("/block-canonical-clone-change.sh"))
+          .map(() => entry.matcher),
+    );
+    assertEquals(canonicalEntries, ["Bash"]);
+    assertEquals(
+      allAgyPreToolUseCmds.filter((c) => c.endsWith("/block-canonical-clone-change.sh")),
+      [`$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${
+        btoa("Bash")
+      } $HOME/.claude/hooks/block-canonical-clone-change.sh`],
+    );
+
     // web-jam-tools#1236: regenerate-memory-index.sh registered in PostToolUse
     const postToolEntries = settings.hooks.PostToolUse.flatMap(
       (entry: { matcher?: string; hooks?: Array<{ command?: string }> }) =>
