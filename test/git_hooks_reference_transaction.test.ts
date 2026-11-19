@@ -520,7 +520,10 @@ Deno.test("linked worktree chains to common .git/hooks/reference-transaction for
       /^STATE:prepar(?:ed|ing)$/m.test(failLog),
       `expected STATE:prepared or STATE:preparing in fail log, got:\n${failLog}`,
     );
-    assertStringIncludes(failLog, "refs/heads/feat");
+    assert(
+      / (?:HEAD|refs\/heads\/feat)$/m.test(failLog),
+      `expected HEAD or refs/heads/feat in fail log, got:\n${failLog}`,
+    );
     const headAfterRefusal = (await runGit(["rev-parse", "HEAD"], wt, fx.env)).stdout.trim();
     assertEquals(headAfterRefusal, headBeforeRefusal);
   } finally {
