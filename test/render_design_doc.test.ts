@@ -1010,3 +1010,91 @@ Deno.test("Rendered Chrome check at 1600 x 1000 finds no near-white pixel", asyn
     await Deno.remove(tempDir, { recursive: true });
   }
 });
+
+Deno.test("Appendix D multi-design Case 12: plan page keeps file order, shows total row count above Gate 2 table, and starts >10 rows with 'all' selected", () => {
+  const header =
+    "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Design | Tests | Closes when |";
+  const sep = "|---|---|---|---|---|---|---|---|---|";
+  const rows: string[] = [];
+  for (let i = 1; i <= 11; i++) {
+    rows.push(
+      `| ${i} | Task item ${i} | row 1 | Terra | High | web-jam-tools | design.md | Tests ${i} | \`deno task test\` passes |`,
+    );
+  }
+  const md = [
+    "# Gate 2 Plan",
+    "",
+    "## Revision History",
+    "| Version | Date | Author | Notes |",
+    "|---|---|---|---|",
+    "| 1.0 | 2026-11-01 | Agy | First |",
+    "| 2.0 | 2026-11-02 | Agy | Second |",
+    "",
+    "## Phase 2 — The Issue Plan",
+    "",
+    header,
+    sep,
+    ...rows,
+  ].join("\n");
+
+  const planHtml = renderDesignDoc(md, "Gate 2 Plan", { isPlanPage: true });
+  // Keeps file order even in Revision History table
+  assertEquals(planHtml.indexOf("1.0") < planHtml.indexOf("2.0"), true);
+  // Gate 2 plan table keeps filing order 1..11
+  assertEquals(
+    planHtml.indexOf("Task item 1") < planHtml.indexOf("Task item 11"),
+    true,
+  );
+  // Shows total row count above the Gate 2 plan table
+  assertStringIncludes(planHtml, '<p class="plan-table-total">Total rows: 11</p>');
+  const totalIdx = planHtml.indexOf('<p class="plan-table-total">Total rows: 11</p>');
+  const task1Idx = planHtml.indexOf("Task item 1");
+  assertEquals(totalIdx !== -1 && totalIdx < task1Idx, true);
+  // Wrapper carries data-default-size="all" and script honors it while preserving DEFAULT_PAGE_SIZE = 10
+  assertStringIncludes(planHtml, '<div class="table-wrapper" data-default-size="all">');
+  assertStringIncludes(
+    planHtml,
+    'var initialOptionValue = defaultSizeAttr === "all" ? "all" : String(DEFAULT_PAGE_SIZE);',
+  );
+  const allState = computeTablePagination(11, 1, "all");
+  assertEquals(allState.startIdx, 0);
+  assertEquals(allState.endIdx, 11);
+  assertEquals(allState.statusText, "1-11 of 11");
+
+  // Non-plan page still excludes plan-table-total and keeps data-default-size unset
+  const regularHtml = renderDesignDoc(md);
+  assertEquals(regularHtml.includes('<p class="plan-table-total">'), false);
+  assertEquals(regularHtml.includes('data-default-size="all"'), false);
+});
+
+Deno.test("Plan page: only the Gate 2 plan table starts on all; another table with more than 10 rows starts with 10 a page", () => {
+  const planHeader =
+    "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Design | Tests | Closes when |";
+  const planRows = Array.from(
+    { length: 11 },
+    (_, i) =>
+      `| ${i + 1} | Plan row ${
+        i + 1
+      } | row 1 | Terra | High | web-jam-tools | design.md | Tests | \`deno task test\` passes |`,
+  );
+  const otherRows = Array.from({ length: 12 }, (_, i) => `| Item ${i + 1} | ${i + 1} |`);
+  const md = [
+    "# Plan",
+    "",
+    "## Phase 2 — The Issue Plan",
+    "",
+    planHeader,
+    "|---|---|---|---|---|---|---|---|---|",
+    ...planRows,
+    "",
+    "## Other",
+    "",
+    "| Name | Count |",
+    "|---|---|",
+    ...otherRows,
+  ].join("\n");
+  const html = renderDesignDoc(md, "Plan", { isPlanPage: true });
+  assertEquals(html.match(/data-default-size="all"/g)?.length, 1);
+  assertEquals(html.match(/<div class="table-wrapper">/g)?.length, 1);
+  assertEquals(html.match(/plan-table-total">Total rows/g)?.length, 1);
+});

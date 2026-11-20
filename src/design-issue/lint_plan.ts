@@ -47,7 +47,10 @@ import {
   resolveStepAfterMergeLabelFlags,
 } from "../../hooks/lib/check_model_label_on_issue_create.ts";
 import { defaultOpenBrowserImpl, expandHome, resolveHtmlPath } from "./gate1.ts";
-import { renderDesignDocFile } from "../../scripts/render_design_doc.ts";
+import {
+  renderDesignDocFile,
+  type RenderDesignDocOptions,
+} from "../../scripts/render_design_doc.ts";
 import { type Gate1StatusResult, type Gate1StatusType, getGate1Status } from "./gate1_record.ts";
 import {
   type MalformedPlanTableRow,
@@ -87,6 +90,12 @@ export interface LintPlanResult {
     reply: string;
     approvalLine: string;
   };
+  gate1Approvals?: Array<{
+    docPath: string;
+    approvedAt: string;
+    reply: string;
+    approvalLine: string;
+  }>;
 }
 
 export interface LintPlanOptions {
@@ -107,10 +116,14 @@ export interface LintPlanOptions {
   runGh?: CommandRunner;
   /** Canonical design document path to check Gate 1 approval against. */
   designDocPath?: string;
+  /** One or more canonical design document paths passed via `--design-doc`. */
+  designDocPaths?: readonly string[];
   /** In-memory design document markdown for checking Closes when headings without disk reads. */
   designDocMarkdown?: string;
   /** Explicit design document headings set for checking Closes when headings. */
   designHeadings?: ReadonlySet<string>;
+  /** Headings per resolved design document path for multi-design plan validation. */
+  designHeadingsByDoc?: ReadonlyMap<string, ReadonlySet<string>>;
   /** Full plan markdown content, used to validate `## Steps after the merge`. */
   markdown?: string;
   /** Gate 1 state directory override (for testing). */
@@ -128,6 +141,7 @@ const COL_EPIC = PLAN_TABLE_HEADER.indexOf("Epic / child of");
 const COL_TIER = PLAN_TABLE_HEADER.indexOf("Model tier");
 const COL_PRIORITY = PLAN_TABLE_HEADER.indexOf("Priority");
 const COL_REPO = PLAN_TABLE_HEADER.indexOf("Repo");
+const COL_DESIGN = PLAN_TABLE_HEADER.indexOf("Design");
 const COL_TESTS = PLAN_TABLE_HEADER.indexOf("Tests");
 const COL_CLOSES = PLAN_TABLE_HEADER.indexOf("Closes when");
 
@@ -315,6 +329,143 @@ function checkCrossRepoEpic(
 /** Validates every well-formed row of a parsed Gate 2 plan table. Parser-level malformed rows
  * (cell count didn't match the header -- `web-jam-tools#795`) are passed through as their own
  * violation rather than silently dropped. */
+interface ResolvedDesignDocArg {
+  rawPath: string;
+  absPath: string;
+}
+
+function resolveDesignDocArgs(options: LintPlanOptions): ResolvedDesignDocArg[] {
+  const rawList: string[] = [];
+  if (options.designDocPaths) {
+    for (const p of options.designDocPaths) {
+      if (p.trim() !== "") rawList.push(p.trim());
+    }
+  }
+  if (options.designDocPath && options.designDocPath.trim() !== "") {
+    rawList.push(options.designDocPath.trim());
+  }
+  const seen = new Set<string>();
+  const resolved: ResolvedDesignDocArg[] = [];
+  for (const rawPath of rawList) {
+    const absPath = path.resolve(expandHome(rawPath));
+    if (seen.has(absPath)) continue;
+    seen.add(absPath);
+    resolved.push({ rawPath, absPath });
+  }
+  return resolved;
+}
+
+function stripDesignCellMarkers(cell: string): string {
+  return cell.trim().replace(/[`*]/g, "").replace(/^_+/, "").replace(/_+$/, "").trim();
+}
+
+function splitDesignCellEntries(raw: string): string[] {
+  const cleaned = stripDesignCellMarkers(raw);
+  const delimited = cleaned
+    .split(/[,;\n]+|\s+(?:\/|&|and)\s+/i)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (delimited.length > 1) return delimited;
+  const mdTokens = cleaned.match(/[^\s,;]+\.md\b/gi);
+  if (mdTokens && mdTokens.length > 1) return mdTokens;
+  return cleaned ? [cleaned] : [];
+}
+
+function normalizeForDesignMatch(raw: string): string {
+  const expanded = raw.startsWith("$HOME/")
+    ? expandHome(`~/${raw.slice("$HOME/".length)}`)
+    : expandHome(raw);
+  return expanded.replace(/\\/g, "/");
+}
+
+function matchDesignCellToArgs(
+  cellValue: string,
+  docs: readonly ResolvedDesignDocArg[],
+): ResolvedDesignDocArg[] {
+  const normalizedCell = normalizeForDesignMatch(cellValue).replace(/^\.\//, "");
+  const isHomeOrAbs = cellValue.startsWith("/") || cellValue.startsWith("~/") ||
+    cellValue.startsWith("$HOME/");
+  const resolvedCell = path.resolve(expandHome(
+    cellValue.startsWith("$HOME/") ? `~/${cellValue.slice("$HOME/".length)}` : cellValue,
+  ));
+
+  const exact = docs.filter((d) =>
+    (isHomeOrAbs && d.absPath === resolvedCell) || d.rawPath === cellValue
+  );
+  if (exact.length > 0) return exact;
+
+  if (normalizedCell.includes("/")) {
+    return docs.filter((d) => {
+      const absSlash = d.absPath.replace(/\\/g, "/");
+      const rawSlash = d.rawPath.replace(/\\/g, "/").replace(/^\.\//, "");
+      return absSlash.endsWith(`/${normalizedCell}`) || rawSlash === normalizedCell;
+    });
+  }
+
+  return docs.filter((d) => path.basename(d.absPath) === normalizedCell);
+}
+
+function checkRowDesignCell(
+  row: PlanTableRow,
+  allRows: PlanTableRow[],
+  docs: readonly ResolvedDesignDocArg[],
+  usedDocs: Set<string>,
+  violations: PlanTableViolation[],
+): ResolvedDesignDocArg | undefined {
+  const raw = row.cells[COL_DESIGN];
+  const rowNum = stripMdMarkers(row.cells[COL_NUM]).trim() || String(allRows.indexOf(row) + 1);
+  if (isMissingValue(raw)) {
+    violations.push({
+      rule: "cell-missing",
+      line: row.line,
+      column: "Design",
+      message: `Row ${rowNum}: Design cell is missing ("${raw}")`,
+    });
+    return undefined;
+  }
+
+  const entries = splitDesignCellEntries(raw);
+  if (entries.length > 1) {
+    violations.push({
+      rule: "design-multiple",
+      line: row.line,
+      column: "Design",
+      message: `Row ${rowNum}: Design cell "${
+        stripDesignCellMarkers(raw)
+      }" lists multiple designs — one design per row only`,
+    });
+    return undefined;
+  }
+
+  const entry = entries[0];
+  if (docs.length === 0) return undefined;
+
+  const matches = matchDesignCellToArgs(entry, docs);
+  if (matches.length === 0) {
+    violations.push({
+      rule: "design-not-provided",
+      line: row.line,
+      column: "Design",
+      message: `Row ${rowNum}: Design cell "${entry}" was not passed with --design-doc`,
+    });
+    return undefined;
+  }
+  if (matches.length > 1) {
+    violations.push({
+      rule: "design-ambiguous",
+      line: row.line,
+      column: "Design",
+      message: `Row ${rowNum}: Design cell "${entry}" matches multiple --design-doc paths: ${
+        matches.map((m) => m.rawPath).join(", ")
+      }`,
+    });
+    return undefined;
+  }
+
+  usedDocs.add(matches[0].absPath);
+  return matches[0];
+}
+
 export function validatePlanTable(
   parsed: ParsedPlanTable,
   options: LintPlanOptions,
@@ -330,6 +481,8 @@ export function validatePlanTable(
     ? [...options.modelLabels]
     : resolveTierVocabulary(options.schema);
   const activeRepos = options.activeRepos ?? ACTIVE_REPOS;
+  const resolvedDesignDocs = resolveDesignDocArgs(options);
+  const usedDesignDocs = new Set<string>();
   const designHeadings = options.designHeadings ??
     (options.designDocMarkdown !== undefined
       ? extractDesignHeadings(options.designDocMarkdown)
@@ -339,9 +492,32 @@ export function validatePlanTable(
     checkMissingAndTier(row, canonicalTiers, violations);
     checkPriority(row, violations);
     checkRepo(row, activeRepos, violations);
+    const matchedDoc = checkRowDesignCell(
+      row,
+      rows,
+      resolvedDesignDocs,
+      usedDesignDocs,
+      violations,
+    );
     checkTests(row, violations);
     checkTitlePersonalName(row, violations);
-    checkClosesWhen(row, rows, designHeadings, violations);
+    const rowHeadings = matchedDoc && options.designHeadingsByDoc
+      ? options.designHeadingsByDoc.get(matchedDoc.absPath)
+      : resolvedDesignDocs.length > 0 && !matchedDoc
+      ? undefined
+      : designHeadings;
+    checkClosesWhen(row, rows, rowHeadings, violations, matchedDoc?.rawPath);
+  }
+
+  for (const doc of resolvedDesignDocs) {
+    if (!usedDesignDocs.has(doc.absPath)) {
+      violations.push({
+        rule: "unused-design-doc",
+        line: 1,
+        column: "Design",
+        message: `--design-doc "${doc.rawPath}" is not named in any row's Design cell`,
+      });
+    }
   }
 
   checkJoshPairingAndComposite(rows, violations);
@@ -683,6 +859,8 @@ export interface IssueBodyCriteriaOptions extends CriterionCheckOptions {
   commandPrefix?: string;
   /** Defaults to true (design:file-plan requires ## Acceptance criteria). */
   requireAcceptanceCriteriaSection?: boolean;
+  /** Design document path or label cited in error messages when headings do not match. */
+  designDocLabel?: string;
 }
 
 /**
@@ -815,8 +993,11 @@ export function validateIssueBodyCriteria(
     const check = checkCriterionOrClosesCell(text, designHeadings, checkOptions);
     if (!check.valid) {
       if (check.reason === "unknown-heading") {
+        const docPhrase = options?.designDocLabel
+          ? `design document "${options.designDocLabel}"`
+          : "the design document";
         throw new Error(
-          `${prefix} — issue "${title}" criterion line ${lineNum} ("${text}"): names heading "${check.unknownHeading}", which does not exist in the design document.`,
+          `${prefix} — issue "${title}" criterion line ${lineNum} ("${text}"): names heading "${check.unknownHeading}", which does not exist in ${docPhrase}.`,
         );
       } else if (check.reason === "step-after-merge-missing-command") {
         throw new Error(
@@ -844,6 +1025,7 @@ function checkClosesWhen(
   allRows: PlanTableRow[],
   designHeadings: ReadonlySet<string> | undefined,
   violations: PlanTableViolation[],
+  designDocLabel?: string,
 ): void {
   // Case 5: an epic closes when its children close
   if (isEpicRow(row, allRows)) return;
@@ -875,12 +1057,13 @@ function checkClosesWhen(
   });
   if (!check.valid) {
     if (check.reason === "unknown-heading") {
+      const targetDoc = designDocLabel ?? "the design document";
       violations.push({
         rule: "closes-when-unknown-heading",
         line: row.line,
         column: "Closes when",
         message:
-          `Row ${rowNum}: Closes when cell names heading "${check.unknownHeading}", which the design document does not have`,
+          `Row ${rowNum}: Closes when cell names heading "${check.unknownHeading}", which ${targetDoc} does not have`,
       });
     } else if (check.reason === "step-after-merge-missing-command") {
       violations.push({
@@ -1021,32 +1204,68 @@ export async function lintPlanTableFile(
   const markdown = await Deno.readTextFile(filePath);
   const parsed = parsePlanTable(markdown);
   if (parsed === null) {
-    throw new Error(`No Gate 2 plan table found in ${filePath}`);
+    throw new Error(
+      `No Gate 2 plan table found in ${filePath} (expected header: | ${
+        PLAN_TABLE_HEADER.join(" | ")
+      } |)`,
+    );
+  }
+
+  const rawDesignDocs: string[] = [];
+  if (options?.designDocPaths) {
+    for (const p of options.designDocPaths) rawDesignDocs.push(p);
+  }
+  if (options?.designDocPath !== undefined) {
+    rawDesignDocs.push(options.designDocPath);
+  }
+
+  const designHeadingsByDoc = new Map<string, ReadonlySet<string>>(
+    options?.designHeadingsByDoc ?? [],
+  );
+  if (rawDesignDocs.length === 1 && rawDesignDocs[0].trim() !== "") {
+    const singleAbs = path.resolve(expandHome(rawDesignDocs[0].trim()));
+    if (options?.designHeadings !== undefined) {
+      designHeadingsByDoc.set(singleAbs, options.designHeadings);
+    } else if (options?.designDocMarkdown !== undefined) {
+      designHeadingsByDoc.set(singleAbs, extractDesignHeadings(options.designDocMarkdown));
+    }
+  }
+
+  const seenAbsDocs = new Set<string>();
+  const uniqueRawDesignDocs: string[] = [];
+  for (const rawDoc of rawDesignDocs) {
+    const trimmed = rawDoc.trim();
+    if (trimmed === "") {
+      uniqueRawDesignDocs.push(rawDoc);
+      continue;
+    }
+    const absDocPath = path.resolve(expandHome(trimmed));
+    if (seenAbsDocs.has(absDocPath)) continue;
+    seenAbsDocs.add(absDocPath);
+    uniqueRawDesignDocs.push(trimmed);
+    if (!designHeadingsByDoc.has(absDocPath)) {
+      try {
+        const designMarkdown = await Deno.readTextFile(absDocPath);
+        designHeadingsByDoc.set(absDocPath, extractDesignHeadings(designMarkdown));
+      } catch {
+        // checkGate1ApprovalRecord will record any unreadable design doc violation
+      }
+    }
   }
 
   let designHeadings: ReadonlySet<string> | undefined = options?.designHeadings;
   if (!designHeadings && options?.designDocMarkdown !== undefined) {
     designHeadings = extractDesignHeadings(options.designDocMarkdown);
   }
-  if (
-    !designHeadings &&
-    options?.designDocPath !== undefined &&
-    options.designDocPath.trim() !== ""
-  ) {
-    try {
-      const absDocPath = path.resolve(expandHome(options.designDocPath.trim()));
-      const designMarkdown = await Deno.readTextFile(absDocPath);
-      designHeadings = extractDesignHeadings(designMarkdown);
-    } catch {
-      // checkGate1ApprovalRecord will record any unreadable design doc violation
-    }
-  }
 
   const violations = validatePlanTable(parsed, {
     schema: options?.schema,
     modelLabels: options?.modelLabels ?? (options?.schema ? undefined : loadModelLabels()),
     activeRepos: options?.activeRepos,
+    designDocPaths: options?.designDocPaths,
+    designDocPath: options?.designDocPath,
     designHeadings,
+    designHeadingsByDoc,
     markdown,
   });
   violations.push(
@@ -1058,10 +1277,10 @@ export async function lintPlanTableFile(
     ),
   );
 
-  let gate1Approval: LintPlanResult["gate1Approval"];
-  if (options?.designDocPath !== undefined) {
-    const gate1 = await checkGate1ApprovalRecord(options.designDocPath, {
-      stateDir: options.stateDir,
+  const gate1Approvals: NonNullable<LintPlanResult["gate1Approvals"]> = [];
+  for (const rawDoc of uniqueRawDesignDocs) {
+    const gate1 = await checkGate1ApprovalRecord(rawDoc, {
+      stateDir: options?.stateDir,
     });
     if (!gate1.valid) {
       violations.push({
@@ -1070,19 +1289,31 @@ export async function lintPlanTableFile(
         message: gate1.error ?? "Gate 1 approval check failed",
       });
     } else {
-      gate1Approval = {
+      const approvalLine = uniqueRawDesignDocs.length > 1
+        ? `Gate 1 approval recorded ${gate1.approvedAt ?? ""} (${rawDoc}): "${gate1.reply ?? ""}"`
+        : gate1.approvalLine!;
+      gate1Approvals.push({
+        docPath: rawDoc,
         approvedAt: gate1.approvedAt!,
         reply: gate1.reply!,
-        approvalLine: gate1.approvalLine!,
-      };
+        approvalLine,
+      });
     }
   }
+  const gate1Approval: LintPlanResult["gate1Approval"] = gate1Approvals[0]
+    ? {
+      approvedAt: gate1Approvals[0].approvedAt,
+      reply: gate1Approvals[0].reply,
+      approvalLine: gate1Approvals[0].approvalLine,
+    }
+    : undefined;
 
   return {
     docPath: filePath,
     valid: violations.length === 0,
     violations,
     gate1Approval,
+    gate1Approvals: gate1Approvals.length > 0 ? gate1Approvals : undefined,
   };
 }
 
@@ -1576,14 +1807,19 @@ export interface LintPlanCliOptions {
   activeRepos?: string[];
   stateDir?: string;
   designDoc?: string;
+  designDocs?: readonly string[];
   noOpen?: boolean;
   display?: string;
   openBrowserImpl?: (htmlPath: string, display?: string) => Promise<void>;
-  renderDesignDocFileImpl?: (inputPath: string, outputPath: string) => void;
+  renderDesignDocFileImpl?: (
+    inputPath: string,
+    outputPath: string,
+    options?: RenderDesignDocOptions,
+  ) => void;
 }
 
 /**
- * CLI runner for `deno task design:lint-plan <plan.md> --design-doc <doc.md>`.
+ * CLI runner for `deno task design:lint-plan <plan.md> --design-doc <doc.md> [...]`.
  */
 export async function runLintPlanCli(
   args: string[],
@@ -1595,6 +1831,7 @@ export async function runLintPlanCli(
   const flags = parseArgs(args, {
     boolean: ["help", "json", "no-open", "no_open"],
     string: ["doc", "design-doc", "design_doc", "state-dir", "state_dir", "display"],
+    collect: ["design-doc", "design_doc"],
     alias: {
       h: "help",
       j: "json",
@@ -1655,12 +1892,19 @@ Options:
     return 1;
   }
 
-  const designDocRaw = flags["design-doc"] ??
-    flags.design_doc ??
-    options?.designDoc;
-  const designDocPath = typeof designDocRaw === "string" ? designDocRaw.trim() : "";
+  const collectStrings = (val: unknown): string[] => {
+    if (Array.isArray(val)) return val.map((v) => String(v).trim()).filter(Boolean);
+    if (typeof val === "string" && val.trim() !== "") return [val.trim()];
+    return [];
+  };
+  const designDocPaths = [
+    ...collectStrings(flags["design-doc"]),
+    ...collectStrings(flags.design_doc),
+    ...(options?.designDocs ?? []).map((s) => s.trim()).filter(Boolean),
+    ...(options?.designDoc?.trim() ? [options.designDoc.trim()] : []),
+  ];
 
-  if (!designDocPath) {
+  if (designDocPaths.length === 0) {
     errorLog("Error: Missing required --design-doc argument.");
     errorLog("Usage: deno task design:lint-plan <plan.md> --design-doc <doc.md>");
     return 1;
@@ -1677,14 +1921,14 @@ Options:
       fetchIssueBody: options?.fetchIssueBody,
       runGh: options?.runGh,
       activeRepos: options?.activeRepos,
-      designDocPath,
+      designDocPaths,
       stateDir,
     });
 
     if (result.valid) {
       const htmlPath = resolveHtmlPath(result.docPath);
       const renderFile = options?.renderDesignDocFileImpl ?? renderDesignDocFile;
-      renderFile(result.docPath, htmlPath);
+      renderFile(result.docPath, htmlPath, { isPlanPage: true });
 
       const noOpen = flags["no-open"] || flags.no_open || options?.noOpen;
       if (!noOpen) {
@@ -1703,7 +1947,11 @@ Options:
     if (flags.json) {
       log(JSON.stringify(result, null, 2));
     } else if (result.valid) {
-      if (result.gate1Approval) {
+      if (result.gate1Approvals && result.gate1Approvals.length > 0) {
+        for (const approval of result.gate1Approvals) {
+          log(approval.approvalLine);
+        }
+      } else if (result.gate1Approval) {
         log(result.gate1Approval.approvalLine);
       }
       log(`[design:lint-plan] PASS: ${result.docPath}'s plan table has no violations.`);

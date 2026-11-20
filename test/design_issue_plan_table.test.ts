@@ -16,10 +16,10 @@ import {
 } from "../src/design-issue/plan_table.ts";
 
 const HEADER_LINE =
-  "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |";
-const ALIGNMENT_LINE = "|---|---|---|---|---|---|---|---|";
+  "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Design | Tests | Closes when |";
+const ALIGNMENT_LINE = "|---|---|---|---|---|---|---|---|---|";
 const DATA_LINE =
-  "| 1 | Add a Gate 2 plan-table parser | Epic web-jam-tools#793 | Sonnet | High | web-jam-tools | Unit tests | PR merges |";
+  "| 1 | Add a Gate 2 plan-table parser | Epic web-jam-tools#793 | Sonnet | High | web-jam-tools | design.md | Unit tests | PR merges |";
 
 function planTableDoc(body: string): string {
   return `# Plan\n\n## Phase 2\n\n${HEADER_LINE}\n${ALIGNMENT_LINE}\n${body}\n`;
@@ -33,6 +33,7 @@ Deno.test("PLAN_TABLE_HEADER matches the Gate 2 plan table header in the skill b
     "Model tier",
     "Priority",
     "Repo",
+    "Design",
     "Tests",
     "Closes when",
   ]);
@@ -58,14 +59,14 @@ Deno.test("splitTableRowCells does not split on a pipe inside a code span", () =
 
 // Case 4: alignment rows in all forms, both spaced and unspaced.
 Deno.test("parsePlanTable recognizes alignment rows in every form, unspaced", () => {
-  const alignment = "|---|:---|---:|:---:|---|---|---|---|";
+  const alignment = "|---|:---|---:|:---:|---|---|---|---|---|";
   const doc = `${HEADER_LINE}\n${alignment}\n${DATA_LINE}\n`;
   const result = parsePlanTable(doc);
   assertEquals(result?.rows.length, 1);
 });
 
 Deno.test("parsePlanTable recognizes alignment rows in every form, spaced", () => {
-  const alignment = "| --- | :--- | ---: | :---: | --- | --- | --- | --- |";
+  const alignment = "| --- | :--- | ---: | :---: | --- | --- | --- | --- | --- |";
   const doc = `${HEADER_LINE}\n${alignment}\n${DATA_LINE}\n`;
   const result = parsePlanTable(doc);
   assertEquals(result?.rows.length, 1);
@@ -149,11 +150,11 @@ Deno.test("parsePlanTable reports rows with too few or too many cells as malform
   assertEquals(result?.malformedRows.length, 2);
 
   const [short, long] = result!.malformedRows;
-  assertEquals(short.expectedCellCount, 8);
+  assertEquals(short.expectedCellCount, 9);
   assertEquals(short.actualCellCount, 3);
   assertEquals(short.cells, ["1", "Only three cells", "Epic"]);
 
-  assertEquals(long.expectedCellCount, 8);
+  assertEquals(long.expectedCellCount, 9);
   assertEquals(long.actualCellCount, 10);
   assertEquals(long.cells.length, 10);
 });

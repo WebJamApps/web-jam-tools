@@ -171,13 +171,14 @@ JSON for any `Opus` or `Fable` row that needs it; the create receives both the l
 
 7. **Propose the plan table**, applying the epic heuristic and the Flash size checklist:
 
-   | # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |
-   |---|---|---|---|---|---|---|---|
+   | # | Proposed title | Epic / child of | Model tier | Priority | Repo | Design | Tests | Closes when |
+   |---|---|---|---|---|---|---|---|---|
 
    - **Issue Titles**: Follows `skills/file-issue/SKILL.md` item 17 ("Issue Titles for Project Manager Audience with Skill/Feature Prefix and Epic Citation").
    - **Priority**: Stated once, owned by `/file-issue`. Each Gate 2 plan row takes its Priority level from the level tests that `/file-issue` owns (under `skills/file-issue/SKILL.md`), and this skill does not restate the tests. In a Gate 2 plan each row takes its level from those same tests, with the plan's own rows counted as issues waiting, so the rows of a plan spread over the levels in dependency order; Josh rules on each row's level with the plan. The tests say which level fits one issue; they put no limit on how many issues a level holds.
    - **Every plan row belongs to an epic**: Every non-epic row in the plan table must name an epic or a plan row in its `Epic / child of` cell (never empty or `none`).
    - **Cross-repository work lives in web-jam-tools**: An epic whose children sit in more than one repository, and a non-epic issue whose work spans repositories, must have its Repo cell set to `web-jam-tools`.
+   - **Design**: Names one approved design document matching one of the `--design-doc` flags passed to `design:lint-plan`; each non-epic, non-`Josh` row's `Closes when` headings and each filed issue's design pointer and acceptance criteria are checked strictly against that row's own design document.
    - **Every target repository carries the plan's theme milestone**: At plan-writing time the run reads each target repository's milestones (`gh api repos/WebJamApps/<repo>/milestones?state=all`). Where a repository has no milestone for the plan's theme (for example `Operations`), the plan says that milestone will be created there, with the same title and description the repositories that have it use, and never says its rows "go in with no milestone". Josh, 2026-10-29, on a plan that filed four repositories' rows with no milestone: "i do not approve this statement, add the appropriate Operations milestone there".
    - **Closes when**: Follows "Issues filed from a design point at it" in `~/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md` — each non-epic, non-`Josh` row's `Closes when` cell names a heading the design document has in double quotes or carries a backtick-quoted command.
 
