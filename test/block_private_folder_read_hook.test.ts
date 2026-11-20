@@ -757,7 +757,11 @@ for (const [index, entry] of SHELL_SYNTAX_CASES.entries()) {
             SCRIPT_PATH,
           ]
           : [SCRIPT_PATH],
-        env: { CLAUDE_SETTINGS_PATH: FIXTURE_SETTINGS_PATH, WJT_SURFACE: surface },
+        env: {
+          AGY_HOOK_RECORD_PATH: path.join(FIXTURE_DIR, "agy-hook-invocations.jsonl"),
+          CLAUDE_SETTINGS_PATH: FIXTURE_SETTINGS_PATH,
+          WJT_SURFACE: surface,
+        },
         stdin: "piped",
         stdout: "piped",
         stderr: "piped",
@@ -1058,7 +1062,9 @@ const REVISION_CASES: Array<
 ];
 
 Deno.test("private-folder pattern operands preserve relative sed reads and known variables", () => {
-  assert(checkPrivateFolderCommand("sed '`unknown`' /tmp/a.md", EXPECTED_16_FOLDERS) !== null);
+  // Under revision 2.27.0, single-quoted text holds no command substitution even with backticks.
+  assertEquals(checkPrivateFolderCommand("sed '`unknown`' /tmp/a.md", EXPECTED_16_FOLDERS), null);
+  assert(checkPrivateFolderCommand('sed "$UNSET" /tmp/a.md', EXPECTED_16_FOLDERS) !== null);
   assert(
     checkPrivateFolderCommand(
       "sed 'r financial/a.txt' /tmp/a.md",
@@ -1314,3 +1320,265 @@ Deno.test("private-folder path variables come only from real assignments in the 
     null,
   );
 });
+
+// --- Revision 2.27.0 literal case table (web-jam-tools#1785, 28 rows on all 3 surfaces) ---
+
+interface Revision227Case {
+  name: string;
+  command: string;
+  outcome: "allow" | "refuse-dropbox" | "cannot-tell";
+  expectedText?: string;
+  useFixtureGlobDir?: boolean;
+  useFixtureHome?: boolean;
+}
+
+const MERMAID_COMMAND =
+  "cd /home/joshua/WebJamApps/JaMmusic && V=$(git show origin/dev:package-lock.json | python3 -c \"import json,sys;print(json.load(sys.stdin)['packages']['node_modules/mermaid']['version'])\") && echo mermaid=$V && D=/tmp/claude-1000/s/scratchpad/mermaid-$V && mkdir -p $D/x && cd $D && npm pack mermaid@$V --silent >/dev/null && tar -xzf mermaid-$V.tgz -C x && cd x/package/dist && grep -rn flowchart .";
+
+const REVISION_227_CASES: Revision227Case[] = [
+  {
+    name: "row 01: mermaid scratchpad command substitution workflow",
+    command: MERMAID_COMMAND,
+    outcome: "allow",
+  },
+  {
+    name: "row 02: V=$(echo 1.2.3) && ls /tmp/m-$V",
+    command: "V=$(echo 1.2.3) && ls /tmp/m-$V",
+    outcome: "allow",
+  },
+  {
+    name: 'row 03: x=$(cat /tmp/list.txt); cat "$x"',
+    command: 'x=$(cat /tmp/list.txt); cat "$x"',
+    outcome: "allow",
+  },
+  {
+    name: 'row 04: head -3 "$(ls -t /tmp/*.md | head -1)"',
+    command: 'head -3 "$(ls -t /tmp/*.md | head -1)"',
+    outcome: "allow",
+  },
+  {
+    name: 'row 05: ls | while read f; do head -1 "$f"; done',
+    command: 'ls | while read f; do head -1 "$f"; done',
+    outcome: "allow",
+  },
+  {
+    name: 'row 06: h=$(git grep ...); for f in $h; do echo "$f"; done',
+    command: "h=$(git grep -l x origin/dev -- 'hooks/*.sh'); for f in $h; do echo \"$f\"; done",
+    outcome: "allow",
+  },
+  {
+    name: "row 07: bash -c 'V=$(echo 1.2.3); ls /tmp/m-$V'",
+    command: "bash -c 'V=$(echo 1.2.3); ls /tmp/m-$V'",
+    outcome: "allow",
+  },
+  {
+    name: "row 08: V=$(echo financial); cat /home/joshua/Dropbox/$V/a.txt",
+    command: "V=$(echo financial); cat /home/joshua/Dropbox/$V/a.txt",
+    outcome: "cannot-tell",
+    useFixtureHome: true,
+  },
+  {
+    name: "row 09: V=$(echo x); cat ~/Dropbox/$V",
+    command: "V=$(echo x); cat ~/Dropbox/$V",
+    outcome: "cannot-tell",
+    useFixtureHome: true,
+  },
+  {
+    name: "row 10: V=$(echo x); cat ~/$V/a.txt",
+    command: "V=$(echo x); cat ~/$V/a.txt",
+    outcome: "cannot-tell",
+    useFixtureHome: true,
+  },
+  {
+    name: 'row 11: V=$(echo x); ls "$HOME/$V"',
+    command: 'V=$(echo x); ls "$HOME/$V"',
+    outcome: "cannot-tell",
+    useFixtureHome: true,
+  },
+  {
+    name: 'row 12: V=$(cat /home/joshua/Dropbox/financial/a.txt); echo "$V"',
+    command: 'V=$(cat /home/joshua/Dropbox/financial/a.txt); echo "$V"',
+    outcome: "refuse-dropbox",
+    expectedText: "financial",
+  },
+  {
+    name: "row 13: D=$(echo /home/joshua/Dropbox/financial); cat $D/a.txt",
+    command: "D=$(echo /home/joshua/Dropbox/financial); cat $D/a.txt",
+    outcome: "refuse-dropbox",
+    expectedText: "financial",
+  },
+  {
+    name: 'row 14: for f in *.md; do head -1 "$f"; done',
+    command: 'for f in *.md; do head -1 "$f"; done',
+    outcome: "allow",
+    useFixtureGlobDir: true,
+  },
+  {
+    name: 'row 15: cd $HOME/WebJamApps && for r in */; do ls "$r"; done',
+    command: 'cd /home/joshua/WebJamApps && for r in */; do ls "$r"; done',
+    outcome: "allow",
+    useFixtureHome: true,
+  },
+  {
+    name: 'row 16: for f in /tmp/zz-none-*.md; do echo "$f"; done',
+    command: 'for f in /tmp/zz-none-*.md; do echo "$f"; done',
+    outcome: "allow",
+  },
+  {
+    name: 'row 17: for f in /home/joshua/Dropbox/*/a.txt; do cat "$f"; done',
+    command: 'for f in /home/joshua/Dropbox/*/a.txt; do cat "$f"; done',
+    outcome: "refuse-dropbox",
+    expectedText: "protected Dropbox location",
+  },
+  {
+    name: 'row 18: cd /home/joshua/Dropbox && for d in */; do ls "$d"; done',
+    command: 'cd /home/joshua/Dropbox && for d in */; do ls "$d"; done',
+    outcome: "refuse-dropbox",
+    expectedText: "protected Dropbox location",
+    useFixtureHome: true,
+  },
+  {
+    name: "row 19: sed -n '/^@@/,$p' /tmp/a.md",
+    command: "sed -n '/^@@/,$p' /tmp/a.md",
+    outcome: "allow",
+  },
+  {
+    name: "row 20: git show HEAD -- a.ts | sed -n '/^@@/,$p'",
+    command: "git show HEAD -- a.ts | sed -n '/^@@/,$p'",
+    outcome: "allow",
+  },
+  {
+    name: "row 21: sed -i 's#a#`b`#' /tmp/a.md",
+    command: "sed -i 's#a#`b`#' /tmp/a.md",
+    outcome: "allow",
+  },
+  {
+    name: "row 22: sed -n '1r /home/joshua/Dropbox/financial/a.txt' /tmp/a.md",
+    command: "sed -n '1r /home/joshua/Dropbox/financial/a.txt' /tmp/a.md",
+    outcome: "refuse-dropbox",
+    expectedText: "financial",
+  },
+  {
+    name: 'row 23: n=$(grep -n x /tmp/a.md | cut -d: -f1); sed -n "$((n-3)),$((n))p" /tmp/a.md',
+    command: 'n=$(grep -n x /tmp/a.md | cut -d: -f1); sed -n "$((n-3)),$((n))p" /tmp/a.md',
+    outcome: "allow",
+  },
+  {
+    name:
+      'row 24: F=/home/joshua/Dropbox/web-jam-llms/a.md; L=$(grep -n x "$F" | cut -d: -f1); sed -n "$((L-3)),$((L-1))p" "$F"',
+    command:
+      'F=/home/joshua/Dropbox/web-jam-llms/a.md; L=$(grep -n x "$F" | cut -d: -f1); sed -n "$((L-3)),$((L-1))p" "$F"',
+    outcome: "allow",
+    useFixtureHome: true,
+  },
+  {
+    name: "row 25: for n in 37 41; do sed -n ${n}p /tmp/a.md; done",
+    command: "for n in 37 41; do sed -n ${n}p /tmp/a.md; done",
+    outcome: "allow",
+  },
+  {
+    name: 'row 26: for r in JaMmusic web-jam-back; do gh label list ... | sed "s/^/$r\\t/"; done',
+    command:
+      'for r in JaMmusic web-jam-back; do gh label list --repo WebJamApps/$r | sed "s/^/$r\\t/"; done',
+    outcome: "allow",
+  },
+  {
+    name: 'row 27: ls "$NOT_SET_ANYWHERE/a" (could-not-read message)',
+    command: 'ls "$NOT_SET_ANYWHERE/a"',
+    outcome: "cannot-tell",
+  },
+  {
+    name: "row 28: unreadable wildcard loop directory refuses with could-not-read message",
+    command: 'for f in /tmp/zz-missing-glob-dir-1785/*.md; do echo "$f"; done',
+    outcome: "cannot-tell",
+  },
+];
+
+for (const entry of REVISION_227_CASES) {
+  Deno.test(`private-folder revision 2.27.0 (${entry.outcome}): ${entry.name}`, async () => {
+    const tempDir = entry.useFixtureGlobDir || entry.useFixtureHome ? createFixtureDir() : "";
+    try {
+      const testHome = entry.useFixtureHome ? tempDir : FIXTURE_DIR;
+      let command = entry.command;
+      let cwd = path.resolve(new URL("..", import.meta.url).pathname);
+      if (entry.useFixtureGlobDir) {
+        writeFixture(path.join(tempDir, "a.md"), "# a\n");
+        writeFixture(path.join(tempDir, "b.md"), "# b\n");
+        cwd = tempDir;
+      }
+      if (entry.useFixtureHome) {
+        fixtureIO("mkdir", [path.join(testHome, "WebJamApps", "repo-a")]);
+        fixtureIO("mkdir", [path.join(testHome, "Dropbox", "Apps")]);
+        fixtureIO("mkdir", [path.join(testHome, "Dropbox", "web-jam-llms")]);
+        command = command.replaceAll("/home/joshua", testHome);
+      }
+
+      for (const surface of ["claude", "agy", "codex"] as const) {
+        const payload = surface === "agy"
+          ? { toolCall: { name: "run_command", args: { CommandLine: command, Cwd: cwd } } }
+          : { tool_name: "Bash", cwd, tool_input: { command } };
+        const child = new Deno.Command("bash", {
+          args: surface === "agy"
+            ? [
+              new URL("../hooks/agy-hook-shim.sh", import.meta.url).pathname,
+              "PreToolUse",
+              btoa("Bash"),
+              SCRIPT_PATH,
+            ]
+            : [SCRIPT_PATH],
+          env: {
+            AGY_HOOK_RECORD_PATH: path.join(FIXTURE_DIR, "agy-hook-invocations.jsonl"),
+            HOME: testHome,
+            DENO_DIR: Deno.env.get("DENO_DIR") ??
+              path.join(Deno.env.get("HOME") || "/home/joshua", ".cache/deno"),
+            CLAUDE_SETTINGS_PATH: FIXTURE_SETTINGS_PATH,
+            WJT_SURFACE: surface,
+          },
+          stdin: "piped",
+          stdout: "piped",
+          stderr: "piped",
+        }).spawn();
+        const writer = child.stdin.getWriter();
+        await writer.write(new TextEncoder().encode(JSON.stringify(payload)));
+        await writer.close();
+        const output = await child.output();
+        const stderr = new TextDecoder().decode(output.stderr);
+        const stdout = new TextDecoder().decode(output.stdout);
+        const reason = surface === "agy" ? JSON.parse(stdout).reason ?? "" : stderr;
+        const expectedDeny = entry.outcome !== "allow";
+
+        assertEquals(
+          output.code,
+          surface === "agy" ? 0 : expectedDeny ? 2 : 0,
+          `${surface}: ${stderr}`,
+        );
+        if (surface === "agy") {
+          assertEquals(JSON.parse(stdout).decision, expectedDeny ? "deny" : "allow", reason);
+        } else {
+          assertEquals(stdout, "", surface);
+        }
+
+        if (entry.outcome === "cannot-tell") {
+          assertStringIncludes(reason, "nothing protected was found", surface);
+          assertStringIncludes(
+            reason,
+            "You may restate the same action in a form this guard can read.",
+            surface,
+          );
+          assert(
+            !reason.includes("Private Dropbox folders are protected"),
+            `${surface}: ${reason}`,
+          );
+          assert(!reason.includes("protected Dropbox location"), `${surface}: ${reason}`);
+        } else if (entry.outcome === "refuse-dropbox") {
+          assertStringIncludes(reason, "Private Dropbox folders are protected", surface);
+          if (entry.expectedText) assertStringIncludes(reason, entry.expectedText, surface);
+        } else {
+          assertEquals(stderr, "", surface);
+        }
+      }
+    } finally {
+      if (tempDir) removeFixture(tempDir, { recursive: true });
+    }
+  });
+}
