@@ -132,7 +132,7 @@ depend on agy-native payload fields Claude Code's hook payload doesn't carry):
 
 - **`hooks/agy-model-guard.sh`** — matcher `.*` (every tool call). Checks the selected model
   **in-session**, using the `modelName` field agy's own payload carries (finding 7). Shares its
-  allowed-slug list (`gemini-4-hydrogen-high`, `gemini-4-argon-high` and `claude-sonnet-5-5-high`)
+  allowed-slug list (`gemini-4-hydrogen-high`, `gemini-4-argon-high`, `gemini-4-neon-high` and `claude-sonnet-5-5-high`)
   with `hooks/block-agy-non-flash-model.sh` (which sees an `agy --model ...` Bash invocation from
   Claude Code, including one behind `timeout`, `sudo`, `bash -c` and the like, not a running
   agy session's live model) via `hooks/lib/check_agy_model.ts`, so the two can't drift apart.
@@ -151,7 +151,7 @@ depend on agy-native payload fields Claude Code's hook payload doesn't carry):
 
 ## 5. Gmail model choice and the session guard
 
-The session guard permits Hydrogen, Argon and Sonnet at high; it supplies no Gmail-specific cost
+The session guard permits Hydrogen, Argon, Neon and Sonnet at high; it supplies no Gmail-specific cost
 confirmation or action approval. The chosen-model workflow and expensive-model question are owned
 by `~/Dropbox/web-jam-llms/AI_Misbehaves/hooks-design-2026-09-15.md`, “Gmail model choice and
 connections”. Their implementation is tracked separately by web-jam-tools#1225

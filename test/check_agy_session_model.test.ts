@@ -2,7 +2,7 @@
 //
 // Automated unit tests for hooks/lib/check_agy_session_model.ts.
 // Exercises checkSessionModel() and stdin runner across all 3 outcomes:
-// - Outcome 1: condition holds (Hydrogen, Argon and Sonnet at high)
+// - Outcome 1: condition holds (Hydrogen, Argon, Neon and Sonnet at high)
 // - Outcome 2: condition does not hold (below-floor, flash-low, non-Flash models denied with exit 2)
 // - Outcome 3: cannot determine (missing, null, empty, or unparseable modelName fails open with exit 0)
 
@@ -42,7 +42,14 @@ async function runSessionModelCli(
 
 // --- Outcome 1: condition holds (allowed high models) ---
 
-for (const slug of ["gemini-4-hydrogen-high", "gemini-4-argon-high", "claude-sonnet-5-5-high"]) {
+for (
+  const slug of [
+    "gemini-4-hydrogen-high",
+    "gemini-4-argon-high",
+    "gemini-4-neon-high",
+    "claude-sonnet-5-5-high",
+  ]
+) {
   Deno.test("checkSessionModel: allows exact high slug " + slug, () => {
     assertEquals(checkSessionModel(slug), { allowed: true });
   });
@@ -277,6 +284,25 @@ Deno.test("checkSessionModel: gemini-4-argon-high and gemini-4-hydrogen-high are
   assertEquals(checkSessionModel("gemini-4-argon-high"), { allowed: true });
   assertEquals(checkSessionModel("claude-sonnet-5-5-high"), { allowed: true });
   assertEquals(checkSessionModel("gemini-4-hydrogen-high"), { allowed: true });
+});
+
+Deno.test("checkSessionModel: Neon at high is allowed; Neon low, medium and xhigh are denied", () => {
+  assertEquals(checkSessionModel("gemini-4-neon-high"), { allowed: true });
+  for (const slug of ["gemini-4-neon-low", "gemini-4-neon-medium", "gemini-4-neon-xhigh"]) {
+    const result = checkSessionModel(slug);
+    assertEquals(result.allowed, false, slug);
+    assert(result.reason?.includes("gemini-4-neon-high"), slug);
+  }
+});
+
+Deno.test("CLI stdin: gemini-4-neon-high exits 0, neon low/medium/xhigh exit 2", async () => {
+  const allowed = await runSessionModelCli(JSON.stringify({ modelName: "gemini-4-neon-high" }));
+  assertEquals(allowed.code, 0);
+  assertEquals(allowed.stderr, "");
+  for (const slug of ["gemini-4-neon-low", "gemini-4-neon-medium", "gemini-4-neon-xhigh"]) {
+    const res = await runSessionModelCli(JSON.stringify({ modelName: slug }));
+    assertEquals(res.code, 2, slug);
+  }
 });
 
 Deno.test("checkSessionModel: Argon at medium or low, and a Claude model, are denied", () => {

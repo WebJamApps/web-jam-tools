@@ -84,6 +84,13 @@ Deno.test("checkSessionModel: Argon at high passes, Argon at medium or low is de
   assert(!checkSessionModel("gemini-4-argon-low").allowed);
 });
 
+Deno.test("checkSessionModel: Neon at high passes, Neon at low, medium or xhigh is denied", () => {
+  assert(checkSessionModel("gemini-4-neon-high").allowed);
+  assert(!checkSessionModel("gemini-4-neon-low").allowed);
+  assert(!checkSessionModel("gemini-4-neon-medium").allowed);
+  assert(!checkSessionModel("gemini-4-neon-xhigh").allowed);
+});
+
 Deno.test("checkSessionModel: below-floor and non-Flash slugs are denied", () => {
   assert(!checkSessionModel("gemini-3.6-flash-low").allowed);
   assert(!checkSessionModel("gemini-3.6-flash-tiered").allowed);
@@ -114,6 +121,16 @@ Deno.test("agy-model-guard.sh allows gemini-4-argon-high and denies Argon at med
   const ok = await runDirect({ modelName: "gemini-4-argon-high" });
   assertEquals(ok.code, 0, ok.stderr);
   for (const modelName of ["gemini-4-argon-medium", "gemini-4-argon-low"]) {
+    const res = await runDirect({ modelName });
+    assertEquals(res.code, 2, modelName);
+    assert(res.stderr.includes("BLOCKED (agy-model guard)"), res.stderr);
+  }
+});
+
+Deno.test("agy-model-guard.sh allows gemini-4-neon-high and denies Neon at low, medium or xhigh", async () => {
+  const ok = await runDirect({ modelName: "gemini-4-neon-high" });
+  assertEquals(ok.code, 0, ok.stderr);
+  for (const modelName of ["gemini-4-neon-low", "gemini-4-neon-medium", "gemini-4-neon-xhigh"]) {
     const res = await runDirect({ modelName });
     assertEquals(res.code, 2, modelName);
     assert(res.stderr.includes("BLOCKED (agy-model guard)"), res.stderr);
@@ -183,7 +200,7 @@ Deno.test(
 );
 
 // Gmail matcher coverage only: model choice/cost dialogue belongs to handle-gmails,
-// while this session guard permits Hydrogen, Argon and Sonnet high.
+// while this session guard permits Hydrogen, Argon, Neon and Sonnet high.
 
 Deno.test(
   "haiku-only-gmail-gate.sh's matcher never matches agy's raw (unprefixed) Gmail tool names",

@@ -84,6 +84,11 @@ function matchesAgyModel(model: string, entry: string): boolean {
       model === "gemini-4-argon-high" ||
       model === "Gemini 4 Argon (High)";
   }
+  if (entry === "Gemini Neon") {
+    return model === "Gemini Neon" ||
+      model === "gemini-4-neon-high" ||
+      model === "Gemini 4 Neon (High)";
+  }
   if (entry === "Claude Sonnet 5.5") {
     return model === "Claude Sonnet 5.5" ||
       model === "claude-sonnet-5-5-high" ||

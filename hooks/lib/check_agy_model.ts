@@ -23,20 +23,25 @@ const ARGON_MODEL: AgyModelSpec = {
   slug: "gemini-4-argon-high",
   displayName: "Gemini 4 Argon (High)",
 };
+const NEON_MODEL: AgyModelSpec = {
+  slug: "gemini-4-neon-high",
+  displayName: "Gemini 4 Neon (High)",
+};
 const SONNET_MODEL: AgyModelSpec = {
   slug: "claude-sonnet-5-5-high",
   displayName: "Claude Sonnet 5.5 (High)",
 };
 
-/** Every model agy may run: Hydrogen, Argon and Sonnet at high. */
+/** Every model agy may run: Hydrogen, Argon, Neon and Sonnet at high. */
 export const ALLOWED_AGY_MODELS: readonly AgyModelSpec[] = [
   HYDROGEN_MODEL,
   ARGON_MODEL,
+  NEON_MODEL,
   SONNET_MODEL,
 ];
 
 /**
- * The models agy dispatches on when nothing names one: Hydrogen only. Selecting Argon or Sonnet
+ * The models agy dispatches on when nothing names one: Hydrogen only. Selecting Argon, Neon or Sonnet
  * through AGY_MODELS or --model never adds either to the default retry chain.
  */
 export const DEFAULT_AGY_MODELS: readonly AgyModelSpec[] = [HYDROGEN_MODEL];

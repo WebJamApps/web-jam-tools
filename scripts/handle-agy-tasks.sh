@@ -160,7 +160,7 @@ agy_env_args() {
 }
 
 # Model chain: Hydrogen at high is the sole default on Josh's Gemini allowance.
-# Argon and Sonnet at high are allowed when explicitly selected, and are never
+# Argon, Neon and Sonnet at high are allowed when explicitly selected, and are never
 # added to the default retry chain. Override with:
 #   AGY_MODELS="Model A|Model B" handle-agy-tasks.sh    (pipe-separated; the
 # names contain spaces, so pipes — not spaces — separate them).
@@ -207,14 +207,18 @@ pr_author_for_model() {
       printf 'agy — Gemini Argon'
       return 0
       ;;
+    gemini-4-neon-high)
+      printf 'agy — Gemini Neon'
+      return 0
+      ;;
     claude-sonnet-5-5-high)
       printf 'agy — Claude Sonnet 5.5'
       return 0
       ;;
   esac
-  # agy models (Gemini Hydrogen, Gemini Argon, Claude Sonnet 5.5) run at high effort only, so the
+  # agy models (Gemini Hydrogen, Gemini Argon, Gemini Neon, Claude Sonnet 5.5) run at high effort only, so the
   # "(High)" effort suffix is dropped too: the roster names the model ("Gemini Hydrogen",
-  # "Gemini Argon", "Claude Sonnet 5.5", web-jam-tools#1202, web-jam-tools#1465). A "(Low)" or
+  # "Gemini Argon", "Gemini Neon", "Claude Sonnet 5.5", web-jam-tools#1202, web-jam-tools#1465). A "(Low)" or
   # "(Medium)" suffix is kept so the roster refuses it.
   printf 'agy — %s' "$(printf '%s' "$model" | sed -E 's/^([[:alpha:]]+)[[:space:]]+[0-9]+(\.[0-9]+)*[[:space:]]+/\1 /; s/[[:space:]]+\(High\)$//')"
 }

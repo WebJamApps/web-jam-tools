@@ -204,6 +204,8 @@ Deno.test("allowed agy model names stay roster-checked; retired Flash and low/me
   }
   assertEquals(await derivedAuthor("Gemini 4 Argon (High)"), "agy — Gemini Argon");
   assertEquals(await derivedAuthor("gemini-4-argon-high"), "agy — Gemini Argon");
+  assertEquals(await derivedAuthor("Gemini 4 Neon (High)"), "agy — Gemini Neon");
+  assertEquals(await derivedAuthor("gemini-4-neon-high"), "agy — Gemini Neon");
   assertEquals(await derivedAuthor("Claude Sonnet 5.5 (High)"), "agy — Claude Sonnet 5.5");
   assertEquals(await derivedAuthor("claude-sonnet-5-5-high"), "agy — Claude Sonnet 5.5");
 

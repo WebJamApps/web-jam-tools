@@ -15,6 +15,7 @@ Deno.test("session slugs are exact: no inferred version or helper variants", () 
   assertEquals(ALLOWED_SESSION_SLUGS, [
     "gemini-4-hydrogen-high",
     "gemini-4-argon-high",
+    "gemini-4-neon-high",
     "claude-sonnet-5-5-high",
   ]);
   assertEquals(deriveSessionSlugs([{ slug: "gemini-5-hydrogen-high", displayName: "future" }]), [
@@ -51,7 +52,7 @@ for (const flag of ["--allowed-slugs", "--default-models"]) {
     assertEquals(
       new TextDecoder().decode(result.stdout).trim(),
       flag === "--allowed-slugs"
-        ? "gemini-4-hydrogen-high or gemini-4-argon-high or claude-sonnet-5-5-high"
+        ? "gemini-4-hydrogen-high or gemini-4-argon-high or gemini-4-neon-high or claude-sonnet-5-5-high"
         : "Gemini 4 Hydrogen (High)",
     );
   });
@@ -62,10 +63,11 @@ Deno.test("default retry chain contains only Hydrogen", () => {
 
 // --- Gemini 4 Argon at high, and agy behind another command (tier-order design 1.5.0) ---
 
-Deno.test("ALLOWED_AGY_MODELS lists Hydrogen, Argon and Sonnet high and nothing else", () => {
+Deno.test("ALLOWED_AGY_MODELS lists Hydrogen, Argon, Neon and Sonnet high and nothing else", () => {
   assertEquals(ALLOWED_AGY_MODELS.map((m) => [m.slug, m.displayName]), [
     ["gemini-4-hydrogen-high", "Gemini 4 Hydrogen (High)"],
     ["gemini-4-argon-high", "Gemini 4 Argon (High)"],
+    ["gemini-4-neon-high", "Gemini 4 Neon (High)"],
     ["claude-sonnet-5-5-high", "Claude Sonnet 5.5 (High)"],
   ]);
   assert(ALLOWED_SESSION_SLUGS.includes("gemini-4-argon-high"));
@@ -77,6 +79,37 @@ Deno.test("isAllowedModelSlug: accepts Argon at high only", () => {
   assert(!isAllowedModelSlug("gemini-4-argon-low"));
   assert(!isAllowedModelSlug("gemini-4-argon-tiered"));
   assert(!isAllowedModelSlug("gemini-5-argon-high"));
+});
+
+Deno.test("isAllowedModelSlug: accepts Neon at high only", () => {
+  assert(isAllowedModelSlug("gemini-4-neon-high"));
+  assert(!isAllowedModelSlug("gemini-4-neon-low"));
+  assert(!isAllowedModelSlug("gemini-4-neon-medium"));
+  assert(!isAllowedModelSlug("gemini-4-neon-xhigh"));
+  assert(!isAllowedModelSlug("gemini-4-neon-tiered"));
+  assert(!isAllowedModelSlug("gemini-5-neon-high"));
+});
+
+Deno.test("checkAgyModel: Neon high is allowed by slug and display name; other efforts are refused", () => {
+  assertEquals(checkAgyModel(`agy --model gemini-4-neon-high -p="x"`), "OK");
+  assertEquals(checkAgyModel(`agy --model "Gemini 4 Neon (High)" -p="x"`), "OK");
+  assertEquals(checkAgyModel(`AGY_MODELS='Gemini 4 Neon (High)' agy -p="x"`), "OK");
+  for (
+    const cmd of [
+      `agy --model gemini-4-neon-low -p="x"`,
+      `agy --model gemini-4-neon-medium -p="x"`,
+      `agy --model gemini-4-neon-xhigh -p="x"`,
+      `agy --model "Gemini 4 Neon (Low)" -p="x"`,
+      `agy --model "Gemini 4 Neon (Medium)" -p="x"`,
+      `agy --model "Gemini 4 Neon (XHigh)" -p="x"`,
+    ]
+  ) {
+    assert(checkAgyModel(cmd).startsWith("BLOCK"), cmd);
+  }
+});
+
+Deno.test("default retry chain does not include Neon", () => {
+  assert(!DEFAULT_AGY_MODELS.some((m) => m.slug === "gemini-4-neon-high"));
 });
 
 const OK_COMMANDS = [
