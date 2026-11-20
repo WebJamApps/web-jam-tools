@@ -1178,7 +1178,7 @@ Deno.test("checkApprovalToken: token scoped to a different repo is refused", asy
         tokenPath,
       );
       assertEquals(res.ok, false);
-      assertStringIncludes(res.reason ?? "", "scoped to WebJamApps/JaMmusic");
+      assertStringIncludes(res.reason ?? "", "No approval in WebJamApps/web-jam-tools");
     },
   );
 });

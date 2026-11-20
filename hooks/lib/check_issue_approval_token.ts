@@ -8,26 +8,34 @@
  * `deno task create-issue` (and its other invocation forms) call.
  *
  * The approval token is written by the plan gate (web-jam-tools#497, not
- * this change) once Josh approves a filing plan. Its shape:
+ * this change) once Josh approves a filing plan. One token covers the whole
+ * plan, every repository in it (web-jam-tools#1858 "scripts/write_issue_approval_token:
+ * one approval token covers every repository of an approved plan"). Its shape:
  *
  *   {
  *     "session_id": "<the session that got approval>",
- *     "repo": "<owner>/<repo>",
- *     "titles": ["exact title 1", "exact title 2", ...],
+ *     "approvals": [
+ *       { "repo": "<owner>/<repo>", "titles": ["exact title 1", ...] },
+ *       { "repo": "<owner>/<other>", "titles": ["exact title 2", ...] }
+ *     ],
  *     "expires_at": "<ISO 8601 timestamp>"
  *   }
  *
+ * A token in the earlier shape — one top-level "repo" and its "titles" — is
+ * read as a list of one approval. A title approved in one repository is not
+ * approved in another: every check pairs the repository with the exact title.
+ *
  * Decision:
- *   - issue_write, method "create", title in the token, same session, same
- *     repo, not expired  -> ALLOW (proceed with no prompt).
+ *   - issue_write, method "create", title approved in that repository, same
+ *     session, not expired  -> ALLOW (proceed with no prompt).
  *   - issue_write, method "create", any of the above false               -> DENY.
  *   - issue_write, method other than "create" (update/edit)              -> PASS
  *     (out of scope: the approval token covers filing new issues, not
  *     editing existing ones).
- *   - sub_issue_write, method "add", same session, same repo, not expired
- *     -> ALLOW (sub_issue_write carries no title to check — it links an
- *     already-created issue, so the token's presence/scope is all there is
- *     to verify).
+ *   - sub_issue_write, method "add", same session, the parent's repository
+ *     one of the token's repositories, not expired -> ALLOW (sub_issue_write
+ *     carries no title to check — it links an already-created issue, so the
+ *     token's presence/scope is all there is to verify).
  *   - sub_issue_write, method other than "add" (remove/reprioritize)     -> PASS.
  *   - Bash `gh issue create` / `deno task create-issue` / `deno task
  *     issue:create` / `deno run .../create-issue.ts` / direct
@@ -96,11 +104,66 @@ import { splitOnOperators, splitShellTokens, stripHeredocs } from "./normalize_c
 const ISSUE_WRITE_RE = /^mcp__.*__issue_write$/;
 const SUB_ISSUE_WRITE_RE = /^mcp__.*__sub_issue_write$/;
 
-export interface ApprovalToken {
-  session_id: string;
+/** One repository of an approved plan and the exact titles approved in it. */
+export interface RepoApproval {
   repo: string;
   titles: string[];
+}
+
+export interface ApprovalToken {
+  session_id: string;
+  approvals: RepoApproval[];
   expires_at: string;
+}
+
+/** The repositories a token covers, in the order they were approved. */
+export function tokenRepos(token: ApprovalToken): string[] {
+  return token.approvals.map((a) => a.repo);
+}
+
+/**
+ * Whether `title` is approved in `repoFull` by this token. The repository and the exact title are
+ * checked as a pair: a title approved in one repository is not approved in another. The refusal
+ * reasons name which of the two failed — no approval in that repository at all, the title approved
+ * only in some other repository, or the title not approved anywhere in the plan.
+ */
+export function checkTitleInRepo(
+  token: ApprovalToken,
+  repoFull: string,
+  title: string,
+): { ok: true } | { ok: false; reason: string } {
+  const here = token.approvals.filter((a) => a.repo === repoFull);
+  if (here.length === 0) {
+    return {
+      ok: false,
+      reason: `No approval in ${repoFull}: this session's approved plan covers ${
+        tokenRepos(token).join(", ")
+      }.`,
+    };
+  }
+  if (here.some((a) => a.titles.includes(title))) return { ok: true };
+  const elsewhere = token.approvals
+    .filter((a) => a.repo !== repoFull && a.titles.includes(title))
+    .map((a) => a.repo);
+  if (elsewhere.length > 0) {
+    return {
+      ok: false,
+      reason: `"${title}" is approved in ${elsewhere.join(", ")} only, not in ${repoFull}.`,
+    };
+  }
+  return {
+    ok: false,
+    reason: `"${title}" is not among the titles approved in this session's plan.`,
+  };
+}
+
+/** A non-empty `{repo, titles}` pair of strings, or null when either part is malformed. */
+function parseRepoApproval(value: unknown): RepoApproval | null {
+  if (typeof value !== "object" || value === null) return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.repo !== "string" || !v.repo) return null;
+  if (!Array.isArray(v.titles) || !v.titles.every((t) => typeof t === "string")) return null;
+  return { repo: v.repo, titles: v.titles as string[] };
 }
 
 /**
@@ -153,15 +216,21 @@ export function loadToken(tokenPath: string): ApprovalToken | null {
   if (typeof data !== "object" || data === null) return null;
   const d = data as Record<string, unknown>;
   if (typeof d.session_id !== "string" || !d.session_id) return null;
-  if (typeof d.repo !== "string" || !d.repo) return null;
-  if (!Array.isArray(d.titles) || !d.titles.every((t) => typeof t === "string")) return null;
   if (typeof d.expires_at !== "string" || !d.expires_at) return null;
-  return {
-    session_id: d.session_id,
-    repo: d.repo,
-    titles: d.titles as string[],
-    expires_at: d.expires_at,
-  };
+
+  let approvals: RepoApproval[];
+  if ("approvals" in d) {
+    if (!Array.isArray(d.approvals) || d.approvals.length === 0) return null;
+    const parsed = d.approvals.map(parseRepoApproval);
+    if (parsed.some((a) => a === null)) return null;
+    approvals = parsed as RepoApproval[];
+  } else {
+    // The earlier shape, one repository and its titles, is read as a list of one approval.
+    const single = parseRepoApproval(d);
+    if (!single) return null;
+    approvals = [single];
+  }
+  return { session_id: d.session_id, approvals, expires_at: d.expires_at };
 }
 
 /** Fails closed: an unparseable expires_at counts as expired. */
@@ -297,11 +366,13 @@ function checkTokenValidity(
       deny: { outcome: "deny", reason: `Approval token expired at ${token.expires_at}.` },
     };
   }
-  if (repoFull && token.repo !== repoFull) {
+  if (repoFull && !tokenRepos(token).includes(repoFull)) {
     return {
       deny: {
         outcome: "deny",
-        reason: `Approval token is scoped to ${token.repo}, not ${repoFull}.`,
+        reason: `No approval in ${repoFull}: this session's approved plan covers ${
+          tokenRepos(token).join(", ")
+        }.`,
       },
     };
   }
@@ -525,12 +596,8 @@ function scanBashSegments(
 
     const check = checkTokenValidity(repoFull, sessionId, tokenPath, nowMs);
     if ("deny" in check) return check.deny;
-    if (!check.token.titles.includes(title)) {
-      return {
-        outcome: "deny",
-        reason: `"${title}" is not among the titles Josh approved in this session's plan.`,
-      };
-    }
+    const titleCheck = checkTitleInRepo(check.token, repoFull, title);
+    if (!titleCheck.ok) return { outcome: "deny", reason: titleCheck.reason };
     // Approved — but never "allow" on Bash (Must Fix #2). Keep scanning the
     // rest of the composed command for a further, unapproved issue-creating
     // segment; otherwise this call resolves to PASS below.
@@ -564,14 +631,20 @@ export function decide(
         reason: "issue_write create call carries no title to check against the approved plan.",
       };
     }
-    const check = checkTokenValidity(repoFullName(toolInput), sessionId, tokenPath, nowMs);
+    const repoFull = repoFullName(toolInput);
+    const check = checkTokenValidity(repoFull, sessionId, tokenPath, nowMs);
     if ("deny" in check) return check.deny;
-    if (!check.token.titles.includes(title)) {
-      return {
-        outcome: "deny",
-        reason: `"${title}" is not among the titles Josh approved in this session's plan.`,
+    // A call naming no repository keeps its earlier behavior: the title must be one the plan
+    // approved somewhere, since there is no repository to pair it with.
+    const titleCheck = repoFull
+      ? checkTitleInRepo(check.token, repoFull, title)
+      : check.token.approvals.some((a) => a.titles.includes(title))
+      ? { ok: true as const }
+      : {
+        ok: false as const,
+        reason: `"${title}" is not among the titles approved in this session's plan.`,
       };
-    }
+    if (!titleCheck.ok) return { outcome: "deny", reason: titleCheck.reason };
     return { outcome: "allow", reason: `"${title}" was approved in this session's plan.` };
   }
 

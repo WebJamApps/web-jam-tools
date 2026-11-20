@@ -253,8 +253,10 @@ async function assertWriterResult(
   if (expected === 0) {
     assert(token);
     assertEquals(token.session_id, threadId);
-    assertEquals(token.repo, "WebJamApps/JaMmusic");
-    assertEquals(token.titles, ["Approved venue task"]);
+    assertEquals(token.approvals, [{
+      repo: "WebJamApps/JaMmusic",
+      titles: ["Approved venue task"],
+    }]);
     assert(Date.parse(token.expires_at) > Date.now());
   } else {
     assertEquals(token, null);

@@ -192,17 +192,19 @@ JSON for any `Opus` or `Fable` row that needs it; the create receives both the l
 
    **Every new title passes the duplicate search before Gate 2.** `design:lint-plan` runs the shared title-similarity search against each row's repository's open issues and the plan's other new titles; an exact existing title names that issue and is not compared with itself. When a title trips the search, the run reads the look-alike. Where it is different work, the run rewords the title and runs the check again until it passes; Josh is not asked. Where it is the same work, the run never rewords around the search: the new row leaves the plan and the plan names the existing issue in its place. An incomplete or failed search refuses the plan. Issue creation keeps its own duplicate search because another issue can be filed after Gate 2.
 
-   **Write the issue-approval token upon Gate 2 approval:** The moment Josh explicitly approves the plan table, write the issue-approval token for the planned repo and exact titles (via `scripts/write_issue_approval_token.ts`) so subsequent issue creation (via `scripts/create-issue.ts` / `deno task create-issue`, or on Claude Code `mcp__*__issue_write` and `mcp__*__sub_issue_write`) passes `hooks/require-approval-token-on-issue-write.sh` without repetitive authorization prompts:
+   **Write one issue-approval token for the whole plan upon Gate 2 approval:** The moment Josh explicitly approves the plan table, write ONE issue-approval token covering every repository in the plan and each one's exact titles (via `scripts/write_issue_approval_token.ts`) so subsequent issue creation (via `scripts/create-issue.ts` / `deno task create-issue`, or on Claude Code `mcp__*__issue_write` and `mcp__*__sub_issue_write`) passes `hooks/require-approval-token-on-issue-write.sh` without repetitive authorization prompts. Each `--title` belongs to the `--repo` written before it; name every repository of the plan in the same command:
 
    ```sh
    deno run --allow-env --allow-read --allow-write scripts/write_issue_approval_token.ts \
      --session-id "<session-id>" \
-     --repo "<owner/repo>" \
+     --repo "<owner/repo-1>" \
      --title "<exact title 1>" \
-     --title "<exact title 2>"
+     --repo "<owner/repo-2>" \
+     --title "<exact title 2>" \
+     --title "<exact title 3>"
    ```
 
-   The token records the approving session's id, the target `owner/repo`, the exact approved titles, and a bounded expiry (default 4 hours) at `$HOME/.claude/state/issue-approval-tokens/<session-id>.json` (honoring `ISSUE_APPROVAL_TOKEN_PATH`).
+   The token records the approving session's id, each repository with the exact titles approved in it, and a bounded expiry (default 4 hours) at `$HOME/.claude/state/issue-approval-tokens/<session-id>.json` (honoring `ISSUE_APPROVAL_TOKEN_PATH`). A title approved in one repository is not approved in another. A later write in the same session replaces the whole token, so never write one repository at a time: a second write would drop the first repository's approval.
 
    **Ask for the slash command before the token write, never after a refusal.** The token writer accepts the write only when the most recent slash command Josh typed in the session is `/design-issue` or `/file-issue` (`hooks/lib/check_token_write_authorization.ts`). A run the agent started itself on his plain-language request does not count, and any other slash command he types afterwards (`/pr-review`, `/work-issue`) cancels the authorization; his plain-text replies in between, such as an approval, do not. So before writing the token the run checks which slash command he typed last. When it is not one of the two, the run does not attempt the write: it asks him, as the first line of the reply and where it can in the same message that asks for Gate 2 approval, to type `/design-issue file the approved <topic> plan`. After he types it the skill text reloads; the run does not restart, and gates already recorded stay passed (`deno task design:gate1-status` says where Gate 1 stands). The token write is run as its own command, never joined to a command that names `create-issue`.
 

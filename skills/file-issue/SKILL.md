@@ -232,9 +232,9 @@ Before the first issue write of a filing run, state how many permission prompts 
 
 **Step 0 — write the approval token before calling `create-issue`.** `deno task create-issue` is
 gated by `hooks/lib/check_issue_approval_token.ts`, which requires a valid approval token at
-`$HOME/.claude/state/issue-approval-tokens/<session-id>.json` matching the current session id, the target repo,
-the exact issue title(s), and an unexpired `expires_at`. Nothing writes that token automatically —
-run the sanctioned writer yourself, before `deno task create-issue`:
+`$HOME/.claude/state/issue-approval-tokens/<session-id>.json` matching the current session id, the target repo
+paired with the exact issue title, and an unexpired `expires_at`. Nothing writes that token automatically —
+run the sanctioned writer yourself, ONCE for the whole approved plan, before `deno task create-issue`:
 
 ```sh
 deno run --allow-env --allow-read --allow-write scripts/write_issue_approval_token.ts \
@@ -243,7 +243,11 @@ deno run --allow-env --allow-read --allow-write scripts/write_issue_approval_tok
   --title "Short, specific title"
 ```
 
-Pass one `--title` per issue being filed in this run (repeat the flag). **Each `--title` here must
+Pass one `--title` per issue being filed in this run (repeat the flag). When the approved issues
+span several repositories, write one token covering all of them: each `--title` belongs to the
+`--repo` written before it, e.g. `--repo WebJamApps/JaMmusic --title "A" --repo
+WebJamApps/web-jam-back --title "B"`. A later write replaces the whole token, so never write one
+repository at a time. A title approved in one repository is not approved in another. **Each `--title` here must
 match the `--title` passed to `deno task create-issue` below EXACTLY** — the token binds the
 titles, so any mismatch (even punctuation or casing) means the create-issue call is denied even
 though a token exists.

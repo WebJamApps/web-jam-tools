@@ -4,6 +4,7 @@
 
 import {
   type ApprovalToken,
+  checkTitleInRepo,
   defaultTokenDir,
   isExpired,
   loadToken,
@@ -289,7 +290,10 @@ function checkApprovalTokenDirectory(
     if (!entry.isFile || !entry.name.endsWith(".json")) continue;
     const token = loadToken(`${dir}/${entry.name}`);
     if (!token) continue; // unreadable or malformed — skip, don't refuse the whole check on it
-    if (token.repo !== repoFull || !token.titles.includes(title)) continue;
+    // web-jam-tools#1858 "scripts/write_issue_approval_token: one approval token covers every
+    // repository of an approved plan": the token matches only when this repository is paired with
+    // this exact title in one of its approvals.
+    if (!checkTitleInRepo(token, repoFull, title).ok) continue;
     if (!isExpired(token, nowMs)) {
       return { ok: true };
     }
@@ -313,15 +317,8 @@ function checkLoadedToken(
   if (isExpired(token, nowMs)) {
     return { ok: false, reason: `Approval token expired at ${token.expires_at}.` };
   }
-  if (token.repo !== repoFull) {
-    return { ok: false, reason: `Approval token is scoped to ${token.repo}, not ${repoFull}.` };
-  }
-  if (!token.titles.includes(title)) {
-    return {
-      ok: false,
-      reason: `"${title}" is not among the titles approved in this plan's approval token.`,
-    };
-  }
+  const titleCheck = checkTitleInRepo(token, repoFull, title);
+  if (!titleCheck.ok) return { ok: false, reason: titleCheck.reason };
   return { ok: true };
 }
 
