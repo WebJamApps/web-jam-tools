@@ -22,7 +22,7 @@ reading, checking, the report, and approved edits; it does not repeat this dispa
 | Claude Code | Opus | a Sonnet helper the session starts |
 | Claude Code | Sonnet | a Sonnet helper the session starts |
 | Claude Code | Haiku | a Haiku helper the session starts |
-| agy | Hydrogen, Argon, or Sonnet | an `inherit` helper the session starts |
+| agy | Hydrogen, Argon, Neon, or Sonnet | an `inherit` helper the session starts |
 | Codex | Astra | a Sol helper the session starts |
 | Codex | Sol | a Sol helper the session starts |
 | Codex | Luna | a Luna helper the session starts |

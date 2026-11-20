@@ -173,6 +173,7 @@ usage() {
 ROSTER=(
   "Gemini Hydrogen"
   "Gemini Argon"
+  "Gemini Neon"
   "Claude Sonnet 5.5"
   "Claude Haiku 5.5"
   # Unversioned on purpose (Josh, 2026-07-26): the roster exists to stop a
@@ -217,6 +218,7 @@ author_roster_check() {
         "GPT-6.1 Terra") PR_MODEL_LABEL="Terra" ;;
         "Claude Fable 5.2") PR_MODEL_LABEL="Fable" ;;
         "Gemini Argon") PR_MODEL_LABEL="Argon" ;;
+        "Gemini Neon") PR_MODEL_LABEL="Neon" ;;
         "GPT-6.1 Sol") PR_MODEL_LABEL="Sol" ;;
         "GPT-6 Astra") PR_MODEL_LABEL="Astra" ;;
         "Claude Sonnet 5.5") PR_MODEL_LABEL="Sonnet" ;;

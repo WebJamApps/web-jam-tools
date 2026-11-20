@@ -15,7 +15,7 @@
 #     configured default — separately pinned to Hydrogen at high in
 #     ~/.gemini/antigravity-cli/settings.json, a laptop-local step outside
 #     this hook's / this repo's reach, web-jam-tools#267 item 2, web-jam-tools#549).
-#   - `--model` (or `--model=`) equal to Hydrogen, Argon or Sonnet high,
+#   - `--model` (or `--model=`) equal to Hydrogen, Argon, Neon or Sonnet high,
 #     by exact slug or display name from ALLOWED_AGY_MODELS.
 #     agy's default stays Hydrogen at high; every other effort level is refused.
 #
@@ -54,14 +54,14 @@ fi
 [ -z "$result" ] && exit 0
 [ "$result" = "OK" ] && exit 0
 
-ALLOWED_SLUGS=$("$HOOK_DIR/lib/run_hook.sh" --group workflow --name block-agy-non-flash-model --note-file "$NOTE_FILE" deno run --no-config "$HOOK_DIR/lib/check_agy_model.ts" --allowed-slugs 2>/dev/null || echo "Hydrogen, Argon and Sonnet at high")
+ALLOWED_SLUGS=$("$HOOK_DIR/lib/run_hook.sh" --group workflow --name block-agy-non-flash-model --note-file "$NOTE_FILE" deno run --no-config "$HOOK_DIR/lib/check_agy_model.ts" --allowed-slugs 2>/dev/null || echo "Hydrogen, Argon, Neon and Sonnet at high")
 if [ -s "$NOTE_FILE" ] || [ -z "$ALLOWED_SLUGS" ]; then
-  ALLOWED_SLUGS="Hydrogen, Argon and Sonnet at high"
+  ALLOWED_SLUGS="Hydrogen, Argon, Neon and Sonnet at high"
 fi
 
 block() {
   echo "BLOCKED (agy-model guard): $1" >&2
-  echo "agy is restricted to Hydrogen, Argon and Sonnet at high: $ALLOWED_SLUGS — or omit --model entirely to use agy's own configured default." >&2
+  echo "agy is restricted to Hydrogen, Argon, Neon and Sonnet at high: $ALLOWED_SLUGS — or omit --model entirely to use agy's own configured default." >&2
   echo "(design: web-jam-tools#267 — override by rephrasing to one of the allowed slugs)" >&2
   exit 2
 }

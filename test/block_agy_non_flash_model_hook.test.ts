@@ -167,6 +167,7 @@ Deno.test("block message names permitted slugs", async () => {
     const slug of [
       "gemini-4-hydrogen-high",
       "gemini-4-argon-high",
+      "gemini-4-neon-high",
       "claude-sonnet-5-5-high",
     ]
   ) {

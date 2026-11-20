@@ -2082,7 +2082,7 @@ export function assertBacklogGroomRules(text: string): void {
   );
   assertStringIncludes(
     text,
-    "| agy | Hydrogen, Argon, or Sonnet | an `inherit` helper the session starts |",
+    "| agy | Hydrogen, Argon, Neon, or Sonnet | an `inherit` helper the session starts |",
     "skills/backlog-groom/SKILL.md table must include agy row",
   );
   assertStringIncludes(

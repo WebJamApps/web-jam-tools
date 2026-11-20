@@ -13,7 +13,7 @@
 # Both share the same exact allowed slugs via hooks/lib/check_agy_model.ts so
 # they can't drift apart.
 #
-# Hydrogen, Argon and Sonnet at high pass this session guard. It does not grant Gmail actions or
+# Hydrogen, Argon, Neon and Sonnet at high pass this session guard. It does not grant Gmail actions or
 # provide the Gmail skill's cost confirmation; those belong to the separate Gmail fences and
 # model-choice workflow in the hooks design, "Gmail model choice and connections".
 set -euo pipefail
