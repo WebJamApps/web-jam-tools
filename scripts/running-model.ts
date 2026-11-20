@@ -100,22 +100,7 @@ function safeEnv(env: (name: string) => string | undefined, name: string): strin
   }
 }
 
-/** Gmail safety probes deliberately contain no conversation/model or mailbox data. */
-function isGmailProbe(record: Record<string, unknown>): boolean {
-  const keys = ["timestamp", "event", "matcher", "targetHookPath", "toolCall"];
-  const tool = record.toolCall;
-  return Object.keys(record).every((key) => keys.includes(key)) &&
-    typeof record.timestamp === "string" &&
-    (record.event === "PreToolUse" || record.event === "PostToolUse") &&
-    typeof record.matcher === "string" &&
-    typeof record.targetHookPath === "string" &&
-    record.targetHookPath.endsWith("/block-agy-gmail-send-delete.sh") &&
-    typeof tool === "object" && tool !== null && !Array.isArray(tool) &&
-    Object.keys(tool).every((key) => key === "name") &&
-    (!("name" in tool) || typeof tool.name === "string");
-}
-
-/** Parse the shared log without treating its deliberately redacted probes as identity. */
+/** Parse the shared log, passing over rows that name no conversation without reading the rest. */
 function agyRecords(text: string, path: string): Record<string, unknown>[] {
   const lines = text.split("\n").filter((line) => line.trim());
   if (!lines.length) throw new Error(`The agy hook record is empty: ${path}`);
@@ -131,12 +116,8 @@ function agyRecords(text: string, path: string): Record<string, unknown>[] {
       throw new Error(`The agy hook record is not an object in ${path}`);
     }
     const record = parsed as Record<string, unknown>;
-    if (isGmailProbe(record)) continue;
     if (typeof record.conversationId !== "string" || !record.conversationId.trim()) {
-      throw new Error(`The agy hook record names no running conversation in ${path}`);
-    }
-    if (typeof record.modelName !== "string" || !record.modelName.trim()) {
-      throw new Error(`The agy hook record has no recorded model in ${path}`);
+      continue;
     }
     records.push(record);
   }
@@ -147,6 +128,7 @@ function agyRecordedAuthor(
   records: Record<string, unknown>[],
   context: NonNullable<RunningModelOptions["invocationContext"]>,
   roster: string[],
+  path: string,
 ): string {
   const { conversationId, modelName, transcriptPath } = context;
   if (typeof conversationId !== "string" || !conversationId.trim()) {
@@ -155,15 +137,19 @@ function agyRecordedAuthor(
   if (typeof modelName !== "string" || !modelName.trim()) {
     throw new Error("Invocation context has missing model");
   }
-  if (typeof transcriptPath !== "string" || !transcriptPath.trim()) {
-    throw new Error("Invocation context has missing transcriptPath");
-  }
-  uniqueRosterModel(modelName, roster.filter((entry) => matchesAgyModel(modelName, entry)));
-
   const conversation = records.filter((record) => record.conversationId === conversationId);
   if (!conversation.length) {
     throw new Error(`No agy hook record matches conversation ${conversationId}`);
   }
+  if (
+    conversation.some((record) => typeof record.modelName !== "string" || !record.modelName.trim())
+  ) {
+    throw new Error(`The agy hook record has no recorded model in ${path}`);
+  }
+  if (typeof transcriptPath !== "string" || !transcriptPath.trim()) {
+    throw new Error("Invocation context has missing transcriptPath");
+  }
+  uniqueRosterModel(modelName, roster.filter((entry) => matchesAgyModel(modelName, entry)));
   // A row missing the second identity key cannot be safely attributed to either collision.
   if (
     conversation.some((record) =>
@@ -238,11 +224,16 @@ export async function resolveRunningModel(options: RunningModelOptions = {}): Pr
   if (contextConversationId === undefined) {
     throw new Error("Missing trusted invocation context");
   }
-  return agyRecordedAuthor(records, {
-    conversationId: contextConversationId,
-    modelName: contextModelName,
-    transcriptPath: contextTranscriptPath,
-  }, roster);
+  return agyRecordedAuthor(
+    records,
+    {
+      conversationId: contextConversationId,
+      modelName: contextModelName,
+      transcriptPath: contextTranscriptPath,
+    },
+    roster,
+    recordPath,
+  );
 }
 
 export async function runRunningModel(
