@@ -1523,6 +1523,7 @@ const MODEL_LABEL_CASES = [
   ["Claude Code — Claude Fable 5.2", "Fable"],
   ["agy — Gemini Hydrogen", "Hydrogen"],
   ["agy — Gemini Argon", "Argon"],
+  ["agy — Gemini Neon", "Neon"],
   ["Codex — GPT-6.1 Sol", "Sol"],
   ["Codex — GPT-6 Astra", "Astra"],
   ["Claude Code — Claude Sonnet 5.5", "Sonnet"],
@@ -1637,6 +1638,8 @@ for (const identity of AGY_IDENTITIES) {
         ? "Argon"
         : identity.conversationId === "beta"
         ? "Sonnet"
+        : identity.conversationId === "delta"
+        ? "Neon"
         : "Hydrogen";
       assertEquals(calls[1], ["pr", "edit", LABEL_PR_URL, "--add-label", label]);
     }, { author: identity.author }));
@@ -1877,6 +1880,8 @@ for (
     ["agy — Gemini Neon (High)", 0],
     ["agy — Gemini Neon (Low)", 1],
     ["agy — Gemini Neon (Medium)", 1],
+    ["agy — Gemini Neon (XHigh)", 1],
+    ["agy — Gemini Hydrogen (XHigh)", 1],
     ["agy — Gemini 4 Neon (High)", 1],
     ["agy — Gemini 4 Argon (High)", 1],
     ["agy — Gemini 4 Argon (Low)", 1],

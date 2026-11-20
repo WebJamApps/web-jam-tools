@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PreToolUse guard (Bash): restrict `agy` (Antigravity CLI) invocations to
-# Gemini 4 Hydrogen, Gemini 4 Argon and Claude Sonnet 5.5 at high effort. Design:
+# Gemini 4 Hydrogen, Gemini 4 Argon, Gemini 4 Neon and Claude Sonnet 5.5 at high effort. Design:
 # web-jam-tools#267 ("agy flash default model fix", approved by Josh 2026-07-25;
 # web-jam-tools#549), extended by the model tier-order design, "The agy model guard".
 #

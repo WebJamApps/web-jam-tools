@@ -237,6 +237,34 @@ Deno.test("agy behind a wrapper with an allowed model is allowed", async () => {
   assertEquals(res.code, 0, res.stderr);
 });
 
+Deno.test("Neon at high is allowed behind a wrapper, by slug and by display name", async () => {
+  for (
+    const cmd of [
+      `timeout 180 agy --model=gemini-4-neon-high -p="x"`,
+      `agy --model "Gemini 4 Neon (High)" -p="x"`,
+    ]
+  ) {
+    const res = await runHook(cmd);
+    assertEquals(res.code, 0, `${cmd}: ${res.stderr}`);
+  }
+});
+
+Deno.test("Neon at any other effort, and the orchestrator Neon names, are blocked", async () => {
+  for (
+    const cmd of [
+      `agy --model gemini-4-neon-low -p="x"`,
+      `agy --model gemini-4-neon-medium -p="x"`,
+      `agy --model gemini-4-neon-xhigh -p="x"`,
+      `agy --model gemini-pro-orchestrator-neon -p="x"`,
+      `agy --model "Orchestrator (Neon)" -p="x"`,
+    ]
+  ) {
+    const res = await runHook(cmd);
+    assertEquals(res.code, 2, cmd);
+    assertBlocked(res.stderr);
+  }
+});
+
 Deno.test("a command that runs agy but cannot be parsed is refused (fails closed)", async () => {
   const res = await runHook(`agy --model "gemini-3.8-flash-high -p=x`);
   assertEquals(res.code, 2);

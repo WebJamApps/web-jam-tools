@@ -197,11 +197,11 @@ PR_MODEL_LABEL=""
 author_roster_check() {
   local author="$1" entry needle
   # Unversioned/substring roster entries ("Gemini Hydrogen", "Gemini Argon", "Claude Sonnet 5.5")
-  # would otherwise substring-match low or medium display names, so an author naming a low or
-  # medium effort level is refused before the match runs (web-jam-tools#1202, web-jam-tools#1465).
-  if printf '%s' "$author" | grep -qiE '\((low|medium)\)'; then
+  # would otherwise substring-match low or medium display names, so an author naming a low, medium
+  # or xhigh effort level is refused before the match runs (web-jam-tools#1202, web-jam-tools#1465).
+  if printf '%s' "$author" | grep -qiE '\((low|medium|xhigh)\)'; then
     echo "ERROR: --author '$author' does not name a model on the roster (web-jam-tools#190)." >&2
-    echo "       Low and medium effort levels are refused; models run at high effort only." >&2
+    echo "       Low, medium and xhigh effort levels are refused; models run at high effort only." >&2
     echo "       Valid models:" >&2
     printf '         - %s\n' "${ROSTER[@]}" >&2
     exit 1
