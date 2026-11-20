@@ -33,8 +33,15 @@ import {
   readPlanModelLabels,
 } from "../shared/model_label_rule.ts";
 
-import { extractDesignHeadings, validateIssueBodyCriteria } from "./lint_plan.ts";
+import {
+  extractBacktickCommands,
+  extractDesignHeadings,
+  indexPlanRowsByNumber,
+  parseStepsAfterMerge,
+  validateIssueBodyCriteria,
+} from "./lint_plan.ts";
 export { validateIssueBodyCriteria };
+import { parsePlanTable, PLAN_TABLE_HEADER } from "./plan_table.ts";
 
 export interface PlanIssueItem {
   id?: number | string;
@@ -67,6 +74,8 @@ export interface IssuePlanDoc {
   plan?: PlanIssueItem[];
   designDoc?: string;
   design_doc?: string;
+  planDoc?: string;
+  plan_doc?: string;
 }
 
 export interface FiledIssueInfo {
@@ -86,6 +95,7 @@ export interface FilePlanResult {
 
 export interface FilePlanOptions {
   planPath: string;
+  planDoc?: string;
   dryRun?: boolean;
   deps?: ExecDeps;
   approvalCheck?: (repoFull: string, title: string) => ApprovalCheckResult;
@@ -99,6 +109,7 @@ interface ParsedPlan {
   epic?: PlanIssueItem;
   children: PlanIssueItem[];
   designDoc?: string;
+  planDoc?: string;
 }
 
 export function parsePlanJson(jsonText: string): ParsedPlan {
@@ -135,6 +146,7 @@ export function parsePlanJson(jsonText: string): ParsedPlan {
     const epic = doc.epic;
     const childrenList = doc.children || doc.issues || doc.plan || [];
     const designDoc = doc.designDoc ?? doc.design_doc;
+    const planDoc = doc.planDoc ?? doc.plan_doc;
 
     if (!epic && childrenList.length === 0) {
       throw new Error("Plan contains no issues to file (missing epic and children/issues).");
@@ -146,6 +158,7 @@ export function parsePlanJson(jsonText: string): ParsedPlan {
       epic,
       children: childrenList,
       designDoc,
+      planDoc,
     };
   }
 
@@ -327,6 +340,70 @@ function resolvePlanParents(
   });
 }
 
+export function extractAcceptanceCriteria(
+  body: string,
+): { inCriteria: boolean; criteria: Array<{ text: string; lineNum: number }> } {
+  const lines = body.split(/\r?\n/);
+  let inCriteria = false;
+  let criteriaLevel = 2;
+  const criteria: { text: string; lineNum: number }[] = [];
+  let currentCriterion: { text: string; lineNum: number } | null = null;
+
+  const flushCurrent = () => {
+    if (currentCriterion !== null) {
+      const trimmedText = currentCriterion.text.trim();
+      if (trimmedText.length > 0) {
+        criteria.push({ text: trimmedText, lineNum: currentCriterion.lineNum });
+      }
+      currentCriterion = null;
+    }
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const trimmed = rawLine.trim();
+
+    if (!inCriteria) {
+      const criteriaHeaderMatch = trimmed.match(/^(#{1,6})\s+Acceptance\s+criteria\b/i);
+      if (criteriaHeaderMatch) {
+        inCriteria = true;
+        criteriaLevel = criteriaHeaderMatch[1].length;
+      }
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      if (level <= criteriaLevel) {
+        flushCurrent();
+        break;
+      } else {
+        // Nested subsection within Acceptance criteria (e.g. ### Behavior)
+        flushCurrent();
+        continue;
+      }
+    }
+
+    if (trimmed === "" || trimmed.startsWith("<!--") || trimmed.startsWith("🤖 Authored by ")) {
+      flushCurrent();
+      continue;
+    }
+
+    const isListItem = /^\s*(?:[-*+]|\d+[.)])\s+/.test(rawLine);
+    if (isListItem) {
+      flushCurrent();
+      currentCriterion = { text: trimmed, lineNum: i + 1 };
+    } else if (currentCriterion !== null) {
+      currentCriterion.text += " " + trimmed;
+    } else {
+      currentCriterion = { text: trimmed, lineNum: i + 1 };
+    }
+  }
+
+  flushCurrent();
+  return { inCriteria, criteria };
+}
 export async function filePlan(
   options: FilePlanOptions,
 ): Promise<FilePlanResult> {
@@ -510,6 +587,23 @@ export async function filePlan(
       labels,
       modelLabels,
     });
+  }
+
+  // Validate "## Steps after the merge" commands against listed rows' acceptance criteria (web-jam-tools#1801)
+  const rawPlanDoc = options.planDoc ?? plan.planDoc;
+  if (rawPlanDoc !== undefined && rawPlanDoc.trim() !== "") {
+    const resolvedPlanDoc = path.resolve(expandHome(rawPlanDoc.trim()));
+    let planDocContent: string;
+    try {
+      planDocContent = await deps.readFileText(resolvedPlanDoc);
+    } catch (err) {
+      throw new Error(
+        `Refused to file plan — plan document at "${rawPlanDoc.trim()}" (${resolvedPlanDoc}) cannot be read: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    await validatePlanStepsAfterMergeBodies(planDocContent, allItems, deps);
   }
 
   if (options.dryRun) {
@@ -922,10 +1016,125 @@ export async function filePlan(
   }
 }
 
+async function resolvePlanItemBody(
+  item: PlanIssueItem,
+  deps: ExecDeps,
+): Promise<string | undefined> {
+  const bodyPath = item.bodyFile || item.body_file || item.bodyPath;
+  if (bodyPath) {
+    try {
+      return await deps.readFileText(path.resolve(expandHome(bodyPath)));
+    } catch (err) {
+      throw new Error(
+        `Refused to file plan — cannot read body file "${bodyPath}" for issue "${item.title}": ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+  return item.body;
+}
+
+async function validatePlanStepsAfterMergeBodies(
+  planDocContent: string,
+  allItems: Array<{ item: PlanIssueItem; isEpic: boolean }>,
+  deps: ExecDeps,
+): Promise<void> {
+  const parsedSteps = parseStepsAfterMerge(planDocContent);
+  if (!parsedSteps.foundSection) {
+    throw new Error(
+      'Refused to file plan — plan document is missing required "## Steps after the merge" section.',
+    );
+  }
+  if (parsedSteps.emptySection) {
+    throw new Error(
+      'Refused to file plan — plan document "## Steps after the merge" section is empty.',
+    );
+  }
+  if (parsedSteps.invalidLines.length > 0) {
+    throw new Error(
+      `Refused to file plan — invalid line in "## Steps after the merge": "${
+        parsedSteps.invalidLines[0].text
+      }".`,
+    );
+  }
+  if (parsedSteps.isNone) return;
+
+  const parsedTable = parsePlanTable(planDocContent);
+  const rowByNumber = parsedTable ? indexPlanRowsByNumber(parsedTable.rows) : undefined;
+  const colTitle = PLAN_TABLE_HEADER.indexOf("Proposed title");
+  const normalizeCmd = (cmd: string) => cmd.trim().replace(/\s+/g, " ");
+
+  for (const entry of parsedSteps.entries) {
+    if (entry.commands.length === 0) {
+      throw new Error(
+        `Refused to file plan — row ${entry.rowNumber} in "## Steps after the merge" has no command.`,
+      );
+    }
+
+    let matched: { item: PlanIssueItem; isEpic: boolean } | undefined;
+    if (rowByNumber && parsedTable) {
+      const tableRow = rowByNumber.get(entry.rowNumber);
+      if (!tableRow) {
+        throw new Error(
+          `Refused to file plan — "## Steps after the merge" names row ${entry.rowNumber}, which the plan table does not have.`,
+        );
+      }
+      const rowTitle = tableRow.cells[colTitle].replace(/[`*_]/g, "").trim();
+      matched = allItems.find(
+        (x) => x.item.title.trim().toLowerCase() === rowTitle.toLowerCase(),
+      );
+      if (
+        !matched &&
+        parsedTable.rows.length === allItems.length &&
+        entry.rowNumber >= 1 &&
+        entry.rowNumber <= allItems.length
+      ) {
+        matched = allItems[entry.rowNumber - 1];
+      }
+      if (!matched) {
+        throw new Error(
+          `Refused to file plan — row ${entry.rowNumber} ("${rowTitle}") in "## Steps after the merge" does not match any issue in the plan.`,
+        );
+      }
+    } else if (entry.rowNumber >= 1 && entry.rowNumber <= allItems.length) {
+      matched = allItems[entry.rowNumber - 1];
+    } else {
+      throw new Error(
+        `Refused to file plan — row ${entry.rowNumber} in "## Steps after the merge" does not match any issue in the plan.`,
+      );
+    }
+
+    const body = await resolvePlanItemBody(matched.item, deps);
+    if (body === undefined) {
+      throw new Error(
+        `Refused to file plan — row ${entry.rowNumber} ("${matched.item.title}") body has no "## Acceptance criteria" section.`,
+      );
+    }
+    const { inCriteria, criteria } = extractAcceptanceCriteria(body);
+    if (!inCriteria || criteria.length === 0) {
+      throw new Error(
+        `Refused to file plan — row ${entry.rowNumber} ("${matched.item.title}") body has no "## Acceptance criteria" section.`,
+      );
+    }
+
+    const criterionCommands = new Set(
+      criteria.flatMap((c) => extractBacktickCommands(c.text)).map(normalizeCmd),
+    );
+    for (const cmd of entry.commands) {
+      if (!criterionCommands.has(normalizeCmd(cmd))) {
+        throw new Error(
+          `Refused to file plan — row ${entry.rowNumber} ("${matched.item.title}") is missing command \`${cmd}\` from "## Steps after the merge" inside an acceptance criterion.`,
+        );
+      }
+    }
+  }
+}
+
 export async function runFilePlanCli(args: string[]): Promise<number> {
   const flags = parseArgs(args, {
     boolean: ["dry-run", "help"],
-    string: ["plan", "author"],
+    string: ["plan", "plan-doc", "plan_doc", "author"],
     alias: {
       h: "help",
       d: "dry-run",
@@ -960,6 +1169,7 @@ Arguments:
 
 Options:
   -p, --plan <path>       Explicit plan JSON file path
+  --plan-doc <path>       Optional Gate 2 plan markdown file path (to check Steps after the merge)
   --author <tool — model> (required outside Codex) e.g. "Claude Code — Opus"; roster-checked and written as
                           the "Authored by" footer of every issue filed
                           Codex looks up the running model instead of using this value
@@ -979,6 +1189,7 @@ Options:
   try {
     await filePlan({
       planPath,
+      planDoc: flags["plan-doc"] || flags.plan_doc,
       dryRun: flags["dry-run"],
       author: flags.author,
     });
