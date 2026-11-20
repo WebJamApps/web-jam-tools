@@ -242,6 +242,7 @@ PRE_TOOL_USE_HOOKS=(
   "Bash::block-canonical-clone-change.sh"
   "Bash::block-backend-mutation.sh"
   "Bash::block-private-folder-read.sh"
+  "Bash|Read::block-personal-numbers-read.sh"
   "Bash|Edit|Write|NotebookEdit::block-production-media-change.sh"
   "Bash|(?:mcp__.*__)?(issue_write|pull_request_review_write|add_comment_to_pending_review|add_reply_to_pull_request_comment|update_issue_comment|add_issue_comment)::check-issue-citation-on-write.sh"
 )
@@ -263,6 +264,9 @@ POST_TOOL_USE_HOOKS=(
 AGY_ONLY_PRE_TOOL_USE_HOOKS=(
   "mcp__gmail__.*|send_email|draft_email|read_email|search_emails|modify_email|delete_email|list_email_labels|batch_modify_emails|batch_delete_emails|create_label|update_label|delete_label|get_or_create_label|create_filter|list_filters|get_filter|delete_filter|create_filter_from_template|download_attachment::block-agy-gmail-send-delete.sh"
   ".*::agy-model-guard.sh"
+  # agy's file-read tool keeps its own name through the shim; its shell tool
+  # reaches the PRE_TOOL_USE_HOOKS entry as Bash (web-jam-tools#1860).
+  "view_file::block-personal-numbers-read.sh"
 )
 
 # permissions.deny patterns this installer keeps registered in settings.json
@@ -380,6 +384,9 @@ DENY_RULES=(
   'Edit(//home/joshua/Dropbox/WebJamApps/**)'
   'Read(//home/joshua/Dropbox/web-jam-llc/**)'
   'Edit(//home/joshua/Dropbox/web-jam-llc/**)'
+  # Financial originals: tax returns, pay stubs, bank and card downloads (web-jam-tools#1860)
+  'Read(//home/joshua/Dropbox/financial-private/**)'
+  'Edit(//home/joshua/Dropbox/financial-private/**)'
 
   # Production media in joshandmariamusic Edit deny rules (web-jam-tools#1580)
   'Edit(//home/joshua/Dropbox/joshandmariamusic/**/*.mp3)'

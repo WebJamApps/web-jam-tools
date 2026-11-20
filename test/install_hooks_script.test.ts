@@ -3170,3 +3170,90 @@ Deno.test("install-hooks.sh registers the subagent cap on Claude Code alone and 
     await Deno.remove(settingsDir, { recursive: true });
   }
 });
+
+// --- Personal information read guard and financial-private deny rules (web-jam-tools#1860) ---
+
+Deno.test(
+  "install-hooks.sh registers block-personal-numbers-read.sh on Bash|Read and on agy view_file, and denies financial-private",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    const agyHooksPath = `${settingsDir}/agy-hooks.json`;
+    try {
+      const res = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agy-hooks-path",
+        agyHooksPath,
+        "--codex-hooks-path",
+        `${settingsDir}/codex-hooks.json`,
+      ]);
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+
+      // The installed hook resolves into this repository's hooks/.
+      assertEquals(
+        await Deno.realPath(`${hooksDir}/block-personal-numbers-read.sh`),
+        await Deno.realPath(`${HOOKS_SRC_DIR}/block-personal-numbers-read.sh`),
+      );
+
+      // Claude Code: one PreToolUse registration, matcher Bash|Read.
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      const matchers = settings.hooks.PreToolUse.flatMap(
+        (entry: { matcher: string; hooks: Array<{ command: string }> }) =>
+          entry.hooks
+            .filter((h) => h.command === "$HOME/.claude/hooks/block-personal-numbers-read.sh")
+            .map(() => entry.matcher),
+      );
+      assertEquals(matchers, ["Bash|Read"]);
+
+      // "Where the originals live": both deny rules for the financial originals.
+      assert(
+        settings.permissions.deny.includes("Read(//home/joshua/Dropbox/financial-private/**)"),
+      );
+      assert(
+        settings.permissions.deny.includes("Edit(//home/joshua/Dropbox/financial-private/**)"),
+      );
+
+      // agy: shim registrations reaching run_command (as Bash) and view_file.
+      const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
+      const agyCommands: string[] = agyHooks.hooks.PreToolUse.flatMap(
+        (entry: { hooks: Array<{ command: string }> }) => entry.hooks.map((h) => h.command),
+      ).filter((c: string) => c.endsWith("/block-personal-numbers-read.sh"));
+      assertEquals(
+        agyCommands.sort(),
+        [
+          `$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${
+            btoa("Bash|Read")
+          } $HOME/.claude/hooks/block-personal-numbers-read.sh`,
+          `$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${
+            btoa("view_file")
+          } $HOME/.claude/hooks/block-personal-numbers-read.sh`,
+        ].sort(),
+      );
+      // The shim maps agy's run_command to Bash; view_file keeps its own name.
+      assert(matcherMatches("Bash|Read", "Bash"));
+      assert(matcherMatches("view_file", "view_file"));
+
+      const check = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agy-hooks-path",
+        agyHooksPath,
+        "--codex-hooks-path",
+        `${settingsDir}/codex-hooks.json`,
+        "--check",
+      ]);
+      assertEquals(check.code, 0, check.stdout + check.stderr);
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
