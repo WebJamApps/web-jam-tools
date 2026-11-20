@@ -296,7 +296,8 @@ for (
   const [record, reason] of [
     [null, "not an object"],
     [[], "not an object"],
-    [{ modelName: "Gemini Flash" }, "no running conversation"],
+    [42, "not an object"],
+    ["text", "not an object"],
     [{ conversationId: "agy-conversation" }, "no recorded model"],
     [{ ...ARGON_RECORD, modelName: "gemini-9-pro" }, "no author roster entry"],
     [{ ...ARGON_RECORD, modelName: "gemini-4-argon-low" }, "no author roster entry"],
@@ -846,4 +847,75 @@ Deno.test("running-model keeps Hydrogen and Argon authors isolated across interl
       fixture.env.AGY_TRANSCRIPT_PATH = row.transcriptPath;
       await succeeds(fixture, expected);
     }
+  }));
+
+const NON_CONVERSATION_AND_OTHER_CASES: readonly [string, string][] = [
+  ["Flash row without conversation", '{"modelName":"Gemini Flash"}'],
+  [
+    "null conversationId probe row",
+    '{"conversationId":null,"toolCall":{"name":"run_command","args":{"CommandLine":"bash /tmp/private-folder-guard-x/shell-syntax-2.sh","Cwd":"/tmp"}}}',
+  ],
+  ["empty conversationId row", '{"conversationId":"","modelName":"gemini-4-argon-high"}'],
+  ["whitespace conversationId row", '{"conversationId":"   "}'],
+  [
+    "Gmail probe row",
+    '{"timestamp":"2026-11-17T01:10:57.943Z","event":"PreToolUse","matcher":".*","targetHookPath":"/home/joshua/.claude/hooks/block-agy-gmail-send-delete.sh","toolCall":{"name":"run_command"}}',
+  ],
+  ["other conversation without model", '{"conversationId":"other-conversation"}'],
+  [
+    "other conversation with unknown model",
+    '{"conversationId":"other-conversation","modelName":"Totally Fake Model"}',
+  ],
+];
+
+async function writeArgonRows(fixture: Fixture, rows: string[]): Promise<void> {
+  await Deno.writeTextFile(fixture.env.AGY_HOOK_RECORD_PATH, rows.join("\n") + "\n");
+  fixture.env.AGY_CONVERSATION_ID = ARGON_RECORD.conversationId;
+  fixture.env.AGY_MODEL_NAME = ARGON_RECORD.modelName;
+  fixture.env.AGY_TRANSCRIPT_PATH = ARGON_RECORD.transcriptPath;
+}
+
+for (const [label, line] of NON_CONVERSATION_AND_OTHER_CASES) {
+  for (const position of ["before", "after"] as const) {
+    Deno.test(`running-model signs Gemini Argon when ${label} is ${position} running row`, () =>
+      withFixture(async (fixture) => {
+        const own = JSON.stringify(ARGON_RECORD);
+        await writeArgonRows(fixture, position === "before" ? [line, own] : [own, line]);
+        await succeeds(fixture, "Gemini Argon");
+      }));
+  }
+}
+
+for (
+  const [label, line, reason] of [
+    ["null literal", "null", "not an object"],
+    ["array literal", "[]", "not an object"],
+    ["number literal", "42", "not an object"],
+    ["string literal", '"text"', "not an object"],
+    ["malformed JSON", "{broken", "JSON"],
+  ] as const
+) {
+  for (const position of ["before", "after"] as const) {
+    Deno.test(`running-model refuses ${label} ${position} running row`, () =>
+      withFixture(async (fixture) => {
+        const own = JSON.stringify(ARGON_RECORD);
+        await writeArgonRows(fixture, position === "before" ? [line, own] : [own, line]);
+        await refuses(fixture, reason);
+      }));
+  }
+}
+
+Deno.test("running-model refuses record holding only rows that name no conversation", () =>
+  withFixture(async (fixture) => {
+    const noConversationLines = NON_CONVERSATION_AND_OTHER_CASES.slice(0, 5).map(([, line]) =>
+      line
+    );
+    await writeArgonRows(fixture, noConversationLines);
+    await refuses(fixture, "Cannot tell the running model");
+  }));
+
+Deno.test("running-model refuses record whose only row is running conversation without a model", () =>
+  withFixture(async (fixture) => {
+    await writeArgonRows(fixture, ['{"conversationId":"agy-conversation"}']);
+    await refuses(fixture, "no recorded model");
   }));
