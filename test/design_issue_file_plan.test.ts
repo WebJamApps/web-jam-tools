@@ -45,6 +45,14 @@ for (const row of DESIGN_BODY_CASES) {
 }
 import { TEST_AUTHOR, withPassingProbe } from "./authored_by_test_helpers.ts";
 import { STEP_AFTER_MERGE_CASES } from "./support/step_after_merge_cases.ts";
+import {
+  OUTCOME_WORDING_CASES,
+  OUTCOME_WORDING_DESIGN_DOC,
+} from "./support/outcome_wording_cases.ts";
+import {
+  extractDesignHeadings,
+  findOutcomeWordingViolation,
+} from "../src/design-issue/lint_plan.ts";
 import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
 import { AGY_IDENTITIES, withAgySigningFixture } from "./support/agy_signing_fixture.ts";
 import {
@@ -1994,6 +2002,7 @@ for (const c of STEP_AFTER_MERGE_CASES) {
         };
       await Deno.writeTextFile(planPath, JSON.stringify(planPayload));
       const noGhDeps: ExecDeps = {
+        signing: { env: () => undefined },
         readFileText: (p) => Deno.readTextFile(p),
         runCmd: () => {
           throw new Error("Unexpected gh call");
@@ -2007,6 +2016,21 @@ for (const c of STEP_AFTER_MERGE_CASES) {
         );
         assertStringIncludes(error.message, c.expectedError);
         assertStringIncludes(error.message, c.criterion);
+      } else if (!c.isEpic && findOutcomeWordingViolation(c.criterion, { labels: c.labels })) {
+        // Under web-jam-tools#1775, design-filed criteria containing `"refused"` outside
+        // backticks are refused for outcome wording by filePlan; step-after-merge still passes.
+        const error = await assertRejects(
+          () => filePlan({ planPath, dryRun: false, approvalCheck: APPROVE_ALL, deps: noGhDeps }),
+          Error,
+          "contains outcome wording",
+        );
+        assertStringIncludes(error.message, c.criterion);
+        validateIssueBodyCriteria(
+          "Step after merge test task",
+          body,
+          extractDesignHeadings(STEP_AFTER_MERGE_DESIGN_DOC),
+          { labels: c.labels, checkOutcomeWording: false },
+        );
       } else {
         const result = await filePlan({
           planPath,
@@ -2053,3 +2077,100 @@ Deno.test("Appendix D step-after-merge (file-plan) case 24: unreadable body file
     await Deno.remove(tmpDir, { recursive: true });
   }
 });
+
+// --- Appendix D — "Outcome wording in a criterion" (web-jam-tools#1775) ---
+
+for (const c of OUTCOME_WORDING_CASES) {
+  Deno.test(`Appendix D "Outcome wording in a criterion" (file-plan) ${c.name}`, async () => {
+    const tmpDir = await Deno.makeTempDir();
+    try {
+      const designPath = c.unreadableDesign
+        ? path.join(tmpDir, "missing-design.md")
+        : path.join(tmpDir, "design.md");
+      const planPath = path.join(tmpDir, "plan.json");
+      if (!c.unreadableDesign) {
+        await Deno.writeTextFile(designPath, OUTCOME_WORDING_DESIGN_DOC);
+      }
+      const noGhDeps: ExecDeps = {
+        signing: { env: () => undefined },
+        readFileText: (p) => Deno.readTextFile(p),
+        runCmd: () => {
+          throw new Error("Unexpected gh call");
+        },
+      };
+      if (c.namesDesign === false) {
+        // Without a named design (outcome check disabled), the body passes this check.
+        const body =
+          `## What this builds\n\nStandalone task\n\n## Acceptance criteria\n\n${c.criterion}\n`;
+        validateIssueBodyCriteria(
+          "Outcome wording standalone task",
+          body,
+          new Set(),
+          { labels: c.labels, checkHeadingAndCommand: false, checkOutcomeWording: false },
+        );
+        return;
+      }
+
+      const body = `## What this builds\n\nTask\n\n## Acceptance criteria\n\n${c.criterion}\n`;
+      const planPayload = c.isEpic
+        ? {
+          repo: "web-jam-tools",
+          designDoc: designPath,
+          epic: {
+            title: "Outcome wording epic",
+            tier: "Opus",
+            escalationReason: "Container epic",
+            body,
+          },
+          children: [
+            {
+              title: "Child task",
+              tier: "Terra",
+              body:
+                "## What this builds\n\nChild\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
+            },
+          ],
+        }
+        : {
+          repo: "web-jam-tools",
+          designDoc: designPath,
+          children: [
+            {
+              title: "Outcome wording task",
+              labels: c.labels,
+              body,
+            },
+          ],
+        };
+      await Deno.writeTextFile(planPath, JSON.stringify(planPayload));
+
+      if (c.unreadableDesign) {
+        const error = await assertRejects(
+          () => filePlan({ planPath, dryRun: false, approvalCheck: APPROVE_ALL, deps: noGhDeps }),
+          Error,
+          "cannot be read",
+        );
+        assertStringIncludes(error.message, designPath);
+      } else if (c.expectedOutcomeWord) {
+        const error = await assertRejects(
+          () => filePlan({ planPath, dryRun: false, approvalCheck: APPROVE_ALL, deps: noGhDeps }),
+          Error,
+          "Refused to file plan",
+        );
+        assertStringIncludes(error.message, 'issue "Outcome wording task"');
+        assertStringIncludes(error.message, c.criterion);
+        assertStringIncludes(error.message, c.expectedOutcomeWord);
+      } else {
+        const result = await filePlan({
+          planPath,
+          dryRun: true,
+          approvalCheck: APPROVE_ALL,
+          deps: noGhDeps,
+        });
+        assertEquals(result.children.length, 1);
+      }
+    } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  });
+}

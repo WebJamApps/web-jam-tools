@@ -33,11 +33,8 @@ import {
   readPlanModelLabels,
 } from "../shared/model_label_rule.ts";
 
-import {
-  checkCriterionOrClosesCell,
-  type CriterionCheckOptions,
-  extractDesignHeadings,
-} from "./lint_plan.ts";
+import { extractDesignHeadings, validateIssueBodyCriteria } from "./lint_plan.ts";
+export { validateIssueBodyCriteria };
 
 export interface PlanIssueItem {
   id?: number | string;
@@ -328,110 +325,6 @@ function resolvePlanParents(
     available.push(child);
     return target;
   });
-}
-
-/**
- * Validates that an issue body has an "## Acceptance criteria" section,
- * and that every criterion in that section names a heading from designHeadings in double quotes
- * or carries a backtick-quoted command.
- * Case 11: A body with no `## Acceptance criteria` section -> refused before the first issue is filed, naming the item
- * Case 9: Body criterion `- [ ] builds "Nope" as written` -> refused before the first issue is filed, naming the item and the line
- * Case 10: Body criterion `- [ ] The pull request merges` -> refused the same way: neither a heading nor a command
- */
-export function validateIssueBodyCriteria(
-  title: string,
-  body: string,
-  designHeadings: ReadonlySet<string>,
-  options?: CriterionCheckOptions,
-): void {
-  const lines = body.split(/\r?\n/);
-  let inCriteria = false;
-  let criteriaLevel = 2;
-  const criteria: { text: string; lineNum: number }[] = [];
-  let currentCriterion: { text: string; lineNum: number } | null = null;
-
-  const flushCurrent = () => {
-    if (currentCriterion !== null) {
-      const trimmedText = currentCriterion.text.trim();
-      if (trimmedText.length > 0) {
-        criteria.push({ text: trimmedText, lineNum: currentCriterion.lineNum });
-      }
-      currentCriterion = null;
-    }
-  };
-
-  for (let i = 0; i < lines.length; i++) {
-    const rawLine = lines[i];
-    const trimmed = rawLine.trim();
-
-    if (!inCriteria) {
-      const criteriaHeaderMatch = trimmed.match(/^(#{1,6})\s+Acceptance\s+criteria\b/i);
-      if (criteriaHeaderMatch) {
-        inCriteria = true;
-        criteriaLevel = criteriaHeaderMatch[1].length;
-      }
-      continue;
-    }
-
-    const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
-    if (headingMatch) {
-      const level = headingMatch[1].length;
-      if (level <= criteriaLevel) {
-        flushCurrent();
-        break;
-      } else {
-        // Nested subsection within Acceptance criteria (e.g. ### Behavior)
-        flushCurrent();
-        continue;
-      }
-    }
-
-    if (trimmed === "" || trimmed.startsWith("<!--") || trimmed.startsWith("🤖 Authored by ")) {
-      flushCurrent();
-      continue;
-    }
-
-    const isListItem = /^\s*(?:[-*+]|\d+[.)])\s+/.test(rawLine);
-    if (isListItem) {
-      flushCurrent();
-      currentCriterion = { text: trimmed, lineNum: i + 1 };
-    } else if (currentCriterion !== null) {
-      currentCriterion.text += " " + trimmed;
-    } else {
-      currentCriterion = { text: trimmed, lineNum: i + 1 };
-    }
-  }
-
-  flushCurrent();
-
-  if (!inCriteria || criteria.length === 0) {
-    throw new Error(
-      `Refused to file plan — issue "${title}" body has no "## Acceptance criteria" section.`,
-    );
-  }
-
-  for (const { text, lineNum } of criteria) {
-    const check = checkCriterionOrClosesCell(text, designHeadings, options);
-    if (!check.valid) {
-      if (check.reason === "unknown-heading") {
-        throw new Error(
-          `Refused to file plan — issue "${title}" criterion line ${lineNum} ("${text}"): names heading "${check.unknownHeading}", which does not exist in the design document.`,
-        );
-      } else if (check.reason === "step-after-merge-missing-command") {
-        throw new Error(
-          `Refused to file plan — issue "${title}" criterion line ${lineNum} ("${text}"): describes a step after the merge, but the command that starts the step is missing.`,
-        );
-      } else if (check.reason === "step-after-merge-missing-josh") {
-        throw new Error(
-          `Refused to file plan — issue "${title}" criterion line ${lineNum} ("${text}"): describes a step after the merge, but the issue is missing the "Josh" label.`,
-        );
-      } else {
-        throw new Error(
-          `Refused to file plan — issue "${title}" criterion line ${lineNum} ("${text}"): neither a heading nor a command.`,
-        );
-      }
-    }
-  }
 }
 
 export async function filePlan(

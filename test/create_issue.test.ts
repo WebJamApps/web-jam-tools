@@ -8,6 +8,10 @@ import { AGY_IDENTITIES, withAgySigningFixture } from "./support/agy_signing_fix
 import { MODEL_LABEL_CASES } from "./support/model_label_cases.ts";
 import { DESIGN_BODY_CASES } from "./support/design_body_cases.ts";
 import { STEP_AFTER_MERGE_CASES } from "./support/step_after_merge_cases.ts";
+import {
+  OUTCOME_WORDING_CASES,
+  OUTCOME_WORDING_DESIGN_DOC,
+} from "./support/outcome_wording_cases.ts";
 
 for (const row of DESIGN_BODY_CASES) {
   Deno.test(`create-issue one design: ${row.name}`, async () => {
@@ -2462,5 +2466,140 @@ Deno.test("Appendix D step-after-merge (create-issue) case 24: unreadable body f
     "cannot read body file",
   );
   assertStringIncludes(error.message, missingBodyPath);
+  assertEquals(calls.length, 0);
+});
+
+// --- Appendix D — "Outcome wording in a criterion" (web-jam-tools#1775) ---
+
+const READABLE_DESIGN_REF =
+  "~/Dropbox/web-jam-llms/Operations/outcome-wording-fixture-design-2026-11-12.md";
+const UNREADABLE_DESIGN_REF =
+  "~/Dropbox/web-jam-llms/Operations/unreadable-outcome-wording-design-2026-11-12.md";
+
+for (const c of OUTCOME_WORDING_CASES) {
+  Deno.test(`Appendix D "Outcome wording in a criterion" (create-issue) ${c.name}`, async () => {
+    const designSection = c.namesDesign === false
+      ? ""
+      : `\n## Design reference\n\n${
+        c.unreadableDesign ? UNREADABLE_DESIGN_REF : READABLE_DESIGN_REF
+      }\n`;
+    const body =
+      `## What this builds\n\nTask\n${designSection}\n## Acceptance criteria\n\n${c.criterion}\n`;
+    const calls: string[][] = [];
+    const deps: ExecDeps = {
+      signing: { env: () => undefined },
+      runCmd(cmd: string[]) {
+        calls.push(cmd);
+        return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+      },
+      readFileText(filePath: string) {
+        if (filePath.endsWith("unreadable-outcome-wording-design-2026-11-12.md")) {
+          return Promise.reject(new Deno.errors.NotFound("No such file or directory"));
+        }
+        if (filePath.endsWith("outcome-wording-fixture-design-2026-11-12.md")) {
+          return Promise.resolve(OUTCOME_WORDING_DESIGN_DOC);
+        }
+        return Promise.resolve(body);
+      },
+    };
+
+    const type = c.isEpic ? "Epic" : "Task";
+    const escalationReason = c.labels.includes("Opus") ? "Container epic" : undefined;
+
+    if (c.unreadableDesign) {
+      const error = await assertRejects(
+        () =>
+          createIssueAndVerify(
+            {
+              title: "Outcome wording create-issue check",
+              bodyFile: "/tmp/b.md",
+              type,
+              labels: c.labels,
+              escalationReason,
+            },
+            deps,
+            APPROVE_ALL,
+          ),
+        Error,
+        "cannot be read",
+      );
+      assertStringIncludes(error.message, "unreadable-outcome-wording-design-2026-11-12.md");
+      assertEquals(calls.length, 0);
+    } else if (c.expectedOutcomeWord) {
+      const error = await assertRejects(
+        () =>
+          createIssueAndVerify(
+            {
+              title: "Outcome wording create-issue check",
+              bodyFile: "/tmp/b.md",
+              type,
+              labels: c.labels,
+              escalationReason,
+            },
+            deps,
+            APPROVE_ALL,
+          ),
+        Error,
+        "Refused to file issue",
+      );
+      assertStringIncludes(error.message, 'issue "Outcome wording create-issue check"');
+      assertStringIncludes(error.message, c.criterion);
+      assertStringIncludes(error.message, c.expectedOutcomeWord);
+      assertEquals(calls.length, 0);
+    } else {
+      const result = await createIssueAndVerify(
+        {
+          title: "Outcome wording create-issue check",
+          bodyFile: "/tmp/b.md",
+          type,
+          labels: c.labels,
+          escalationReason,
+          dryRun: true,
+        },
+        deps,
+        APPROVE_ALL,
+      );
+      assertStringIncludes(result, "dry run: would create issue");
+      assertEquals(calls.length, 0);
+    }
+  });
+}
+
+Deno.test('Issues filed from a design (create-issue): `- [ ] builds "Nope" as written` against a design without that heading is refused', async () => {
+  const body =
+    `## What this builds\n\nTask\n\n## Design reference\n\n${READABLE_DESIGN_REF}\n\n## Acceptance criteria\n\n- [ ] builds "Nope" as written\n`;
+  const calls: string[][] = [];
+  const deps: ExecDeps = {
+    signing: { env: () => undefined },
+    runCmd(cmd: string[]) {
+      calls.push(cmd);
+      return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+    },
+    readFileText(filePath: string) {
+      if (filePath.endsWith("outcome-wording-fixture-design-2026-11-12.md")) {
+        return Promise.resolve(OUTCOME_WORDING_DESIGN_DOC);
+      }
+      return Promise.resolve(body);
+    },
+  };
+  const error = await assertRejects(
+    () =>
+      createIssueAndVerify(
+        {
+          title: "Unknown heading create-issue check",
+          bodyFile: "/tmp/b.md",
+          type: "Task",
+          labels: ["Sol"],
+          dryRun: true,
+        },
+        deps,
+        APPROVE_ALL,
+      ),
+    Error,
+    "Refused to file issue",
+  );
+  assertStringIncludes(error.message, 'issue "Unknown heading create-issue check"');
+  assertStringIncludes(error.message, '- [ ] builds "Nope" as written');
+  assertStringIncludes(error.message, "Nope");
   assertEquals(calls.length, 0);
 });
