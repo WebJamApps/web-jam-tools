@@ -108,6 +108,15 @@ rules and do not reconstruct them from memory or from this file.
 28. **Read Target Worktree `AGENTS.md` Upon Entering `REPO_DIR`:** Sessions launched from
     `/home/joshua` (such as agy) load `~/.agents/AGENTS.md`, which can be stale or truncated; read
     the target worktree's `AGENTS.md` after setup rather than relying on the home-directory copy.
+29. **Delete `/tmp/agy-hook-invocations.jsonl` When Unrelated/Test Entries Block Agy Signing:**
+    When an agy `deno task push`, `deno task post-pr-comment`, `deno task post-pr-review`, or
+    `deno task running-model` invocation fails with `The agy hook record names no running
+    conversation in /tmp/agy-hook-invocations.jsonl`, delete `/tmp/agy-hook-invocations.jsonl`
+    (`rm -f /tmp/agy-hook-invocations.jsonl`) in its own command before retrying the guarded
+    command — `/tmp/agy-hook-invocations.jsonl` is a disposable `/tmp` log and the next hooked
+    shell call recreates it cleanly for the active conversation. Always run `deno task test` /
+    `deno task coverage:check` with `AGY_HOOK_RECORD_PATH=off` in agy sessions to avoid
+    appending synthetic hook-test entries to `/tmp/agy-hook-invocations.jsonl`.
 ## Opening pull requests (all WebJamApps repos)
 
 Open every PR through the `draft-pr` skill (`skills/draft-pr/SKILL.md`), never `gh pr create`
