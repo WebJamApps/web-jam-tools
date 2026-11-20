@@ -1,13 +1,13 @@
 /**
- * check_agy_skill_run.ts — logic for hooks/agy-skill-run-hook.sh (web-jam-tools#1319).
+ * check_agy_skill_run.ts — logic for hooks/agy-skill-run-hook.sh (web-jam-tools#1319, #1789).
  *
  * Implements the agy PreToolUse hook logic:
  * 1. Checks if the tool call is `run_command`. If not, allows without rewrite.
  * 2. Checks if the command contains the installed script path (`.claude/hooks/agy-skill-run.sh`).
- *    If so, denies the command (whether a skill run is open or not).
- * 3. Determines whether a skill run is open from the conversation record (`transcriptPath`),
- *    following helper agent links up to 3 steps up if needed.
- * 4. If a skill run is open, rewrites the command to invoke the installed script with the
+ *    If so, denies the command regardless of the conversation.
+ * 3. Determines whether Josh has typed a request in the conversation (`USER_INPUT` entry with
+ *    `source: "USER_EXPLICIT"`), following helper agent links up to 3 steps up when needed.
+ * 4. If Josh has typed a request, rewrites the command to invoke the installed script with the
  *    original command single-quoted (with internal single quotes escaped as `'\''`).
  * 5. Fails open (allows without rewrite) if the record cannot be read, parsed, or decided.
  */
@@ -221,10 +221,8 @@ export function readTranscript(
     }
 
     if (
-      parsed.type === "USER_INPUT" ||
-      parsed.source === "USER_EXPLICIT" ||
-      parsed.role === "user" ||
-      parsed.type === "user"
+      parsed.type === "USER_INPUT" &&
+      parsed.source === "USER_EXPLICIT"
     ) {
       let content = "";
       if (typeof parsed.content === "string") {
@@ -265,24 +263,16 @@ export function readTranscript(
 }
 
 /**
- * Processes user messages sequentially to determine if a skill run is open at the end.
+ * Returns true when Josh has typed at least one request in the starting conversation.
+ * A plain request, a slash command, a "yes", and a nudge all count, and the rule holds
+ * for the rest of the conversation (web-jam-tools#1789).
  */
 export function evaluateUserMessages(
   userMessages: string[],
-  pluginSkills: Set<string>,
-  userSkills: Set<string>,
+  _pluginSkills?: Set<string>,
+  _userSkills?: Set<string>,
 ): boolean {
-  let skillRunOpen = false;
-
-  for (const msg of userMessages) {
-    const evalResult = evaluateMessage(msg, pluginSkills, userSkills);
-    if (evalResult.isSlashCommand) {
-      skillRunOpen = evalResult.isInstalledSkill;
-    }
-    // Plain messages leave the state unchanged.
-  }
-
-  return skillRunOpen;
+  return userMessages.length > 0;
 }
 
 /**
@@ -630,8 +620,8 @@ export type SkillRunCheckResult =
 export function isSkillRunOpen(
   transcriptPath: string | undefined,
   conversationId: string | undefined,
-  pluginSkills: Set<string>,
-  userSkills: Set<string>,
+  _pluginSkills?: Set<string>,
+  _userSkills?: Set<string>,
 ): SkillRunCheckResult {
   if (!transcriptPath || typeof transcriptPath !== "string") {
     return { outcome: "cannot_tell" };
@@ -700,7 +690,7 @@ export function isSkillRunOpen(
     }
 
     if (transcriptData.userMessages.length > 0) {
-      const isOpen = evaluateUserMessages(transcriptData.userMessages, pluginSkills, userSkills);
+      const isOpen = evaluateUserMessages(transcriptData.userMessages);
       return { outcome: isOpen ? "open" : "not_open" };
     }
 
@@ -724,8 +714,8 @@ export interface HookResult {
  */
 export function handlePreToolUse(
   payload: unknown,
-  pluginSkills?: Set<string>,
-  userSkills?: Set<string>,
+  _pluginSkills?: Set<string>,
+  _userSkills?: Set<string>,
 ): HookResult {
   try {
     const p = payload as {
@@ -752,16 +742,10 @@ export function handlePreToolUse(
       };
     }
 
-    if (!pluginSkills || !userSkills) {
-      const installed = getInstalledSkills();
-      pluginSkills = pluginSkills ?? installed.pluginSkills;
-      userSkills = userSkills ?? installed.userSkills;
-    }
-
     const transcriptPath = typeof p?.transcriptPath === "string" ? p.transcriptPath : undefined;
     const conversationId = typeof p?.conversationId === "string" ? p.conversationId : undefined;
     const modelName = typeof p?.modelName === "string" ? p.modelName : undefined;
-    const checkResult = isSkillRunOpen(transcriptPath, conversationId, pluginSkills, userSkills);
+    const checkResult = isSkillRunOpen(transcriptPath, conversationId);
 
     if (checkResult.outcome === "open") {
       return {

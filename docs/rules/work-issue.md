@@ -16,4 +16,11 @@ work. State plainly whether a PR exists and link it when it does; never imply a 
 setup stopped before implementation. If Josh explicitly redirects work, state what is unfinished
 and continue the task he named.
 
+When `handle-agy-tasks.sh` or `running-model` refuses because lines in the temporary log
+`/tmp/agy-hook-invocations.jsonl` lack a `conversationId` (`The agy hook record names no running
+conversation in /tmp/agy-hook-invocations.jsonl`), delete `/tmp/agy-hook-invocations.jsonl` yourself
+(`rm -f /tmp/agy-hook-invocations.jsonl`) and retry — it is a disposable `/tmp` runtime log that
+agy's next `PreToolUse` hook call recreates cleanly.
+
 Recorded from Josh's correction on 2026-11-16: "i should not have to repeat when I invoke the skill!"
+Recorded from Josh's correction on 2026-11-17: "please add this to your rules to DELETE this tmp file next time yourself, it is not needed it is tmp log only so delete it next time yourself!"
