@@ -63,7 +63,7 @@ Deno.test("shared interpreter selection preserves production-media decisions on 
           : { tool_name: "Bash", cwd: home, tool_input: { command } };
         const child = new Deno.Command("bash", {
           args: surface === "agy" ? [shim, "PreToolUse", btoa("Bash"), HOOK_SCRIPT] : [HOOK_SCRIPT],
-          env: { HOME: home, WJT_SURFACE: surface },
+          env: { HOME: home, WJT_SURFACE: surface, AGY_HOOK_RECORD_PATH: "off" },
           stdin: "piped",
           stdout: "piped",
           stderr: "piped",

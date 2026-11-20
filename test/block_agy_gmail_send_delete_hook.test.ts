@@ -47,90 +47,115 @@ Deno.test("Gmail fence: shell entry point classifies literal fixtures and denies
 
 for (const prefix of ["", "mcp__gmail__"]) {
   Deno.test(`Gmail fence: shim preserves raw/prefixed safety arguments (${prefix || "raw"})`, async () => {
-    for (const fixture of GMAIL_FENCE_CASES) {
-      const verdict = await runShim(
-        "PreToolUse",
-        MATCHER,
-        HOOK_PATH,
-        JSON.stringify({ toolCall: { name: prefix + fixture.tool, args: fixture.input } }),
-      );
-      assertEquals(
-        verdict.decision,
-        fixture.decision === "allow" ? "allow" : "deny",
-        JSON.stringify(fixture),
-      );
+    const sandbox = await Deno.makeTempDir();
+    try {
+      for (const fixture of GMAIL_FENCE_CASES) {
+        const verdict = await runShim(
+          "PreToolUse",
+          MATCHER,
+          HOOK_PATH,
+          JSON.stringify({ toolCall: { name: prefix + fixture.tool, args: fixture.input } }),
+          `${sandbox}/record.jsonl`,
+        );
+        assertEquals(
+          verdict.decision,
+          fixture.decision === "allow" ? "allow" : "deny",
+          JSON.stringify(fixture),
+        );
+      }
+    } finally {
+      await Deno.remove(sandbox, { recursive: true });
     }
   });
 }
 
 Deno.test("Gmail fence: malformed shim inputs refuse instead of normalizing to an empty object", async () => {
-  for (
-    const raw of [
-      "",
-      "{",
-      "null",
-      "[]",
-      "{}",
-      '{"toolCall":{"name":1}}',
-      '{"toolCall":{"name":"modify_email"}}',
-      '{"toolCall":{"name":"modify_email","args":[]}}',
-    ]
-  ) {
-    assertEquals((await runShim("PreToolUse", MATCHER, HOOK_PATH, raw)).decision, "deny");
-  }
-  for (const name of ["run_command", "mcp__other__delete_label", "mcp__gmail_extra__send_email"]) {
-    assertEquals(
-      (await runShim(
-        "PreToolUse",
-        MATCHER,
-        HOOK_PATH,
-        JSON.stringify({ toolCall: { name, args: {} } }),
-      )).decision,
-      "allow",
-    );
-  }
-  assertEquals(
-    (await runShim(
-      "PreToolUse",
-      MATCHER,
-      HOOK_PATH,
-      JSON.stringify({ toolCall: { name: "mcp__gmail__unknown", args: {} } }),
-    )).decision,
-    "deny",
-  );
-});
-
-Deno.test("Gmail fence: parameterless read tools proceed when args is omitted, but refuse malformed args", async () => {
-  for (
-    const name of [
-      "list_email_labels",
-      "list_filters",
-      "mcp__gmail__list_email_labels",
-      "mcp__gmail__list_filters",
-    ]
-  ) {
-    assertEquals(
-      (await runShim(
-        "PreToolUse",
-        MATCHER,
-        HOOK_PATH,
-        JSON.stringify({ toolCall: { name } }),
-      )).decision,
-      "allow",
-      `${name} without args should proceed`,
-    );
-    for (const badArgs of [[], null, "invalid", 123]) {
+  const sandbox = await Deno.makeTempDir();
+  try {
+    for (
+      const raw of [
+        "",
+        "{",
+        "null",
+        "[]",
+        "{}",
+        '{"toolCall":{"name":1}}',
+        '{"toolCall":{"name":"modify_email"}}',
+        '{"toolCall":{"name":"modify_email","args":[]}}',
+      ]
+    ) {
+      assertEquals(
+        (await runShim("PreToolUse", MATCHER, HOOK_PATH, raw, `${sandbox}/record.jsonl`)).decision,
+        "deny",
+      );
+    }
+    for (
+      const name of ["run_command", "mcp__other__delete_label", "mcp__gmail_extra__send_email"]
+    ) {
       assertEquals(
         (await runShim(
           "PreToolUse",
           MATCHER,
           HOOK_PATH,
-          JSON.stringify({ toolCall: { name, args: badArgs } }),
+          JSON.stringify({ toolCall: { name, args: {} } }),
+          `${sandbox}/record.jsonl`,
         )).decision,
-        "deny",
-        `${name} with malformed args should deny`,
+        "allow",
       );
     }
+    assertEquals(
+      (await runShim(
+        "PreToolUse",
+        MATCHER,
+        HOOK_PATH,
+        JSON.stringify({ toolCall: { name: "mcp__gmail__unknown", args: {} } }),
+        `${sandbox}/record.jsonl`,
+      )).decision,
+      "deny",
+    );
+  } finally {
+    await Deno.remove(sandbox, { recursive: true });
+  }
+});
+
+Deno.test("Gmail fence: parameterless read tools proceed when args is omitted, but refuse malformed args", async () => {
+  const sandbox = await Deno.makeTempDir();
+  try {
+    for (
+      const name of [
+        "list_email_labels",
+        "list_filters",
+        "mcp__gmail__list_email_labels",
+        "mcp__gmail__list_filters",
+      ]
+    ) {
+      assertEquals(
+        (await runShim(
+          "PreToolUse",
+          MATCHER,
+          HOOK_PATH,
+          JSON.stringify({ toolCall: { name } }),
+          `${sandbox}/record.jsonl`,
+        )).decision,
+        "allow",
+        `${name} without args should proceed`,
+      );
+      for (const badArgs of [[], null, "invalid", 123]) {
+        assertEquals(
+          (await runShim(
+            "PreToolUse",
+            MATCHER,
+            HOOK_PATH,
+            JSON.stringify({ toolCall: { name, args: badArgs } }),
+            `${sandbox}/record.jsonl`,
+          )).decision,
+          "deny",
+          `${name} with malformed args should deny`,
+        );
+      }
+    }
+  } finally {
+    await Deno.remove(sandbox, { recursive: true });
   }
 });
 

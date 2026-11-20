@@ -99,7 +99,11 @@ Deno.test("shared script selection reaches backend guard on Claude, agy and Code
           : { tool_name: "Bash", cwd: dir, tool_input: { command } };
         const child = new Deno.Command("bash", {
           args: surface === "agy" ? [shim, "PreToolUse", btoa("Bash"), hook] : [hook],
-          env: { WJT_SURFACE: surface, BACKEND_APPROVAL_TOKEN_PATH: NO_TOKEN },
+          env: {
+            WJT_SURFACE: surface,
+            BACKEND_APPROVAL_TOKEN_PATH: NO_TOKEN,
+            AGY_HOOK_RECORD_PATH: "off",
+          },
           stdin: "piped",
           stdout: "piped",
           stderr: "piped",
