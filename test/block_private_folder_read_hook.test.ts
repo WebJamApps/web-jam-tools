@@ -758,7 +758,7 @@ for (const [index, entry] of SHELL_SYNTAX_CASES.entries()) {
           ]
           : [SCRIPT_PATH],
         env: {
-          AGY_HOOK_RECORD_PATH: path.join(FIXTURE_DIR, "agy-hook-invocations.jsonl"),
+          AGY_HOOK_RECORD_PATH: "off",
           CLAUDE_SETTINGS_PATH: FIXTURE_SETTINGS_PATH,
           WJT_SURFACE: surface,
         },

@@ -40,7 +40,10 @@ async function runPayloadHook(
         SCRIPT_PATH,
       ]
       : [SCRIPT_PATH],
-    env: { WJT_SURFACE: surface === "claude" ? "claude-code" : surface },
+    env: {
+      WJT_SURFACE: surface === "claude" ? "claude-code" : surface,
+      AGY_HOOK_RECORD_PATH: "off",
+    },
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
