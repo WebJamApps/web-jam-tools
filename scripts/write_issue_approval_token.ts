@@ -276,21 +276,26 @@ export async function resolveClaudeCodeWriteContext(
   };
 }
 
+export interface AntigravityWriteTarget {
+  conversationId?: string;
+  transcriptPath?: string;
+  recordPath?: string;
+}
+
 /**
  * Antigravity discovery: agy has no hook-delivered payload here either, and unlike Claude Code its
  * transcript path cannot be located from a session id (Antigravity keys transcripts by
  * conversationId, which this script is never told directly). The one existing, real record of that
  * identity is hooks/lib/agy_hook_shim.ts's recordInvocation() — already writing every agy tool
  * call's full payload (conversationId, transcriptPath) to AGY_HOOK_RECORD_PATH (default
- * /tmp/agy-hook-invocations.jsonl) for an unrelated purpose (web-jam-tools#816). Because at least
- * one hook is registered against every command agy runs (".*::agy-model-guard.sh"), and recording
- * happens before the matched hook decides, THIS invocation's own run_command call is normally the
- * most recently recorded line by the time this script starts — so the last parseable line's
- * conversationId/transcriptPath is normally this invocation's own.
+ * /tmp/agy-hook-invocations.jsonl) for an unrelated purpose (web-jam-tools#816).
  *
- * Known limitation, stated rather than silently assumed away: this is a shared, cross-session log.
- * Under genuine concurrent agy activity the last line could belong to a different session's call
- * instead.
+ * In non-strict mode (the default for the approval-token CLI until its own strict update lands),
+ * the newest valid row naming any conversation is used. In strict mode (used by fix-pr push), the
+ * caller must supply the conversation id and transcript path handed to it by the skill-run hook;
+ * strict mode refuses any damaged record, passes over rows of other conversations or rows naming no
+ * conversation, and reads the transcript only when one of that conversation's rows names the exact
+ * same transcript path (web-jam-tools#1845).
  *
  * Antigravity's transcript carries no in-band signal distinguishing a subagent's turn from a
  * person's: a subagent's opening prompt, composed by its parent, is filed as USER_INPUT /
@@ -301,8 +306,17 @@ export async function resolveClaudeCodeWriteContext(
  */
 export async function resolveAntigravityWriteContext(
   strict = false,
+  target?: AntigravityWriteTarget,
 ): Promise<ResolvedWriteContext | null> {
-  const recordPath = Deno.env.get("AGY_HOOK_RECORD_PATH") || "/tmp/agy-hook-invocations.jsonl";
+  const targetConversationId = target?.conversationId?.trim() ? target.conversationId : "";
+  const targetTranscriptPath = target?.transcriptPath?.trim() ? target.transcriptPath : "";
+  if (strict && (!targetConversationId || !targetTranscriptPath)) {
+    return null;
+  }
+
+  const recordPath = (target?.recordPath !== undefined
+    ? target.recordPath
+    : Deno.env.get("AGY_HOOK_RECORD_PATH")) || "/tmp/agy-hook-invocations.jsonl";
   let text: string;
   try {
     text = await Deno.readTextFile(recordPath);
@@ -310,30 +324,70 @@ export async function resolveAntigravityWriteContext(
     return null;
   }
   const lines = text.split("\n").filter((l) => l.trim().length > 0);
+
+  if (strict) {
+    const conversationRows: Record<string, unknown>[] = [];
+    for (const line of lines) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        return null;
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return null;
+      }
+      const rec = parsed as Record<string, unknown>;
+      if (rec.conversationId === targetConversationId) {
+        conversationRows.push(rec);
+      }
+    }
+    if (conversationRows.length === 0) return null;
+    if (
+      conversationRows.some(
+        (rec) => typeof rec.transcriptPath !== "string" || !rec.transcriptPath.trim(),
+      )
+    ) {
+      return null;
+    }
+    if (!conversationRows.some((rec) => rec.transcriptPath === targetTranscriptPath)) {
+      return null;
+    }
+    let entries: TranscriptEntry[];
+    try {
+      entries = await readTranscriptFile(targetTranscriptPath, null, true);
+    } catch {
+      return null;
+    }
+    return {
+      entries,
+      ownConversationId: targetConversationId,
+      isSubagentInvocation: await antigravityTranscriptIsSubagent(
+        targetTranscriptPath,
+        targetConversationId,
+      ),
+    };
+  }
+
   for (let i = lines.length - 1; i >= 0; i--) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(lines[i]);
     } catch {
-      if (strict) return null;
       continue;
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      if (strict) return null;
       continue;
     }
     const rec = parsed as Record<string, unknown>;
     const conversationId = typeof rec.conversationId === "string" ? rec.conversationId : "";
     const transcriptPath = typeof rec.transcriptPath === "string" ? rec.transcriptPath : "";
     if (!conversationId || !transcriptPath) {
-      if (strict) return null;
       continue;
     }
     let entries: TranscriptEntry[];
     try {
-      entries = strict
-        ? await readTranscriptFile(transcriptPath, null, true)
-        : await loadTranscript(transcriptPath);
+      entries = await loadTranscript(transcriptPath);
     } catch {
       return null;
     }
