@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# git-hooks/reference-transaction — web-jam-tools#1820
+# Machine-wide reference-transaction guard (draft-pr design 1.2.0,
+# "Lanes never change the canonical clone"): refuses moving the canonical
+# web-jam-tools clone's HEAD off dev or its dev off origin/dev, on every tool,
+# then hands on to the repository's own .git/hooks/reference-transaction.
+set -euo pipefail
+
+STATE="${1:-}"
+
+# Capture stdin once so we can inspect ref updates and still forward them verbatim.
+STDIN_DATA="$(cat; printf x)"
+STDIN_DATA="${STDIN_DATA%x}"
+
+CANONICAL_RAW="${CANONICAL_CLONE_DIR:-${HOME:-/home/joshua}/WebJamApps/web-jam-tools}"
+CANONICAL_DIR="$(readlink -f "$CANONICAL_RAW" 2>/dev/null || echo "$CANONICAL_RAW")"
+CANONICAL_GIT_DIR="$(readlink -f "$CANONICAL_DIR/.git" 2>/dev/null || echo "$CANONICAL_DIR/.git")"
+
+CURRENT_GIT_DIR_RAW="$(git rev-parse --git-dir 2>/dev/null || true)"
+CURRENT_GIT_DIR=""
+if [ -n "$CURRENT_GIT_DIR_RAW" ]; then
+  CURRENT_GIT_DIR="$(readlink -f "$CURRENT_GIT_DIR_RAW" 2>/dev/null || echo "$CURRENT_GIT_DIR_RAW")"
+fi
+
+# Walk up ancestor processes and inspect NUL-delimited argv to identify the
+# enclosing git subcommand (premise P-4), e.g. `worktree add` or `pack-refs`.
+has_git_ancestor() {
+  local want1="$1" want2="${2:-}"
+  local pid="${PPID:-}" depth=0
+  while [ -n "$pid" ] && [ "$pid" -gt 1 ] && [ "$depth" -lt 8 ]; do
+    if [ -r "/proc/$pid/cmdline" ]; then
+      local args=()
+      mapfile -d '' -t args < "/proc/$pid/cmdline" 2>/dev/null || true
+      if [ "${#args[@]}" -gt 0 ]; then
+        local cmd="${args[0]##*/}"
+        if [ "$cmd" = "git-${want1}" ] && [ -z "$want2" ]; then
+          return 0
+        fi
+        if [ "$cmd" = "git" ]; then
+          local i=1 expect_val=0 sub="" sub2=""
+          while [ "$i" -lt "${#args[@]}" ]; do
+            local tok="${args[$i]}"
+            if [ "$expect_val" -eq 1 ]; then
+              expect_val=0
+              i=$((i + 1))
+              continue
+            fi
+            case "$tok" in
+              --)
+                i=$((i + 1))
+                break
+                ;;
+              -C|-c|--git-dir|--work-tree|--namespace|--config-env|--exec-path|--attr-source|--shallow-file)
+                expect_val=1
+                ;;
+              -*)
+                ;;
+              *)
+                if [ -z "$sub" ]; then
+                  sub="$tok"
+                else
+                  sub2="$tok"
+                  break
+                fi
+                ;;
+            esac
+            i=$((i + 1))
+          done
+          if [ "$sub" = "$want1" ] && { [ -z "$want2" ] || [ "$sub2" = "$want2" ]; }; then
+            return 0
+          fi
+        fi
+      fi
+    fi
+    pid="$(awk '/^PPid:/ {print $2}' "/proc/$pid/status" 2>/dev/null || true)"
+    depth=$((depth + 1))
+  done
+  return 1
+}
+
+refuse_canonical_update() {
+  local ref_name="$1"
+  local new_val="$2"
+  echo "BLOCKED (reference-transaction): refusing to update \`$ref_name\` -> \`$new_val\` in canonical web-jam-tools clone ($CANONICAL_DIR)." >&2
+  echo "The canonical clone stays on dev at origin/dev; lanes must work in their own worktree via scripts/new-agent-worktree.sh." >&2
+  echo "Report the clone's state to Josh and NEVER reset, checkout --, or clean its working tree." >&2
+  echo "For Josh's own deliberate change, run the same git command with: -c core.hooksPath=/dev/null" >&2
+  exit 1
+}
+
+if [ "$STATE" = "prepared" ] && [ -n "$CURRENT_GIT_DIR" ] && [ "$CURRENT_GIT_DIR" = "$CANONICAL_GIT_DIR" ]; then
+  ORIGIN_DEV_OID="$(git rev-parse --verify -q refs/remotes/origin/dev 2>/dev/null || true)"
+  LOCAL_DEV_OID="$(git rev-parse --verify -q refs/heads/dev 2>/dev/null || true)"
+  WORKTREE_ADD_CHECKED=0
+  WORKTREE_ADD=1
+  PACK_REFS_CHECKED=0
+  PACK_REFS=1
+
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    read -r old_val new_val ref_name _rest <<< "$line"
+    case "$ref_name" in
+      HEAD)
+        if [ "$new_val" != "ref:refs/heads/dev" ]; then
+          if [ "$WORKTREE_ADD_CHECKED" -eq 0 ]; then
+            WORKTREE_ADD_CHECKED=1
+            if has_git_ancestor "worktree" "add"; then
+              WORKTREE_ADD=0
+            fi
+          fi
+          if [ "$WORKTREE_ADD" -ne 0 ]; then
+            refuse_canonical_update "$ref_name" "$new_val"
+          fi
+        fi
+        ;;
+      refs/heads/dev)
+        if [ -n "$LOCAL_DEV_OID" ] && [ "$new_val" = "$LOCAL_DEV_OID" ]; then
+          continue
+        fi
+        if [[ "$new_val" =~ ^0+$ ]] && [ -n "$LOCAL_DEV_OID" ] && [ "$old_val" = "$LOCAL_DEV_OID" ]; then
+          if [ "$PACK_REFS_CHECKED" -eq 0 ]; then
+            PACK_REFS_CHECKED=1
+            if has_git_ancestor "pack-refs"; then
+              PACK_REFS=0
+            fi
+          fi
+          if [ "$PACK_REFS" -eq 0 ]; then
+            continue
+          fi
+        fi
+        if [ -z "$ORIGIN_DEV_OID" ] || [ "$new_val" != "$ORIGIN_DEV_OID" ]; then
+          refuse_canonical_update "$ref_name" "$new_val"
+        fi
+        ;;
+    esac
+  done <<< "$STDIN_DATA"
+fi
+
+# Hand on to the repository's own .git/hooks/reference-transaction if present and executable.
+COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+if [ -n "$COMMON_DIR" ]; then
+  COMMON_DIR="$(readlink -f "$COMMON_DIR" 2>/dev/null || echo "$COMMON_DIR")"
+  REPO_HOOK="$COMMON_DIR/hooks/reference-transaction"
+  if [ -f "$REPO_HOOK" ] && [ -x "$REPO_HOOK" ]; then
+    THIS_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+    TARGET_HOOK="$(readlink -f "$REPO_HOOK" 2>/dev/null || echo "$REPO_HOOK")"
+    if [ "$THIS_SCRIPT" != "$TARGET_HOOK" ]; then
+      printf '%s' "$STDIN_DATA" | "$REPO_HOOK" "$@"
+      exit $?
+    fi
+  fi
+fi
+
+exit 0
