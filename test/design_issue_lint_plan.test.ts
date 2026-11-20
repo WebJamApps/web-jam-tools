@@ -1922,6 +1922,7 @@ Deno.test("findOutcomeWordingViolation matches all banned phrases in any capital
     assertStringIncludes((err as Error).message, 'issue "Item X"');
     assertStringIncludes((err as Error).message, "Unable To Determine");
   }
+});
 
 // --- Appendix D — "The plan's steps after the merge" (web-jam-tools#1801, Cases 1–7) ---
 
