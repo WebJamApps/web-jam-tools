@@ -14,11 +14,14 @@ import { checkPayload, refusalFor } from "../hooks/lib/check_personal_numbers_re
 
 const SCRIPT = new URL("../hooks/block-personal-numbers-read.sh", import.meta.url).pathname;
 const SHIM = new URL("../hooks/agy-hook-shim.sh", import.meta.url).pathname;
-const REAL_HOME = Deno.env.get("HOME") ?? "/home/joshua";
-const DENO_DIR = Deno.env.get("DENO_DIR") ?? path.join(REAL_HOME, ".cache/deno");
-const HAS_PDFTOTEXT =
-  new Deno.Command("bash", { args: ["-c", "command -v pdftotext"] }).outputSync()
-    .success;
+// The hook runs with a fixture HOME; keep Deno on its real cache so the hook's
+// imports resolve exactly as they do on the laptop.
+const DENO_DIR: string = JSON.parse(
+  new TextDecoder().decode(
+    new Deno.Command(Deno.execPath(), { args: ["info", "--json"], stdout: "piped" }).outputSync()
+      .stdout,
+  ),
+).denoDir;
 const IS_ROOT = new TextDecoder().decode(
   new Deno.Command("id", { args: ["-u"], stdout: "piped" }).outputSync().stdout,
 )
@@ -203,7 +206,6 @@ const ROWS: Row[] = [
     arg: "pdftotext ~/Downloads/paystub.pdf -",
     setup: () => put(`${HOME}/Downloads/paystub.pdf`, pdfWithText("123-45-6789")),
     refuse: "a Social Security number",
-    ignore: !HAS_PDFTOTEXT,
   },
   {
     call: 'Read {"file_path":"/home/joshua/Downloads/receipt.jpg"}',

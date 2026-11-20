@@ -120,8 +120,10 @@ jobs:
             rm -f "/tmp/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" "/tmp/trivy_${TRIVY_VERSION}_checksums.txt"
             trivy --version
             # Semgrep (via pipx) + hledger (Ubuntu package, web-jam-tools#1764)
-            sudo apt-get update -y && sudo apt-get install -y pipx xz-utils tmux hledger
+            # + pdftotext (poppler-utils), which the personal-numbers read guard runs on a PDF (web-jam-tools#1860)
+            sudo apt-get update -y && sudo apt-get install -y pipx xz-utils tmux hledger poppler-utils
             hledger --version
+            pdftotext -v
             pipx install semgrep
             echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
             # shellcheck (pinned) — static binary, no apt version pin available
