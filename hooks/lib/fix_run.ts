@@ -66,7 +66,11 @@ export async function readTypedSkillCall(
     if (surface === "codex" || (surface === "claude" && !claudeId)) return null;
     const context = claudeId
       ? await resolveClaudeCodeWriteContext(claudeId, true)
-      : await resolveAntigravityWriteContext(true);
+      : await resolveAntigravityWriteContext(true, {
+        conversationId: env("AGY_CONVERSATION_ID"),
+        transcriptPath: env("AGY_TRANSCRIPT_PATH"),
+        recordPath: env("AGY_HOOK_RECORD_PATH"),
+      });
     return context ? latestTypedSkillCall(context) : null;
   } catch {
     return null;
