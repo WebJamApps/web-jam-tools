@@ -25,7 +25,7 @@ Design section: "Which model does the fix".
   never sort the failure by kind, and never consult the tier order.
 - A helper exists only when the call asks for one by model. It does steps 1 to 5; this session keeps
   step 6, since only the session Josh typed into may push. The comment then names the helper.
-  - Claude Code: start it with the Agent tool, naming the model.
+  - On Claude Code, start it with the Agent tool, naming the model.
   - Codex: ask for a helper on the named model.
   - agy: the run stays in this session, on a model "The agy model guard" in
     `~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md` permits. A request
@@ -115,5 +115,5 @@ Design section: "Both surfaces — Claude Code, agy and Codex".
 | ----------------- | ------------------------------- | ---------------------------------------------- | --------------------------- |
 | Call              | `/fix-pr`                       | `/fix-pr`                                      | `$fix-pr`                   |
 | Linked at         | `~/.claude/skills`              | `~/.gemini/config/plugins/webjam-tasks/skills` | `~/.codex/skills`           |
-| Helper on request | Agent tool with the model named | none; the run ends before edits                | a helper on the model named |
+| Helper on request | On Claude Code, use the Agent tool with the model named | none; the run ends before edits | a helper on the model named |
 | `/learn`          | skipped                         | step 4                                         | skipped                     |
