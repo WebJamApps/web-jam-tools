@@ -3348,3 +3348,350 @@ Deno.test("Design table case 13: repository copy scripts/agy-skill-run.sh in Jos
     await Deno.remove(tmpDir, { recursive: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// 9. Design doc rev 1.16.0 swarm-worker ancestry cases (web-jam-tools#1882)
+// ---------------------------------------------------------------------------
+
+function makeSwarmCreationResult(
+  childId: string,
+  overrides: { status?: string; conversationId?: string; note?: string } = {},
+): string {
+  const payload = {
+    status: overrides.status ?? "added",
+    name: "hydrogen-filer",
+    model: "gemini-4-hydrogen-high",
+    model_display_name: "Gemini 4 Hydrogen (High)",
+    conversation_id: overrides.conversationId ?? childId,
+    open_board: "Run /swarm board (default shortcut alt+s) to open the live board.",
+    note: overrides.note ?? "The brief is on the board as #1.",
+  };
+  return JSON.stringify({
+    step_index: 452,
+    source: "MODEL",
+    type: "GENERIC",
+    status: "DONE",
+    created_at: "2026-11-20T20:51:47Z",
+    content: `Created At: 2026-11-20T15:51:47-05:00\nCompleted At: 2026-11-20T15:51:49-05:00\n${
+      JSON.stringify(payload)
+    }`,
+  });
+}
+
+function makeSwarmCreationMessage(
+  childId: string,
+  parentId: string,
+  overrides: { recipient?: unknown; sender?: unknown; toolConvId?: unknown } = {},
+): string {
+  return JSON.stringify({
+    id: "5003d746-e8fe-41e3-b6b6-93463733b3ea",
+    recipient: "recipient" in overrides ? overrides.recipient : childId,
+    sender: "sender" in overrides ? overrides.sender : parentId,
+    sourceMetadata: {
+      tool: {
+        conversationId: "toolConvId" in overrides ? overrides.toolConvId : parentId,
+        stepIndex: 452,
+        toolCall: {
+          id: "call_5921027428028321113",
+          name: "swarm",
+          argumentsJson: JSON.stringify({ action: "add", brief: "Execute task" }),
+        },
+      },
+    },
+  });
+}
+
+Deno.test("swarm unit: isHelperCreationMessage accepts valid swarm creation and rejects mismatched or contradictory fields", () => {
+  const valid = JSON.parse(makeSwarmCreationMessage("worker-1", "starter-1"));
+  assertEquals(isHelperCreationMessage(valid, "worker-1"), {
+    valid: true,
+    isCreationAttempt: true,
+    parentId: "starter-1",
+  });
+
+  const mismatchedRecipient = JSON.parse(
+    makeSwarmCreationMessage("worker-1", "starter-1", { recipient: "other-worker" }),
+  );
+  assertEquals(isHelperCreationMessage(mismatchedRecipient, "worker-1"), {
+    valid: false,
+    isCreationAttempt: true,
+    reason: "mismatched recipient",
+  });
+
+  const contradictory = JSON.parse(
+    makeSwarmCreationMessage("worker-1", "starter-1", {
+      sender: "starter-a",
+      toolConvId: "starter-b",
+    }),
+  );
+  assertEquals(isHelperCreationMessage(contradictory, "worker-1"), {
+    valid: false,
+    isCreationAttempt: true,
+    reason: "contradictory sender and tool conversationId",
+  });
+
+  const selfParent = JSON.parse(
+    makeSwarmCreationMessage("worker-1", "worker-1"),
+  );
+  assertEquals(isHelperCreationMessage(selfParent, "worker-1"), {
+    valid: false,
+    isCreationAttempt: true,
+    reason: "self-referential parent conversation ID",
+  });
+
+  const boardNotify = {
+    recipient: "worker-1",
+    sender: "starter-1",
+    content: "[swarm] new board message #1",
+  };
+  assertEquals(isHelperCreationMessage(boardNotify, "worker-1"), {
+    valid: false,
+    isCreationAttempt: false,
+    reason: "toolCall is neither invoke_subagent nor swarm",
+  });
+});
+
+Deno.test("swarm unit: isHelperCreationResult accepts authentic swarm add response (even with braces in strings) and rejects spoofs", () => {
+  const validEntry = JSON.parse(
+    makeSwarmCreationResult("worker-1", { note: "Brief mentions {unclosed brace in text" }),
+  );
+  assertEquals(isHelperCreationResult(validEntry, "worker-1"), true);
+
+  const wrongIdEntry = JSON.parse(
+    makeSwarmCreationResult("worker-1", { conversationId: "worker-other" }),
+  );
+  assertEquals(isHelperCreationResult(wrongIdEntry, "worker-1"), false);
+
+  const nonAddedStatus = JSON.parse(
+    makeSwarmCreationResult("worker-1", { status: "error" }),
+  );
+  assertEquals(isHelperCreationResult(nonAddedStatus, "worker-1"), false);
+
+  const userSpoof = {
+    type: "USER_INPUT",
+    source: "USER_EXPLICIT",
+    content: JSON.stringify({ status: "added", conversation_id: "worker-1" }),
+  };
+  assertEquals(isHelperCreationResult(userSpoof, "worker-1"), false);
+
+  const assistantSpoof = {
+    type: "GENERIC",
+    role: "assistant",
+    content: JSON.stringify({ status: "added", conversation_id: "worker-1" }),
+  };
+  assertEquals(isHelperCreationResult(assistantSpoof, "worker-1"), false);
+});
+
+Deno.test("Design table rev 1.16.0 swarm case 1: swarm worker with valid creation message, starter status=added, and Josh USER_INPUT -> allow, rewritten with worker identity flags", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-swarm-case1-" });
+  try {
+    const starterId = "starter-swarm-1";
+    const workerId = "worker-swarm-1";
+    const starterLogs = join(tmpDir, starterId, ".system_generated", "logs");
+    await Deno.mkdir(starterLogs, { recursive: true });
+    await Deno.writeTextFile(
+      join(starterLogs, "transcript.jsonl"),
+      [
+        JSON.stringify({
+          type: "USER_INPUT",
+          source: "USER_EXPLICIT",
+          content: "/design-issue web-jam-tools#1683",
+        }),
+        makeSwarmCreationResult(workerId),
+      ].join("\n") + "\n",
+    );
+
+    const workerLogs = join(tmpDir, workerId, ".system_generated", "logs");
+    const workerMsgs = join(tmpDir, workerId, ".system_generated", "messages");
+    await Deno.mkdir(workerLogs, { recursive: true });
+    await Deno.mkdir(workerMsgs, { recursive: true });
+    const workerTranscript = join(workerLogs, "transcript.jsonl");
+    await Deno.writeTextFile(workerTranscript, CAPTURED_CHILD_LAUNCH_ENTRY + "\n");
+    await Deno.writeTextFile(
+      join(workerMsgs, "5003d746.json"),
+      makeSwarmCreationMessage(workerId, starterId),
+    );
+    // Board notification message without sourceMetadata must be safely ignored.
+    await Deno.writeTextFile(
+      join(workerMsgs, "77b681ba.json"),
+      JSON.stringify({
+        id: "77b681ba",
+        recipient: workerId,
+        sender: starterId,
+        content: "[swarm] new board message #1",
+      }),
+    );
+
+    const cmd = "deno task edit-issue --repo WebJamApps/web-jam-tools --issue 1683 --dry-run";
+    const payload = {
+      toolCall: { name: "run_command", args: { CommandLine: cmd } },
+      transcriptPath: workerTranscript,
+      conversationId: workerId,
+      modelName: "gemini-4-hydrogen-high",
+    };
+
+    const res = handlePreToolUse(payload);
+    assertEquals(res.decision, "allow");
+    assertEquals(
+      res.overwrite?.CommandLine,
+      `${INSTALLED_SCRIPT_PATH} --conversation-id '${workerId}' --model-name 'gemini-4-hydrogen-high' --transcript-path '${workerTranscript}' '${cmd}'`,
+    );
+
+    // Also verify end-to-end through hooks/agy-skill-run-hook.sh
+    const e2e = await runHookScript(payload);
+    assertEquals(e2e.code, 0);
+    assertEquals(e2e.parsed.decision, "allow");
+    assertEquals(
+      e2e.parsed.overwrite?.CommandLine,
+      `${INSTALLED_SCRIPT_PATH} --conversation-id '${workerId}' --model-name 'gemini-4-hydrogen-high' --transcript-path '${workerTranscript}' '${cmd}'`,
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Design table rev 1.16.0 swarm case 2: swarm worker whose starter record holds no matching status=added response -> allow, no rewrite", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-swarm-case2-" });
+  try {
+    const starterId = "starter-swarm-2";
+    const workerId = "worker-swarm-2";
+    const starterLogs = join(tmpDir, starterId, ".system_generated", "logs");
+    await Deno.mkdir(starterLogs, { recursive: true });
+    await Deno.writeTextFile(
+      join(starterLogs, "transcript.jsonl"),
+      [
+        JSON.stringify({
+          type: "USER_INPUT",
+          source: "USER_EXPLICIT",
+          content: "run tests",
+        }),
+        makeSwarmCreationResult("different-worker-id"),
+      ].join("\n") + "\n",
+    );
+
+    const workerLogs = join(tmpDir, workerId, ".system_generated", "logs");
+    const workerMsgs = join(tmpDir, workerId, ".system_generated", "messages");
+    await Deno.mkdir(workerLogs, { recursive: true });
+    await Deno.mkdir(workerMsgs, { recursive: true });
+    const workerTranscript = join(workerLogs, "transcript.jsonl");
+    await Deno.writeTextFile(workerTranscript, CAPTURED_CHILD_LAUNCH_ENTRY + "\n");
+    await Deno.writeTextFile(
+      join(workerMsgs, "msg.json"),
+      makeSwarmCreationMessage(workerId, starterId),
+    );
+
+    const res = handlePreToolUse({
+      toolCall: { name: "run_command", args: { CommandLine: "npm test" } },
+      transcriptPath: workerTranscript,
+      conversationId: workerId,
+      modelName: "gemini-4-hydrogen-high",
+    });
+    assertEquals(res.decision, "allow");
+    assertEquals(res.overwrite, undefined);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Design table rev 1.16.0 swarm case 3: swarm creation message with mismatched recipient or contradictory sender/tool conversationId -> allow, no rewrite", async () => {
+  for (
+    const badOverride of [
+      { recipient: "wrong-recipient" },
+      { sender: "other-parent", toolConvId: "starter-swarm-3" },
+    ]
+  ) {
+    const tmpDir = await Deno.makeTempDir({ prefix: "agy-swarm-case3-" });
+    try {
+      const starterId = "starter-swarm-3";
+      const workerId = "worker-swarm-3";
+      const starterLogs = join(tmpDir, starterId, ".system_generated", "logs");
+      await Deno.mkdir(starterLogs, { recursive: true });
+      await Deno.writeTextFile(
+        join(starterLogs, "transcript.jsonl"),
+        [
+          JSON.stringify({
+            type: "USER_INPUT",
+            source: "USER_EXPLICIT",
+            content: "run tests",
+          }),
+          makeSwarmCreationResult(workerId),
+        ].join("\n") + "\n",
+      );
+
+      const workerLogs = join(tmpDir, workerId, ".system_generated", "logs");
+      const workerMsgs = join(tmpDir, workerId, ".system_generated", "messages");
+      await Deno.mkdir(workerLogs, { recursive: true });
+      await Deno.mkdir(workerMsgs, { recursive: true });
+      const workerTranscript = join(workerLogs, "transcript.jsonl");
+      await Deno.writeTextFile(workerTranscript, CAPTURED_CHILD_LAUNCH_ENTRY + "\n");
+      await Deno.writeTextFile(
+        join(workerMsgs, "msg.json"),
+        makeSwarmCreationMessage(workerId, starterId, badOverride),
+      );
+
+      const res = handlePreToolUse({
+        toolCall: { name: "run_command", args: { CommandLine: "npm test" } },
+        transcriptPath: workerTranscript,
+        conversationId: workerId,
+        modelName: "gemini-4-hydrogen-high",
+      });
+      assertEquals(res.decision, "allow");
+      assertEquals(res.overwrite, undefined);
+    } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  }
+});
+
+Deno.test("Design table rev 1.16.0 swarm case 4: swarm worker 3 steps below starter rewrites, 4 steps below starter does not rewrite", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-swarm-case4-" });
+  try {
+    const convs = ["s0", "s1", "s2", "s3", "s4"];
+    for (let i = 0; i < convs.length; i++) {
+      const id = convs[i];
+      const logsDir = join(tmpDir, id, ".system_generated", "logs");
+      await Deno.mkdir(logsDir, { recursive: true });
+      let lines = i === 0
+        ? JSON.stringify({ type: "USER_INPUT", source: "USER_EXPLICIT", content: "run tests" }) +
+          "\n"
+        : CAPTURED_CHILD_LAUNCH_ENTRY + "\n";
+      if (i < convs.length - 1) {
+        lines += makeSwarmCreationResult(convs[i + 1]) + "\n";
+      }
+      await Deno.writeTextFile(join(logsDir, "transcript.jsonl"), lines);
+      if (i > 0) {
+        const msgsDir = join(tmpDir, id, ".system_generated", "messages");
+        await Deno.mkdir(msgsDir, { recursive: true });
+        await Deno.writeTextFile(
+          join(msgsDir, "msg.json"),
+          makeSwarmCreationMessage(id, convs[i - 1]),
+        );
+      }
+    }
+
+    const s3Transcript = join(tmpDir, "s3", ".system_generated", "logs", "transcript.jsonl");
+    const res3 = handlePreToolUse({
+      toolCall: { name: "run_command", args: { CommandLine: "npm test" } },
+      transcriptPath: s3Transcript,
+      conversationId: "s3",
+      modelName: "gemini-4-hydrogen-high",
+    });
+    assertEquals(res3.decision, "allow");
+    assertEquals(
+      res3.overwrite?.CommandLine,
+      `${INSTALLED_SCRIPT_PATH} --conversation-id 's3' --model-name 'gemini-4-hydrogen-high' --transcript-path '${s3Transcript}' 'npm test'`,
+    );
+
+    const s4Transcript = join(tmpDir, "s4", ".system_generated", "logs", "transcript.jsonl");
+    const res4 = handlePreToolUse({
+      toolCall: { name: "run_command", args: { CommandLine: "npm test" } },
+      transcriptPath: s4Transcript,
+      conversationId: "s4",
+      modelName: "gemini-4-hydrogen-high",
+    });
+    assertEquals(res4.decision, "allow");
+    assertEquals(res4.overwrite, undefined);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
