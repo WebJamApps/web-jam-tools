@@ -37,6 +37,16 @@
  *   <session_id>.queue.jsonl    one JSON object per line; this module writes `kind: "launch"` lines.
  *                               The mid-turn message queue (web-jam-tools#1065) writes its own
  *                               `kind` into the same file.
+ *
+ * Every refused launch is its own queue line: two requests with identical arguments are two
+ * entries, each with its own `id` (the tool call's `tool_use_id`, or a fresh random id when the
+ * payload carries none). The same tool call reaching the hook twice keeps one entry. A launch that
+ * is admitted later removes exactly one entry, the oldest with the same arguments, so a second
+ * identical request is never lost.
+ *
+ * An admitted launch updates the queue before it saves the reservation. A failure on the way leaves
+ * the two agreeing: before the queue is written nothing has changed; after it, the launch is off the
+ * queue and runs without a reservation, which SubagentStart then records as a running entry.
  *   <session_id>.lock/          a directory made with mkdir while one hook rewrites the files
  */
 
@@ -214,8 +224,17 @@ async function withLock<T>(paths: SessionPaths, stateDir: string, fn: () => T): 
 
 function writeAtomic(path: string, text: string): void {
   const tmp = `${path}.${Deno.pid}.tmp`;
-  Deno.writeTextFileSync(tmp, text);
-  Deno.renameSync(tmp, path);
+  try {
+    Deno.writeTextFileSync(tmp, text);
+    Deno.renameSync(tmp, path);
+  } catch (err) {
+    try {
+      Deno.removeSync(tmp);
+    } catch {
+      // nothing was written, or it is already gone
+    }
+    throw err;
+  }
 }
 
 /** A missing file is an empty list; a file that is not a well-formed list throws. */
@@ -275,6 +294,7 @@ export interface AgentLaunchPayload {
   transcript_path?: unknown;
   agent_id?: unknown;
   tool_name?: unknown;
+  tool_use_id?: unknown;
   tool_input?: {
     description?: unknown;
     prompt?: unknown;
@@ -313,51 +333,72 @@ function launchKey(input: NonNullable<AgentLaunchPayload["tool_input"]>): string
   ]);
 }
 
-/** Appends the launch to the session queue unless that same launch is already queued. */
-function queueLaunch(
-  queuePath: string,
+interface QueueLine {
+  raw: string;
+  item: Record<string, unknown> | null;
+}
+
+function queueLines(text: string): QueueLine[] {
+  const lines: QueueLine[] = [];
+  for (const raw of text.split("\n")) {
+    if (!raw.trim()) continue;
+    let item: Record<string, unknown> | null = null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") item = parsed as Record<string, unknown>;
+    } catch {
+      // another writer's malformed line is none of this launch's business; it is kept as it is
+    }
+    lines.push({ raw, item });
+  }
+  return lines;
+}
+
+const joinLines = (lines: QueueLine[]): string =>
+  lines.length ? lines.map((l) => l.raw).join("\n") + "\n" : "";
+
+/** The queue identity of one launch attempt: its tool call id, or a fresh id when it has none. */
+function launchId(payload: AgentLaunchPayload): string {
+  const given = str(payload.tool_use_id);
+  return given && /^[A-Za-z0-9_-]{1,128}$/.test(given) ? given : crypto.randomUUID();
+}
+
+/** The queue text with this launch appended, unless this very tool call is already queued. */
+function withLaunchQueued(
+  queueText: string,
+  id: string,
   input: NonNullable<AgentLaunchPayload["tool_input"]>,
   deps: CapDeps,
-) {
-  const key = launchKey(input);
-  const existing = deps.readState(queuePath) ?? "";
-  for (const line of existing.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const item = JSON.parse(line);
-      if (item?.kind === "launch" && item.key === key) return;
-    } catch {
-      // another writer's malformed line is none of this launch's business
-    }
-  }
+): string {
+  const lines = queueLines(queueText);
+  if (lines.some((l) => l.item?.kind === "launch" && l.item.id === id)) return joinLines(lines);
   const item = {
     kind: "launch",
-    key,
+    id,
+    key: launchKey(input),
     queued_at: new Date(deps.now()).toISOString(),
     description: str(input.description),
     subagent_type: str(input.subagent_type),
     model: str(input.model),
     prompt: str(input.prompt),
   };
-  writeAtomic(queuePath, existing + JSON.stringify(item) + "\n");
+  lines.push({ raw: JSON.stringify(item), item });
+  return joinLines(lines);
 }
 
-/** A launch that was queued and is now admitted leaves the queue, so the queue drains. */
-function dequeueLaunch(queuePath: string, key: string, deps: CapDeps) {
-  const existing = deps.readState(queuePath);
-  if (existing === null) return;
-  const kept = existing.split("\n").filter((line) => {
-    if (!line.trim()) return false;
-    try {
-      const item = JSON.parse(line);
-      return !(item?.kind === "launch" && item.key === key);
-    } catch {
-      return true;
-    }
-  });
-  if (kept.length !== existing.split("\n").filter((line) => line.trim()).length) {
-    writeAtomic(queuePath, kept.length ? kept.join("\n") + "\n" : "");
-  }
+/**
+ * The queue text without the entry an admitted launch answers: the entry with its own id, else the
+ * oldest launch entry with the same arguments. One entry leaves, so the queue drains one launch at
+ * a time and an identical second request stays queued.
+ */
+function withLaunchDequeued(queueText: string, id: string, key: string): string {
+  const lines = queueLines(queueText);
+  const isLaunch = (l: QueueLine) => l.item?.kind === "launch";
+  const byId = lines.findIndex((l) => isLaunch(l) && l.item?.id === id);
+  const at = byId >= 0 ? byId : lines.findIndex((l) => isLaunch(l) && l.item?.key === key);
+  if (at < 0) return joinLines(lines);
+  lines.splice(at, 1);
+  return joinLines(lines);
 }
 
 type CapOutcome = { full: RunningEntry[] } | { admitted: true };
@@ -404,13 +445,20 @@ export async function decideLaunch(
   }
   const paths = sessionPaths(deps.stateDir, sessionId);
   const key = launchKey(input);
+  const id = launchId(payload);
   const locked = await withLock<CapOutcome>(paths, deps.stateDir, () => {
     const entries = pruneEntries(loadList(paths.list, deps).entries, deps);
+    // Read everything first: a read that fails here has changed nothing.
+    const queueText = deps.readState(paths.queue) ?? "";
     if (entries.length >= MAX_RUNNING_SUBAGENTS) {
-      queueLaunch(paths.queue, input, deps);
+      const queued = withLaunchQueued(queueText, id, input, deps);
+      if (queued !== queueText) writeAtomic(paths.queue, queued);
       saveList(paths.list, entries);
       return { full: entries };
     }
+    // The queue first, the reservation second: the header says what a failure leaves behind.
+    const remaining = withLaunchDequeued(queueText, id, key);
+    if (remaining !== queueText) writeAtomic(paths.queue, remaining);
     entries.push({
       agent_id: null,
       agent_type: str(input.subagent_type) || "general-purpose",
@@ -418,7 +466,6 @@ export async function decideLaunch(
       reserved_at: new Date(deps.now()).toISOString(),
     });
     saveList(paths.list, entries);
-    dequeueLaunch(paths.queue, key, deps);
     return { admitted: true };
   });
   if (!locked.ok) {

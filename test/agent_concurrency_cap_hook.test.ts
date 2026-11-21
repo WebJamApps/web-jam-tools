@@ -221,17 +221,166 @@ for (const [label, input] of INHERITING_LAUNCHES) {
 
 // --- the queue and the slots -------------------------------------------------------------------
 
-Deno.test("cap: the same refused launch is queued once, then leaves the queue when a slot frees", async () => {
+Deno.test("cap: two identical requests refused while full are two queue entries", async () => {
+  await withSandbox(async (box) => {
+    await fillSlots(box, 2);
+    for (const tool_use_id of ["toolu_first", "toolu_second"]) {
+      const launch = launchPayload({
+        model: "opus",
+        description: "again",
+        prompt: "same prompt",
+        tool_use_id,
+      });
+      assertDenied(await decideLaunch(launch, box.deps), "already running");
+    }
+    const queued = await queuedLaunches(box);
+    assertEquals(queued.map((q) => q.id), ["toolu_first", "toolu_second"]);
+    assertEquals(queued[0].key, queued[1].key);
+  });
+});
+
+Deno.test("cap: identical requests that carry no tool call id are each retained with their own id", async () => {
   await withSandbox(async (box) => {
     await fillSlots(box, 2);
     const launch = launchPayload({ model: "opus", description: "again", prompt: "same prompt" });
     assertDenied(await decideLaunch(launch, box.deps), "already running");
+    assertDenied(await decideLaunch(launch, box.deps), "already running");
+    const queued = await queuedLaunches(box);
+    assertEquals(queued.length, 2);
+    assert(queued[0].id && queued[1].id && queued[0].id !== queued[1].id);
+  });
+});
+
+Deno.test("cap: the same tool call reaching the hook again keeps one queue entry", async () => {
+  await withSandbox(async (box) => {
+    await fillSlots(box, 2);
+    const launch = launchPayload({
+      model: "opus",
+      description: "retry",
+      tool_use_id: "toolu_same",
+    });
+    assertDenied(await decideLaunch(launch, box.deps), "already running");
+    assertDenied(await decideLaunch(launch, box.deps), "already running");
+    assertEquals((await queuedLaunches(box)).map((q) => q.id), ["toolu_same"]);
+  });
+});
+
+Deno.test("cap: an admitted launch removes one queued entry, so an identical second request stays", async () => {
+  await withSandbox(async (box) => {
+    await fillSlots(box, 2);
+    for (const tool_use_id of ["toolu_first", "toolu_second"]) {
+      await decideLaunch(
+        launchPayload({ model: "opus", description: "again", prompt: "same prompt", tool_use_id }),
+        box.deps,
+      );
+    }
+    await recordSubagentStop(lifecyclePayload("SubagentStop", "busy1"), box.deps);
+    assertAllowed(
+      await decideLaunch(
+        launchPayload({
+          model: "opus",
+          description: "again",
+          prompt: "same prompt",
+          tool_use_id: "toolu_relaunch",
+        }),
+        box.deps,
+      ),
+    );
+    assertEquals((await queuedLaunches(box)).map((q) => q.id), ["toolu_second"]);
+  });
+});
+
+Deno.test("cap: an admitted launch removes the entry carrying its own tool call id first", async () => {
+  await withSandbox(async (box) => {
+    await fillSlots(box, 2);
+    await decideLaunch(
+      launchPayload({ model: "haiku", description: "older", tool_use_id: "toolu_old" }),
+      box.deps,
+    );
+    await decideLaunch(
+      launchPayload({ model: "haiku", description: "newer", tool_use_id: "toolu_new" }),
+      box.deps,
+    );
+    await recordSubagentStop(lifecyclePayload("SubagentStop", "busy1"), box.deps);
+    assertAllowed(
+      await decideLaunch(
+        launchPayload({ model: "haiku", description: "newer", tool_use_id: "toolu_new" }),
+        box.deps,
+      ),
+    );
+    assertEquals((await queuedLaunches(box)).map((q) => q.id), ["toolu_old"]);
+  });
+});
+
+Deno.test("cap: a tool call id that is not a safe token is replaced by a fresh id", async () => {
+  await withSandbox(async (box) => {
+    await fillSlots(box, 2);
+    await decideLaunch(launchPayload({ model: "haiku", tool_use_id: "not a safe id!" }), box.deps);
+    const [queued] = await queuedLaunches(box);
+    assert(queued.id && queued.id !== "not a safe id!");
+  });
+});
+
+Deno.test("cap: a refused launch is queued, then leaves the queue when it is admitted", async () => {
+  await withSandbox(async (box) => {
+    await fillSlots(box, 2);
+    const launch = launchPayload({ model: "opus", description: "again", prompt: "same prompt" });
     assertDenied(await decideLaunch(launch, box.deps), "already running");
     assertEquals((await queuedLaunches(box)).length, 1);
 
     await recordSubagentStop(lifecyclePayload("SubagentStop", "busy1"), box.deps);
     assertAllowed(await decideLaunch(launch, box.deps));
     assertEquals(await queuedLaunches(box), []);
+  });
+});
+
+Deno.test("cap: a queue that cannot be read leaves no reservation and the queued entry in place", async () => {
+  await withSandbox(async (box) => {
+    await fillSlots(box, 2);
+    const launch = launchPayload({ model: "opus", description: "queued", tool_use_id: "toolu_q" });
+    assertDenied(await decideLaunch(launch, box.deps), "already running");
+    await recordSubagentStop(lifecyclePayload("SubagentStop", "busy1"), box.deps);
+
+    const unreadable: CapDeps = {
+      ...box.deps,
+      readState: (path) => {
+        if (path.endsWith(".queue.jsonl")) throw new Error("queue unreadable");
+        return box.deps.readState(path);
+      },
+    };
+    const decision = await decideLaunch(launch, unreadable);
+    assertEquals(decision.decision, "allow");
+    assertStringIncludes((decision as { note?: string }).note ?? "", "queue unreadable");
+    assertEquals(runningSummary(box), ["busy2:running"]);
+    assertEquals((await queuedLaunches(box)).map((q) => q.id), ["toolu_q"]);
+  });
+});
+
+Deno.test("cap: a reservation that cannot be saved leaves the admitted launch off the queue", async () => {
+  await withSandbox(async (box) => {
+    await fillSlots(box, 2);
+    const launch = launchPayload({ model: "opus", description: "queued", tool_use_id: "toolu_q" });
+    assertDenied(await decideLaunch(launch, box.deps), "already running");
+    await recordSubagentStop(lifecyclePayload("SubagentStop", "busy1"), box.deps);
+
+    // The list is readable but cannot be replaced: a directory now stands where the file was.
+    const listPath = `${box.stateDir}/${SESSION_ID}.running.json`;
+    const listText = Deno.readTextFileSync(listPath);
+    Deno.removeSync(listPath);
+    Deno.mkdirSync(listPath);
+    const unsavable: CapDeps = {
+      ...box.deps,
+      readState: (path) => path === listPath ? listText : box.deps.readState(path),
+    };
+
+    const decision = await decideLaunch(launch, unsavable);
+    assertEquals(decision.decision, "allow");
+    assertStringIncludes((decision as { note?: string }).note ?? "", "could not be used");
+    assertEquals(await queuedLaunches(box), []);
+    const leftovers = [...Deno.readDirSync(box.stateDir)].map((e) => e.name).filter((n) =>
+      n.endsWith(".tmp")
+    );
+    assertEquals(leftovers, []);
   });
 });
 

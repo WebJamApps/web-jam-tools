@@ -118,6 +118,8 @@ export interface LaunchOptions {
   agent_id?: string;
   transcript_path?: string;
   session_id?: string;
+  /** The tool call's id, which Claude Code gives every PreToolUse payload. */
+  tool_use_id?: string;
 }
 
 /** A PreToolUse payload for the `Agent` tool. */
@@ -134,6 +136,7 @@ export function launchPayload(opts: LaunchOptions = {}): Record<string, unknown>
     session_id: opts.session_id ?? SESSION_ID,
     transcript_path: opts.transcript_path,
     agent_id: opts.agent_id,
+    tool_use_id: opts.tool_use_id,
     tool_input: input,
   };
 }
