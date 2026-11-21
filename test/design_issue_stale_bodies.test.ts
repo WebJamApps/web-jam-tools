@@ -582,9 +582,9 @@ Deno.test("extractDocumentIssueTargets extracts plan table rows, issue tables, a
 | 1.0.0 | 2026-09-01 | [Epic #737](https://github.com/WebJamApps/web-jam-tools/issues/737) | Initial |
 
 ## Proposed Plan Table
-| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |
-|---|---|---|---|---|---|---|---|
-| 1 | [#888](https://github.com/WebJamApps/web-jam-tools/issues/888) | Epic #737 | Terra | Medium | web-jam-tools | npm test | PR merges |
+| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Design | Tests | Closes when |
+|---|---|---|---|---|---|---|---|---|
+| 1 | [#888](https://github.com/WebJamApps/web-jam-tools/issues/888) | Epic #737 | Terra | Medium | web-jam-tools | design.md | npm test | PR merges |
 
 ### The Filed Issues
 | # | Title | Issue Link | Model Tier |

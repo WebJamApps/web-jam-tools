@@ -102,19 +102,19 @@ for (const [cell, expectedLabels] of ALLOWED_NO_REASON_CELLS) {
       const testsCell = cell === "Josh" ? "none — manual step" : "Unit tests cover every case";
       const rows = cell === "Josh"
         ? [
-          '| 1 | Author doc for manual check | web-jam-tools#900 "Fixture epic" | Terra | High | web-jam-tools | Unit tests cover doc | `deno task test` passes |',
-          `| 2 | Manual verification: Share the model-label reader | web-jam-tools#900 "Fixture epic" | ${cell} | High | web-jam-tools | ${testsCell} | ${closesWhen} |`,
+          '| 1 | Author doc for manual check | web-jam-tools#900 "Fixture epic" | Terra | High | web-jam-tools | design.md | Unit tests cover doc | `deno task test` passes |',
+          `| 2 | Manual verification: Share the model-label reader | web-jam-tools#900 "Fixture epic" | ${cell} | High | web-jam-tools | design.md | ${testsCell} | ${closesWhen} |`,
         ]
         : [
-          `| 1 | Share the model-label reader | web-jam-tools#900 "Fixture epic" | ${cell} | High | web-jam-tools | ${testsCell} | ${closesWhen} |`,
+          `| 1 | Share the model-label reader | web-jam-tools#900 "Fixture epic" | ${cell} | High | web-jam-tools | design.md | ${testsCell} | ${closesWhen} |`,
         ];
       await Deno.writeTextFile(
         tablePath,
         [
           "# Plan",
           "",
-          "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |",
-          "|---|---|---|---|---|---|---|---|",
+          "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Design | Tests | Closes when |",
+          "|---|---|---|---|---|---|---|---|---|",
           ...rows,
           "",
           "## Steps after the merge",
@@ -179,9 +179,9 @@ Deno.test("model-label chain: Opus / Fable top lane preserves both labels and es
       [
         "# Plan",
         "",
-        "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |",
-        "|---|---|---|---|---|---|---|---|",
-        '| 1 | Share the model-label reader | web-jam-tools#900 "Fixture epic" | Opus / Fable | High | web-jam-tools | Unit tests cover every literal case | `deno task test` passes |',
+        "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Design | Tests | Closes when |",
+        "|---|---|---|---|---|---|---|---|---|",
+        '| 1 | Share the model-label reader | web-jam-tools#900 "Fixture epic" | Opus / Fable | High | web-jam-tools | design.md | Unit tests cover every literal case | `deno task test` passes |',
         "",
         "## Steps after the merge",
         "",

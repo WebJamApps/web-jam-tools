@@ -1,4 +1,10 @@
 import * as path from "jsr:@std/path@^1.0.0";
+import { PLAN_TABLE_HEADER } from "../src/design-issue/plan_table.ts";
+
+export interface RenderDesignDocOptions {
+  /** Render as a Gate 2 issue plan page (file row order, total row count, pager opens on "All"). */
+  isPlanPage?: boolean;
+}
 
 /**
  * Converts a text heading into a URL-friendly slug.
@@ -198,8 +204,24 @@ function parseTableRow(rowStr: string): string[] {
   return cells;
 }
 
-/** Orders only the history tables, leaving all other tables in file order. */
-function orderTableRows(heading: string, headers: string[], rows: string[][]): string[][] {
+/** Returns true when a parsed header row matches the canonical Gate 2 plan table header. */
+function isPlanTableHeader(headers: string[]): boolean {
+  if (headers.length !== PLAN_TABLE_HEADER.length) return false;
+  return headers.every(
+    (cell, idx) =>
+      cell.replace(/[*_`]/g, "").trim().toLowerCase() ===
+        PLAN_TABLE_HEADER[idx].toLowerCase(),
+  );
+}
+
+/** Orders only the history tables, leaving all other tables (and all plan-page tables) in file order. */
+function orderTableRows(
+  heading: string,
+  headers: string[],
+  rows: string[][],
+  options?: RenderDesignDocOptions,
+): string[][] {
+  if (options?.isPlanPage) return rows;
   const plainText = (text: string) => text.replace(/[*_`]/g, "").trim();
   const title = plainText(heading);
   if (
@@ -224,6 +246,7 @@ function orderTableRows(heading: string, headers: string[], rows: string[][]): s
 export function renderDesignDoc(
   markdownContent: string,
   fallbackTitle: string = "Design Document",
+  options?: RenderDesignDocOptions,
 ): string {
   const lines = markdownContent.split(/\r?\n/);
 
@@ -391,9 +414,19 @@ export function renderDesignDoc(
           tableHeading,
           headerCells,
           tableLines.slice(2).map(parseTableRow),
+          options,
         );
 
-        let tableHtml = `<div class="table-wrapper">\n<table>\n<thead>\n<tr>\n`;
+        const isPlanPage = Boolean(options?.isPlanPage);
+        const isGate2PlanTable = isPlanPage && isPlanTableHeader(headerCells);
+        const wrapperAttrs = isGate2PlanTable
+          ? ` class="table-wrapper" data-default-size="all"`
+          : ` class="table-wrapper"`;
+
+        let tableHtml = isGate2PlanTable
+          ? `<p class="plan-table-total">Total rows: ${bodyRows.length}</p>\n`
+          : "";
+        tableHtml += `<div${wrapperAttrs}>\n<table>\n<thead>\n<tr>\n`;
         for (const cell of headerCells) {
           tableHtml += `  <th>${parseInlineMarkdown(cell)}</th>\n`;
         }
@@ -661,6 +694,14 @@ export function renderDesignDoc(
       opacity: 0.85;
     }
 
+    .plan-table-total {
+      font-size: 0.9rem;
+      font-weight: 600;
+      margin: 1rem 0 0.4rem;
+      color: var(--text-color);
+      opacity: 0.85;
+    }
+
     pre {
       background-color: var(--code-bg);
       padding: 16px;
@@ -876,7 +917,9 @@ export function renderDesignDoc(
           var wrapper = table.closest(".table-wrapper");
           if (!wrapper || !wrapper.parentNode) return;
 
-          var currentSize = DEFAULT_PAGE_SIZE;
+          var defaultSizeAttr = wrapper.getAttribute("data-default-size");
+          var initialOptionValue = defaultSizeAttr === "all" ? "all" : String(DEFAULT_PAGE_SIZE);
+          var currentSize = defaultSizeAttr === "all" ? "all" : DEFAULT_PAGE_SIZE;
           var currentPage = 1;
 
           var pager = document.createElement("div");
@@ -897,7 +940,7 @@ export function renderDesignDoc(
             var opt = document.createElement("option");
             opt.value = sizeOptions[o].toLowerCase();
             opt.textContent = sizeOptions[o];
-            if (sizeOptions[o] === String(DEFAULT_PAGE_SIZE)) opt.selected = true;
+            if (opt.value === initialOptionValue) opt.selected = true;
             sizeSelect.appendChild(opt);
           }
           sizeLabel.appendChild(sizeSelect);
@@ -1041,23 +1084,25 @@ export function computeTablePagination(
 export function renderDesignDocFile(
   inputPath: string,
   outputPath: string,
+  options?: RenderDesignDocOptions,
 ): void {
   const content = Deno.readTextFileSync(inputPath);
   const fallbackTitle = path.basename(inputPath, path.extname(inputPath));
-  const html = renderDesignDoc(content, fallbackTitle);
+  const html = renderDesignDoc(content, fallbackTitle, options);
   Deno.writeTextFileSync(outputPath, html);
 }
 
 if (import.meta.main) {
-  const args = Deno.args;
+  const isPlanPage = Deno.args.includes("--plan-page");
+  const args = Deno.args.filter((a) => a !== "--plan-page");
   if (args.length < 2) {
     console.error(
-      "Usage: render_design_doc.ts <input_markdown_path> <output_html_path>",
+      "Usage: render_design_doc.ts [--plan-page] <input_markdown_path> <output_html_path>",
     );
     Deno.exit(1);
   }
   try {
-    renderDesignDocFile(args[0], args[1]);
+    renderDesignDocFile(args[0], args[1], { isPlanPage });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`Error rendering design doc: ${message}`);

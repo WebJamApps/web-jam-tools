@@ -1010,3 +1010,49 @@ Deno.test("Rendered Chrome check at 1600 x 1000 finds no near-white pixel", asyn
     await Deno.remove(tempDir, { recursive: true });
   }
 });
+
+Deno.test("Plan page: only the Gate 2 table starts on all, and the revision history keeps file order", () => {
+  const planHeader =
+    "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Design | Tests | Closes when |";
+  const planRows = Array.from(
+    { length: 11 },
+    (_, i) =>
+      `| ${i + 1} | Plan row ${
+        i + 1
+      } | row 1 | Terra | High | web-jam-tools | design.md | Tests | \`deno task test\` passes |`,
+  );
+  const otherRows = Array.from({ length: 12 }, (_, i) => `| Item ${i + 1} | ${i + 1} |`);
+  const md = [
+    "# Plan",
+    "",
+    "## Revision History",
+    "",
+    "| Version | Date | Notes |",
+    "|---|---|---|",
+    "| 1.0 | 2026-11-01 | First revision |",
+    "| 2.0 | 2026-11-02 | Second revision |",
+    "",
+    "## Phase 2 — The Issue Plan",
+    "",
+    planHeader,
+    "|---|---|---|---|---|---|---|---|---|",
+    ...planRows,
+    "",
+    "## Other",
+    "",
+    "| Name | Count |",
+    "|---|---|",
+    ...otherRows,
+  ].join("\n");
+  const html = renderDesignDoc(md, "Plan", { isPlanPage: true });
+  assertStringIncludes(html, "First revision");
+  assertStringIncludes(html, "Second revision");
+  assertEquals(html.indexOf("First revision") < html.indexOf("Second revision"), true);
+  assertEquals(html.match(/data-default-size="all"/g)?.length, 1);
+  assertEquals(html.match(/<div class="table-wrapper">/g)?.length, 2);
+  assertEquals(html.match(/plan-table-total">Total rows/g)?.length, 1);
+
+  const regularHtml = renderDesignDoc(md);
+  assertEquals(regularHtml.includes('class="plan-table-total"'), false);
+  assertEquals(regularHtml.includes('data-default-size="all"'), false);
+});

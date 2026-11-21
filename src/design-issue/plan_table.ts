@@ -18,6 +18,7 @@ export const PLAN_TABLE_HEADER = [
   "Model tier",
   "Priority",
   "Repo",
+  "Design",
   "Tests",
   "Closes when",
 ] as const;

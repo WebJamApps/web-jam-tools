@@ -7,7 +7,7 @@
 // (`createIssueAndVerify`).
 
 import { parseArgs } from "@std/cli/parse-args";
-import { checkDesignBody } from "../shared/design_body.ts";
+import { checkDesignBody, designPathsInBody, isDesignDocFilename } from "../shared/design_body.ts";
 import { checkAuthorOnRoster, withFooter } from "../../hooks/lib/authored_by_footer.ts";
 import {
   isAgySession,
@@ -59,6 +59,8 @@ export interface PlanIssueItem {
   labels?: string[] | string;
   milestone?: string | number;
   repo?: string;
+  designDoc?: string;
+  design_doc?: string;
   parent?: number | string | null;
   blocked_by?: Array<number | string | { repo?: string; number?: number; id?: number }>;
   blockedBy?: Array<number | string | { repo?: string; number?: number; id?: number }>;
@@ -423,21 +425,13 @@ export async function filePlan(
   }
 
   // Validate every body, including epics and manual steps, before any issue is filed.
+  const bodies = new Map<PlanIssueItem, string>();
   for (const { item } of allItems) {
-    const bodyPath = item.bodyFile || item.body_file || item.bodyPath;
-    let body = item.body ?? "";
-    if (bodyPath) {
-      try {
-        body = await deps.readFileText(path.resolve(expandHome(bodyPath)));
-      } catch (err) {
-        throw new Error(
-          `Refused to file plan — cannot read body file "${bodyPath}" for issue "${item.title}": ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      }
+    const body = await resolvePlanItemBody(item, deps);
+    if (body !== undefined) {
+      await checkDesignBody(body);
+      bodies.set(item, body);
     }
-    await checkDesignBody(body);
   }
 
   // Pre-validate titles, Gate 2 approval tokens, and ensure explicit IDs do not collide
@@ -534,48 +528,79 @@ export async function filePlan(
     throw new Error(`Refused to file plan — ${authorCheck.message}`);
   }
 
+  function normalizeDesignDocPath(rawPath: string): string {
+    const trimmed = rawPath.trim();
+    const expanded = trimmed.startsWith("$HOME/")
+      ? expandHome(`~/${trimmed.slice("$HOME/".length)}`)
+      : expandHome(trimmed);
+    return path.resolve(expanded);
+  }
+
+  function extractDesignDocPathsFromBody(body: string): string[] {
+    const found: string[] = [...designPathsInBody(body)];
+    const seen = new Set(found.map(normalizeDesignDocPath));
+    const absRegex = /(?:^|[\s`"'(<[])(\/[^\s`"'()<>[\]]+\.md)\b/g;
+    for (const m of body.matchAll(absRegex)) {
+      const candidate = m[1];
+      if (!isDesignDocFilename(candidate)) continue;
+      const normalized = normalizeDesignDocPath(candidate);
+      if (!seen.has(normalized)) {
+        seen.add(normalized);
+        found.push(candidate);
+      }
+    }
+    return found;
+  }
+
   // Validate design document and issue body acceptance criteria (web-jam-tools#1442)
-  if (!plan.designDoc || plan.designDoc.trim() === "") {
+  const fallbackDesignDoc = (plan.designDoc ?? "").trim();
+  if (allItems.length === 0 && !fallbackDesignDoc) {
     throw new Error(
       'Refused to file plan — the design document is not named (missing "designDoc" field in plan).',
     );
   }
 
-  const rawDesignDoc = plan.designDoc.trim();
-  const resolvedDesignDoc = path.resolve(expandHome(rawDesignDoc));
-  let designDocContent: string;
-  try {
-    designDocContent = await deps.readFileText(resolvedDesignDoc);
-  } catch (err) {
-    throw new Error(
-      `Refused to file plan — design document at "${rawDesignDoc}" (${resolvedDesignDoc}) cannot be read: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-  }
-
-  const designHeadings = extractDesignHeadings(designDocContent);
+  const designHeadingsByDoc = new Map<string, ReadonlySet<string>>();
 
   for (const { item, isEpic } of allItems) {
+    const rawItemDesignDoc = (item.designDoc ?? item.design_doc ?? fallbackDesignDoc).trim();
+    if (!rawItemDesignDoc) {
+      throw new Error(
+        `Refused to file plan — the design document is not named (missing "designDoc" field in plan) for issue "${item.title}".`,
+      );
+    }
+
+    const resolvedItemDesignDoc = normalizeDesignDocPath(rawItemDesignDoc);
+    let itemDesignHeadings = designHeadingsByDoc.get(resolvedItemDesignDoc);
+    if (!itemDesignHeadings) {
+      let designDocContent: string;
+      try {
+        designDocContent = await deps.readFileText(resolvedItemDesignDoc);
+      } catch (err) {
+        throw new Error(
+          `Refused to file plan — design document at "${rawItemDesignDoc}" (${resolvedItemDesignDoc}) cannot be read for issue "${item.title}": ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+      itemDesignHeadings = extractDesignHeadings(designDocContent);
+      designHeadingsByDoc.set(resolvedItemDesignDoc, itemDesignHeadings);
+    }
+
+    const body = bodies.get(item);
+    for (const bodyDesignPath of extractDesignDocPathsFromBody(body ?? "")) {
+      if (normalizeDesignDocPath(bodyDesignPath) !== resolvedItemDesignDoc) {
+        throw new Error(
+          `Refused to file plan — issue "${item.title}" body names "${bodyDesignPath}", which differs from its designDoc "${rawItemDesignDoc}".`,
+        );
+      }
+    }
+
     if (isEpic || item.type?.toLowerCase() === "epic") continue;
     const labels = resolvedLabels.get(item) ?? [];
     const tier = item.tier ?? item.model ?? item.modelTier;
     const hasModelLabel = labels.some((l) => modelLabels.has(l));
     if (!hasModelLabel && (labels.includes("Josh") || tier?.trim() === "Josh")) continue;
-
-    const bodyPath = item.bodyFile || item.body_file || item.bodyPath;
-    let body: string | undefined = item.body;
-    if (bodyPath) {
-      try {
-        body = await deps.readFileText(path.resolve(expandHome(bodyPath)));
-      } catch (err) {
-        throw new Error(
-          `Refused to file plan — cannot read body file "${bodyPath}" for issue "${item.title}": ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      }
-    }
 
     if (body === undefined) {
       throw new Error(
@@ -583,9 +608,10 @@ export async function filePlan(
       );
     }
 
-    validateIssueBodyCriteria(item.title, body, designHeadings, {
+    validateIssueBodyCriteria(item.title, body, itemDesignHeadings, {
       labels,
       modelLabels,
+      designDocLabel: rawItemDesignDoc,
     });
   }
 
