@@ -113,6 +113,14 @@ const cases: Array<{
     batch: true,
   },
   {
+    name: "Sonnet Medium to Neon",
+    labels: ["Sonnet"],
+    priority: "Medium",
+    remove: ["Sonnet"],
+    add: ["Neon"],
+    batch: true,
+  },
+  {
     name: "both everyday labels Low removing Sonnet",
     labels: ["Terra", "Sonnet"],
     priority: "Low",

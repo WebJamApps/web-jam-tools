@@ -67,9 +67,7 @@ topic names — one source of truth, not two that can drift apart.
 
 Shape, for orientation (see `labels.yaml` for the actual current values):
 
-- **Model-tier** — `Luna` / `Haiku` / `Terra` / `Sonnet` / `Sol` / `Astra` / `Argon` / `Hydrogen` / `Opus` / `Fable` across all 8
-  repos. `Fable` is retired/dormant and marked `neverDelete` in the schema — the scripted diff never proposes
-  removing it, in any repo.
+- **Model-tier** — entries marked `modelTier: true` in `labels.yaml`.
 - **Status** — `Josh` / `Blocked`, across all 8 repos. `Blocked` (capital B, `B60205`) is
   reserved exclusively for issues unworkable due to external blockers (credentials, vendor delays,
   assets from Josh, physical prerequisites) — native GitHub dependencies (`blocked_by`) are the single
@@ -290,7 +288,7 @@ milestone already exists must be surfaced, not swallowed.
 - Runs on Haiku on Claude Code, or on the session's model on Antigravity / agy, inline or via delegated subagent (Claude Code surface: `Agent` tool with `model: "haiku"`; Antigravity / agy surface: `invoke_subagent` with `Model: "inherit"`).
 - Never auto-applies anything, including creates that look obviously safe.
 - Never deletes or removes a label without first computing and showing its blast radius.
-- Never touches `Fable` — retired/dormant, but always kept.
+- Preserves labels marked `neverDelete` in the schema.
 - Never adds a model-tier label outside its scoped repo list in `labels.yaml` above (all 8 repos).
 - Never invents a new label name/color or topic milestone name outside the canonical schema in this
   file — if a repo has a label or milestone that doesn't map cleanly to any schema entry, it's a

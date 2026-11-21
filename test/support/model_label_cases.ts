@@ -1,4 +1,4 @@
-/** Literal label-check cases from the approved design's Appendix D. */
+/** Literal cases from "Model-label cases" in the tier-order design. */
 export const MODEL_LABEL_NAMES = [
   "Argon",
   "Astra",
@@ -6,12 +6,13 @@ export const MODEL_LABEL_NAMES = [
   "Haiku",
   "Hydrogen",
   "Luna",
+  "Neon",
   "Opus",
   "Sol",
   "Sonnet",
   "Terra",
 ];
-export const ESCALATION_REASON = "Opus is needed: the case list cannot be closed";
+export const ESCALATION_REASON = "Josh chose Fable for the open case list";
 export const MODEL_LABEL_CASES: Array<{
   labels: string[];
   reason?: string;
@@ -24,25 +25,22 @@ export const MODEL_LABEL_CASES: Array<{
   { labels: ["Hydrogen"] },
   { labels: ["Terra", "Sonnet"] },
   { labels: ["Sonnet", "Terra"] },
-  { labels: ["Sol", "Argon"] },
-  { labels: ["Sol", "Hydrogen"] },
+  { labels: ["Sol", "Argon"], error: "forbidden model-label combination" },
+  { labels: ["Sol", "Hydrogen"], error: "forbidden model-label combination" },
   { labels: ["Argon", "Hydrogen"] },
-  { labels: ["Sol", "Argon", "Hydrogen"] },
-  { labels: ["Hydrogen", "Argon", "Sol"] },
+  { labels: ["Sol", "Argon", "Hydrogen"], error: "forbidden model-label combination" },
+  { labels: ["Hydrogen", "Argon", "Sol"], error: "forbidden model-label combination" },
   { labels: ["Sonnet", "Sonnet"] },
   { labels: ["Sonnet"], reason: "   " },
   { labels: ["Flash"], error: "no model label" },
-  { labels: ["Opus"], error: "Opus needs an escalation reason" },
-  { labels: ["Opus"], reason: "   ", error: "Opus needs an escalation reason" },
+  { labels: ["Opus"] },
+  { labels: ["Neon"] },
+  { labels: ["Opus"], reason: "   " },
   { labels: ["Fable"], error: "Fable needs an escalation reason" },
   { labels: ["Fable"], reason: "x" },
   { labels: ["Opus", "Fable"], reason: "x" },
-  { labels: ["Fable", "Opus"], error: "needs an escalation reason" },
-  {
-    labels: ["Fable", "Sonnet"],
-    reason: "x",
-    error: "forbidden model-label combination",
-  },
+  { labels: ["Fable", "Opus"], error: "Fable needs an escalation reason" },
+  { labels: ["Fable", "Sonnet"], reason: "x" },
   { labels: ["Fable", "Josh"], reason: "x" },
   { labels: ["fable"], reason: "x", error: "no model label" },
   { labels: ["Needs Design", "Opus"], reason: "closed case list is unavailable" },
@@ -56,11 +54,7 @@ export const MODEL_LABEL_CASES: Array<{
     reason: "x",
     error: "forbidden model-label combination",
   },
-  {
-    labels: ["Sol", "Opus"],
-    reason: "x",
-    error: "forbidden model-label combination",
-  },
+  { labels: ["Sol", "Opus"] },
   {
     labels: ["Argon", "Astra"],
     reason: "x",

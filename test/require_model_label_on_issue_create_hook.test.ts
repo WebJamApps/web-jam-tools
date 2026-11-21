@@ -855,27 +855,13 @@ Deno.test("gh issue create with Fable and no escalation reason is denied with he
   );
 });
 
-Deno.test("gh issue create with Opus and no escalation reason is denied with helpful escalation prompt", async () => {
+Deno.test("gh issue create with Opus and no escalation reason is allowed", async () => {
   const res = await runHook(
     bashCall(
       `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Opus`,
     ),
   );
-  assertEquals(res.code, 2);
-  assertBlocked(res.stderr);
-  assertEquals(
-    res.stderr.includes(
-      "Creating an issue labeled 'Opus' requires an explicit escalation justification.",
-    ),
-    true,
-  );
-  assertEquals(res.stderr.includes("Flash"), false);
-  assertEquals(
-    res.stderr.includes(
-      'gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Opus --escalation-reason "<why Opus is genuinely the right tier>"',
-    ),
-    true,
-  );
+  assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("gh issue create with Fable and non-empty --escalation-reason is allowed", async () => {
@@ -905,10 +891,10 @@ Deno.test("gh issue create with Opus and --escalation-reason=value single-token 
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("gh issue create with Opus and empty --escalation-reason is denied", async () => {
+Deno.test("gh issue create with Fable and empty --escalation-reason is denied", async () => {
   const resEmpty = await runHook(
     bashCall(
-      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Opus --escalation-reason ""`,
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Fable --escalation-reason ""`,
     ),
   );
   assertEquals(resEmpty.code, 2);
@@ -916,7 +902,7 @@ Deno.test("gh issue create with Opus and empty --escalation-reason is denied", a
 
   const resWhitespace = await runHook(
     bashCall(
-      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Opus --escalation-reason "   "`,
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Fable --escalation-reason "   "`,
     ),
   );
   assertEquals(resWhitespace.code, 2);
@@ -945,12 +931,12 @@ Deno.test("gh issue create with Terra, Sonnet, Haiku, or shared lane requires no
   );
   assertEquals(resEverydayPair.code, 0, resEverydayPair.stderr);
 
-  const resSharedTriple = await runHook(
+  const resSharedPair = await runHook(
     bashCall(
-      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Sol,Argon,Hydrogen"`,
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Argon,Hydrogen"`,
     ),
   );
-  assertEquals(resSharedTriple.code, 0, resSharedTriple.stderr);
+  assertEquals(resSharedPair.code, 0, resSharedPair.stderr);
 
   // web-jam-tools#1202, web-jam-tools#1551: retired labels are not model labels any more.
   for (const retired of ["Flash", "Terra Med", "Terra High"]) {
@@ -996,10 +982,11 @@ Deno.test("MCP issue_write create with Fable and no escalation reason is denied"
   assertEquals(res.stderr.includes("Flash"), false);
 });
 
-Deno.test("MCP issue_write create with Opus and no escalation reason is denied", async () => {
+Deno.test("MCP issue_write create with Opus and no escalation reason is allowed", async () => {
   const res = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "create",
+      body: SIGNED_BODY,
       owner: "WebJamApps",
       repo: "web-jam-tools",
       title: "T",
@@ -1007,15 +994,7 @@ Deno.test("MCP issue_write create with Opus and no escalation reason is denied",
       labels: ["Opus"],
     }),
   );
-  assertEquals(res.code, 2);
-  assertBlocked(res.stderr);
-  assertEquals(
-    res.stderr.includes(
-      "Creating an issue labeled 'Opus' requires an explicit escalation justification.",
-    ),
-    true,
-  );
-  assertEquals(res.stderr.includes("Flash"), false);
+  assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("MCP issue_write create with Fable and escalation_reason is allowed", async () => {
@@ -1056,7 +1035,9 @@ Deno.test("MCP issue_write create with Terra, Sonnet, Haiku, or shared lane requ
       ["Terra"],
       ["Sonnet"],
       ["Terra", "Sonnet"],
-      ["Sol", "Argon", "Hydrogen"],
+      ["Argon", "Hydrogen"],
+      ["Sol", "Opus"],
+      ["Neon"],
       ["Haiku"],
     ]
   ) {
@@ -1075,12 +1056,11 @@ Deno.test("MCP issue_write create with Terra, Sonnet, Haiku, or shared lane requ
   }
 });
 
-Deno.test("deno task create-issue with Opus and no escalation reason is denied", async () => {
+Deno.test("deno task create-issue with Opus and no escalation reason is allowed", async () => {
   const res = await runHook(
     bashCall(`deno task create-issue --title T --body-file /tmp/b.md --type Task --label Opus`),
   );
-  assertEquals(res.code, 2);
-  assertBlocked(res.stderr);
+  assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("deno task create-issue with Opus and --escalation-reason is allowed", async () => {

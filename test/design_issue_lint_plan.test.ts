@@ -66,10 +66,7 @@ function planTableDoc(rows: string[], stepsAfterMerge: string | null = "none"): 
   return `${base}\n## Steps after the merge\n\n${stepsAfterMerge}\n`;
 }
 
-/** A minimal, deterministic model-tier schema -- decoupled from the live labels.yaml file so
- * these unit tests never drift with real-world label edits. Mirrors labels.yaml's shape: five
- * `modelTier: true` entries, plus `Josh` present but NOT modelTier (exactly as labels.yaml has
- * it -- Josh is a status label the plan table's Manual Steps convention reuses as a tier value). */
+/** Fixture model-tier schema. The plan table also uses the Josh status label for manual steps. */
 const TEST_SCHEMA: Schema = {
   repoClasses: { frontend: [], other: [] },
   keep: {},
@@ -81,6 +78,7 @@ const TEST_SCHEMA: Schema = {
     { name: "Haiku", hex: "0E8A16", repos: "all", modelTier: true },
     { name: "Hydrogen", hex: "A5D6A7", repos: "all", modelTier: true },
     { name: "Luna", hex: "0E8A16", repos: "all", modelTier: true },
+    { name: "Neon", hex: "3BFD98", repos: "all", modelTier: true },
     { name: "Sonnet", hex: "1D76DB", repos: "all", modelTier: true },
     { name: "Sol", hex: "006B75", repos: "all", modelTier: true },
     { name: "Opus", hex: "B392F0", repos: "all", modelTier: true },
@@ -406,10 +404,10 @@ Deno.test("lint-plan applies the shared plan reader and lane sets without an esc
       "Sonnet / Terra",
       "Sonnet/Terra",
       "**Terra  /  Sonnet**",
-      "Sol / Argon",
-      "Sol / Hydrogen",
       "Argon / Hydrogen",
-      "Sol / Argon / Hydrogen",
+      "Sol / Opus",
+      "Neon",
+      "Fable / Sonnet",
       "Opus / Fable",
       "Fable",
     ]
@@ -420,7 +418,9 @@ Deno.test("lint-plan applies the shared plan reader and lane sets without an esc
     const tier of [
       "Sonnet / Sol",
       "Terra / Hydrogen",
-      "Sol / Opus",
+      "Sol / Argon",
+      "Sol / Hydrogen",
+      "Sol / Argon / Hydrogen",
       "Argon / Astra",
       "Sol / Sonnet / Opus",
       "Sonnet / Bogus",

@@ -39,12 +39,10 @@ The lane sets and working-model tracking follow
 `~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`,
 "How the order is used" and "Issue labels follow the working model".
 
-1. Read the issue’s known model labels and determine the actual executing model. Any of
-   `Sol`, `Argon` or `Hydrogen` may take any non-empty set of those shared-lane labels.
-   Either `Terra` or `Sonnet` may take either or both everyday-lane labels. Multiple labels
-   within a lane add no restriction and require no override question or model switch. Unknown
-   labels grant no eligibility. Other model choices follow the cited design: single-model choices
-   such as `Luna`, `Haiku` and `Astra` still require the matching model or Josh’s approval.
+1. Read the issue’s known model labels and determine the actual executing model. Use "How the
+   order is used" in the tier-order design above for the eligible coding lanes and Josh’s choice
+   of Fable. Multiple labels within a lane add no restriction and require no override question
+   or model switch. Unknown labels grant no eligibility.
 2. Execute directly in an eligible current session. Claude Code may delegate to an eligible
    labeled tier; an eligible Codex session works directly. Sonnet work selected within agy stays
    in agy: use the second-process mechanism in the design, never an Anthropic-billed Claude Code

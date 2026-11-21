@@ -6,18 +6,15 @@ export const DEFAULT_MODEL_LABELS_PATH = new URL(
 );
 
 /** Any non-empty subset permits the shared logic-and-safety lane. */
-export const SHARED_MODEL_LABELS = ["Sol", "Argon", "Hydrogen"] as const;
+export const SHARED_MODEL_LABELS = ["Argon", "Hydrogen"] as const;
 
 /** Either label permits either model on the everyday coding lane. */
 export const EVERYDAY_MODEL_LABELS = ["Terra", "Sonnet"] as const;
 
 /** Either label permits either model on the top lane. */
-export const TOP_MODEL_LABELS = ["Opus", "Fable"] as const;
+export const TOP_MODEL_LABELS = ["Sol", "Opus"] as const;
 
-/** Model labels that require an explicit escalation reason. */
-export const ESCALATION_MODEL_LABELS = ["Opus", "Fable"] as const;
-
-const ALLOWED_MULTI_LABEL_LANES: readonly (readonly string[])[] = [
+const CODING_LANES: readonly (readonly string[])[] = [
   SHARED_MODEL_LABELS,
   EVERYDAY_MODEL_LABELS,
   TOP_MODEL_LABELS,
@@ -51,17 +48,23 @@ export function modelLabelViolation(
   if (matched.length === 0) {
     return labels.includes("Josh") ? undefined : "no model label";
   }
+  const hasFable = matched.includes("Fable");
   const inSingleLane = matched.length === 1 ||
-    ALLOWED_MULTI_LABEL_LANES.some((lane) => matched.every((label) => lane.includes(label)));
-  if (!inSingleLane) {
+    CODING_LANES.some((lane) => matched.every((label) => lane.includes(label)));
+  if (!hasFable && !inSingleLane) {
     return `forbidden model-label combination (${matched.join(", ")})`;
   }
-  const escalated = matched.find((label) =>
-    (ESCALATION_MODEL_LABELS as readonly string[]).includes(label)
-  );
-  if (checkEscalationReason && escalated && !escalationReason?.trim()) {
-    return `${escalated} needs an escalation reason`;
+  if (checkEscalationReason && hasFable && !escalationReason?.trim()) {
+    return "Fable needs an escalation reason";
   }
+}
+
+/** Check eligibility after the issue’s label set has passed the label rule. */
+export function canWorkModelLabels(label: string, matched: readonly string[]): boolean {
+  return matched.includes(label) ||
+    CODING_LANES.some((lane) =>
+      lane.includes(label) && matched.some((value) => lane.includes(value))
+    );
 }
 
 /** Read a Markdown Model tier cell. Names remain case sensitive, just like GitHub labels. */
