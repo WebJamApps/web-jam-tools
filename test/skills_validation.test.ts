@@ -2414,7 +2414,7 @@ function assertModelLabelGuidance(skill: string, text: string): void {
   ) {
     assertFalse(text.includes(stale), `${skill}: stale model-label rule: ${stale}`);
   }
-  if (skill === "backlog-groom") assertStringIncludes(text, "must not be reduced to one label");
+  if (skill === "backlog-groom") assertStringIncludes(text, "Preserve permitted sets.");
   if (skill === "work-issue") {
     assertStringIncludes(text, "Do not retain the earlier model labels after work starts");
   }
