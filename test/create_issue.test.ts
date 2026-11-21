@@ -1200,10 +1200,16 @@ async function withDefaultTokenDir(
   const prevCodexThread = Deno.env.get("CODEX_THREAD_ID");
   const prevCodexHome = Deno.env.get("CODEX_HOME");
   const prevSurface = Deno.env.get("WJT_SURFACE");
+  const prevAgyConv = Deno.env.get("AGY_CONVERSATION_ID");
+  const prevAgyTranscript = Deno.env.get("AGY_TRANSCRIPT_PATH");
+  const prevAgyModel = Deno.env.get("AGY_MODEL_NAME");
   Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
   Deno.env.delete("CODEX_THREAD_ID");
   Deno.env.delete("CODEX_HOME");
   Deno.env.delete("WJT_SURFACE");
+  Deno.env.delete("AGY_CONVERSATION_ID");
+  Deno.env.delete("AGY_TRANSCRIPT_PATH");
+  Deno.env.delete("AGY_MODEL_NAME");
   Deno.env.set("HOME", homeDir);
   try {
     await fn(dir);
@@ -1218,6 +1224,12 @@ async function withDefaultTokenDir(
     else Deno.env.set("CODEX_HOME", prevCodexHome);
     if (prevSurface === undefined) Deno.env.delete("WJT_SURFACE");
     else Deno.env.set("WJT_SURFACE", prevSurface);
+    if (prevAgyConv === undefined) Deno.env.delete("AGY_CONVERSATION_ID");
+    else Deno.env.set("AGY_CONVERSATION_ID", prevAgyConv);
+    if (prevAgyTranscript === undefined) Deno.env.delete("AGY_TRANSCRIPT_PATH");
+    else Deno.env.set("AGY_TRANSCRIPT_PATH", prevAgyTranscript);
+    if (prevAgyModel === undefined) Deno.env.delete("AGY_MODEL_NAME");
+    else Deno.env.set("AGY_MODEL_NAME", prevAgyModel);
     await Deno.remove(homeDir, { recursive: true });
   }
 }
@@ -1352,9 +1364,15 @@ Deno.test("createIssueAndVerify (default approvalCheck, no third arg): succeeds 
       const prevCodexThread = Deno.env.get("CODEX_THREAD_ID");
       const prevCodexHome = Deno.env.get("CODEX_HOME");
       const prevSurface = Deno.env.get("WJT_SURFACE");
+      const prevAgyConv = Deno.env.get("AGY_CONVERSATION_ID");
+      const prevAgyTranscript = Deno.env.get("AGY_TRANSCRIPT_PATH");
+      const prevAgyModel = Deno.env.get("AGY_MODEL_NAME");
       Deno.env.delete("CODEX_THREAD_ID");
       Deno.env.delete("CODEX_HOME");
       Deno.env.delete("WJT_SURFACE");
+      Deno.env.delete("AGY_CONVERSATION_ID");
+      Deno.env.delete("AGY_TRANSCRIPT_PATH");
+      Deno.env.delete("AGY_MODEL_NAME");
       Deno.env.set("ISSUE_APPROVAL_TOKEN_PATH", tokenPath);
       try {
         const mockDeps: ExecDeps = {
@@ -1399,6 +1417,12 @@ Deno.test("createIssueAndVerify (default approvalCheck, no third arg): succeeds 
         else Deno.env.set("CODEX_HOME", prevCodexHome);
         if (prevSurface === undefined) Deno.env.delete("WJT_SURFACE");
         else Deno.env.set("WJT_SURFACE", prevSurface);
+        if (prevAgyConv === undefined) Deno.env.delete("AGY_CONVERSATION_ID");
+        else Deno.env.set("AGY_CONVERSATION_ID", prevAgyConv);
+        if (prevAgyTranscript === undefined) Deno.env.delete("AGY_TRANSCRIPT_PATH");
+        else Deno.env.set("AGY_TRANSCRIPT_PATH", prevAgyTranscript);
+        if (prevAgyModel === undefined) Deno.env.delete("AGY_MODEL_NAME");
+        else Deno.env.set("AGY_MODEL_NAME", prevAgyModel);
       }
     },
   );

@@ -184,12 +184,18 @@ Deno.test("guard (per-session token files): a subagent loads the approving sessi
     codexThread: Deno.env.get("CODEX_THREAD_ID"),
     codexHome: Deno.env.get("CODEX_HOME"),
     surface: Deno.env.get("WJT_SURFACE"),
+    agyConv: Deno.env.get("AGY_CONVERSATION_ID"),
+    agyTranscript: Deno.env.get("AGY_TRANSCRIPT_PATH"),
+    agyModel: Deno.env.get("AGY_MODEL_NAME"),
   };
   try {
     Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
     Deno.env.delete("CODEX_THREAD_ID");
     Deno.env.delete("CODEX_HOME");
     Deno.env.delete("WJT_SURFACE");
+    Deno.env.delete("AGY_CONVERSATION_ID");
+    Deno.env.delete("AGY_TRANSCRIPT_PATH");
+    Deno.env.delete("AGY_MODEL_NAME");
     Deno.env.set("HOME", home);
     const dir = `${home}/.claude/state/issue-approval-tokens`;
     await Deno.mkdir(dir, { recursive: true });
@@ -228,6 +234,12 @@ Deno.test("guard (per-session token files): a subagent loads the approving sessi
     else Deno.env.set("CODEX_HOME", previous.codexHome);
     if (previous.surface === undefined) Deno.env.delete("WJT_SURFACE");
     else Deno.env.set("WJT_SURFACE", previous.surface);
+    if (previous.agyConv === undefined) Deno.env.delete("AGY_CONVERSATION_ID");
+    else Deno.env.set("AGY_CONVERSATION_ID", previous.agyConv);
+    if (previous.agyTranscript === undefined) Deno.env.delete("AGY_TRANSCRIPT_PATH");
+    else Deno.env.set("AGY_TRANSCRIPT_PATH", previous.agyTranscript);
+    if (previous.agyModel === undefined) Deno.env.delete("AGY_MODEL_NAME");
+    else Deno.env.set("AGY_MODEL_NAME", previous.agyModel);
     await Deno.remove(home, { recursive: true });
   }
 });

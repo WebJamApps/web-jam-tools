@@ -88,6 +88,7 @@ import {
   findGhIssueCreateArgs,
   stripLeadingAssignments,
 } from "./check_model_label_on_issue_create.ts";
+import { resolveAntigravityTokenOwnerSync } from "./agy_session_reader.ts";
 import { resolveCodexTokenOwnerSync } from "./codex_session_reader.ts";
 import { splitOnOperators, splitShellTokens, stripHeredocs } from "./normalize_command.ts";
 
@@ -321,6 +322,19 @@ export interface HookTokenResolveOptions {
   surface?: string;
   transcriptPath?: unknown;
   env?: (name: string) => string | undefined;
+  conversationId?: unknown;
+  hasConversationIdField?: boolean;
+  modelName?: unknown;
+}
+
+function isAntigravityHookPayload(
+  surface: string | undefined,
+  options?: HookTokenResolveOptions,
+): boolean {
+  if (surface === "agy") return true;
+  if (options?.hasConversationIdField || typeof options?.modelName === "string") return true;
+  return typeof options?.transcriptPath === "string" &&
+    options.transcriptPath.includes("/brain/");
 }
 
 function checkTokenValidity(
@@ -339,6 +353,24 @@ function checkTokenValidity(
         threadId: sessionId,
         rolloutPath: options?.transcriptPath,
         requireRolloutPath: true,
+        env,
+      });
+    } catch (error) {
+      return {
+        deny: {
+          outcome: "deny",
+          reason: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  } else if (isAntigravityHookPayload(surface, options)) {
+    const agyConversationId = options?.conversationId !== undefined
+      ? options.conversationId
+      : (sessionId || env("AGY_CONVERSATION_ID"));
+    try {
+      effectiveSessionId = resolveAntigravityTokenOwnerSync({
+        conversationId: agyConversationId,
+        transcriptPath: options?.transcriptPath,
         env,
       });
     } catch (error) {
@@ -737,12 +769,32 @@ export function approvingSessionId(sessionId: string, transcriptPath: unknown): 
   return match[1];
 }
 
+function payloadResolveOptions(
+  data: Record<string, unknown>,
+  env: (name: string) => string | undefined,
+): HookTokenResolveOptions {
+  return {
+    surface: env("WJT_SURFACE"),
+    transcriptPath: data.transcript_path !== undefined ? data.transcript_path : data.transcriptPath,
+    env,
+    conversationId: typeof data.conversationId === "string"
+      ? data.conversationId
+      : (typeof data.session_id === "string" ? data.session_id : undefined),
+    hasConversationIdField: Object.prototype.hasOwnProperty.call(data, "conversationId"),
+    modelName: data.modelName,
+  };
+}
+
 /** The approving session id for a PreToolUse payload: its own, or its parent's for a subagent call. */
-function payloadSessionId(data: Record<string, unknown>, surface?: string): string {
+function payloadSessionId(
+  data: Record<string, unknown>,
+  surface?: string,
+  options?: HookTokenResolveOptions,
+): string {
   const own = typeof data.session_id === "string"
     ? data.session_id
     : (typeof data.conversationId === "string" ? data.conversationId : "");
-  if (surface === "codex") return own;
+  if (surface === "codex" || isAntigravityHookPayload(surface, options)) return own;
   return approvingSessionId(own, data.transcript_path);
 }
 
@@ -760,19 +812,15 @@ export function checkIssueApprovalToken(
     return "PASS";
   }
   const env = options?.env ?? ((name: string) => Deno.env.get(name));
-  const surface = env("WJT_SURFACE");
+  const resolveOpts = payloadResolveOptions(data, env);
   const toolName = typeof data.tool_name === "string" ? data.tool_name : "";
-  const sessionId = payloadSessionId(data, surface);
+  const sessionId = payloadSessionId(data, resolveOpts.surface, resolveOpts);
   const toolInputRaw = data.tool_input;
   const toolInput = typeof toolInputRaw === "object" && toolInputRaw !== null
     ? (toolInputRaw as Record<string, unknown>)
     : {};
 
-  const result = decide(toolName, toolInput, sessionId, tokenPath, nowMs, {
-    surface,
-    transcriptPath: data.transcript_path,
-    env,
-  });
+  const result = decide(toolName, toolInput, sessionId, tokenPath, nowMs, resolveOpts);
   if (result.outcome === "pass") return "PASS";
   if (result.outcome === "allow") return `ALLOW:${result.reason ?? ""}`;
   return `DENY:${result.reason ?? ""}`;
@@ -804,19 +852,15 @@ export function checkIssueApprovalTokenAuto(
   } catch {
     return "PASS";
   }
-  const surface = env("WJT_SURFACE");
+  const resolveOpts = payloadResolveOptions(data, env);
   const toolName = typeof data.tool_name === "string" ? data.tool_name : "";
-  const sessionId = payloadSessionId(data, surface);
+  const sessionId = payloadSessionId(data, resolveOpts.surface, resolveOpts);
   const toolInputRaw = data.tool_input;
   const toolInput = typeof toolInputRaw === "object" && toolInputRaw !== null
     ? (toolInputRaw as Record<string, unknown>)
     : {};
 
-  const result = decide(toolName, toolInput, sessionId, null, nowMs, {
-    surface,
-    transcriptPath: data.transcript_path,
-    env,
-  });
+  const result = decide(toolName, toolInput, sessionId, null, nowMs, resolveOpts);
   if (result.outcome === "pass") return "PASS";
   if (result.outcome === "allow") return `ALLOW:${result.reason ?? ""}`;
   return `DENY:${result.reason ?? ""}`;
