@@ -128,7 +128,7 @@ async function withModel(
         path,
         JSON.stringify({
           type: "turn_context",
-          payload: { model: `gpt-6.1-${model.toLowerCase()}` },
+          payload: { model: model === "Sol" ? "gpt-6.2-sol" : "gpt-6.1-terra" },
         }) + "\n",
       );
       // A contradictory typed author must never replace the recorded Codex model.
