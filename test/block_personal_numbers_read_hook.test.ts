@@ -10,7 +10,11 @@
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import * as path from "jsr:@std/path@^1.0.0";
-import { checkPayload, refusalFor } from "../hooks/lib/check_personal_numbers_read.ts";
+import {
+  checkPayload,
+  MAX_SWEEP_FILES,
+  refusalFor,
+} from "../hooks/lib/check_personal_numbers_read.ts";
 
 const SCRIPT = new URL("../hooks/block-personal-numbers-read.sh", import.meta.url).pathname;
 const SHIM = new URL("../hooks/agy-hook-shim.sh", import.meta.url).pathname;
@@ -92,8 +96,8 @@ function local(text: string): string {
 interface Row {
   /** The call exactly as the design's table writes it. */
   call: string;
-  tool: "Read" | "Bash" | "view_file";
-  /** Read/view_file: the file; Bash: the command. */
+  tool: "Read" | "Bash" | "view_file" | "read_file";
+  /** Read/view_file/read_file: the file; Bash: the command. */
   arg: string;
   setup: () => void;
   refuse: false | string;
@@ -103,6 +107,16 @@ interface Row {
 const statement = `${HOME}/Downloads/statement.ofx`;
 const stub = `${HOME}/Downloads/stub.txt`;
 const financial = `${HOME}/Dropbox/web-jam-llms/financial`;
+const designDir = `${HOME}/Dropbox/web-jam-llms/AI_Misbehaves`;
+const mainRepo = `${HOME}/WebJamApps/web-jam-tools`;
+const demoWorktree = `${FIX}/tmp/agy-worktrees/web-jam-tools-demo`;
+
+/** A git worktree at `dir` whose `.git` file points into `repo`'s .git/worktrees/. */
+function worktreeOf(repo: string, dir: string): void {
+  const gitdir = `${repo}/.git/worktrees/${path.basename(dir)}`;
+  Deno.mkdirSync(gitdir, { recursive: true });
+  put(`${dir}/.git`, `gitdir: ${gitdir}\n`);
+}
 
 const ROWS: Row[] = [
   {
@@ -234,6 +248,84 @@ const ROWS: Row[] = [
     refuse: "a Social Security number",
   },
   {
+    call: 'agy read_file {"Path":"/home/joshua/Downloads/stub.txt"}',
+    tool: "read_file",
+    arg: "/home/joshua/Downloads/stub.txt",
+    setup: () => put(stub, "SSN: 123-45-6789\n"),
+    refuse: "a Social Security number",
+  },
+  {
+    call:
+      'Read {"file_path":"/home/joshua/Dropbox/web-jam-llms/AI_Misbehaves/personal-information-guards-design.md"}',
+    tool: "Read",
+    arg: "/home/joshua/Dropbox/web-jam-llms/AI_Misbehaves/personal-information-guards-design.md",
+    setup: () =>
+      put(`${designDir}/personal-information-guards-design.md`, "| `SSN: 123-45-6789` |\n"),
+    refuse: false,
+  },
+  {
+    call:
+      'Read {"file_path":"/home/joshua/Dropbox/web-jam-llms/AI_Misbehaves/personal-information-guards-design.html"}',
+    tool: "Read",
+    arg: "/home/joshua/Dropbox/web-jam-llms/AI_Misbehaves/personal-information-guards-design.html",
+    setup: () =>
+      put(
+        `${designDir}/personal-information-guards-design.html`,
+        "<td><code>SSN: 123-45-6789</code></td>\n",
+      ),
+    refuse: false,
+  },
+  {
+    call:
+      'Read {"file_path":"/tmp/agy-worktrees/web-jam-tools-demo/test/detect_personal_numbers.test.ts"}',
+    tool: "Read",
+    arg: `${demoWorktree}/test/detect_personal_numbers.test.ts`,
+    setup: () => {
+      worktreeOf(mainRepo, demoWorktree);
+      put(`${demoWorktree}/test/detect_personal_numbers.test.ts`, '"SSN: 123-45-6789"\n');
+    },
+    refuse: false,
+  },
+  {
+    call: 'Read {"file_path":"/tmp/not-a-worktree/stub.txt"}',
+    tool: "Read",
+    arg: `${FIX}/tmp/not-a-worktree/stub.txt`,
+    setup: () => put(`${FIX}/tmp/not-a-worktree/stub.txt`, "SSN: 123-45-6789\n"),
+    refuse: "a Social Security number",
+  },
+  {
+    call: "awk '{print $1}' /tmp/notes.txt",
+    tool: "Bash",
+    arg: `awk '{print $1}' ${FIX}/tmp/notes.txt`,
+    setup: () => put(`${FIX}/tmp/notes.txt`, "Account ending in 1234\n"),
+    refuse: false,
+  },
+  {
+    call: 'grep "$PATTERN" /tmp/stub.txt',
+    tool: "Bash",
+    arg: `grep "$PATTERN" ${FIX}/tmp/stub.txt`,
+    setup: () => put(`${FIX}/tmp/stub.txt`, "SSN: 123-45-6789\n"),
+    refuse: "a Social Security number",
+  },
+  {
+    call: 'cat "$UNKNOWN_FILE"',
+    tool: "Bash",
+    arg: 'cat "$UNKNOWN_FILE"',
+    setup: () => {},
+    refuse: false,
+  },
+  {
+    call: "grep -r foo /tmp/huge-dir",
+    tool: "Bash",
+    arg: `grep -r foo ${FIX}/tmp/huge-dir`,
+    setup: () => {
+      const dir = `${FIX}/tmp/huge-dir`;
+      Deno.mkdirSync(dir, { recursive: true });
+      for (let i = 0; i <= MAX_SWEEP_FILES; i++) Deno.writeTextFileSync(`${dir}/f${i}.txt`, "");
+    },
+    refuse: "more files under it than the guard can check in time",
+  },
+  {
     call: "ls -la ~/Downloads",
     tool: "Bash",
     arg: "ls -la ~/Downloads",
@@ -249,15 +341,18 @@ function payloadFor(row: Row, surface: Surface): { args: string[]; payload: unkn
   const cwd = FIX;
   if (surface === "agy") {
     // agy's own tool names: the shell is run_command (mapped to Bash by the
-    // shim), the file reader is view_file. Read rows reach agy as view_file.
+    // shim), the file readers are view_file and read_file. Read rows reach agy
+    // as view_file.
     const call = row.tool === "Bash"
       ? { name: "run_command", args: { CommandLine: arg, Cwd: cwd } }
+      : row.tool === "read_file"
+      ? { name: "read_file", args: { Path: arg } }
       : { name: "view_file", args: { AbsolutePath: arg } };
     // The matchers scripts/install-hooks.sh registers for agy.
-    const matcher = row.tool === "Bash" ? "Bash|Read" : "view_file";
+    const matcher = row.tool === "Bash" ? "Bash|Read" : "view_file|read_file";
     return { args: [SHIM, "PreToolUse", btoa(matcher), SCRIPT], payload: { toolCall: call } };
   }
-  const toolName = row.tool === "view_file" ? "Read" : row.tool;
+  const toolName = row.tool === "view_file" || row.tool === "read_file" ? "Read" : row.tool;
   const input = row.tool === "Bash" ? { command: arg } : { file_path: arg };
   return { args: [SCRIPT], payload: { tool_name: toolName, tool_input: input, cwd } };
 }
@@ -417,3 +512,117 @@ Deno.test("other tools are allowed without reading anything", () => {
   );
   assertEquals(verdict.kind, "allow");
 });
+
+/** Run `fn` with HOME pointing at the fixture home, as the hook's own process sees it. */
+function withFixtureHome(fn: () => void): () => void {
+  return () => {
+    const real = Deno.env.get("HOME");
+    Deno.env.set("HOME", HOME);
+    try {
+      fn();
+    } finally {
+      if (real === undefined) Deno.env.delete("HOME");
+      else Deno.env.set("HOME", real);
+    }
+  };
+}
+
+Deno.test(
+  "only the design document's exact paths are exempt; a sibling in its folder is checked",
+  withFixtureHome(() => {
+    put(`${designDir}/personal-information-guards-design.md`, "SSN: 123-45-6789\n");
+    for (
+      const file of [
+        `${designDir}/personal-information-guards-design.md.bak`,
+        `${designDir}/notes.md`,
+        `${HOME}/Downloads/personal-information-guards-design.md`,
+      ]
+    ) {
+      put(file, "SSN: 123-45-6789\n");
+      const verdict = checkPayload(
+        JSON.stringify({ tool_name: "Read", tool_input: { file_path: file } }),
+      );
+      assertEquals(verdict.kind, "found", file);
+    }
+  }),
+);
+
+Deno.test(
+  "a link to the design document is judged on its resolved path",
+  withFixtureHome(() => {
+    put(`${designDir}/personal-information-guards-design.md`, "SSN: 123-45-6789\n");
+    const link = `${FIX}/tmp/design-link.md`;
+    Deno.mkdirSync(path.dirname(link), { recursive: true });
+    try {
+      Deno.removeSync(link);
+    } catch {
+      // first use
+    }
+    Deno.symlinkSync(`${designDir}/personal-information-guards-design.md`, link);
+    const verdict = checkPayload(
+      JSON.stringify({ tool_name: "Bash", tool_input: { command: `cat ${link}` }, cwd: FIX }),
+    );
+    assertEquals(verdict.kind, "allow");
+  }),
+);
+
+Deno.test(
+  "a folder outside ~/WebJamApps is exempt only as a worktree of a ~/WebJamApps repository",
+  withFixtureHome(() => {
+    const cases: Array<[string, () => void]> = [
+      // a whole clone outside ~/WebJamApps: `.git` is a folder, not a worktree's file
+      ["clone", () => Deno.mkdirSync(`${FIX}/tmp/clone/.git`, { recursive: true })],
+      // a worktree of a repository outside ~/WebJamApps
+      ["elsewhere", () => worktreeOf(`${FIX}/other-repo`, `${FIX}/tmp/elsewhere`)],
+      // a `.git` file whose gitdir does not exist
+      [
+        "dangling",
+        () => put(`${FIX}/tmp/dangling/.git`, `gitdir: ${mainRepo}/.git/worktrees/missing\n`),
+      ],
+      // a gitdir inside ~/WebJamApps but not under <repo>/.git/worktrees/
+      [
+        "not-worktrees",
+        () => {
+          Deno.mkdirSync(`${mainRepo}/.git/modules/x`, { recursive: true });
+          put(`${FIX}/tmp/not-worktrees/.git`, `gitdir: ${mainRepo}/.git/modules/x\n`);
+        },
+      ],
+      // a gitdir that climbs out of .git/worktrees/ with ..
+      [
+        "climbs",
+        () => {
+          Deno.mkdirSync(`${FIX}/outside`, { recursive: true });
+          put(
+            `${FIX}/tmp/climbs/.git`,
+            `gitdir: ${mainRepo}/.git/worktrees/../../../../../outside\n`,
+          );
+        },
+      ],
+    ];
+    for (const [name, setup] of cases) {
+      setup();
+      const file = `${FIX}/tmp/${name}/test/stub.txt`;
+      put(file, "SSN: 123-45-6789\n");
+      const verdict = checkPayload(
+        JSON.stringify({ tool_name: "Read", tool_input: { file_path: file } }),
+      );
+      assertEquals(verdict.kind, "found", name);
+    }
+  }),
+);
+
+Deno.test(
+  "a folder sweep inside a worktree of a ~/WebJamApps repository is passed over",
+  withFixtureHome(() => {
+    worktreeOf(mainRepo, demoWorktree);
+    put(`${demoWorktree}/test/detect_personal_numbers.test.ts`, '"SSN: 123-45-6789"\n');
+    const verdict = checkPayload(
+      JSON.stringify({
+        tool_name: "Bash",
+        tool_input: { command: `grep -rn SSN ${demoWorktree}` },
+        cwd: FIX,
+      }),
+    );
+    assertEquals(verdict.kind, "allow");
+  }),
+);

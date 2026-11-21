@@ -9,20 +9,24 @@
  * Design: ~/Dropbox/web-jam-llms/AI_Misbehaves/personal-information-guards-design.md,
  * "What an agent reads".
  *
- * Which calls: Claude Code's `Read`, agy's `view_file`, and a shell command
+ * Which calls: Claude Code's `Read`, agy's `view_file` and `read_file`, and a shell command
  * whose words, through the shared command reader (normalize_command.ts), run
  * one of READER_COMMANDS on a file or a folder.
  *
  * Three outcomes:
  *   - Refuse (exit 2): a file the call names holds a protected number.
  *   - Allow (exit 0): no file the call names holds one, or every such file is
- *     inside a git working tree under ~/WebJamApps, over 5 MB, an image, audio
- *     or video, or otherwise not text or PDF.
+ *     inside a git working tree of a ~/WebJamApps repository (insideWebJamAppsRepo),
+ *     is this guard's own design document (isExemptDesignDoc), is over 5 MB, an
+ *     image, audio or video, or otherwise not text or PDF. A shell word holding an
+ *     unresolved variable, or a relative path after a `cd` the shared reader cannot
+ *     follow, is passed over; every literal path in the same command is still checked.
  *   - Refuse, failing closed (exit 2): the guard cannot open a file the call
- *     names, or cannot read the call itself.
+ *     names, cannot read the call itself, or a folder sweep passes
+ *     MAX_SWEEP_FILES files or SWEEP_TIME_LIMIT_MS.
  *
  * Used on Claude Code (PreToolUse `Bash|Read`), agy (through agy-hook-shim.sh,
- * on `run_command` and `view_file`) and Codex (PreToolUse `Bash`, WJT_SURFACE=codex).
+ * on `run_command` and `view_file|read_file`) and Codex (PreToolUse `Bash`, WJT_SURFACE=codex).
  */
 
 import * as path from "jsr:@std/path@^1.0.0";
@@ -135,23 +139,91 @@ function errorDetail(err: unknown): string {
 }
 
 /**
- * A file or folder inside a git working tree under ~/WebJamApps, judged on its
- * real location so a link inside a repository never exempts what it points at.
+ * A file or folder inside a git working tree of a ~/WebJamApps repository,
+ * judged on its real location so a link inside a repository never exempts what
+ * it points at. That is a working tree under ~/WebJamApps itself, or a git
+ * worktree elsewhere (such as /tmp/agy-worktrees/...) whose `.git` file carries
+ * a `gitdir:` resolving inside ~/WebJamApps/<repo>/.git/worktrees/. Any other
+ * path, under /tmp or not, is never trusted.
  */
 export function insideWebJamAppsRepo(realPath: string, home = homeDir()): boolean {
   const root = path.join(home, "WebJamApps");
-  if (!realPath.startsWith(root + "/")) return false;
-  let dir = realPath;
-  while (dir.startsWith(root + "/")) {
-    try {
-      Deno.lstatSync(path.join(dir, ".git"));
-      return true;
-    } catch {
-      // not a working tree root at this level
+  if (realPath.startsWith(root + "/")) {
+    let dir = realPath;
+    while (dir.startsWith(root + "/")) {
+      try {
+        Deno.lstatSync(path.join(dir, ".git"));
+        return true;
+      } catch {
+        // not a working tree root at this level
+      }
+      dir = path.dirname(dir);
     }
-    dir = path.dirname(dir);
+    return false;
   }
-  return false;
+  // Outside ~/WebJamApps: the nearest `.git` decides, and only a worktree's
+  // `.git` file pointing into a ~/WebJamApps repository exempts.
+  let dir = realPath;
+  for (;;) {
+    const dotGit = path.join(dir, ".git");
+    let info: Deno.FileInfo | null = null;
+    try {
+      info = Deno.lstatSync(dotGit);
+    } catch {
+      // no `.git` at this level
+    }
+    if (info) return info.isFile && worktreeOfWebJamAppsRepo(dotGit, dir, root);
+    const parent = path.dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+}
+
+/** Whether a worktree's `.git` file names a gitdir inside ~/WebJamApps/<repo>/.git/worktrees/. */
+function worktreeOfWebJamAppsRepo(dotGit: string, worktree: string, root: string): boolean {
+  let text: string;
+  try {
+    text = Deno.readTextFileSync(dotGit);
+  } catch {
+    return false;
+  }
+  const match = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(text);
+  if (!match) return false;
+  let gitdir: string;
+  try {
+    gitdir = Deno.realPathSync(path.resolve(worktree, match[1]));
+  } catch {
+    return false; // a gitdir that does not exist is no worktree
+  }
+  const realRoot = (() => {
+    try {
+      return Deno.realPathSync(root);
+    } catch {
+      return root;
+    }
+  })();
+  if (!gitdir.startsWith(realRoot + "/")) return false;
+  const [repo, dotGitDir, worktrees, name] = gitdir.slice(realRoot.length + 1).split("/");
+  return Boolean(repo) && dotGitDir === ".git" && worktrees === "worktrees" && Boolean(name);
+}
+
+/** The design document's two files, whose literal-case tables carry made-up numbers on purpose. */
+const EXEMPT_DESIGN_DOCS = [
+  "Dropbox/web-jam-llms/AI_Misbehaves/personal-information-guards-design.md",
+  "Dropbox/web-jam-llms/AI_Misbehaves/personal-information-guards-design.html",
+];
+
+/** Whether `realFile` is exactly one of the design document's canonical resolved paths. */
+export function isExemptDesignDoc(realFile: string, home = homeDir()): boolean {
+  return EXEMPT_DESIGN_DOCS.some((rel) => {
+    const named = path.join(home, rel);
+    if (realFile === named) return true;
+    try {
+      return realFile === Deno.realPathSync(named);
+    } catch {
+      return false;
+    }
+  });
 }
 
 interface Sweep {
@@ -175,7 +247,7 @@ function pdfText(file: string): { ok: true; text: string } | { ok: false; detail
 
 /** Check one regular file the call names. `realFile` is its resolved location. */
 function checkFile(file: string, realFile: string, size: number): Verdict {
-  if (insideWebJamAppsRepo(realFile)) return ALLOW;
+  if (insideWebJamAppsRepo(realFile) || isExemptDesignDoc(realFile)) return ALLOW;
   if (size > MAX_FILE_BYTES) return ALLOW;
   const ext = path.extname(realFile).slice(1).toLowerCase();
   if (NOT_TEXT_EXTENSIONS.has(ext)) return ALLOW;
@@ -443,7 +515,7 @@ export function checkPayload(raw: string, fallbackCwd = Deno.cwd()): Verdict {
     ? inputRaw as Record<string, unknown>
     : {};
 
-  if (toolName === "Read" || toolName === "view_file") {
+  if (toolName === "Read" || toolName === "view_file" || toolName === "read_file") {
     const file = input.file_path ?? input.AbsolutePath ?? input.Path;
     if (typeof file !== "string" || !path.isAbsolute(file)) {
       return {

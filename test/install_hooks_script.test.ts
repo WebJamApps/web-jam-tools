@@ -26,7 +26,7 @@
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
-import { matcherMatches } from "../hooks/lib/agy_hook_shim.ts";
+import { mapAgyToolName, matcherMatches } from "../hooks/lib/agy_hook_shim.ts";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const INSTALL_SCRIPT = `${REPO_ROOT}scripts/install-hooks.sh`;
@@ -3174,7 +3174,7 @@ Deno.test("install-hooks.sh registers the subagent cap on Claude Code alone and 
 // --- Personal information read guard and financial-private deny rules (web-jam-tools#1860) ---
 
 Deno.test(
-  "install-hooks.sh registers block-personal-numbers-read.sh on Bash|Read and on agy view_file, and denies financial-private",
+  "install-hooks.sh registers block-personal-numbers-read.sh on Bash|Read and on agy view_file|read_file, and denies financial-private",
   async () => {
     const hooksDir = await Deno.makeTempDir();
     const settingsDir = await Deno.makeTempDir();
@@ -3218,7 +3218,7 @@ Deno.test(
         settings.permissions.deny.includes("Edit(//home/joshua/Dropbox/financial-private/**)"),
       );
 
-      // agy: shim registrations reaching run_command (as Bash) and view_file.
+      // agy: shim registrations reaching run_command (as Bash), view_file and read_file.
       const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
       const agyCommands: string[] = agyHooks.hooks.PreToolUse.flatMap(
         (entry: { hooks: Array<{ command: string }> }) => entry.hooks.map((h) => h.command),
@@ -3230,13 +3230,15 @@ Deno.test(
             btoa("Bash|Read")
           } $HOME/.claude/hooks/block-personal-numbers-read.sh`,
           `$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${
-            btoa("view_file")
+            btoa("view_file|read_file")
           } $HOME/.claude/hooks/block-personal-numbers-read.sh`,
         ].sort(),
       );
-      // The shim maps agy's run_command to Bash; view_file keeps its own name.
+      // The shim maps agy's run_command to Bash; view_file and read_file keep their own names.
       assert(matcherMatches("Bash|Read", "Bash"));
-      assert(matcherMatches("view_file", "view_file"));
+      assert(matcherMatches("view_file|read_file", "view_file"));
+      assert(matcherMatches("view_file|read_file", "read_file"));
+      assertEquals(mapAgyToolName("read_file"), "read_file");
 
       const check = await run("bash", [
         INSTALL_SCRIPT,
