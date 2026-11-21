@@ -82,7 +82,7 @@ Deno.test("signing PR: update mode also uses the running model", () =>
     const dir = await makeFixtureRepo();
     try {
       const result = await runScript(dir, [
-        ...baseArgs({ author: "Codex — GPT-6 Astra" }),
+        ...baseArgs({ author: "Codex — GPT-6.2 Astra" }),
         "--update",
       ], env);
       assertEquals(result.code, 0, result.stderr);
@@ -106,7 +106,7 @@ Deno.test("signing PR: roster probes remain read-only with conflicting Codex sur
   }
 });
 
-for (const author of ["Codex — GPT-6.1 Sol", undefined]) {
+for (const author of ["Codex — GPT-6.2 Sol", undefined]) {
   Deno.test(`signing PR a/b: dry run uses lookup with ${author ?? "no typed author"}`, () =>
     withSigningFixture(async (_options, env) => {
       const dir = await makeFixtureRepo();
@@ -116,14 +116,14 @@ for (const author of ["Codex — GPT-6.1 Sol", undefined]) {
         const result = await runScript(dir, args, env);
         assertEquals(result.code, 0, result.stderr);
         assertEquals(result.stdout.includes(`🤖 Work by ${LUNA_SIGNATURE}`), true);
-        assertEquals(result.stdout.includes("🤖 Work by Codex — GPT-6.1 Sol"), false);
+        assertEquals(result.stdout.includes("🤖 Work by Codex — GPT-6.2 Sol"), false);
       } finally {
         await Deno.remove(dir, { recursive: true });
       }
     }));
 }
 
-for (const author of [undefined, "Codex — GPT-6.1 Sol"]) {
+for (const author of [undefined, "Codex — GPT-6.2 Sol"]) {
   Deno.test(`signing PR f/g: simultaneous Codex and forced author refuse ${author ?? "no typed author"}`, () =>
     withSigningFixture(async (_options, env) => {
       const dir = await makeFixtureRepo();
@@ -177,13 +177,15 @@ Deno.test("--list-roster is read-only and needs no git repository", async () => 
         "GPT-6.1 Terra",
         "Claude Fable 5.2",
         "GPT-6 Luna",
-        "GPT-6.1 Sol",
-        "GPT-6 Astra",
+        "GPT-6.2 Sol",
+        "GPT-6.2 Astra",
       ]
     ) {
       assertEquals(entries.includes(entry), true);
     }
     assertEquals(entries.includes("Gemini Flash"), false);
+    assertEquals(entries.includes("GPT-6.1 Sol"), false);
+    assertEquals(entries.includes("GPT-6 Astra"), false);
     assertEquals(entries.includes("Claude Fable 5"), false);
     assertEquals(Array.from(Deno.readDirSync(dir)).map((entry) => entry.name), ["git"]);
   } finally {
@@ -1524,8 +1526,8 @@ const MODEL_LABEL_CASES = [
   ["agy — Gemini Hydrogen", "Hydrogen"],
   ["agy — Gemini Argon", "Argon"],
   ["agy — Gemini Neon", "Neon"],
-  ["Codex — GPT-6.1 Sol", "Sol"],
-  ["Codex — GPT-6 Astra", "Astra"],
+  ["Codex — GPT-6.2 Sol", "Sol"],
+  ["Codex — GPT-6.2 Astra", "Astra"],
   ["Claude Code — Claude Sonnet 5.5", "Sonnet"],
   ["Claude Code — Claude Opus", "Opus"],
 ] as const;
@@ -1608,7 +1610,7 @@ for (const initialLabels of [["Flash"], []]) {
     withModelLabelFixture(async ({ repo, dir, env, invocations }) => {
       const result = await runScriptWithoutDryRun(
         repo,
-        [...baseArgs({ author: "Codex — GPT-6.1 Sol" }), "--update"],
+        [...baseArgs({ author: "Codex — GPT-6.2 Sol" }), "--update"],
         env,
       );
       assertEquals(result.code, 0, result.stderr);
@@ -1649,7 +1651,7 @@ Deno.test("model label: Sol signature wins over the issue's Flash label", () =>
   withModelLabelFixture(async ({ repo, env, invocations }) => {
     const result = await runScriptWithoutDryRun(
       repo,
-      [...baseArgs({ author: "Codex — GPT-6.1 Sol" }), "--issue", "999"],
+      [...baseArgs({ author: "Codex — GPT-6.2 Sol" }), "--issue", "999"],
       env,
     );
     assertEquals(result.code, 0, result.stderr);
@@ -1661,13 +1663,13 @@ Deno.test("model label: Codex session resolves Sol instead of the typed Astra au
   withSigningFixture(async (_options, signingEnv, sessionPath) => {
     await Deno.writeTextFile(
       sessionPath,
-      '{"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}\n',
+      '{"type":"turn_context","payload":{"model":"gpt-6.2-sol"}}\n',
       { append: true },
     );
     await withModelLabelFixture(async ({ repo, env, invocations }) => {
       const result = await runScriptWithoutDryRun(
         repo,
-        baseArgs({ author: "Codex — GPT-6 Astra" }),
+        baseArgs({ author: "Codex — GPT-6.2 Astra" }),
         {
           ...env,
           ...signingEnv,
@@ -1675,7 +1677,7 @@ Deno.test("model label: Codex session resolves Sol instead of the typed Astra au
       );
       assertEquals(result.code, 0, result.stderr);
       const calls = await invocations();
-      assertEquals(calls[0].join("\n").includes("🤖 Work by Codex — GPT-6.1 Sol"), true);
+      assertEquals(calls[0].join("\n").includes("🤖 Work by Codex — GPT-6.2 Sol"), true);
       assertEquals(calls[1], ["pr", "edit", LABEL_PR_URL, "--add-label", "Sol"]);
     });
   }));
@@ -1830,9 +1832,9 @@ ${realGitPath} "$@"
 
 // --- --check-author probe tests (web-jam-tools#1200) ---
 
-Deno.test("create-draft-pr.sh --check-author: Codex — GPT-6.1 Sol exits 0", async () => {
+Deno.test("create-draft-pr.sh --check-author: Codex — GPT-6.2 Sol exits 0", async () => {
   const cmd = new Deno.Command("bash", {
-    args: [SCRIPT_PATH, "--check-author", "Codex — GPT-6.1 Sol"],
+    args: [SCRIPT_PATH, "--check-author", "Codex — GPT-6.2 Sol"],
     stdout: "piped",
     stderr: "piped",
   });
@@ -1852,9 +1854,9 @@ Deno.test("create-draft-pr.sh --check-author: Codex — GPT-6 still exits non-ze
   assertMatch(new TextDecoder().decode(stderr), /does not name a model on the roster/);
 });
 
-Deno.test("create-draft-pr.sh --check-author: Codex — GPT-6 Astra exits 0", async () => {
+Deno.test("create-draft-pr.sh --check-author: Codex — GPT-6.2 Astra exits 0", async () => {
   const cmd = new Deno.Command("bash", {
-    args: [SCRIPT_PATH, "--check-author", "Codex — GPT-6 Astra"],
+    args: [SCRIPT_PATH, "--check-author", "Codex — GPT-6.2 Astra"],
     stdout: "piped",
     stderr: "piped",
   });
@@ -1862,6 +1864,39 @@ Deno.test("create-draft-pr.sh --check-author: Codex — GPT-6 Astra exits 0", as
   assertEquals(code, 0, new TextDecoder().decode(stderr));
   assertMatch(new TextDecoder().decode(stdout), /names a model on the roster/);
 });
+
+for (const author of ["Codex — GPT-6.1 Sol", "Codex — GPT-6 Astra"]) {
+  Deno.test(`create-draft-pr.sh --check-author: retired ${author} exits non-zero (web-jam-tools#1868)`, async () => {
+    const { code, stderr } = await new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--check-author", author],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(code, 1);
+    assertMatch(new TextDecoder().decode(stderr), /does not name a model on the roster/);
+  });
+}
+
+for (const model of ["gpt-6.1-sol", "gpt-6-astra"]) {
+  Deno.test(`signing PR: a Codex session still on ${model} refuses and opens nothing (web-jam-tools#1868)`, () =>
+    withSigningFixture(async (_options, signingEnv, sessionPath) => {
+      await Deno.writeTextFile(
+        sessionPath,
+        `{"type":"turn_context","payload":{"model":"${model}"}}\n`,
+        { append: true },
+      );
+      await withModelLabelFixture(async ({ repo, env, invocations }) => {
+        const result = await runScriptWithoutDryRun(
+          repo,
+          baseArgs({ author: "Codex — GPT-6.2 Sol" }),
+          { ...env, ...signingEnv },
+        );
+        assertEquals(result.code, 1);
+        assertMatch(result.stderr, /no author roster entry/);
+        assertEquals(await invocations(), []);
+      });
+    }));
+}
 
 // --- web-jam-tools#1202: one Flash level, the medium level is refused ---
 

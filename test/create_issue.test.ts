@@ -147,14 +147,14 @@ Deno.test("signing issue k: dry run replaces the typed author with Luna", () =>
         title: "Signing fixture",
         bodyFile: "/tmp/b.md",
         labels: ["Terra"],
-        author: "Codex — GPT-6.1 Sol",
+        author: "Codex — GPT-6.2 Sol",
         dryRun: true,
       },
       deps,
       APPROVE_ALL,
     );
     assertEquals(result.trimEnd().endsWith(`🤖 Authored by ${LUNA_SIGNATURE}`), true);
-    assertEquals(result.includes("🤖 Authored by Codex — GPT-6.1 Sol"), false);
+    assertEquals(result.includes("🤖 Authored by Codex — GPT-6.2 Sol"), false);
     assertEquals(calls.some((cmd) => cmd.includes("create") || cmd.includes("graphql")), false);
   }));
 
@@ -2063,6 +2063,32 @@ Deno.test("createIssueAndVerify refuses an author not on the roster, names it an
   assertStringIncludes((err as Error).message, "Claude Sonnet 5.5");
   assertEquals(calls.length, 0);
 });
+
+for (const author of ["Codex — GPT-6.1 Sol", "Codex — GPT-6 Astra"]) {
+  Deno.test(`createIssueAndVerify refuses retired ${author} through the real roster and files nothing (web-jam-tools#1868)`, async () => {
+    const { deps, calls } = probeDeps("Body", { code: 0, stderr: "" });
+    const realProbe = new URL("../scripts/create-draft-pr.sh", import.meta.url).pathname;
+    deps.probeScriptPath = realProbe;
+    const recordOthers = deps.runCmd;
+    deps.runCmd = async (cmd: string[]) => {
+      if (cmd[0] !== realProbe) return recordOthers(cmd);
+      const out = await new Deno.Command("bash", { args: cmd, stdout: "piped", stderr: "piped" })
+        .output();
+      const text = new TextDecoder();
+      return { code: out.code, stdout: text.decode(out.stdout), stderr: text.decode(out.stderr) };
+    };
+    const err = await assertRejects(() =>
+      realCreateIssueAndVerify(
+        { title: "T", bodyFile: "/tmp/b.md", labels: ["Sol"], author },
+        deps,
+        APPROVE_ALL,
+      )
+    );
+    assertStringIncludes((err as Error).message, author);
+    assertStringIncludes((err as Error).message, "GPT-6.2 Sol");
+    assertEquals(calls.length, 0);
+  });
+}
 
 Deno.test("createIssueAndVerify: a probe that cannot run refuses with a different message than not-on-roster", async () => {
   const messages: string[] = [];

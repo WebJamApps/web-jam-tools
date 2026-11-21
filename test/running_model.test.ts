@@ -102,8 +102,8 @@ async function refuses(fixture: Fixture, reason: string): Promise<void> {
 
 for (
   const [slug, name] of [
-    ["gpt-6-astra", "GPT-6 Astra"],
-    ["gpt-6.1-sol", "GPT-6.1 Sol"],
+    ["gpt-6.2-astra", "GPT-6.2 Astra"],
+    ["gpt-6.2-sol", "GPT-6.2 Sol"],
     ["gpt-6-luna", "GPT-6 Luna"],
   ]
 ) {
@@ -118,13 +118,13 @@ for (
 Deno.test("running-model reads the newest Codex turn instead of the first model", () =>
   withFixture(async (fixture) => {
     fixture.env.CODEX_THREAD_ID = CODEX_ID;
-    await fixture.codex("gpt-6-astra");
+    await fixture.codex("gpt-6.2-astra");
     await Deno.writeTextFile(
       join(fixture.env.CODEX_HOME, "sessions", "one", `rollout-${CODEX_ID}.jsonl`),
-      '\n{"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}',
+      '\n{"type":"turn_context","payload":{"model":"gpt-6.2-sol"}}',
       { append: true },
     );
-    await succeeds(fixture, "GPT-6.1 Sol");
+    await succeeds(fixture, "GPT-6.2 Sol");
   }));
 
 Deno.test("running-model refuses a missing Codex record, even with a stale agy record", () =>
@@ -137,8 +137,8 @@ Deno.test("running-model refuses a missing Codex record, even with a stale agy r
 Deno.test("running-model refuses two matching Codex session files", () =>
   withFixture(async (fixture) => {
     fixture.env.CODEX_THREAD_ID = CODEX_ID;
-    await fixture.codex("gpt-6.1-sol");
-    await fixture.codex("gpt-6.1-sol", "two");
+    await fixture.codex("gpt-6.2-sol");
+    await fixture.codex("gpt-6.2-sol", "two");
     await refuses(fixture, "Multiple session files");
   }));
 
@@ -353,8 +353,8 @@ for (const surface of ["codex", "claude"] as const) {
       await fixture.agy(ARGON_RECORD, false);
       if (surface === "codex") {
         fixture.env.CODEX_THREAD_ID = CODEX_ID;
-        await fixture.codex("gpt-6.1-sol");
-        await succeeds(fixture, "GPT-6.1 Sol");
+        await fixture.codex("gpt-6.2-sol");
+        await succeeds(fixture, "GPT-6.2 Sol");
       } else {
         fixture.env.CLAUDE_CODE_SESSION_ID = CLAUDE_ID;
         await fixture.claude(assistant("claude-opus-5-5"));
@@ -369,8 +369,8 @@ for (const surface of ["codex", "claude", "agy"] as const) {
       let entries: string[];
       if (surface === "codex") {
         fixture.env.CODEX_THREAD_ID = CODEX_ID;
-        await fixture.codex("gpt-6.1-sol");
-        entries = ["GPT-6.1 Sol", "GPT-6.1 Sol"];
+        await fixture.codex("gpt-6.2-sol");
+        entries = ["GPT-6.2 Sol", "GPT-6.2 Sol"];
       } else if (surface === "claude") {
         fixture.env.CLAUDE_CODE_SESSION_ID = CLAUDE_ID;
         await fixture.claude(assistant("claude-opus-5-5"));
@@ -393,10 +393,10 @@ Deno.test("running-model refuses an unreadable roster", () =>
 for (const surface of ["codex", "claude", "agy", "none"] as const) {
   Deno.test(`running-model task uses scoped permissions and exits correctly for ${surface}`, () =>
     withFixture(async (fixture) => {
-      const models = { codex: "GPT-6.1 Sol", claude: "Claude Opus", agy: "Gemini Argon", none: "" };
+      const models = { codex: "GPT-6.2 Sol", claude: "Claude Opus", agy: "Gemini Argon", none: "" };
       if (surface === "codex") {
         fixture.env.CODEX_THREAD_ID = CODEX_ID;
-        await fixture.codex("gpt-6.1-sol");
+        await fixture.codex("gpt-6.2-sol");
       } else if (surface === "claude") {
         fixture.env.CLAUDE_CODE_SESSION_ID = CLAUDE_ID;
         await fixture.claude(assistant("claude-opus-5-5"));

@@ -239,14 +239,14 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(byName.get("Sol")?.modelTier, true);
   assertEquals(
     byName.get("Sol")?.description,
-    "Logic- and safety-heavy coding via Codex: GPT-6.1 Sol (gpt-6.1-sol), high effort",
+    "Logic- and safety-heavy coding via Codex: GPT-6.2 Sol (gpt-6.2-sol), high effort",
   );
   assertEquals(byName.get("Sol")?.repos, "all");
   assertEquals(byName.get("Astra")?.hex, "6F42C1");
   assertEquals(byName.get("Astra")?.modelTier, true);
   assertEquals(
     byName.get("Astra")?.description,
-    "GPT-6 Astra at high effort; kept for REAPER recording",
+    "GPT-6.2 Astra at high effort; kept for REAPER recording",
   );
   assertEquals(byName.get("Astra")?.repos, "all");
   assertEquals(byName.get("Sonnet")?.hex, "1D76DB");
@@ -449,12 +449,12 @@ Deno.test("Luna, Sol, Astra: missing labels are proposed with canonical values f
       name: "Sol",
       hex: "006B75",
       description:
-        "Logic- and safety-heavy coding via Codex: GPT-6.1 Sol (gpt-6.1-sol), high effort",
+        "Logic- and safety-heavy coding via Codex: GPT-6.2 Sol (gpt-6.2-sol), high effort",
     },
     {
       name: "Astra",
       hex: "6F42C1",
-      description: "GPT-6 Astra at high effort; kept for REAPER recording",
+      description: "GPT-6.2 Astra at high effort; kept for REAPER recording",
     },
   ];
 

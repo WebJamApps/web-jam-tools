@@ -182,7 +182,7 @@ Deno.test("signing plan m: every dry-run body has the looked-up Luna footer", ()
       const result = await realFilePlan({
         planPath: "test/fixtures/design-issue/fixture-plan.json",
         dryRun: true,
-        author: "Codex — GPT-6.1 Sol",
+        author: "Codex — GPT-6.2 Sol",
         approvalCheck: APPROVE_ALL,
         deps: {
           signing,
@@ -201,7 +201,7 @@ Deno.test("signing plan m: every dry-run body has the looked-up Luna footer", ()
     assertEquals(bodies.length, 3);
     for (const body of bodies) {
       assertEquals(body.trimEnd().endsWith(`🤖 Authored by ${LUNA_SIGNATURE}`), true);
-      assertEquals(body.includes("🤖 Authored by Codex — GPT-6.1 Sol"), false);
+      assertEquals(body.includes("🤖 Authored by Codex — GPT-6.2 Sol"), false);
     }
     assertEquals(calls.some((cmd) => cmd[0] === "gh"), false);
   }));

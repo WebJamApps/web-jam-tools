@@ -103,12 +103,12 @@ labels:
     modelTier: true
   - name: Sol
     hex: "006B75"
-    description: "Logic- and safety-heavy coding via Codex: GPT-6.1 Sol (gpt-6.1-sol), high effort"
+    description: "Logic- and safety-heavy coding via Codex: GPT-6.2 Sol (gpt-6.2-sol), high effort"
     repos: all
     modelTier: true
   - name: Astra
     hex: "6F42C1"
-    description: "GPT-6 Astra at high effort; kept for REAPER recording"
+    description: "GPT-6.2 Astra at high effort; kept for REAPER recording"
     repos: all
     modelTier: true
 

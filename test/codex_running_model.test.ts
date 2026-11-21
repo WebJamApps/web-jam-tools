@@ -89,7 +89,7 @@ Deno.test("agy signing refuses unknown, mismatched, missing and unreadable evide
   }));
 
 const SESSION_ID = "01a10611-a947-7b00-87b3-414e9e2085eb";
-for (const author of ["Codex — GPT-6.1 Sol", undefined]) {
+for (const author of ["Codex — GPT-6.2 Sol", undefined]) {
   Deno.test(`signing a/b: lookup replaces ${author ?? "missing author"}`, () =>
     withSigningFixture(async (options) => {
       assertEquals(await resolveSigningAuthor(author, options), LUNA_SIGNATURE);
@@ -107,7 +107,7 @@ for (const id of [undefined, ""]) {
   });
 }
 
-for (const author of [undefined, "Codex — GPT-6.1 Sol"]) {
+for (const author of [undefined, "Codex — GPT-6.2 Sol"]) {
   Deno.test(`signing f/g: forced author with lookup refuses ${author ?? "no typed name"}`, () =>
     withSigningFixture(async (options, env) => {
       env.FORCED_PR_AUTHOR = "agy — Gemini Flash (High)";
@@ -189,13 +189,13 @@ const successfulCases = [
   { case: "a: one turn", text: LUNA_TURN, signature: "Codex — GPT-6 Luna" },
   {
     case: "b: switch to the newest turn",
-    text: `${LUNA_TURN}\n{"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}`,
-    signature: "Codex — GPT-6.1 Sol",
+    text: `${LUNA_TURN}\n{"type":"turn_context","payload":{"model":"gpt-6.2-sol"}}`,
+    signature: "Codex — GPT-6.2 Sol",
   },
   {
     case: "c: Astra",
-    text: '{"type":"turn_context","payload":{"model":"gpt-6-astra"}}',
-    signature: "Codex — GPT-6 Astra",
+    text: '{"type":"turn_context","payload":{"model":"gpt-6.2-astra"}}',
+    signature: "Codex — GPT-6.2 Astra",
   },
   {
     case: "d: torn last line",
@@ -204,7 +204,7 @@ const successfulCases = [
   },
   {
     case: "e: response_item cannot change the model",
-    text: `${LUNA_TURN}\n{"type":"response_item","payload":{"model":"gpt-6.1-sol"}}`,
+    text: `${LUNA_TURN}\n{"type":"response_item","payload":{"model":"gpt-6.2-sol"}}`,
     signature: "Codex — GPT-6 Luna",
   },
 ];
@@ -301,9 +301,16 @@ for (const id of [undefined, ""]) {
     }));
 }
 
+for (const model of ["gpt-6.1-sol", "gpt-6-astra"]) {
+  Deno.test(`retired ${model} session refuses to sign (web-jam-tools#1868)`, () =>
+    fixture(async (options) => {
+      await refuses(options, `Model ${model} has no author roster entry`);
+    }, `{"type":"turn_context","payload":{"model":"${model}"}}`));
+}
+
 Deno.test("p: real roster probe supplies the normalized model names", async () => {
   const names = (await readAuthorRoster()).map((entry) => entry.toLowerCase().replaceAll(" ", "-"));
-  for (const model of ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"]) {
+  for (const model of ["gpt-6-luna", "gpt-6.2-sol", "gpt-6.2-astra"]) {
     assertEquals(names.filter((name) => name === model).length, 1);
   }
 });
