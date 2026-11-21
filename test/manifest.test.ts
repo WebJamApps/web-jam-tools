@@ -101,6 +101,10 @@ const EXPECTED_HOOK_SCRIPTS = [
   // carries a credential-shaped LITERAL, before it can be approved and
   // persisted verbatim into permissions.allow.
   "block-secret-literals.sh",
+  // PreToolUse workflow guard (web-jam-tools#1892) — refuses tool calls
+  // emitted after an unanswered prose question in the current turn across agy,
+  // Codex, and Claude Code.
+  "block-tool-after-question.sh",
   // PreToolUse hook on the `Agent` tool (web-jam-tools#708) — at most two
   // Anthropic-billed subagents run at once; a third launch is refused and queued,
   // and an agent-selected or fork-inherited Fable launch is refused. Claude Code only.
