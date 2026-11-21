@@ -428,12 +428,14 @@ export interface AntigravityWriteTarget {
 }
 
 /**
- * Antigravity discovery: agy has no hook-delivered payload here either, and unlike Claude Code its
- * transcript path cannot be located from a session id (Antigravity keys transcripts by
- * conversationId, which this script is never told directly). The one existing, real record of that
- * identity is hooks/lib/agy_hook_shim.ts's recordInvocation() — already writing every agy tool
- * call's full payload (conversationId, transcriptPath) to AGY_HOOK_RECORD_PATH (default
- * /tmp/agy-hook-invocations.jsonl) for an unrelated purpose (web-jam-tools#816).
+ * Antigravity discovery uses two sources with separate roles. The conversation id and transcript
+ * path come from the caller, which receives them from the skill-run hook (AGY_CONVERSATION_ID,
+ * AGY_TRANSCRIPT_PATH); unlike Claude Code, agy's transcript cannot be located from a session id,
+ * because Antigravity keys transcripts by conversationId. The shared record written by
+ * hooks/lib/agy_hook_shim.ts's recordInvocation() — every agy tool call's payload (conversationId,
+ * transcriptPath) appended to AGY_HOOK_RECORD_PATH (default /tmp/agy-hook-invocations.jsonl,
+ * web-jam-tools#816) — only corroborates that pair: it never supplies the conversation in strict
+ * mode.
  *
  * Both commands that read what Josh typed on agy, fix-pr push and this token writer, use strict
  * mode (web-jam-tools#1845, web-jam-tools#1846): the caller supplies the conversation id and
