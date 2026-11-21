@@ -185,11 +185,11 @@ ROSTER=(
   # Codex CLI running GPT-6 Luna — trial lane for Haiku-tier work (Josh, 2026-09-30).
   "GPT-6 Luna"
   "GPT-6.1 Terra"
-  # Codex CLI running GPT-6.2 Sol — default coding and review model on Plus. Replaced
+  # Codex CLI running GPT-6.2 Sol — hardest coding work, on the Opus rung. Replaced
   # GPT-6.1 Sol when Josh moved the team to GPT-6.2 (web-jam-tools#1868).
   "GPT-6.2 Sol"
-  # Codex CLI running GPT-6.2 Astra — reserved for REAPER recording. Replaced GPT-6 Astra
-  # (web-jam-tools#1868).
+  # Codex CLI running GPT-6.2 Astra — architect with Neon: design-issue runs and only work
+  # Josh names; takes no audio. Replaced GPT-6 Astra (web-jam-tools#1868).
   "GPT-6.2 Astra"
 )
 
