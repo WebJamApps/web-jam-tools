@@ -413,7 +413,8 @@ export async function filePlan(
   const deps = options.deps || defaultExecDeps;
   options = { ...options, author: await resolveSigningAuthor(options.author, deps.signing) };
   const approvalCheck = options.approvalCheck ||
-    ((repoFull, title) => checkApprovalToken(repoFull, title));
+    ((repoFull, title) =>
+      checkApprovalToken(repoFull, title, undefined, Date.now(), { env: deps.approvalEnv }));
 
   // Collect all items for pre-validation / dry-run
   const allItems: Array<{ item: PlanIssueItem; isEpic: boolean }> = [];

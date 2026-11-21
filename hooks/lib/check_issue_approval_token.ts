@@ -88,6 +88,7 @@ import {
   findGhIssueCreateArgs,
   stripLeadingAssignments,
 } from "./check_model_label_on_issue_create.ts";
+import { resolveCodexTokenOwnerSync } from "./codex_session_reader.ts";
 import { splitOnOperators, splitShellTokens, stripHeredocs } from "./normalize_command.ts";
 
 // Dependency direction (web-jam-tools#788 review, Actionable Feedback A):
@@ -172,8 +173,10 @@ function parseRepoApproval(value: unknown): RepoApproval | null {
  * that need the override's single-file behavior read it themselves (see `defaultTokenPath()` and
  * `checkApprovalToken()` in src/create-issue/lib.ts).
  */
-export function defaultTokenDir(): string {
-  const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "/home/joshua";
+export function defaultTokenDir(
+  env: (name: string) => string | undefined = (name) => Deno.env.get(name),
+): string {
+  const home = env("HOME") || env("USERPROFILE") || "/home/joshua";
   return `${home}/.claude/state/issue-approval-tokens`;
 }
 
@@ -182,10 +185,13 @@ export function defaultTokenDir(): string {
  * unless `ISSUE_APPROVAL_TOKEN_PATH` is set, which keeps its pre-existing meaning — a single fixed
  * file used for every session, ignoring `sessionId` entirely (existing tests depend on this).
  */
-export function defaultTokenPath(sessionId: string): string {
-  const override = Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+export function defaultTokenPath(
+  sessionId: string,
+  env: (name: string) => string | undefined = (name) => Deno.env.get(name),
+): string {
+  const override = env("ISSUE_APPROVAL_TOKEN_PATH");
   if (override) return override;
-  return `${defaultTokenDir()}/${sessionId}.json`;
+  return `${defaultTokenDir(env)}/${sessionId}.json`;
 }
 
 /**
@@ -311,16 +317,43 @@ function extractBashTitle(args: string[]): string | null {
  * path-unsafe session id), which is why this is the one place doing it: it only needs to happen when
  * a token is actually about to be checked, not for every hook invocation regardless of tool.
  */
+export interface HookTokenResolveOptions {
+  surface?: string;
+  transcriptPath?: unknown;
+  env?: (name: string) => string | undefined;
+}
+
 function checkTokenValidity(
   repoFull: string,
   sessionId: string,
   tokenPath: string | null,
   nowMs: number,
+  options?: HookTokenResolveOptions,
 ): { token: ApprovalToken } | { deny: Decision } {
+  const env = options?.env ?? ((name: string) => Deno.env.get(name));
+  const surface = options?.surface ?? env("WJT_SURFACE");
+  let effectiveSessionId = sessionId;
+  if (surface === "codex") {
+    try {
+      effectiveSessionId = resolveCodexTokenOwnerSync({
+        threadId: sessionId,
+        rolloutPath: options?.transcriptPath,
+        requireRolloutPath: true,
+        env,
+      });
+    } catch (error) {
+      return {
+        deny: {
+          outcome: "deny",
+          reason: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  }
   let resolvedPath: string;
   if (tokenPath !== null) {
     resolvedPath = tokenPath;
-  } else if (!sessionId) {
+  } else if (!effectiveSessionId) {
     return {
       deny: {
         outcome: "deny",
@@ -328,18 +361,18 @@ function checkTokenValidity(
           "No session id was provided with this call, so this session's own approval token file cannot be located.",
       },
     };
-  } else if (!isSafeSessionId(sessionId)) {
+  } else if (!isSafeSessionId(effectiveSessionId)) {
     return {
       deny: {
         outcome: "deny",
         reason:
           `Session id is not safe to use as a filename (contains "/", "\\", or ".."), so this session's own approval token file cannot be located: ${
-            JSON.stringify(sessionId)
+            JSON.stringify(effectiveSessionId)
           }`,
       },
     };
   } else {
-    resolvedPath = defaultTokenPath(sessionId);
+    resolvedPath = defaultTokenPath(effectiveSessionId, env);
   }
   const token = loadToken(resolvedPath);
   if (!token) {
@@ -351,7 +384,7 @@ function checkTokenValidity(
       },
     };
   }
-  if (token.session_id !== sessionId) {
+  if (token.session_id !== effectiveSessionId) {
     return {
       deny: {
         outcome: "deny",
@@ -446,12 +479,13 @@ function decideBash(
   sessionId: string,
   tokenPath: string | null,
   nowMs: number,
+  options?: HookTokenResolveOptions,
 ): Decision {
   const { segments, unterminated } = splitOnOperators(command);
   if (!unterminated) {
-    return scanBashSegments(segments, sessionId, tokenPath, nowMs);
+    return scanBashSegments(segments, sessionId, tokenPath, nowMs, options);
   }
-  return retryAmbiguousParseWithHeredocsStripped(command, sessionId, tokenPath, nowMs);
+  return retryAmbiguousParseWithHeredocsStripped(command, sessionId, tokenPath, nowMs, options);
 }
 
 /**
@@ -502,11 +536,12 @@ function retryAmbiguousParseWithHeredocsStripped(
   sessionId: string,
   tokenPath: string | null,
   nowMs: number,
+  options?: HookTokenResolveOptions,
 ): Decision {
   const stripped = stripHeredocs(command);
   const reparsed = splitOnOperators(stripped);
   if (!reparsed.unterminated) {
-    return scanBashSegments(reparsed.segments, sessionId, tokenPath, nowMs);
+    return scanBashSegments(reparsed.segments, sessionId, tokenPath, nowMs, options);
   }
 
   if (looksLikeIssueCreatingCommand(stripped)) {
@@ -542,6 +577,7 @@ function scanBashSegments(
   sessionId: string,
   tokenPath: string | null,
   nowMs: number,
+  options?: HookTokenResolveOptions,
 ): Decision {
   for (const segment of segments) {
     const scTokens = stripLeadingAssignments(splitShellTokens(segment));
@@ -594,7 +630,7 @@ function scanBashSegments(
       repoFull = "WebJamApps/web-jam-tools";
     }
 
-    const check = checkTokenValidity(repoFull, sessionId, tokenPath, nowMs);
+    const check = checkTokenValidity(repoFull, sessionId, tokenPath, nowMs, options);
     if ("deny" in check) return check.deny;
     const titleCheck = checkTitleInRepo(check.token, repoFull, title);
     if (!titleCheck.ok) return { outcome: "deny", reason: titleCheck.reason };
@@ -612,11 +648,12 @@ export function decide(
   sessionId: string,
   tokenPath: string | null,
   nowMs: number,
+  options?: HookTokenResolveOptions,
 ): Decision {
   if (toolName === "Bash") {
     const command = typeof toolInput.command === "string" ? toolInput.command : "";
     if (!command.trim()) return { outcome: "pass" };
-    return decideBash(command, sessionId, tokenPath, nowMs);
+    return decideBash(command, sessionId, tokenPath, nowMs, options);
   }
 
   if (ISSUE_WRITE_RE.test(toolName)) {
@@ -641,7 +678,7 @@ export function decide(
           "issue_write create call names no owner/repo, so the approved plan's repository cannot be checked.",
       };
     }
-    const check = checkTokenValidity(repoFull, sessionId, tokenPath, nowMs);
+    const check = checkTokenValidity(repoFull, sessionId, tokenPath, nowMs, options);
     if ("deny" in check) return check.deny;
     const titleCheck = checkTitleInRepo(check.token, repoFull, title);
     if (!titleCheck.ok) return { outcome: "deny", reason: titleCheck.reason };
@@ -663,7 +700,7 @@ export function decide(
           "sub_issue_write add call names no owner/repo, so the parent's repository cannot be checked against the approved plan.",
       };
     }
-    const check = checkTokenValidity(repoFull, sessionId, tokenPath, nowMs);
+    const check = checkTokenValidity(repoFull, sessionId, tokenPath, nowMs, options);
     if ("deny" in check) return check.deny;
     return {
       outcome: "allow",
@@ -701,10 +738,11 @@ export function approvingSessionId(sessionId: string, transcriptPath: unknown): 
 }
 
 /** The approving session id for a PreToolUse payload: its own, or its parent's for a subagent call. */
-function payloadSessionId(data: Record<string, unknown>): string {
+function payloadSessionId(data: Record<string, unknown>, surface?: string): string {
   const own = typeof data.session_id === "string"
     ? data.session_id
     : (typeof data.conversationId === "string" ? data.conversationId : "");
+  if (surface === "codex") return own;
   return approvingSessionId(own, data.transcript_path);
 }
 
@@ -713,6 +751,7 @@ export function checkIssueApprovalToken(
   inputJson: string,
   tokenPath: string,
   nowMs: number,
+  options?: { env?: (name: string) => string | undefined },
 ): string {
   let data: Record<string, unknown>;
   try {
@@ -720,14 +759,20 @@ export function checkIssueApprovalToken(
   } catch {
     return "PASS";
   }
+  const env = options?.env ?? ((name: string) => Deno.env.get(name));
+  const surface = env("WJT_SURFACE");
   const toolName = typeof data.tool_name === "string" ? data.tool_name : "";
-  const sessionId = payloadSessionId(data);
+  const sessionId = payloadSessionId(data, surface);
   const toolInputRaw = data.tool_input;
   const toolInput = typeof toolInputRaw === "object" && toolInputRaw !== null
     ? (toolInputRaw as Record<string, unknown>)
     : {};
 
-  const result = decide(toolName, toolInput, sessionId, tokenPath, nowMs);
+  const result = decide(toolName, toolInput, sessionId, tokenPath, nowMs, {
+    surface,
+    transcriptPath: data.transcript_path,
+    env,
+  });
   if (result.outcome === "pass") return "PASS";
   if (result.outcome === "allow") return `ALLOW:${result.reason ?? ""}`;
   return `DENY:${result.reason ?? ""}`;
@@ -742,10 +787,15 @@ export function checkIssueApprovalToken(
  * payload still PASSes exactly as before, and a tool this hook has no opinion on is never blocked on
  * session-id validity it doesn't need.
  */
-export function checkIssueApprovalTokenAuto(inputJson: string, nowMs: number): string {
-  const override = Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+export function checkIssueApprovalTokenAuto(
+  inputJson: string,
+  nowMs: number,
+  options?: { env?: (name: string) => string | undefined },
+): string {
+  const env = options?.env ?? ((name: string) => Deno.env.get(name));
+  const override = env("ISSUE_APPROVAL_TOKEN_PATH");
   if (override) {
-    return checkIssueApprovalToken(inputJson, override, nowMs);
+    return checkIssueApprovalToken(inputJson, override, nowMs, options);
   }
 
   let data: Record<string, unknown>;
@@ -754,14 +804,19 @@ export function checkIssueApprovalTokenAuto(inputJson: string, nowMs: number): s
   } catch {
     return "PASS";
   }
+  const surface = env("WJT_SURFACE");
   const toolName = typeof data.tool_name === "string" ? data.tool_name : "";
-  const sessionId = payloadSessionId(data);
+  const sessionId = payloadSessionId(data, surface);
   const toolInputRaw = data.tool_input;
   const toolInput = typeof toolInputRaw === "object" && toolInputRaw !== null
     ? (toolInputRaw as Record<string, unknown>)
     : {};
 
-  const result = decide(toolName, toolInput, sessionId, null, nowMs);
+  const result = decide(toolName, toolInput, sessionId, null, nowMs, {
+    surface,
+    transcriptPath: data.transcript_path,
+    env,
+  });
   if (result.outcome === "pass") return "PASS";
   if (result.outcome === "allow") return `ALLOW:${result.reason ?? ""}`;
   return `DENY:${result.reason ?? ""}`;

@@ -1,4 +1,5 @@
 import { join } from "@std/path";
+import { readCodexSession as readCodexSessionFromHookLib } from "../../hooks/lib/codex_session_reader.ts";
 
 export interface InvocationContext {
   conversationId?: string;
@@ -120,40 +121,10 @@ function lastTurnModel(text: string, path: string): string {
 }
 
 /** Locate and read this session, refusing any ambiguous or unreadable input. */
-export async function readCodexSession(
+export function readCodexSession(
   options: Pick<RunningModelOptions, "env"> = {},
 ): Promise<{ threadId: string; path: string; text: string }> {
-  const env = options.env ?? ((name: string) => Deno.env.get(name));
-  const id = env("CODEX_THREAD_ID");
-  if (!id) throw new Error("Not a Codex session: CODEX_THREAD_ID is unset or empty");
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) {
-    throw new Error(`CODEX_THREAD_ID is not a session id: ${id}`);
-  }
-  let codexHome = env("CODEX_HOME");
-  if (!codexHome) {
-    const userHome = env("HOME");
-    if (!userHome) throw new Error("Cannot locate Codex sessions: CODEX_HOME and HOME are unset");
-    codexHome = join(userHome, ".codex");
-  }
-  const directory = join(codexHome, "sessions");
-  let files: string[];
-  try {
-    files = await findSessionFiles(directory, `-${id}.jsonl`);
-  } catch (error) {
-    throw new Error(`Could not search for session ${id} under ${directory}: ${error}`);
-  }
-  if (files.length === 0) throw new Error(`No session file ends with ${id} under ${directory}`);
-  if (files.length !== 1) {
-    throw new Error(`Multiple session files end with ${id}: ${files.sort().join(", ")}`);
-  }
-  const path = files[0];
-  let text: string;
-  try {
-    text = await Deno.readTextFile(path);
-  } catch (error) {
-    throw new Error(`Could not read session file ${path}: ${error}`);
-  }
-  return { threadId: id, path, text };
+  return readCodexSessionFromHookLib(options);
 }
 
 /** Resolve this session's signature using the same session lookup as authorization readers. */

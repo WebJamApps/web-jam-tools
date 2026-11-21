@@ -181,9 +181,15 @@ Deno.test("guard (per-session token files): a subagent loads the approving sessi
   const previous = {
     HOME: Deno.env.get("HOME"),
     override: Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH"),
+    codexThread: Deno.env.get("CODEX_THREAD_ID"),
+    codexHome: Deno.env.get("CODEX_HOME"),
+    surface: Deno.env.get("WJT_SURFACE"),
   };
   try {
     Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
+    Deno.env.delete("CODEX_THREAD_ID");
+    Deno.env.delete("CODEX_HOME");
+    Deno.env.delete("WJT_SURFACE");
     Deno.env.set("HOME", home);
     const dir = `${home}/.claude/state/issue-approval-tokens`;
     await Deno.mkdir(dir, { recursive: true });
@@ -216,6 +222,12 @@ Deno.test("guard (per-session token files): a subagent loads the approving sessi
     if (previous.override !== undefined) {
       Deno.env.set("ISSUE_APPROVAL_TOKEN_PATH", previous.override);
     }
+    if (previous.codexThread === undefined) Deno.env.delete("CODEX_THREAD_ID");
+    else Deno.env.set("CODEX_THREAD_ID", previous.codexThread);
+    if (previous.codexHome === undefined) Deno.env.delete("CODEX_HOME");
+    else Deno.env.set("CODEX_HOME", previous.codexHome);
+    if (previous.surface === undefined) Deno.env.delete("WJT_SURFACE");
+    else Deno.env.set("WJT_SURFACE", previous.surface);
     await Deno.remove(home, { recursive: true });
   }
 });

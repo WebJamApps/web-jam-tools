@@ -189,6 +189,9 @@ for (const row of CREATE_ROWS) {
     const home = await Deno.makeTempDir();
     const savedHome = Deno.env.get("HOME");
     const savedOverride = Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+    const savedCodexThread = Deno.env.get("CODEX_THREAD_ID");
+    const savedCodexHome = Deno.env.get("CODEX_HOME");
+    const savedSurface = Deno.env.get("WJT_SURFACE");
     try {
       const tokenDir = `${home}/.claude/state/issue-approval-tokens`;
       await Deno.mkdir(tokenDir, { recursive: true });
@@ -196,6 +199,9 @@ for (const row of CREATE_ROWS) {
       assertEquals(res.code, 0, res.stderr);
       Deno.env.set("HOME", home);
       Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
+      Deno.env.delete("CODEX_THREAD_ID");
+      Deno.env.delete("CODEX_HOME");
+      Deno.env.delete("WJT_SURFACE");
       const check = checkApprovalToken(row.repo, row.title);
       if (row.refuse) {
         assertEquals(check.ok, false);
@@ -208,6 +214,12 @@ for (const row of CREATE_ROWS) {
       else Deno.env.set("HOME", savedHome);
       if (savedOverride === undefined) Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
       else Deno.env.set("ISSUE_APPROVAL_TOKEN_PATH", savedOverride);
+      if (savedCodexThread === undefined) Deno.env.delete("CODEX_THREAD_ID");
+      else Deno.env.set("CODEX_THREAD_ID", savedCodexThread);
+      if (savedCodexHome === undefined) Deno.env.delete("CODEX_HOME");
+      else Deno.env.set("CODEX_HOME", savedCodexHome);
+      if (savedSurface === undefined) Deno.env.delete("WJT_SURFACE");
+      else Deno.env.set("WJT_SURFACE", savedSurface);
       await Deno.remove(home, { recursive: true });
     }
   });
