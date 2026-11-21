@@ -2010,11 +2010,14 @@ for (const ownIdentity of [AGY_PARENT, "unknown-session", "broken-codex"] as con
           transcriptPath: transcript(AGY_PARENT),
         }) + "\n",
       );
+      // The skill-run hook hands the writer its conversation (web-jam-tools#1846).
       const env: Record<string, string> = {
         ...envWithoutAmbientSessionId(),
         HOME: root,
         CODEX_HOME: root,
         AGY_HOOK_RECORD_PATH: recordPath,
+        AGY_CONVERSATION_ID: AGY_PARENT,
+        AGY_TRANSCRIPT_PATH: transcript(AGY_PARENT),
       };
       if (ownIdentity === "broken-codex") env.CODEX_THREAD_ID = AGY_PARENT;
       const res = await runCli([
@@ -2029,6 +2032,177 @@ for (const ownIdentity of [AGY_PARENT, "unknown-session", "broken-codex"] as con
       ], env);
       assertEquals(res.code, ownIdentity === AGY_PARENT ? 0 : 1, res.stderr);
       assertEquals(loadToken(tokenPath) !== null, ownIdentity === AGY_PARENT);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+}
+
+// --- The writer reads the conversation the skill-run hook hands it (web-jam-tools#1846) ---
+//
+// The twelve cases of web-jam-tools#1846, run through the CLI with AGY_CONVERSATION_ID=conv-a and
+// AGY_TRANSCRIPT_PATH set to conv-a's transcript unless a case says otherwise. The issue's literal
+// paths sit under /home/joshua/.gemini/antigravity-cli/brain; here the same layout sits under a
+// temporary brain root, and the rows that name no path are written word for word.
+
+const GMAIL_PROBE_ROW =
+  '{"timestamp":"2026-11-18T01:10:57.943Z","event":"PreToolUse","matcher":".*","targetHookPath":"/home/joshua/.claude/hooks/block-agy-gmail-send-delete.sh","toolCall":{"name":"run_command"}}';
+const TEST_ROW =
+  '{"conversationId":null,"toolCall":{"name":"run_command","args":{"CommandLine":"bash /tmp/private-folder-guard-x/shell-syntax-2.sh","Cwd":"/tmp"}}}';
+
+type RowBuilder = (id: string, transcriptOf?: string) => string;
+
+interface ConversationCase {
+  name: string;
+  /** The record's lines, or null for no record file. */
+  record: ((row: RowBuilder) => string[]) | null;
+  /** Environment changes; null removes the variable. */
+  env?: Record<string, string | null>;
+  /** conv-a is a helper that conv-p started. */
+  helper?: boolean;
+  writes: boolean;
+}
+
+const CONVERSATION_CASES: ConversationCase[] = [
+  {
+    name: "1, a conv-a row then a Gmail probe row last",
+    record: (row) => [row("conv-a"), GMAIL_PROBE_ROW],
+    writes: true,
+  },
+  {
+    name: "2, a conv-a row then a conv-b row last",
+    record: (row) => [row("conv-a"), row("conv-b")],
+    writes: true,
+  },
+  {
+    name: "3, a conv-a row then a test row last",
+    record: (row) => [row("conv-a"), TEST_ROW],
+    writes: true,
+  },
+  {
+    name: "4, AGY_CONVERSATION_ID unset",
+    record: (row) => [row("conv-a")],
+    env: { AGY_CONVERSATION_ID: null },
+    writes: false,
+  },
+  {
+    name: "5, AGY_CONVERSATION_ID empty",
+    record: (row) => [row("conv-a")],
+    env: { AGY_CONVERSATION_ID: "" },
+    writes: false,
+  },
+  {
+    name: "6, AGY_TRANSCRIPT_PATH unset",
+    record: (row) => [row("conv-a")],
+    env: { AGY_TRANSCRIPT_PATH: null },
+    writes: false,
+  },
+  { name: "7, only conv-b rows", record: (row) => [row("conv-b"), row("conv-b")], writes: false },
+  {
+    name: "8, a conv-a row naming conv-b's transcript",
+    record: (row) => [row("conv-a", "conv-b")],
+    writes: false,
+  },
+  {
+    name: "9, the conv-a row and a line {broken",
+    record: (row) => [row("conv-a"), "{broken"],
+    writes: false,
+  },
+  {
+    name: "10, the conv-a row and a line []",
+    record: (row) => [row("conv-a"), "[]"],
+    writes: false,
+  },
+  { name: "11, no record file", record: null, writes: false },
+  {
+    name: "12, conv-a is a helper conv-p started",
+    record: (row) => [row("conv-a")],
+    helper: true,
+    writes: false,
+  },
+];
+
+/** The CLI's environment for one case: nothing from this machine's agy or session state leaks in. */
+function agyCaseEnv(root: string, changes: Record<string, string | null>): Record<string, string> {
+  const env = envWithoutAmbientSessionId();
+  for (
+    const name of [
+      "AGY_CONVERSATION_ID",
+      "AGY_TRANSCRIPT_PATH",
+      "AGY_HOOK_RECORD_PATH",
+      "ISSUE_APPROVAL_TOKEN_PATH",
+      "WRITE_ISSUE_APPROVAL_TOKEN_TEST_TRANSCRIPT_PATH",
+      "WRITE_ISSUE_APPROVAL_TOKEN_TEST_CONVERSATION_ID",
+    ]
+  ) delete env[name];
+  env.HOME = root;
+  env.CODEX_HOME = root;
+  for (const [name, value] of Object.entries(changes)) {
+    if (value === null) delete env[name];
+    else env[name] = value;
+  }
+  return env;
+}
+
+for (const c of CONVERSATION_CASES) {
+  Deno.test(`CLI on agy, case ${c.name}: ${c.writes ? "writes a token from conv-a's transcript" : "writes no token"}`, async () => {
+    const root = await Deno.makeTempDir();
+    const brain = `${root}/brain`;
+    const transcript = (id: string) =>
+      `${brain}/${id}/.system_generated/logs/transcript_full.jsonl`;
+    // Only conv-a's own turn invoked /file-issue, so a token can come from conv-a's transcript alone.
+    const prompts = {
+      "conv-a": "/file-issue for the approved plan",
+      "conv-b": "hi",
+      "conv-p": "hi",
+    };
+    for (const [id, prompt] of Object.entries(prompts)) {
+      await Deno.mkdir(`${brain}/${id}/.system_generated/logs`, { recursive: true });
+      await Deno.writeTextFile(
+        transcript(id),
+        JSON.stringify({
+          type: "USER_INPUT",
+          source: "USER_EXPLICIT",
+          step_index: 0,
+          content: `<USER_REQUEST>\n${prompt}\n</USER_REQUEST>`,
+        }) + "\n",
+      );
+    }
+    if (c.helper) {
+      await Deno.mkdir(`${brain}/conv-p/.system_generated/subagents`, { recursive: true });
+      await Deno.writeTextFile(
+        `${brain}/conv-p/.system_generated/subagents/conv-a.json`,
+        JSON.stringify({ conversationId: "conv-a", state: "SUBAGENT_STATE_ALIVE" }),
+      );
+    }
+    const recordPath = `${root}/agy-hook-invocations.jsonl`;
+    if (c.record) {
+      const row: RowBuilder = (id, transcriptOf = id) =>
+        JSON.stringify({ conversationId: id, transcriptPath: transcript(transcriptOf) });
+      await Deno.writeTextFile(recordPath, c.record(row).join("\n") + "\n");
+    }
+    const tokenPath = `${root}/token.json`;
+    try {
+      const res = await runCli(
+        [
+          "--session-id",
+          "conv-a",
+          "--repo",
+          "WebJamApps/web-jam-tools",
+          "--title",
+          "Approved task",
+          "--token-path",
+          tokenPath,
+        ],
+        agyCaseEnv(root, {
+          AGY_HOOK_RECORD_PATH: recordPath,
+          AGY_CONVERSATION_ID: "conv-a",
+          AGY_TRANSCRIPT_PATH: transcript("conv-a"),
+          ...c.env,
+        }),
+      );
+      assertEquals(res.code, c.writes ? 0 : 1, res.stderr);
+      assertEquals(loadToken(tokenPath)?.session_id ?? null, c.writes ? "conv-a" : null);
     } finally {
       await Deno.remove(root, { recursive: true });
     }
