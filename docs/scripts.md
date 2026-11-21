@@ -511,6 +511,34 @@ script, skill body, or `hooks/lib/*.ts` module is live on both surfaces the mome
 no install step is needed unless the change is structural (a new/renamed/deleted skill or hook, or a
 changed event/matcher registration).
 
+### The subagent cap (`cap-concurrent-subagents.sh`, `track-subagent-start.sh`, `track-subagent-stop.sh`)
+
+Claude Code only (web-jam-tools#708). At most two Anthropic-billed subagents run at once in a
+session. Design: "Subagents and the work queue" in
+`~/Dropbox/web-jam-llms/AI_Misbehaves/delegation-gate-design.md` (revision 1.3.0).
+
+- **`cap-concurrent-subagents.sh`** is a `PreToolUse` hook on the `Agent` tool. A launch with a slot
+  free is admitted. A launch with two subagents running is refused and appended to the session's
+  queue. An explicit `fable` launch, and a fork or other launch that would inherit Fable from a
+  Fable session, is refused and never queued. An explicit or inherited Opus coding helper takes one
+  slot like any other helper.
+- **`track-subagent-start.sh` / `track-subagent-stop.sh`** are the `SubagentStart` / `SubagentStop`
+  hooks that keep the list of running subagents. An entry whose subagent transcript has been silent
+  for 30 minutes without a Stop event is dropped, so a helper that crashed never blocks a launch.
+- **State** is per session in `~/.claude/state/subagent-cap/` (`SUBAGENT_CAP_STATE_DIR` overrides
+  it): `<session_id>.running.json` and `<session_id>.queue.jsonl`, plus a short-lived
+  `<session_id>.lock/` directory while a hook rewrites them. The cap reserves a slot the moment a
+  launch is admitted, because several launches in one message all pass `PreToolUse` before any has
+  started; `SubagentStart` turns the reservation into a running entry, and a reservation nothing
+  claims expires after two minutes.
+- **A workflow guard.** When the checker cannot run, or cannot read the session id, the running
+  list or the session model, the launch is allowed with a note. To release it on purpose:
+  `deno task workflow-switch --guard cap-concurrent-subagents` (or `--guard track-subagent-start`,
+  `--guard track-subagent-stop`, or `--all`).
+- **Registration:** `scripts/install-hooks.sh` registers all three on Claude Code. agy and Codex
+  never receive them, because a helper they start is not an Anthropic-billed subagent. A new hook
+  is a structural change, so run `bash scripts/install-hooks.sh` once from the canonical clone.
+
 ### `permissions.defaultMode`
 
 The installer does not manage Claude Code's permission mode (`permissions.defaultMode` in

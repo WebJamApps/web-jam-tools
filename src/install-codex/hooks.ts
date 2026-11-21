@@ -43,6 +43,9 @@ function arrayEntries(source: string, name: string): string[] {
 
 const EXCLUDED_CODEX_HOOKS = new Set<string>([
   "business-deadline-reminder.sh", // Claude Code only per design (web-jam-tools#1690)
+  // The cap counts Anthropic-billed Claude Code subagents; a helper Codex starts is not one
+  // (web-jam-tools#708).
+  "cap-concurrent-subagents.sh",
 ]);
 
 export function readHookRegistrations(source: string, home: string): Record<Event, Registration[]> {

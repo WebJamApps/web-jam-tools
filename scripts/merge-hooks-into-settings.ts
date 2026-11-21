@@ -2,9 +2,11 @@
 /**
  * merge-hooks-into-settings.ts — web-jam-tools#382
  *
- * Idempotently merges SessionStart, SessionEnd, Stop, and PreToolUse/PostToolUse (any
- * matcher) hook commands, plus a flat list of `permissions.deny` patterns,
- * into a Claude Code settings.json.
+ * Idempotently merges SessionStart, SessionEnd, Stop, SubagentStart, SubagentStop, and
+ * PreToolUse/PostToolUse (any matcher) hook commands, plus a flat list of `permissions.deny`
+ * patterns, into a Claude Code settings.json. SubagentStart and SubagentStop are Claude Code
+ * only (web-jam-tools#708): they are merged only when --subagent-start/--subagent-stop are
+ * passed, and refused on a --forbid-lifecycle-hooks (agy) target.
  */
 
 import * as path from "jsr:@std/path@^1.0.0";
@@ -18,6 +20,9 @@ export function merge(settingsPath: string, args: string[]): number {
   let sessionStartCmds: string[] = [];
   let stopCmds: string[] = [];
   let sessionEndCmds: string[] = [];
+  let subagentStartCmds: string[] = [];
+  let subagentStopCmds: string[] = [];
+  let subagentSectionsPassed = false;
   const preToolUsePairs: Array<[string, string]> = [];
   const postToolUsePairs: Array<[string, string]> = [];
   let denyPatterns: string[] = [];
@@ -68,6 +73,8 @@ export function merge(settingsPath: string, args: string[]): number {
       [
         "--stop",
         "--session-end",
+        "--subagent-start",
+        "--subagent-stop",
         "--pre-tool-use",
         "--post-tool-use",
         "--deny",
@@ -83,6 +90,9 @@ export function merge(settingsPath: string, args: string[]): number {
     sessionStartCmds = head;
     stopCmds = sections["--stop"] || [];
     sessionEndCmds = sections["--session-end"] || [];
+    subagentSectionsPassed = "--subagent-start" in sections || "--subagent-stop" in sections;
+    subagentStartCmds = sections["--subagent-start"] || [];
+    subagentStopCmds = sections["--subagent-stop"] || [];
     for (const pair of sections["--pre-tool-use"] || []) {
       const sep = pair.indexOf("::");
       if (sep !== -1) {
@@ -121,6 +131,14 @@ export function merge(settingsPath: string, args: string[]): number {
     );
     return 1;
   }
+  if (forbidLifecycleHooks && subagentSectionsPassed) {
+    console.error(
+      "error: --subagent-start/--subagent-stop are Claude Code only (web-jam-tools#708): the " +
+        "subagent cap counts Anthropic-billed subagents, and a helper agy starts is not one. " +
+        `Refusing to write ${path.basename(settingsPath)}.`,
+    );
+    return 1;
+  }
   if (forbidLifecycleHooks && hasModelSettings) {
     console.error("error: --model-settings is Claude Code only; refusing it on the agy target.");
     return 1;
@@ -156,7 +174,15 @@ export function merge(settingsPath: string, args: string[]): number {
     managedDirs.add(path.join(homeEnv, ".claude/hooks"));
   }
 
-  for (const cmd of [...sessionStartCmds, ...stopCmds, ...sessionEndCmds]) {
+  for (
+    const cmd of [
+      ...sessionStartCmds,
+      ...stopCmds,
+      ...sessionEndCmds,
+      ...subagentStartCmds,
+      ...subagentStopCmds,
+    ]
+  ) {
     const sp = extractScriptPath(cmd);
     const dir = path.dirname(sp);
     if (dir && dir !== ".") managedDirs.add(dir);
@@ -291,6 +317,14 @@ export function merge(settingsPath: string, args: string[]): number {
     ? mergeAgyFlatHooks("Stop", stopCmds)
     : [...mergeFlatHooks("Stop", stopCmds), 0];
   const [addedSessionEnd, prunedSessionEnd] = mergeFlatHooks("SessionEnd", sessionEndCmds);
+  // Only touched when a --subagent-* section was passed, so agy's hooks.json (and any caller that
+  // predates web-jam-tools#708) never gains an empty SubagentStart/SubagentStop key.
+  const [addedSubagentStart, prunedSubagentStart] = subagentSectionsPassed
+    ? mergeFlatHooks("SubagentStart", subagentStartCmds)
+    : [[], []];
+  const [addedSubagentStop, prunedSubagentStop] = subagentSectionsPassed
+    ? mergeFlatHooks("SubagentStop", subagentStopCmds)
+    : [[], []];
 
   function mergeMatcherHooks(
     kind: string,
@@ -652,6 +686,10 @@ export function merge(settingsPath: string, args: string[]): number {
     reshapedStop > 0 ||
     addedSessionEnd.length > 0 ||
     prunedSessionEnd.length > 0 ||
+    addedSubagentStart.length > 0 ||
+    prunedSubagentStart.length > 0 ||
+    addedSubagentStop.length > 0 ||
+    prunedSubagentStop.length > 0 ||
     addedPreToolUse.length > 0 ||
     prunedPreToolUseStale.length > 0 ||
     prunedPreToolUseRetired.length > 0 ||
@@ -708,6 +746,18 @@ export function merge(settingsPath: string, args: string[]): number {
       }
       for (const cmd of prunedSessionEnd) {
         console.error(`${targetFilename}: has retired SessionEnd hook ${cmd}`);
+      }
+      for (const cmd of addedSubagentStart) {
+        console.error(`${targetFilename}: missing SubagentStart hook ${cmd}`);
+      }
+      for (const cmd of prunedSubagentStart) {
+        console.error(`${targetFilename}: has retired SubagentStart hook ${cmd}`);
+      }
+      for (const cmd of addedSubagentStop) {
+        console.error(`${targetFilename}: missing SubagentStop hook ${cmd}`);
+      }
+      for (const cmd of prunedSubagentStop) {
+        console.error(`${targetFilename}: has retired SubagentStop hook ${cmd}`);
       }
       for (const [matcher, cmd] of addedPreToolUse) {
         console.error(`${targetFilename}: missing PreToolUse hook (${matcher}) ${cmd}`);
@@ -867,6 +917,18 @@ export function merge(settingsPath: string, args: string[]): number {
   for (const cmd of addedSessionEnd) console.log(`${targetFilename}: added SessionEnd hook ${cmd}`);
   for (const cmd of prunedSessionEnd) {
     console.log(`${targetFilename}: removed retired SessionEnd hook ${cmd}`);
+  }
+  for (const cmd of addedSubagentStart) {
+    console.log(`${targetFilename}: added SubagentStart hook ${cmd}`);
+  }
+  for (const cmd of prunedSubagentStart) {
+    console.log(`${targetFilename}: removed retired SubagentStart hook ${cmd}`);
+  }
+  for (const cmd of addedSubagentStop) {
+    console.log(`${targetFilename}: added SubagentStop hook ${cmd}`);
+  }
+  for (const cmd of prunedSubagentStop) {
+    console.log(`${targetFilename}: removed retired SubagentStop hook ${cmd}`);
   }
   for (const [matcher, cmd] of addedPreToolUse) {
     console.log(`${targetFilename}: added PreToolUse hook (${matcher}) ${cmd}`);

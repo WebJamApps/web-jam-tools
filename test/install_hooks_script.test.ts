@@ -24,7 +24,7 @@
 //     deterministically, regardless of whether this suite happens to be run
 //     from a worktree itself.
 
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
 import { matcherMatches } from "../hooks/lib/agy_hook_shim.ts";
 
@@ -3087,3 +3087,86 @@ for (
     }
   });
 }
+
+Deno.test("install-hooks.sh registers the subagent cap on Claude Code alone and --check flags drift (web-jam-tools#708)", async () => {
+  const hooksDir = await Deno.makeTempDir();
+  const settingsDir = await Deno.makeTempDir();
+  const settingsPath = `${settingsDir}/settings.json`;
+  const capHooks = [
+    "cap-concurrent-subagents.sh",
+    "track-subagent-start.sh",
+    "track-subagent-stop.sh",
+  ];
+  const commandsOf = (entries: { hooks: { command: string }[] }[]) =>
+    entries.flatMap((e) => e.hooks.map((h) => h.command));
+  try {
+    const install = await run("bash", [
+      INSTALL_SCRIPT,
+      "--hooks-dir",
+      hooksDir,
+      "--settings-path",
+      settingsPath,
+    ]);
+    assertEquals(install.code, 0, install.stdout + install.stderr);
+
+    const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+    const cap = settings.hooks.PreToolUse.find((e: { hooks: { command: string }[] }) =>
+      commandsOf([e]).includes("$HOME/.claude/hooks/cap-concurrent-subagents.sh")
+    );
+    assertEquals(cap?.matcher, "Agent");
+    assertEquals(commandsOf(settings.hooks.SubagentStart), [
+      "$HOME/.claude/hooks/track-subagent-start.sh",
+    ]);
+    assertEquals(commandsOf(settings.hooks.SubagentStop), [
+      "$HOME/.claude/hooks/track-subagent-stop.sh",
+    ]);
+    for (const name of capHooks) {
+      assert(await symlinkExists(`${hooksDir}/${name}`), `${name} should be linked`);
+    }
+
+    // Claude Code alone: nothing reaches agy's hooks.json or Codex's hooks file.
+    for (const other of [`${settingsDir}/hooks.json`, `${settingsDir}/codex-hooks.json`]) {
+      if (!await pathExists(other)) continue;
+      const text = await Deno.readTextFile(other);
+      for (
+        const needle of [
+          "cap-concurrent-subagents",
+          "track-subagent",
+          "SubagentStart",
+          "SubagentStop",
+        ]
+      ) {
+        assert(!text.includes(needle), `${other} must not mention ${needle}`);
+      }
+    }
+
+    const clean = await run("bash", [
+      INSTALL_SCRIPT,
+      "--hooks-dir",
+      hooksDir,
+      "--settings-path",
+      settingsPath,
+      "--check",
+    ]);
+    assertEquals(clean.code, 0, clean.stdout + clean.stderr);
+
+    delete settings.hooks.SubagentStop;
+    await Deno.writeTextFile(settingsPath, JSON.stringify(settings));
+    const drift = await run("bash", [
+      INSTALL_SCRIPT,
+      "--hooks-dir",
+      hooksDir,
+      "--settings-path",
+      settingsPath,
+      "--check",
+    ]);
+    assert(drift.code !== 0, "--check should fail without the SubagentStop hook");
+    assertStringIncludes(
+      drift.stdout + drift.stderr,
+      "missing SubagentStop hook $HOME/.claude/hooks/track-subagent-stop.sh",
+    );
+  } finally {
+    await Deno.remove(hooksDir, { recursive: true });
+    await Deno.remove(settingsDir, { recursive: true });
+  }
+});
