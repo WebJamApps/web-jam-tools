@@ -1058,6 +1058,10 @@ Deno.test("Installed Sol-to-Terra probe exercises registered Codex hook, createI
       CODEX_HOME: Deno.env.get("CODEX_HOME"),
       CODEX_THREAD_ID: Deno.env.get("CODEX_THREAD_ID"),
       ISSUE_APPROVAL_TOKEN_PATH: Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH"),
+      WJT_SURFACE: Deno.env.get("WJT_SURFACE"),
+      AGY_CONVERSATION_ID: Deno.env.get("AGY_CONVERSATION_ID"),
+      AGY_TRANSCRIPT_PATH: Deno.env.get("AGY_TRANSCRIPT_PATH"),
+      AGY_MODEL_NAME: Deno.env.get("AGY_MODEL_NAME"),
     };
     const bodyFile = path.join(tmpRoot, "probe-body.md");
     await Deno.writeTextFile(bodyFile, "## What this builds\n\nSol-to-Terra probe.\n");
@@ -1084,6 +1088,10 @@ Deno.test("Installed Sol-to-Terra probe exercises registered Codex hook, createI
 
     try {
       Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
+      Deno.env.delete("WJT_SURFACE");
+      Deno.env.delete("AGY_CONVERSATION_ID");
+      Deno.env.delete("AGY_TRANSCRIPT_PATH");
+      Deno.env.delete("AGY_MODEL_NAME");
       Deno.env.set("HOME", home);
       Deno.env.set("CODEX_HOME", codexHome);
       Deno.env.set("CODEX_THREAD_ID", TERRA_H);
@@ -1156,6 +1164,14 @@ Deno.test("Installed Sol-to-Terra probe exercises registered Codex hook, createI
       if (prev.ISSUE_APPROVAL_TOKEN_PATH === undefined) {
         Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
       } else Deno.env.set("ISSUE_APPROVAL_TOKEN_PATH", prev.ISSUE_APPROVAL_TOKEN_PATH);
+      if (prev.WJT_SURFACE === undefined) Deno.env.delete("WJT_SURFACE");
+      else Deno.env.set("WJT_SURFACE", prev.WJT_SURFACE);
+      if (prev.AGY_CONVERSATION_ID === undefined) Deno.env.delete("AGY_CONVERSATION_ID");
+      else Deno.env.set("AGY_CONVERSATION_ID", prev.AGY_CONVERSATION_ID);
+      if (prev.AGY_TRANSCRIPT_PATH === undefined) Deno.env.delete("AGY_TRANSCRIPT_PATH");
+      else Deno.env.set("AGY_TRANSCRIPT_PATH", prev.AGY_TRANSCRIPT_PATH);
+      if (prev.AGY_MODEL_NAME === undefined) Deno.env.delete("AGY_MODEL_NAME");
+      else Deno.env.set("AGY_MODEL_NAME", prev.AGY_MODEL_NAME);
     }
   });
 });

@@ -10,6 +10,7 @@ import {
   loadToken,
   type RepoApproval,
 } from "../../hooks/lib/check_issue_approval_token.ts";
+import { resolveAntigravityTokenOwnerSync } from "../../hooks/lib/agy_session_reader.ts";
 import { resolveCodexTokenOwnerSync } from "../../hooks/lib/codex_session_reader.ts";
 import {
   checkDuplicateTitle,
@@ -249,6 +250,14 @@ export function checkApprovalToken(
   const env = options?.env ?? ((name: string) => Deno.env.get(name));
   const override = env("ISSUE_APPROVAL_TOKEN_PATH");
   const codexThreadId = env("CODEX_THREAD_ID");
+  const isAgy = env("WJT_SURFACE") === "agy" ||
+    Boolean(env("AGY_CONVERSATION_ID") || env("AGY_TRANSCRIPT_PATH") || env("AGY_MODEL_NAME"));
+  if (codexThreadId && isAgy) {
+    return {
+      ok: false,
+      reason: "Refusing: both CODEX_THREAD_ID and Antigravity session env vars are set.",
+    };
+  }
   if (codexThreadId) {
     let codexOwnerId: string;
     try {
@@ -268,6 +277,25 @@ export function checkApprovalToken(
       title,
       codexTokenPath,
       codexOwnerId,
+      nowMs,
+    );
+  }
+  if (isAgy) {
+    let agyOwnerId: string;
+    try {
+      agyOwnerId = resolveAntigravityTokenOwnerSync({ env });
+    } catch (error) {
+      return {
+        ok: false,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+    const agyTokenPath = override || `${defaultTokenDir(env)}/${agyOwnerId}.json`;
+    return checkApprovalTokenSingleFileForSession(
+      repoFull,
+      title,
+      agyTokenPath,
+      agyOwnerId,
       nowMs,
     );
   }
