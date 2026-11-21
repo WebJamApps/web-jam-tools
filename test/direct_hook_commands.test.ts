@@ -35,7 +35,12 @@ Deno.test("extractDirectCommandHookScripts extracts Claude and agy direct comman
   assert(direct.has("require-issue-citation-titles.sh"));
   assert(direct.has("require-clear-communication.sh"));
 
+  // Must include Claude Code SubagentStart and SubagentStop hooks (web-jam-tools#708)
+  assert(direct.has("track-subagent-start.sh"));
+  assert(direct.has("track-subagent-stop.sh"));
+
   // Must include Claude Code PreToolUse and PostToolUse hooks
+  assert(direct.has("cap-concurrent-subagents.sh"));
   assert(direct.has("semver-push-reminder.sh"));
   assert(direct.has("block-secret-dumps.sh"));
   assert(direct.has("block-secret-literals.sh"));
@@ -74,6 +79,17 @@ Deno.test("getGitTrackedModes reads tracked modes from git index", async () => {
   assertExists(modes.get("opus-delegation-gate.sh"));
   assertExists(modes.get("prune-permission-allows-on-session-end.sh"));
   assertExists(modes.get("run_hook.sh"));
+
+  // The subagent cap hooks are direct commands too (web-jam-tools#708)
+  for (
+    const name of [
+      "cap-concurrent-subagents.sh",
+      "track-subagent-start.sh",
+      "track-subagent-stop.sh",
+    ]
+  ) {
+    assertEquals(modes.get(name), "100755", `${name} must be tracked executable`);
+  }
 
   // Direct commands are tracked as 100755
   assertEquals(modes.get("prune-permission-allows-on-session-end.sh"), "100755");

@@ -62,6 +62,21 @@ export function extractDirectCommandHookScripts(
     }
   }
 
+  // 3b. Claude Code SubagentStart and SubagentStop hooks (web-jam-tools#708)
+  for (
+    const subagentMatch of [
+      installerContent.match(/SUBAGENT_START_HOOKS=\(([\s\S]*?)\)/),
+      installerContent.match(/SUBAGENT_STOP_HOOKS=\(([\s\S]*?)\)/),
+    ]
+  ) {
+    if (subagentMatch) {
+      for (const token of subagentMatch[1].trim().split(/\s+/)) {
+        const clean = token.replace(/#.*$/, "").trim().replace(/^["']|["']$/g, "");
+        if (clean.endsWith(".sh")) directHooks.add(clean);
+      }
+    }
+  }
+
   // 4. Claude Code PreToolUse hooks
   const preMatch = installerContent.match(
     /PRE_TOOL_USE_HOOKS=\(([\s\S]*?)\n\)/,

@@ -758,3 +758,20 @@ Deno.test("Gmail switches refuse non-table ancestors and unsafe nested represent
     });
   }
 });
+
+Deno.test("Codex registrations leave out the Claude Code only subagent cap hooks (web-jam-tools#708)", () => {
+  const registrations = readHookRegistrations(HOOKS, "/home/u");
+  const commands = Object.values(registrations).flat().flatMap((r) =>
+    r.hooks.map((h) => h.command)
+  );
+  for (
+    const name of [
+      "cap-concurrent-subagents.sh",
+      "track-subagent-start.sh",
+      "track-subagent-stop.sh",
+    ]
+  ) {
+    assert(!commands.some((c) => c.includes(name)), `${name} must not be registered on Codex`);
+  }
+  assert(!(EVENTS as readonly string[]).some((event) => event.startsWith("Subagent")));
+});

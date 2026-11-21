@@ -7,7 +7,9 @@
 #
 # 2. Idempotently merges the SessionStart hook(s) listed in
 #    SESSION_START_HOOKS, the SessionEnd hook(s) listed in
-#    SESSION_END_HOOKS, the Stop hook(s) listed in STOP_HOOKS, the PreToolUse
+#    SESSION_END_HOOKS, the Stop hook(s) listed in STOP_HOOKS, the SubagentStart
+#    and SubagentStop hook(s) listed in SUBAGENT_START_HOOKS and
+#    SUBAGENT_STOP_HOOKS (Claude Code only, web-jam-tools#708), the PreToolUse
 #    hook(s) (any matcher) listed in PRE_TOOL_USE_HOOKS, and the
 #    permissions.deny patterns listed in DENY_RULES, below into
 #    ~/.claude/settings.json (only adding entries that aren't already there;
@@ -204,6 +206,13 @@ SESSION_END_HOOKS=(prune-permission-allows-on-session-end.sh)
 # a violation).
 STOP_HOOKS=(require-issue-citation-titles.sh require-clear-communication.sh)
 
+# SubagentStart / SubagentStop hooks this installer keeps registered in settings.json
+# (web-jam-tools#708). Same flat, no-matcher shape as STOP_HOOKS. Claude Code ONLY: they keep the
+# running-subagent list that the PreToolUse cap on the `Agent` tool counts, and a helper agy or
+# Codex starts is not an Anthropic-billed subagent, so agy's hooks.json never receives them.
+SUBAGENT_START_HOOKS=(track-subagent-start.sh)
+SUBAGENT_STOP_HOOKS=(track-subagent-stop.sh)
+
 # PreToolUse hooks this installer keeps registered in settings.json, as
 # "<matcher>::<script>" pairs (web-jam-tools#265 — generalized from a
 # Bash-only array so a hook can be wired to ANY PreToolUse matcher, not just
@@ -227,6 +236,7 @@ PRE_TOOL_USE_HOOKS=(
   "Bash|mcp__.*__issue_write::require-model-label-on-issue-create.sh"
   "Write|Edit|NotebookEdit::block-out-of-tree-write.sh"
   "Bash|Write|Edit|NotebookEdit::opus-delegation-gate.sh"
+  "Agent::cap-concurrent-subagents.sh"
   "Bash|mcp__.*__(issue_write|sub_issue_write)::require-approval-token-on-issue-write.sh"
   "Bash::block-raw-gh-write.sh"
   "Bash::block-canonical-clone-change.sh"
@@ -851,6 +861,22 @@ for name in "${SESSION_END_HOOKS[@]}"; do
   merge_session_end_args+=('$HOME/.claude/hooks/'"$name")
 done
 
+merge_subagent_start_args=()
+for name in "${SUBAGENT_START_HOOKS[@]}"; do
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in SUBAGENT_START_HOOKS)" >&2; exit 1; }
+  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
+  # shell that runs the hook later, not by this installer (see header note).
+  merge_subagent_start_args+=('$HOME/.claude/hooks/'"$name")
+done
+
+merge_subagent_stop_args=()
+for name in "${SUBAGENT_STOP_HOOKS[@]}"; do
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in SUBAGENT_STOP_HOOKS)" >&2; exit 1; }
+  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
+  # shell that runs the hook later, not by this installer (see header note).
+  merge_subagent_stop_args+=('$HOME/.claude/hooks/'"$name")
+done
+
 merge_pre_tool_use_args=()
 for entry in "${PRE_TOOL_USE_HOOKS[@]}"; do
   matcher="${entry%%::*}"
@@ -1056,6 +1082,9 @@ for entry in "${PRE_TOOL_USE_HOOKS[@]}" "${AGY_ONLY_PRE_TOOL_USE_HOOKS[@]}"; do
   name="${entry#*::}"
   # Model context is not applicable to agy; preserve its independent Gmail fence.
   [ "$name" = "haiku-only-gmail-gate.sh" ] && continue
+  # The subagent cap counts Anthropic-billed Claude Code subagents; a helper agy starts is not one
+  # (web-jam-tools#708), so agy's hooks.json never receives it.
+  [ "$name" = "cap-concurrent-subagents.sh" ] && continue
   [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in PRE_TOOL_USE_HOOKS/AGY_ONLY_PRE_TOOL_USE_HOOKS)" >&2; exit 1; }
   merge_agy_pre_tool_use_args+=("$(agy_shim_arg PreToolUse "$matcher" "$name")")
 done
@@ -1172,7 +1201,7 @@ if [ "$CHECK_MODE" = "1" ]; then
     fi
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}" "--model-settings" "${merge_model_settings_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--subagent-start" "${merge_subagent_start_args[@]}" "--subagent-stop" "${merge_subagent_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}" "--model-settings" "${merge_model_settings_args[@]}"; then
     DRIFT=1
   fi
 
@@ -1444,7 +1473,7 @@ fi
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}" "--model-settings" "${merge_model_settings_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--subagent-start" "${merge_subagent_start_args[@]}" "--subagent-stop" "${merge_subagent_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}" "--model-settings" "${merge_model_settings_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
 

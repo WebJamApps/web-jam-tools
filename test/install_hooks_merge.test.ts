@@ -2290,3 +2290,91 @@ Deno.test("secret-scan gate refuses a skillOverrides that carries a credential l
     assertEquals(await readSettingsWithSkillOverrides(path), { model: "opus" });
   });
 });
+
+// --- SubagentStart / SubagentStop (web-jam-tools#708) ------------------------------------------
+
+const SUBAGENT_ARGS = [
+  "--subagent-start",
+  "$HOME/.claude/hooks/track-subagent-start.sh",
+  "--subagent-stop",
+  "$HOME/.claude/hooks/track-subagent-stop.sh",
+];
+
+Deno.test("subagent hooks: SubagentStart and SubagentStop are added once, in the flat Stop shape", async () => {
+  await withTempSettings({ model: "opus" }, async (path) => {
+    assertEquals((await runMerge(path, SUBAGENT_ARGS)).code, 0);
+    const data = JSON.parse(await Deno.readTextFile(path));
+    assertEquals(data.hooks.SubagentStart, [{
+      hooks: [{ type: "command", command: "$HOME/.claude/hooks/track-subagent-start.sh" }],
+    }]);
+    assertEquals(data.hooks.SubagentStop, [{
+      hooks: [{ type: "command", command: "$HOME/.claude/hooks/track-subagent-stop.sh" }],
+    }]);
+
+    const before = await Deno.readTextFile(path);
+    assertEquals((await runMerge(path, ["--check", ...SUBAGENT_ARGS])).code, 0);
+    assertEquals((await runMerge(path, SUBAGENT_ARGS)).code, 0);
+    assertEquals(await Deno.readTextFile(path), before);
+  });
+});
+
+Deno.test("subagent hooks: --check names a missing SubagentStart and SubagentStop hook", async () => {
+  await withTempSettings({ hooks: {} }, async (path) => {
+    const res = await runMerge(path, ["--check", ...SUBAGENT_ARGS]);
+    assertEquals(res.code, 1);
+    assert(
+      res.stderr.includes("missing SubagentStart hook $HOME/.claude/hooks/track-subagent-start.sh"),
+    );
+    assert(
+      res.stderr.includes("missing SubagentStop hook $HOME/.claude/hooks/track-subagent-stop.sh"),
+    );
+    assertEquals(JSON.parse(await Deno.readTextFile(path)), { hooks: {} });
+  });
+});
+
+Deno.test("subagent hooks: a retired installer-managed hook is removed and the user's own is kept", async () => {
+  await withTempSettings({
+    hooks: {
+      SubagentStop: [
+        { hooks: [{ type: "command", command: "$HOME/.claude/hooks/retired-subagent-hook.sh" }] },
+        { hooks: [{ type: "command", command: "/usr/local/bin/my-own-hook" }] },
+      ],
+    },
+  }, async (path) => {
+    const res = await runMerge(path, SUBAGENT_ARGS);
+    assertEquals(res.code, 0, res.stderr);
+    assert(
+      res.stdout.includes(
+        "removed retired SubagentStop hook $HOME/.claude/hooks/retired-subagent-hook.sh",
+      ),
+    );
+    const commands = JSON.parse(await Deno.readTextFile(path)).hooks.SubagentStop
+      .flatMap((e: HookEntry) => e.hooks.map((h) => h.command));
+    assertEquals(commands.sort(), [
+      "$HOME/.claude/hooks/track-subagent-stop.sh",
+      "/usr/local/bin/my-own-hook",
+    ]);
+  });
+});
+
+Deno.test("subagent hooks: a call that passes no subagent section leaves those keys alone", async () => {
+  await withTempSettings({
+    hooks: { SubagentStart: [{ hooks: [{ type: "command", command: "x" }] }] },
+  }, async (path) => {
+    const before = await Deno.readTextFile(path);
+    assertEquals((await runMerge(path, ["--stop", "$HOME/.claude/hooks/a.sh"])).code, 0);
+    const data = JSON.parse(await Deno.readTextFile(path));
+    assertEquals(data.hooks.SubagentStart, JSON.parse(before).hooks.SubagentStart);
+    assertEquals(data.hooks.SubagentStop, undefined);
+  });
+});
+
+Deno.test("subagent hooks: the agy target refuses them and writes nothing", async () => {
+  await withTempSettings({ hooks: {} }, async (path) => {
+    const before = await Deno.readTextFile(path);
+    const res = await runMerge(path, ["--forbid-lifecycle-hooks", ...SUBAGENT_ARGS]);
+    assertEquals(res.code, 1);
+    assert(res.stderr.includes("Claude Code only"), res.stderr);
+    assertEquals(await Deno.readTextFile(path), before);
+  });
+});

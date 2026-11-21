@@ -98,6 +98,10 @@ const EXPECTED_HOOK_SCRIPTS = [
   // carries a credential-shaped LITERAL, before it can be approved and
   // persisted verbatim into permissions.allow.
   "block-secret-literals.sh",
+  // PreToolUse hook on the `Agent` tool (web-jam-tools#708) — at most two
+  // Anthropic-billed subagents run at once; a third launch is refused and queued,
+  // and an agent-selected or fork-inherited Fable launch is refused. Claude Code only.
+  "cap-concurrent-subagents.sh",
   // PreToolUse guard (web-jam-tools#1056) — checks issue citations in bodies
   // written to GitHub via CLI and MCP.
   "check-issue-citation-on-write.sh",
@@ -139,6 +143,10 @@ const EXPECTED_HOOK_SCRIPTS = [
   // guard here, and the only one that inspects output rather than commands.
   "scan-output-for-secrets.sh",
   "semver-push-reminder.sh",
+  // SubagentStart and SubagentStop hooks (web-jam-tools#708) — keep the
+  // running-subagent list the cap counts. Claude Code only.
+  "track-subagent-start.sh",
+  "track-subagent-stop.sh",
 ];
 
 function listSkillDirs(): string[] {
