@@ -114,37 +114,108 @@ function normalizeApprovals(raw: RepoApproval[]): RepoApproval[] {
   return [...merged].map(([repo, titles]) => ({ repo, titles }));
 }
 
+/** The writer's command-line options; the main block and `groupApprovalArgs` both parse with it. */
+const WRITER_ARGS_OPTIONS = {
+  string: [
+    "session-id",
+    "repo",
+    "title",
+    "titles",
+    "titles-file",
+    "expires-at",
+    "ttl-hours",
+    "token-path",
+  ],
+  boolean: ["json", "help"],
+  collect: ["title", "repo"],
+  alias: {
+    s: "session-id",
+    r: "repo",
+    t: "title",
+    p: "token-path",
+    h: "help",
+  },
+} as const;
+
+const NUMERIC_VALUE = /^-?\d+(\.\d*)?(e-?\d+)?$/;
+
 /**
  * Reads the command line's --repo/-r and --title/-t flags IN ORDER, so each title belongs to the
- * repository written before it. `extraTitles` (from --titles, --titles-file or bare arguments, which
- * carry no position) join the only repository when exactly one is named. Returns an error string
- * for a title before any repository, a repository with no title, or extra titles that cannot say
- * which of several repositories they belong to.
+ * repository written before it. The scan mirrors how `parseArgs` splits those two options (`--`
+ * ends parsing, `--x=V`, `-x=V`, `-xV`, grouped short flags such as `-jr V`, and a value taken from
+ * the next argument only when it does not start with "-"), and the result is then compared with
+ * `parseArgs`'s own collected `repo` and `title` lists: if they ever differ the call refuses, so an
+ * approved title is never dropped or attached to the wrong repository. `extraTitles` (from
+ * --titles, --titles-file or bare arguments, which carry no position) join the only repository
+ * when exactly one is named. Returns an error string for a title before any repository, a
+ * repository with no title, or extra titles that cannot say which of several repositories they
+ * belong to.
  */
 export function groupApprovalArgs(
   argv: string[],
   extraTitles: string[] = [],
 ): { approvals: RepoApproval[] } | { error: string } {
   const groups: RepoApproval[] = [];
-  const valueOf = (flag: string, long: string, short: string, i: number) => {
-    if (flag === long || flag === short) return { value: argv[i + 1] ?? "", skip: 1 };
-    if (flag.startsWith(`${long}=`)) return { value: flag.slice(long.length + 1), skip: 0 };
-    return null;
+  const seen: { repo: string[]; title: string[] } = { repo: [], title: [] };
+  const shortKinds: Record<string, "repo" | "title"> = { r: "repo", t: "title" };
+  const nextValue = (i: number) => {
+    const next = argv[i + 1];
+    return next !== undefined && !next.startsWith("-")
+      ? { value: next, skip: 1 }
+      : { value: "", skip: 0 };
+  };
+  const record = (kind: "repo" | "title", value: string): string | undefined => {
+    if (kind === "repo") {
+      groups.push({ repo: value, titles: [] });
+    } else if (groups.length === 0) {
+      return `--title "${value}" comes before any --repo`;
+    } else {
+      groups[groups.length - 1].titles.push(value);
+    }
+    seen[kind].push(value);
   };
   for (let i = 0; i < argv.length; i++) {
-    const repo = valueOf(argv[i], "--repo", "-r", i);
-    if (repo) {
-      groups.push({ repo: repo.value, titles: [] });
-      i += repo.skip;
-      continue;
-    }
-    const title = valueOf(argv[i], "--title", "-t", i);
-    if (title) {
-      if (groups.length === 0) {
-        return { error: `--title "${title.value}" comes before any --repo` };
+    const arg = argv[i];
+    if (arg === "--") break;
+    if (arg.startsWith("--")) {
+      const eq = arg.indexOf("=");
+      const name = eq < 0 ? arg.slice(2) : arg.slice(2, eq);
+      if (name !== "repo" && name !== "title") continue;
+      let value = arg.slice(eq + 1);
+      if (eq < 0) {
+        const next = nextValue(i);
+        value = next.value;
+        i += next.skip;
       }
-      groups[groups.length - 1].titles.push(title.value);
-      i += title.skip;
+      const error = record(name, value);
+      if (error) return { error };
+    } else if (arg.length > 1 && arg[0] === "-") {
+      for (let j = 1; j < arg.length; j++) {
+        const kind = shortKinds[arg[j]];
+        const rest = arg.slice(j + 1);
+        let value = "";
+        let groupEnds = true;
+        if (rest.startsWith("=")) value = rest.slice(1);
+        else if (rest !== "" && (NUMERIC_VALUE.test(rest) || /\W/.test(rest[0]))) value = rest;
+        else if (rest === "") {
+          const next = nextValue(i);
+          value = next.value;
+          i += next.skip;
+        } else groupEnds = false;
+        const error = kind && record(kind, value);
+        if (error) return { error };
+        if (groupEnds) break;
+      }
+    }
+  }
+  const parsed = parseArgs(argv, WRITER_ARGS_OPTIONS);
+  for (const kind of ["repo", "title"] as const) {
+    const expected = [parsed[kind] ?? []].flat().map(String);
+    if (expected.length !== seen[kind].length || expected.some((v, k) => v !== seen[kind][k])) {
+      return {
+        error:
+          "could not read which --repo each --title belongs to; write each one as --repo <owner/repo> --title <title>",
+      };
     }
   }
   const extras = extraTitles.map((t) => t.trim()).filter((t) => t.length > 0);
@@ -402,9 +473,9 @@ export async function resolveAntigravityWriteContext(
     return null;
   }
 
-  const recordPath = (target?.recordPath !== undefined
-    ? target.recordPath
-    : Deno.env.get("AGY_HOOK_RECORD_PATH")) || "/tmp/agy-hook-invocations.jsonl";
+  const recordPath =
+    (target?.recordPath !== undefined ? target.recordPath : Deno.env.get("AGY_HOOK_RECORD_PATH")) ||
+    "/tmp/agy-hook-invocations.jsonl";
   let text: string;
   try {
     text = await Deno.readTextFile(recordPath);
@@ -614,27 +685,7 @@ export async function authorizeWrite(
 
 if (import.meta.main) {
   try {
-    const args = parseArgs(Deno.args, {
-      string: [
-        "session-id",
-        "repo",
-        "title",
-        "titles",
-        "titles-file",
-        "expires-at",
-        "ttl-hours",
-        "token-path",
-      ],
-      boolean: ["json", "help"],
-      collect: ["title"],
-      alias: {
-        s: "session-id",
-        r: "repo",
-        t: "title",
-        p: "token-path",
-        h: "help",
-      },
-    });
+    const args = parseArgs(Deno.args, WRITER_ARGS_OPTIONS);
 
     if (args.help) {
       console.log(

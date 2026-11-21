@@ -632,18 +632,18 @@ export function decide(
       };
     }
     const repoFull = repoFullName(toolInput);
+    // The repository and the exact title are checked as a pair, so a call naming no repository
+    // has nothing to pair the title with: fail closed rather than accept a title from any repo.
+    if (!repoFull) {
+      return {
+        outcome: "deny",
+        reason:
+          "issue_write create call names no owner/repo, so the approved plan's repository cannot be checked.",
+      };
+    }
     const check = checkTokenValidity(repoFull, sessionId, tokenPath, nowMs);
     if ("deny" in check) return check.deny;
-    // A call naming no repository keeps its earlier behavior: the title must be one the plan
-    // approved somewhere, since there is no repository to pair it with.
-    const titleCheck = repoFull
-      ? checkTitleInRepo(check.token, repoFull, title)
-      : check.token.approvals.some((a) => a.titles.includes(title))
-      ? { ok: true as const }
-      : {
-        ok: false as const,
-        reason: `"${title}" is not among the titles approved in this session's plan.`,
-      };
+    const titleCheck = checkTitleInRepo(check.token, repoFull, title);
     if (!titleCheck.ok) return { outcome: "deny", reason: titleCheck.reason };
     return { outcome: "allow", reason: `"${title}" was approved in this session's plan.` };
   }
@@ -653,7 +653,17 @@ export function decide(
     if (method !== "add") {
       return { outcome: "pass" };
     }
-    const check = checkTokenValidity(repoFullName(toolInput), sessionId, tokenPath, nowMs);
+    const repoFull = repoFullName(toolInput);
+    // A link passes only when the parent's repository is one of the token's repositories, so a
+    // call naming no repository has nothing to check: fail closed.
+    if (!repoFull) {
+      return {
+        outcome: "deny",
+        reason:
+          "sub_issue_write add call names no owner/repo, so the parent's repository cannot be checked against the approved plan.",
+      };
+    }
+    const check = checkTokenValidity(repoFull, sessionId, tokenPath, nowMs);
     if ("deny" in check) return check.deny;
     return {
       outcome: "allow",

@@ -16,6 +16,7 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { checkApprovalToken } from "../src/create-issue/lib.ts";
 import { loadToken } from "../hooks/lib/check_issue_approval_token.ts";
+import { groupApprovalArgs } from "../scripts/write_issue_approval_token.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const WRITER = `${ROOT}scripts/write_issue_approval_token.ts`;
@@ -183,6 +184,33 @@ for (const row of CREATE_ROWS) {
       }
     });
   });
+
+  Deno.test(`checkApprovalToken (per-session directory scan): ${label}`, async () => {
+    const home = await Deno.makeTempDir();
+    const savedHome = Deno.env.get("HOME");
+    const savedOverride = Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+    try {
+      const tokenDir = `${home}/.claude/state/issue-approval-tokens`;
+      await Deno.mkdir(tokenDir, { recursive: true });
+      const res = await runWriter(home, DESIGN_WRITE_ARGS, `${tokenDir}/${SESSION}.json`);
+      assertEquals(res.code, 0, res.stderr);
+      Deno.env.set("HOME", home);
+      Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
+      const check = checkApprovalToken(row.repo, row.title);
+      if (row.refuse) {
+        assertEquals(check.ok, false);
+        assertStringIncludes(check.reason ?? "", row.refuse);
+      } else {
+        assertEquals(check, { ok: true });
+      }
+    } finally {
+      if (savedHome === undefined) Deno.env.delete("HOME");
+      else Deno.env.set("HOME", savedHome);
+      if (savedOverride === undefined) Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
+      else Deno.env.set("ISSUE_APPROVAL_TOKEN_PATH", savedOverride);
+      await Deno.remove(home, { recursive: true });
+    }
+  });
 }
 
 Deno.test("hook: sub_issue_write add in web-jam-back -> allow: a token repository", async () => {
@@ -262,6 +290,70 @@ Deno.test("a token in the earlier shape is read as a list of one approval -> all
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
+});
+
+Deno.test("writer: equals-form short aliases -r= and -t= write the same single-repository token", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const tokenPath = `${dir}/token.json`;
+    const res = await runWriter(
+      dir,
+      ["--session-id", SESSION, "-r=WebJamApps/web-jam-tools", "-t=Title A", "-t", "Title B"],
+      tokenPath,
+    );
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(loadToken(tokenPath)?.approvals, [
+      { repo: "WebJamApps/web-jam-tools", titles: ["Title A", "Title B"] },
+    ]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("writer: arguments after -- are not read as a --repo or --title", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const tokenPath = `${dir}/token.json`;
+    const res = await runWriter(
+      dir,
+      [
+        "--session-id",
+        SESSION,
+        "-r",
+        "WebJamApps/web-jam-tools",
+        "-t",
+        "Title A",
+        "--",
+        "--title",
+        "Title B",
+      ],
+      tokenPath,
+    );
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(loadToken(tokenPath)?.approvals, [
+      { repo: "WebJamApps/web-jam-tools", titles: ["Title A"] },
+    ]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("groupApprovalArgs reads mixed long, short and equals forms in order", () => {
+  assertEquals(
+    groupApprovalArgs([
+      "-r=WebJamApps/JaMmusic",
+      "-t=Book Us form: x",
+      "--repo=WebJamApps/web-jam-back",
+      "-t",
+      "model/inquiry: y",
+    ]),
+    {
+      approvals: [
+        { repo: "WebJamApps/JaMmusic", titles: ["Book Us form: x"] },
+        { repo: "WebJamApps/web-jam-back", titles: ["model/inquiry: y"] },
+      ],
+    },
+  );
 });
 
 Deno.test("writer refuses: a title before any --repo", async () => {
