@@ -164,7 +164,7 @@ Model-label combinations follow
 checks the labels alone, because the table has no escalation-reason column. `design:file-plan`
 uses the same reader, merges each row's `labels`, and checks every row (the epic included) with
 its `escalationReason` before filing anything and in `--dry-run`. Carry that reason in the filing
-JSON for rows that require it; the create receives both the labels and the reason.
+JSON for rows that require it. The filing command receives both the labels and the reason.
 
 7. **Propose the plan table**, applying the epic heuristic and the Flash size checklist:
 
@@ -438,7 +438,7 @@ When `/design-issue` resolves an existing issue into paired implementation and J
 
 **Finding.** With no argument the skill scans all 8 active repos for open `Needs Design` issues and offers them as candidates.
 
-**Adding — automatic, inside one guard rail.** The skill may add the label to an existing issue too under-specified to plan against, and to a follow-up it knowingly defers to a later design run. It may never add it to anything in the approved plan's executable set. A deferred stub still needs model labels allowed by the tier-order design cited above; for this open-ended design work it goes out as `Opus` + `Needs Design`.
+**Adding — automatic, inside one guard rail.** The skill may add the label to an existing issue too under-specified to plan against, and to a follow-up it knowingly defers to a later design run. It may never add it to anything in the approved plan's executable set. For open-ended design work, file a deferred stub with `Opus` and `Needs Design` under the tier-order design cited above.
 
 **Removing — never automatic, and the ask carries its reason.** Only Josh can say that a design is completed or not. Removing the `Needs Design` label and rewriting the issue's stale body sections happen in the same run — never separately (striking questions the design document answers, repointing design references, and reconciling scope). Use `deno task design:stale-bodies` (`web-jam-tools#746`) to find stale sections. The plan presented at Gate 2 lists every `Needs Design` label to be removed, each with its 4 parts, every time:
 
