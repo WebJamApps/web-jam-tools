@@ -78,10 +78,10 @@ const ALLOWED_NO_REASON_CELLS: Array<[string, string[]]> = [
   ["Sonnet/Terra", ["Sonnet", "Terra"]],
   ["Terra  /  Sonnet", ["Terra", "Sonnet"]],
   ["**Terra / Sonnet**", ["Terra", "Sonnet"]],
-  ["Sol / Argon", ["Sol", "Argon"]],
-  ["Sol / Hydrogen", ["Sol", "Hydrogen"]],
   ["Argon / Hydrogen", ["Argon", "Hydrogen"]],
-  ["Sol / Argon / Hydrogen", ["Sol", "Argon", "Hydrogen"]],
+  ["Sol / Opus", ["Sol", "Opus"]],
+  ["Opus", ["Opus"]],
+  ["Neon", ["Neon"]],
   ["Terra", ["Terra"]],
   ["Josh", ["Josh"]],
 ];
@@ -163,7 +163,7 @@ for (const [cell, expectedLabels] of ALLOWED_NO_REASON_CELLS) {
   });
 }
 
-Deno.test("model-label chain: Opus / Fable top lane preserves both labels and escalation reason", async () => {
+Deno.test("model-label chain: Opus / Fable preserves both labels and escalation reason", async () => {
   const directory = await Deno.makeTempDir();
   const { deps, calls, creates } = githubFixture();
   const planPath = `${directory}/filing.json`;
@@ -230,7 +230,7 @@ Deno.test("model-label chain: Opus / Fable top lane preserves both labels and es
   }
 });
 
-Deno.test('model-label chain: row merging ["Argon"] with Sol / Hydrogen passes as the permitted triple', async () => {
+Deno.test("model-label chain: row merging Argon with Hydrogen preserves the shared lane", async () => {
   const directory = await Deno.makeTempDir();
   const { deps, creates } = githubFixture();
   const planPath = `${directory}/filing.json`;
@@ -238,9 +238,9 @@ Deno.test('model-label chain: row merging ["Argon"] with Sol / Hydrogen passes a
   try {
     await Deno.writeTextFile(designPath, "# Fixture design\n");
     const child: PlanIssueItem = {
-      title: "Shared triple child",
+      title: "Shared lane child",
       parent: 900,
-      tier: "Sol / Hydrogen",
+      tier: "Hydrogen",
       labels: ["Argon"],
       body:
         "## What this builds\n\nBuild the shared model-label reader.\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes",
@@ -257,7 +257,6 @@ Deno.test('model-label chain: row merging ["Argon"] with Sol / Hydrogen passes a
     assertEquals(creates.length, 1);
     const command = creates[0];
     assertEquals(command.flatMap((arg, i) => arg === "--label" ? [command[i + 1]] : []), [
-      "Sol",
       "Hydrogen",
       "Argon",
     ]);
@@ -268,7 +267,7 @@ Deno.test('model-label chain: row merging ["Argon"] with Sol / Hydrogen passes a
 
 for (const dryRun of [true, false]) {
   for (const invalidEpic of [false, true]) {
-    Deno.test(`model-label chain: missing reason on Opus refuses ${invalidEpic ? "epic" : "child"} before any create (dryRun=${dryRun})`, async () => {
+    Deno.test(`model-label chain: missing reason on Fable refuses ${invalidEpic ? "epic" : "child"} before any create (dryRun=${dryRun})`, async () => {
       const directory = await Deno.makeTempDir();
       const planPath = `${directory}/filing.json`;
       const { deps, calls, creates } = githubFixture();
@@ -276,7 +275,7 @@ for (const dryRun of [true, false]) {
         await Deno.writeTextFile(
           planPath,
           JSON.stringify({
-            epic: { title: "Fixture epic", tier: invalidEpic ? "Opus" : "Sol" },
+            epic: { title: "Fixture epic", tier: invalidEpic ? "Fable" : "Sol" },
             children: [
               {
                 title: "Valid child first",
@@ -286,7 +285,7 @@ for (const dryRun of [true, false]) {
               },
               {
                 title: "Top child",
-                tier: "Opus",
+                tier: "Fable / Sonnet",
                 body:
                   "## What this builds\n\nSecond.\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes",
               },
@@ -304,8 +303,8 @@ for (const dryRun of [true, false]) {
             }),
           Error,
           invalidEpic
-            ? 'Epic "Fixture epic": Opus needs an escalation reason'
-            : 'issue "Top child": Opus needs an escalation reason',
+            ? 'Epic "Fixture epic": Fable needs an escalation reason'
+            : 'issue "Top child": Fable needs an escalation reason',
         );
         assertEquals(creates, []);
         assertEquals(calls, []);
@@ -327,7 +326,7 @@ Deno.test("model-label chain: extra row labels cannot smuggle in a forbidden com
         children: [{
           title: "Invalid merged labels",
           tier: "Sol",
-          labels: ["Opus"],
+          labels: ["Hydrogen"],
           escalationReason: "x",
         }],
       }),

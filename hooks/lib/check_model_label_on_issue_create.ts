@@ -771,18 +771,11 @@ export async function findIssueCreateFooterDenial(
   return `DENY:the footer '${footer.line}' names a model that is not on the author roster. File the issue through deno task create-issue --author "<tool — model>". ${check.message}`;
 }
 
-/**
- * Model tiers that require an explicit escalation justification (web-jam-tools#709, web-jam-tools#1467).
- *
- * NOTE: The guard checks ONLY presence of non-empty justification text,
- * NEVER quality or task complexity. Do not add complexity classification here.
- */
-export const ESCALATION_LABELS = new Set(["Opus", "Fable"]);
-
+// Frozen copy of the tier-order policy. The parity suite checks the shared reader.
 const ALLOWED_MULTI_LABEL_LANES: readonly (readonly string[])[] = [
-  ["Sol", "Argon", "Hydrogen"],
+  ["Argon", "Hydrogen"],
   ["Terra", "Sonnet"],
-  ["Opus", "Fable"],
+  ["Sol", "Opus"],
 ];
 
 export function decide(
@@ -802,25 +795,24 @@ export function decide(
     const present = labels.length ? labels.join(", ") : "(none)";
     return `DENY:no model label (labels present: ${present}). Valid model labels: ${validStr}.`;
   }
+  const hasFable = matched.includes("Fable");
   const inSingleLane = matched.length === 1 ||
     ALLOWED_MULTI_LABEL_LANES.some((lane) => matched.every((label) => lane.includes(label)));
-  if (!inSingleLane) {
+  if (!hasFable && !inSingleLane) {
     const joined = matched.join(", ");
-    return `DENY:${matched.length} model labels given (${joined}) — multiple model labels must belong to one lane: shared (Sol, Argon, Hydrogen), everyday (Terra, Sonnet), or top (Opus, Fable). Valid model labels: ${validStr}.`;
+    const lanes = ALLOWED_MULTI_LABEL_LANES.map((lane) => lane.join(" / ")).join(", ");
+    return `DENY:${matched.length} model labels given (${joined}) — choose a single coding lane: ${lanes}. Valid model labels: ${validStr}.`;
   }
 
-  const matchedTier = matched.find((label) => ESCALATION_LABELS.has(label));
-  if (matchedTier) {
-    const reason = escalationReason?.trim();
-    if (!reason) {
-      if (mode === "mcp") {
-        return `DENY:Creating an issue labeled '${matchedTier}' requires an explicit escalation justification.\nTo proceed with ${matchedTier}, supply an 'escalation_reason' property (e.g. escalation_reason: "<why ${matchedTier} is genuinely the right tier>") in the tool input.`;
-      }
-      const commandToRun = cmd?.trim()
-        ? `${cmd.trim()} --escalation-reason "<why ${matchedTier} is genuinely the right tier>"`
-        : `gh issue create ... --label ${matchedTier} --escalation-reason "<why ${matchedTier} is genuinely the right tier>"`;
-      return `DENY:Creating an issue labeled '${matchedTier}' requires an explicit escalation justification.\nTo proceed with ${matchedTier}, re-run with an escalation reason:\n${commandToRun}`;
+  if (hasFable && !escalationReason?.trim()) {
+    const denial =
+      "DENY:Creating an issue labeled 'Fable' requires an explicit escalation justification.";
+    const reason = "<why Fable is genuinely the right tier>";
+    if (mode === "mcp") {
+      return `${denial}\nTo proceed with Fable, supply an 'escalation_reason' property (e.g. escalation_reason: "${reason}") in the tool input.`;
     }
+    const commandToRun = cmd?.trim() || "gh issue create ... --label Fable";
+    return `${denial}\nTo proceed with Fable, re-run with an escalation reason:\n${commandToRun} --escalation-reason "${reason}"`;
   }
 
   return "PASS";

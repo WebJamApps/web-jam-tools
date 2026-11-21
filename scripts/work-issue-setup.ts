@@ -1,10 +1,9 @@
 /** Record the working model before handle-agy-tasks creates or resumes a branch. */
 import { resolveSetupAuthor, type RunningModelOptions } from "../src/shared/codex_running_model.ts";
 import {
-  EVERYDAY_MODEL_LABELS,
+  canWorkModelLabels,
   loadModelLabels,
   modelLabelViolation,
-  SHARED_MODEL_LABELS,
 } from "../src/shared/model_label_rule.ts";
 
 interface Result {
@@ -83,12 +82,7 @@ export async function recordWorkingModel(
     const violation = modelLabelViolation(labels, models, undefined, false);
     if (violation) throw new Error(violation);
     const matched = labels.filter((value) => models.has(value));
-    const eligible = matched.includes(label) || [SHARED_MODEL_LABELS, EVERYDAY_MODEL_LABELS]
-      .some((lane: readonly string[]) =>
-        lane.includes(label) && matched.length > 0 &&
-        matched.every((value) => lane.includes(value))
-      );
-    if (!eligible) {
+    if (!canWorkModelLabels(label, matched)) {
       throw new Error(
         `${author} cannot take labels [${
           matched.join(", ")

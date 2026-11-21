@@ -111,6 +111,11 @@ labels:
     description: "GPT-6.2 Astra at high effort: architect for design-issue runs, only for work Josh names"
     repos: all
     modelTier: true
+  - name: Neon
+    hex: "3BFD98"
+    description: "Gemini 4 Neon at high effort: architect for design-issue runs and recording"
+    repos: all
+    modelTier: true
 
   # --- Status — all 8 repos ---
   - name: Josh

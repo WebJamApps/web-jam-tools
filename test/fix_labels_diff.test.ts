@@ -249,6 +249,8 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     "GPT-6.2 Astra at high effort: architect for design-issue runs, only for work Josh names",
   );
   assertEquals(byName.get("Astra")?.repos, "all");
+  assertEquals(byName.get("Neon")?.modelTier, true);
+  assertEquals(byName.get("Neon")?.repos, "all");
   assertEquals(byName.get("Sonnet")?.hex, "1D76DB");
   assertEquals(byName.get("Sonnet")?.modelTier, true);
   assertEquals(
@@ -281,6 +283,7 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     "Haiku",
     "Hydrogen",
     "Luna",
+    "Neon",
     "Opus",
     "Sol",
     "Sonnet",

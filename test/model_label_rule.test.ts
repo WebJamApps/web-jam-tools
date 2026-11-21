@@ -78,10 +78,9 @@ Deno.test("plan lint checks label combinations without requiring a reason column
       "Sonnet/Terra",
       "Terra  /  Sonnet",
       "**Terra / Sonnet**",
-      "Sol / Argon",
-      "Sol / Hydrogen",
       "Argon / Hydrogen",
-      "Sol / Argon / Hydrogen",
+      "Sol / Opus",
+      "Neon",
       "Terra",
       "Josh",
       "Opus / Fable",
@@ -104,7 +103,7 @@ Deno.test("retired Flash is unknown to the canonical label vocabulary", () => {
   const vocabulary = loadModelLabels();
   assertEquals(modelLabelViolation(["Flash"], vocabulary), "no model label");
   assertThrows(() => readPlanModelLabels("Flash", vocabulary), Error, 'Unknown model tier "Flash"');
-  for (const name of ["Argon", "Terra", "Hydrogen", "Fable"]) {
+  for (const name of ["Argon", "Terra", "Hydrogen", "Fable", "Neon"]) {
     assertEquals(vocabulary.has(name), true);
   }
 });

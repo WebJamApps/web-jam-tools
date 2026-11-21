@@ -1552,8 +1552,7 @@ Deno.test("skills/pr-review/SKILL.md names Gemini Flash as the Flash author and 
 
 Deno.test("work-issue uses lane eligibility and recorded working-model tracking", async () => {
   const text = await Deno.readTextFile("skills/work-issue/SKILL.md");
-  assertStringIncludes(text, "\`Sol\`, \`Argon\` or \`Hydrogen\`");
-  assertStringIncludes(text, "\`Terra\` or \`Sonnet\`");
+  assertStringIncludes(text, 'order is used" in the tier-order design above');
   assertStringIncludes(text, "Outside the executing model’s eligible lane, ask Josh");
   assertStringIncludes(text, "preserves all");
   assertStringIncludes(text, "non-model labels, and reads the result back");
@@ -2415,7 +2414,7 @@ function assertModelLabelGuidance(skill: string, text: string): void {
   ) {
     assertFalse(text.includes(stale), `${skill}: stale model-label rule: ${stale}`);
   }
-  if (skill === "backlog-groom") assertStringIncludes(text, "must not be reduced to one label");
+  if (skill === "backlog-groom") assertStringIncludes(text, "Preserve permitted sets.");
   if (skill === "work-issue") {
     assertStringIncludes(text, "Do not retain the earlier model labels after work starts");
   }

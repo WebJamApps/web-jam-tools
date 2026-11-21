@@ -134,8 +134,9 @@ async function withModel(
       // A contradictory typed author must never replace the recorded Codex model.
       await test(env, "Claude Code — Claude Haiku 5.5");
     });
-  } else if (model === "Sonnet") {
-    await test({ CLAUDE_CODE_SESSION_ID: "fixture" }, "Claude Code — Claude Sonnet 5.5");
+  } else if (model === "Opus" || model === "Sonnet" || model === "Fable") {
+    const author = { Opus: "Opus", Sonnet: "Sonnet 5.5", Fable: "Fable 5.2" }[model];
+    await test({ CLAUDE_CODE_SESSION_ID: "fixture" }, `Claude Code — ${author}`);
   } else {
     const identity = AGY_IDENTITIES.find((value) => value.author.endsWith(model));
     if (!identity) throw new Error(`missing fixture ${model}`);
@@ -145,7 +146,7 @@ async function withModel(
   }
 }
 
-for (const lane of [["Sol", "Argon", "Hydrogen"], ["Terra", "Sonnet"]]) {
+for (const lane of [["Sol", "Opus"], ["Argon", "Hydrogen"], ["Terra", "Sonnet"], ["Neon"]]) {
   for (const model of lane) {
     for (const label of lane) {
       Deno.test(`setup records ${model} working ${label} without a model override`, async () => {
@@ -163,9 +164,15 @@ for (const lane of [["Sol", "Argon", "Hydrogen"], ["Terra", "Sonnet"]]) {
   }
 }
 
-for (const labels of [["Argon", "Hydrogen"], ["Sol", "Argon", "Hydrogen"], ["Terra", "Sonnet"]]) {
+for (
+  const [model, labels] of [
+    ["Argon", ["Argon", "Hydrogen"]],
+    ["Sol", ["Sol", "Opus"]],
+    ["Terra", ["Terra", "Sonnet"]],
+    ["Fable", ["Fable", "Sonnet"]],
+  ] as const
+) {
   Deno.test(`setup collapses optional lane labels ${labels.join("/")}`, async () => {
-    const model = labels.includes("Terra") ? "Terra" : "Sol";
     await withModel(model, async (env, author) => {
       const result = await setupFixture([...labels, "Josh"], env, author);
       assertEquals(result.code, 0, result.stderr);
@@ -185,7 +192,7 @@ Deno.test("agy Sonnet uses its recorded identity for everyday-lane setup", async
 for (const failure of ["edit", "unreadable", "mismatch"]) {
   Deno.test(`setup ${failure} label update refuses before any branch exists`, async () => {
     await withModel("Sol", async (env, author) => {
-      const result = await setupFixture(["Argon", "Josh"], env, author, failure);
+      const result = await setupFixture(["Opus", "Josh"], env, author, failure);
       assertEquals(result.code, 1);
       assertStringIncludes(result.stderr, "Refused setup for Fixture1468-");
       assertEquals(result.branches, "");
@@ -193,14 +200,24 @@ for (const failure of ["edit", "unreadable", "mismatch"]) {
   });
 }
 
-for (const labels of [["Terra"], ["Mystery", "Josh"], ["Sol", "Terra"]]) {
-  Deno.test(`setup refuses labels ${labels.join("/")} before branching`, async () => {
-    await withModel("Sol", async (env, author) => {
-      const result = await setupFixture(labels, env, author);
+for (
+  const [model, labels, message] of [
+    ["Sol", ["Terra"], "ask Josh"],
+    ["Sol", ["Hydrogen"], "ask Josh"],
+    ["Sol", ["Fable"], "ask Josh"],
+    ["Fable", ["Sonnet"], "ask Josh"],
+    ["Sol", ["Mystery", "Josh"], "ask Josh"],
+    ["Sol", ["Sol", "Hydrogen"], "forbidden model-label combination"],
+    ["Sol", ["Sol", "Terra"], "forbidden model-label combination"],
+  ] as const
+) {
+  Deno.test(`setup refuses ${model} on ${labels.join("/")} before branching`, async () => {
+    await withModel(model, async (env, author) => {
+      const result = await setupFixture([...labels], env, author);
       assertEquals(result.code, 1);
       assertEquals(result.branches, "");
       assertEquals(result.labels, labels);
-      if (labels[0] === "Terra") assertStringIncludes(result.stderr, "ask Josh");
+      assertStringIncludes(result.stderr, message);
     });
   });
 }

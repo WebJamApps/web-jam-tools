@@ -132,8 +132,7 @@ Deno.test("surface roster and skill bodies include Codex", async () => {
     "Finish coding tasks across\nClaude Code, agy, and Codex by pushing through `deno task push`",
   );
 
-  // Model tiers include Codex models
-  assertStringIncludes(workIssueText, "Luna");
-  assertStringIncludes(workIssueText, "Sol");
-  assertStringIncludes(workIssueText, "Astra");
+  // The tier-order design owns the model choices for every surface.
+  assertStringIncludes(workIssueText, "model-tier-order-design-2026-10-02.md");
+  assertStringIncludes(workIssueText, "Codex and agy resolve their recorded session/conversation");
 });

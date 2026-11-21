@@ -3,7 +3,6 @@ import { assertEquals } from "@std/assert";
 import {
   checkModelLabelOnIssueCreate,
   decide,
-  ESCALATION_LABELS,
   extractEscalationReason,
   extractRepoValue,
   loadModelLabels,
@@ -15,17 +14,6 @@ const MODEL_LABELS_PATH = new URL(
   "../skills/fix-labels/model-labels.json",
   import.meta.url,
 ).pathname;
-
-Deno.test("ESCALATION_LABELS contains Opus and Fable only", () => {
-  assertEquals(ESCALATION_LABELS.has("Opus"), true);
-  assertEquals(ESCALATION_LABELS.has("Fable"), true);
-  assertEquals(ESCALATION_LABELS.has("Sonnet"), false);
-  assertEquals(ESCALATION_LABELS.has("Terra"), false);
-  assertEquals(ESCALATION_LABELS.has("Haiku"), false);
-  assertEquals(ESCALATION_LABELS.has("Sol"), false);
-  assertEquals(ESCALATION_LABELS.has("Argon"), false);
-  assertEquals(ESCALATION_LABELS.has("Hydrogen"), false);
-});
 
 Deno.test("extractEscalationReason: parses space-separated flag", () => {
   assertEquals(
@@ -91,18 +79,8 @@ Deno.test("extractRepoValue: parses --repo, --repo=, -R, and -R= (web-jam-tools#
   assertEquals(extractRepoValue(["--title", "T"]), null);
 });
 
-Deno.test("decide: Opus and Fable require escalation justification; non-top labels do not", () => {
+Deno.test("decide: only Fable requires escalation justification", () => {
   const modelLabels = loadModelLabels(MODEL_LABELS_PATH);
-
-  // Opus without reason
-  const resOpusNoReason = decide(["Opus"], modelLabels);
-  assertEquals(
-    resOpusNoReason.startsWith(
-      "DENY:Creating an issue labeled 'Opus' requires an explicit escalation justification.",
-    ),
-    true,
-  );
-  assertEquals(resOpusNoReason.includes("Flash"), false);
 
   // Fable without reason
   const resFableNoReason = decide(["Fable"], modelLabels);
@@ -114,12 +92,24 @@ Deno.test("decide: Opus and Fable require escalation justification; non-top labe
   );
   assertEquals(resFableNoReason.includes("Flash"), false);
 
-  // Opus and Fable with reason
-  assertEquals(decide(["Opus"], modelLabels, "architectural design"), "PASS");
+  // Fable with reason
   assertEquals(decide(["Fable"], modelLabels, "architectural design"), "PASS");
 
-  // Non-top labels require no reason
-  for (const label of ["Terra", "Sonnet", "Sol", "Argon", "Hydrogen", "Haiku", "Luna", "Astra"]) {
+  // Other model labels require no reason
+  for (
+    const label of [
+      "Terra",
+      "Sonnet",
+      "Sol",
+      "Argon",
+      "Hydrogen",
+      "Haiku",
+      "Luna",
+      "Astra",
+      "Neon",
+      "Opus",
+    ]
+  ) {
     assertEquals(decide([label], modelLabels), "PASS", label);
   }
 
@@ -134,7 +124,7 @@ Deno.test("decide: Opus and Fable require escalation justification; non-top labe
 
 Deno.test("decide: MCP mode formats denial message with tool input property instructions and no Flash reference", () => {
   const modelLabels = loadModelLabels(MODEL_LABELS_PATH);
-  const res = decide(["Opus"], modelLabels, null, undefined, "mcp");
+  const res = decide(["Fable"], modelLabels, null, undefined, "mcp");
   assertEquals(res.includes("supply an 'escalation_reason' property"), true);
   assertEquals(res.includes("Flash"), false);
 });
@@ -143,12 +133,10 @@ for (
   const labels of [
     ["Terra", "Sonnet"],
     ["Sonnet", "Terra"],
-    ["Sol", "Argon"],
-    ["Sol", "Hydrogen"],
     ["Argon", "Hydrogen"],
-    ["Sol", "Argon", "Hydrogen"],
-    ["Hydrogen", "Argon", "Sol"],
-    ["Josh", "Sol", "Argon"],
+    ["Sol", "Opus"],
+    ["Opus", "Sol"],
+    ["Josh", "Sol", "Opus"],
     ["Terra", "Sonnet", "Terra", "bug"],
   ]
 ) {
@@ -157,7 +145,12 @@ for (
   });
 }
 
-for (const labels of [["Opus", "Fable"], ["Fable", "Opus"], ["Josh", "Opus", "Fable"]]) {
+for (
+  const labels of [["Opus", "Fable"], ["Fable", "Opus"], ["Josh", "Opus", "Fable"], [
+    "Fable",
+    "Sonnet",
+  ], ["Fable", "Josh"]]
+) {
   Deno.test(`decide: ${labels.join(" / ")} passes with a reason`, () => {
     assertEquals(decide(labels, loadModelLabels(MODEL_LABELS_PATH), "open case list"), "PASS");
   });
@@ -190,9 +183,10 @@ for (
     ["Sol", "Sonnet"],
     ["Sonnet", "Sol"],
     ["Terra", "Hydrogen"],
-    ["Sol", "Opus"],
+    ["Sol", "Argon"],
+    ["Sol", "Hydrogen"],
+    ["Sol", "Argon", "Hydrogen"],
     ["Argon", "Astra"],
-    ["Fable", "Sonnet"],
     ["Sol", "Sonnet", "Opus"],
   ]
 ) {
@@ -261,10 +255,8 @@ Deno.test("checkModelLabelOnIssueCreate: end-to-end payload evaluation", async (
     },
   });
   assertEquals(
-    (await checkModelLabelOnIssueCreate(cliOpusNoReason, MODEL_LABELS_PATH)).startsWith(
-      "DENY:Creating an issue labeled 'Opus'",
-    ),
-    true,
+    await checkModelLabelOnIssueCreate(cliOpusNoReason, MODEL_LABELS_PATH),
+    "PASS",
   );
 
   const cliOpusWithReason = JSON.stringify({
@@ -285,13 +277,12 @@ Deno.test("checkModelLabelOnIssueCreate: end-to-end payload evaluation", async (
       method: "create",
       type: "Task",
       labels: ["Opus"],
+      body: SIGNED_BODY,
     },
   });
   assertEquals(
-    (await checkModelLabelOnIssueCreate(mcpOpusNoReason, MODEL_LABELS_PATH)).startsWith(
-      "DENY:Creating an issue labeled 'Opus'",
-    ),
-    true,
+    await checkModelLabelOnIssueCreate(mcpOpusNoReason, MODEL_LABELS_PATH),
+    "PASS",
   );
 
   const mcpOpusWithReason = JSON.stringify({

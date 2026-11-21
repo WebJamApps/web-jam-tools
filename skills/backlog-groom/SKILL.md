@@ -59,7 +59,7 @@ The audit inspects every open issue across all 8 repositories against six core c
 
 ### 1. Model-Label Drift
 - **Missing or Misaligned Model Label:** Issue has no model-tier label from `skills/fix-labels/model-labels.json` (unless it is a `Josh` manual step) or carries a label that differs from the triage table in `docs/ai-team-playbook.md`. The skill compares each open coding issue's label with the triage table and proposes a relabel per issue, asking Josh per item. It does not apply any single model label by default.
-- **Multiple Model Labels:** Report two or more model labels as drift only when they are not the allowed pair in `~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`, "How the order is used". The allowed pair is valid and must not be reduced to one label.
+- **Multiple Model Labels:** Check each set against "How the order is used" in `~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`. Preserve permitted sets.
 - **Retired / Deprecated Labels:** Issue carries retired or non-canonical model labels (e.g. retired `Flash`, `Flash-lane`, `GPT-4`, `Claude-2` or mismatched tier spellings).
 
 ### 2. Native Dependencies & Blocked Label Drift

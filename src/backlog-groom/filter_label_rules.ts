@@ -15,7 +15,6 @@ export function filterLabelRules(
 ): FindingsFile {
   const file = validateFindings(findings);
   validateSnapshot(snapshot);
-  const models = new Set([...modelLabels, ...EVERYDAY_MODEL_LABELS]);
   const issues = new Map(
     snapshot.repositories.flatMap(({ repo }) =>
       repositoryFacts(snapshot, repo).issues.map((issue) =>
@@ -31,7 +30,7 @@ export function filterLabelRules(
     const onlyModelLabels = item.changes.length > 0 &&
       item.changes.every((change) =>
         change.kind === "labels" &&
-        [...change.remove, ...change.add].every((label) => models.has(label))
+        [...change.remove, ...change.add].every((label) => modelLabels.has(label))
       );
     const removesEveryday = item.changes.some((change) =>
       change.kind === "labels" &&
