@@ -25,6 +25,33 @@ export interface PremiseRow {
   proved: string; // the row's Proved cell, trimmed
 }
 
+/** One sweep note recorded by `deno task design:sweep-note <doc.md> <other.md> --reason "<why>"`. */
+export interface SweepNote {
+  otherPath: string;
+  reason: string;
+  recordedAt: string;
+}
+
+export type OtherDesignSweepStatus = "revised" | "noted" | "unreadable-noted";
+
+/** One entry in the Gate 1 cross-design sweep record shown on the Gate 1 page. */
+export interface OtherDesignSweepEntry {
+  otherPath: string;
+  lines: number[];
+  terms: string[];
+  status: OtherDesignSweepStatus;
+  reason?: string;
+  revisionDate?: string;
+}
+
+/** Snapshot of the cross-design sweep checked at Gate 1. */
+export interface OtherDesignSweepResult {
+  terms: string[];
+  checkedAt: string;
+  presentingDay: string;
+  entries: OtherDesignSweepEntry[];
+}
+
 export interface Gate1Record {
   docPath: string; // Absolute path to design document
   presentedFingerprint: string; // SHA-256 hex of document content when presented
@@ -36,6 +63,8 @@ export interface Gate1Record {
   premiseRowsSource?: "approval" | "adoption"; // where premiseRows came from
   premiseRowsStoredAt?: string; // ISO 8601 timestamp the rows were stored
   premiseRowsAdoptionReply?: string; // Josh's reply verbatim, adoption only
+  sweepNotes?: SweepNote[]; // Active sweep notes recorded for the current revision
+  otherDesignSweep?: OtherDesignSweepResult; // Cross-design sweep recorded at Gate 1
 }
 
 export type Gate1StatusType =
@@ -265,18 +294,56 @@ async function readExistingRecord(recordPath: string): Promise<Gate1Record | nul
       `Cannot parse Gate 1 record at ${recordPath}: malformed premise rows`,
     );
   }
+  const sweepNotes = (parsed as Gate1Record).sweepNotes;
+  if (
+    sweepNotes !== undefined &&
+    (!Array.isArray(sweepNotes) ||
+      sweepNotes.some((note) =>
+        note === null || typeof note !== "object" ||
+        typeof note.otherPath !== "string" || typeof note.reason !== "string" ||
+        typeof note.recordedAt !== "string"
+      ))
+  ) {
+    throw new Gate1RecordError(
+      `Cannot parse Gate 1 record at ${recordPath}: malformed sweepNotes`,
+    );
+  }
+  const otherDesignSweep = (parsed as Gate1Record).otherDesignSweep;
+  if (otherDesignSweep !== undefined) {
+    const validStatus = (s: unknown) =>
+      s === "revised" || s === "noted" || s === "unreadable-noted";
+    if (
+      otherDesignSweep === null || typeof otherDesignSweep !== "object" ||
+      !Array.isArray(otherDesignSweep.terms) ||
+      otherDesignSweep.terms.some((t) => typeof t !== "string") ||
+      typeof otherDesignSweep.checkedAt !== "string" ||
+      typeof otherDesignSweep.presentingDay !== "string" ||
+      !Array.isArray(otherDesignSweep.entries) ||
+      otherDesignSweep.entries.some((e) =>
+        e === null || typeof e !== "object" ||
+        typeof e.otherPath !== "string" ||
+        !Array.isArray(e.lines) || e.lines.some((l) => typeof l !== "number") ||
+        !Array.isArray(e.terms) || e.terms.some((t) => typeof t !== "string") ||
+        !validStatus(e.status)
+      )
+    ) {
+      throw new Gate1RecordError(
+        `Cannot parse Gate 1 record at ${recordPath}: malformed otherDesignSweep`,
+      );
+    }
+  }
   return parsed as Gate1Record;
 }
 
 /**
  * Opens a Gate 1 record on disk each time a design document is presented.
- * Clears any earlier approval, keeps the stored premise rows, and refuses (leaving the file
- * untouched) when an existing record cannot be read or parsed.
+ * Clears any earlier approval, keeps the stored premise rows and active sweep notes, and refuses
+ * (leaving the file untouched) when an existing record cannot be read or parsed.
  */
 export async function openGate1Record(
   docPath: string,
   content: string,
-  options?: { stateDir?: string },
+  options?: { stateDir?: string; otherDesignSweep?: OtherDesignSweepResult },
 ): Promise<{ record: Gate1Record; recordPath: string }> {
   const absDocPath = path.resolve(expandHome(docPath.trim()));
   const dir = getGate1StateDir(options?.stateDir);
@@ -300,6 +367,12 @@ export async function openGate1Record(
   }
   if (existing?.premiseRowsAdoptionReply !== undefined) {
     record.premiseRowsAdoptionReply = existing.premiseRowsAdoptionReply;
+  }
+  if (existing?.sweepNotes !== undefined && existing.sweepNotes.length > 0) {
+    record.sweepNotes = existing.sweepNotes;
+  }
+  if (options?.otherDesignSweep !== undefined) {
+    record.otherDesignSweep = options.otherDesignSweep;
   }
 
   await Deno.writeTextFile(recordPath, JSON.stringify(record, null, 2) + "\n");
@@ -397,7 +470,77 @@ export async function approveGate1Record(
   record.premiseRowsSource = "approval";
   record.premiseRowsStoredAt = record.approvedAt;
   delete record.premiseRowsAdoptionReply;
+  // Clear active sweep notes after approval (the presented sweep snapshot stays in otherDesignSweep)
+  // so a later revision must re-verify or re-note any hits in other designs.
+  delete record.sweepNotes;
 
+  await Deno.writeTextFile(recordPath, JSON.stringify(record, null, 2) + "\n");
+  return { record, recordPath };
+}
+
+/**
+ * Records a sweep note (`deno task design:sweep-note <doc.md> <other.md> --reason "<why>"`) on
+ * `<doc.md>`'s Gate 1 record explaining why `<other.md>` is unaffected or cannot be read.
+ * Refuses when `<doc.md>`, `<other.md>`, or `--reason` is empty, when `<other.md>` resolves to
+ * `<doc.md>` itself, or when an existing Gate 1 record cannot be read or parsed. Creates the
+ * record if none exists yet without approving Gate 1.
+ */
+export async function recordSweepNote(
+  docPath: string,
+  otherPath: string,
+  reason: string,
+  options?: { stateDir?: string; nowImpl?: () => Date },
+): Promise<{ record: Gate1Record; recordPath: string }> {
+  if (!docPath || docPath.trim() === "") {
+    throw new Gate1RecordError("Design document path is required.");
+  }
+  if (!otherPath || otherPath.trim() === "") {
+    throw new Gate1RecordError("Other design document path is required.");
+  }
+  if (!reason || reason.trim() === "") {
+    throw new Gate1RecordError("Reason is empty — refusing to record sweep note.");
+  }
+
+  const absDocPath = path.resolve(expandHome(docPath.trim()));
+  const absOtherPath = path.resolve(expandHome(otherPath.trim()));
+  const resolveReal = (p: string): string => {
+    try {
+      return Deno.realPathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  if (absDocPath === absOtherPath || resolveReal(absDocPath) === resolveReal(absOtherPath)) {
+    throw new Gate1RecordError(
+      `Cannot record a sweep note for the presented document itself (${absOtherPath}).`,
+    );
+  }
+
+  const dir = getGate1StateDir(options?.stateDir);
+  const recordPath = getGate1RecordPath(absDocPath, dir);
+  const existing = await readExistingRecord(recordPath);
+  const now = options?.nowImpl?.() ?? new Date();
+  const trimmedReason = reason.trim();
+
+  const record: Gate1Record = existing ?? {
+    docPath: absDocPath,
+    presentedFingerprint: "",
+    presentedAt: "",
+  };
+
+  const realOther = resolveReal(absOtherPath);
+  const nextNotes = (record.sweepNotes ?? []).filter((n) => {
+    const absExisting = path.resolve(expandHome(n.otherPath));
+    return absExisting !== absOtherPath && resolveReal(absExisting) !== realOther;
+  });
+  nextNotes.push({
+    otherPath: absOtherPath,
+    reason: trimmedReason,
+    recordedAt: now.toISOString(),
+  });
+  record.sweepNotes = nextNotes;
+
+  await Deno.mkdir(dir, { recursive: true });
   await Deno.writeTextFile(recordPath, JSON.stringify(record, null, 2) + "\n");
   return { record, recordPath };
 }
@@ -614,6 +757,14 @@ export function formatGate1Status(result: Gate1StatusResult): string[] {
   }
   const rowLine = formatStoredRowsLine(result.record);
   if (rowLine) lines.push(rowLine);
+  const sweep = result.record?.otherDesignSweep;
+  if (sweep) {
+    lines.push(
+      `  Other designs sweep: ${sweep.entries.length} hit(s)/note(s) for ${
+        sweep.terms.map((t) => `"${t}"`).join(", ")
+      } (${sweep.presentingDay})`,
+    );
+  }
   return lines;
 }
 
