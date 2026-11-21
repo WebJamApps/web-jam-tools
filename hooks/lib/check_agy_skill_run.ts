@@ -329,8 +329,12 @@ export function isHelperCreationMessage(
   };
 
   const toolName = obj.sourceMetadata?.tool?.toolCall?.name;
-  if (toolName !== "invoke_subagent") {
-    return { valid: false, isCreationAttempt: false, reason: "toolCall is not invoke_subagent" };
+  if (toolName !== "invoke_subagent" && toolName !== "swarm") {
+    return {
+      valid: false,
+      isCreationAttempt: false,
+      reason: "toolCall is neither invoke_subagent nor swarm",
+    };
   }
 
   // Recipient must be a non-empty string. Missing or non-string recipients are refused.
@@ -389,7 +393,7 @@ export type ParentConversationResult =
 
 /**
  * Looks for the parent conversation in the messages directory.
- * Requires a verified helper-creation message (invoke_subagent) addressed to this helper.
+ * Requires a verified helper-creation message (`invoke_subagent` or `swarm`) addressed to this helper.
  * Returns:
  * - { outcome: "found", parentId } when exactly one authentic parent creation message exists
  * - { outcome: "rejected", reason } when helper creation evidence exists but was rejected (e.g. missing recipient,
@@ -524,19 +528,30 @@ export function resolveTranscriptPath(currentTranscriptPath: string, parentId: s
   return join(baseDir, parentId, basename(currentTranscriptPath));
 }
 
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function extractJsonBlocks(str: string): unknown[] {
   const results: unknown[] = [];
   let depth = 0;
   let start = -1;
+  let inString = false;
+  let escaped = false;
   for (let i = 0; i < str.length; i++) {
-    if (str[i] === "{") {
+    const ch = str[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      if (depth > 0) inString = true;
+    } else if (ch === "{") {
       if (depth === 0) start = i;
       depth++;
-    } else if (str[i] === "}") {
+    } else if (ch === "}") {
       if (depth > 0) {
         depth--;
         if (depth === 0 && start !== -1) {
@@ -555,7 +570,8 @@ function extractJsonBlocks(str: string): unknown[] {
 
 /**
  * Validates whether a parent transcript entry is an authentic helper-creation result
- * confirming the launch of childId, rather than an incidental prose mention or unrelated JSON/status response.
+ * confirming the launch of childId (either an `invoke_subagent` response or a `swarm` `add`
+ * tool response), rather than an incidental prose mention or unrelated JSON/status response.
  */
 export function isHelperCreationResult(
   entry: Record<string, unknown>,
@@ -581,26 +597,19 @@ export function isHelperCreationResult(
     return false;
   }
 
-  // Must match the recognized subagent creation header format (e.g. "Created the following subagents:" or "Created subagents:")
+  // Must match either:
+  // 1. invoke_subagent creation response ("Created [the following] subagents:" + JSON conversationId), or
+  // 2. swarm add tool response (JSON with status: "added" and conversation_id matching childId).
   const subagentHeaderRegex = /created\s+(the\s+following\s+)?subagents?:?/i;
-  if (!subagentHeaderRegex.test(content)) {
-    return false;
-  }
-
-  // Fast pre-check for conversationId declaration
-  const conversationIdRegex = new RegExp(
-    `["']?conversationId["']?\\s*:\\s*["']${escapeRegex(childId)}["']`,
-  );
-  if (!conversationIdRegex.test(content)) {
-    return false;
-  }
-
-  // Must parse a JSON object that declares conversationId matching childId
+  const hasSubagentHeader = subagentHeaderRegex.test(content);
   const blocks = extractJsonBlocks(content);
   for (const block of blocks) {
     if (block && typeof block === "object") {
       const record = block as Record<string, unknown>;
-      if (record.conversationId === childId) {
+      if (hasSubagentHeader && record.conversationId === childId) {
+        return true;
+      }
+      if (record.status === "added" && record.conversation_id === childId) {
         return true;
       }
     }
