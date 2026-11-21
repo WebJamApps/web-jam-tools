@@ -17,6 +17,7 @@ import {
   hashDocPath,
   loadGate1Record,
   openGate1Record,
+  recordSweepNote,
 } from "../src/design-issue/gate1_record.ts";
 import { lintDesignDoc, toLocalIsoDate } from "../src/design-issue/lint_doc.ts";
 import {
@@ -24,6 +25,7 @@ import {
   runGate1AdoptCli,
   runGate1ApproveCli,
   runGate1StatusCli,
+  runSweepNoteCli,
 } from "../src/design-issue/cli.ts";
 
 const MINIMAL_DESIGN_DOC = `# Test Design
@@ -1095,4 +1097,183 @@ Deno.test("the stored-rows line prints the local calendar day the rows were stor
     },
   });
   assertEquals(lines.at(-1), "  Stored premise rows: 0 (source: approval, 2026-10-04)");
+});
+
+Deno.test("recordSweepNote records and updates sweepNotes without approving Gate 1, and refuses invalid inputs", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-sweep-note-" });
+  try {
+    const docPath = path.join(tempDir, "owner-design.md");
+    const otherPath = path.join(tempDir, "other-design.md");
+    const stateDir = path.join(tempDir, "state");
+    await Deno.writeTextFile(docPath, MINIMAL_DESIGN_DOC);
+    await Deno.writeTextFile(otherPath, MINIMAL_DESIGN_DOC);
+
+    await assertRejects(
+      () => recordSweepNote("", otherPath, "why", { stateDir }),
+      Gate1RecordError,
+      "Design document path is required",
+    );
+    await assertRejects(
+      () => recordSweepNote(docPath, "", "why", { stateDir }),
+      Gate1RecordError,
+      "Other design document path is required",
+    );
+    await assertRejects(
+      () => recordSweepNote(docPath, otherPath, "   ", { stateDir }),
+      Gate1RecordError,
+      "Reason is empty",
+    );
+    await assertRejects(
+      () => recordSweepNote(docPath, docPath, "self", { stateDir }),
+      Gate1RecordError,
+      "Cannot record a sweep note for the presented document itself",
+    );
+
+    const { record: first } = await recordSweepNote(docPath, otherPath, "Initial reason", {
+      stateDir,
+      nowImpl: () => new Date("2026-11-21T10:00:00Z"),
+    });
+    assertEquals(first.sweepNotes?.length, 1);
+    assertEquals(first.sweepNotes?.[0].reason, "Initial reason");
+    assertEquals((await getGate1Status(docPath, { stateDir })).status, "not presented");
+
+    // Re-recording for the same otherPath replaces the previous note instead of duplicating.
+    const { record: updated } = await recordSweepNote(docPath, otherPath, "Updated reason", {
+      stateDir,
+      nowImpl: () => new Date("2026-11-21T11:00:00Z"),
+    });
+    assertEquals(updated.sweepNotes?.length, 1);
+    assertEquals(updated.sweepNotes?.[0].reason, "Updated reason");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("openGate1Record preserves sweepNotes and stores otherDesignSweep; approveGate1Record keeps otherDesignSweep and clears active sweepNotes", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-sweep-lifecycle-" });
+  try {
+    const docPath = path.join(tempDir, "owner-design.md");
+    const otherPath = path.join(tempDir, "other-design.md");
+    const stateDir = path.join(tempDir, "state");
+    await Deno.writeTextFile(docPath, MINIMAL_DESIGN_DOC);
+    await Deno.writeTextFile(otherPath, MINIMAL_DESIGN_DOC);
+
+    await recordSweepNote(docPath, otherPath, "Local workflow unaffected", { stateDir });
+
+    const sweepSnapshot = {
+      terms: ["Hydrogen"],
+      checkedAt: "2026-11-21T12:00:00Z",
+      presentingDay: "2026-11-21",
+      entries: [
+        {
+          otherPath,
+          lines: [7],
+          terms: ["Hydrogen"],
+          status: "noted" as const,
+          reason: "Local workflow unaffected",
+        },
+      ],
+    };
+
+    const { record: opened } = await openGate1Record(docPath, MINIMAL_DESIGN_DOC, {
+      stateDir,
+      otherDesignSweep: sweepSnapshot,
+    });
+    assertEquals(opened.sweepNotes?.length, 1);
+    assertEquals(opened.otherDesignSweep, sweepSnapshot);
+
+    const statusOpen = await getGate1Status(docPath, { stateDir });
+    assertEquals(
+      formatGate1Status(statusOpen).some((l) =>
+        l.includes('Other designs sweep: 1 hit(s)/note(s) for "Hydrogen" (2026-11-21)')
+      ),
+      true,
+    );
+
+    const { record: approved } = await approveGate1Record(docPath, "Approved", { stateDir });
+    assertEquals(approved.otherDesignSweep, sweepSnapshot);
+    assertEquals(approved.sweepNotes, undefined);
+
+    const reloaded = await loadGate1Record(docPath, { stateDir });
+    assertEquals(reloaded?.otherDesignSweep, sweepSnapshot);
+    assertEquals(reloaded?.sweepNotes, undefined);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("loadGate1Record refuses malformed sweepNotes or otherDesignSweep", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-sweep-corrupt-" });
+  try {
+    const docPath = path.join(tempDir, "doc.md");
+    const stateDir = path.join(tempDir, "state");
+    await Deno.mkdir(stateDir, { recursive: true });
+    await Deno.writeTextFile(docPath, MINIMAL_DESIGN_DOC);
+    const recordPath = getGate1RecordPath(docPath, stateDir);
+
+    await Deno.writeTextFile(
+      recordPath,
+      JSON.stringify({
+        docPath,
+        presentedFingerprint: "abc",
+        presentedAt: "2026-11-21T00:00:00Z",
+        sweepNotes: [{ otherPath: 123 }],
+      }),
+    );
+    await assertRejects(
+      () => loadGate1Record(docPath, { stateDir }),
+      Gate1RecordError,
+      "malformed sweepNotes",
+    );
+
+    await Deno.writeTextFile(
+      recordPath,
+      JSON.stringify({
+        docPath,
+        presentedFingerprint: "abc",
+        presentedAt: "2026-11-21T00:00:00Z",
+        otherDesignSweep: { terms: ["Hydrogen"], entries: "bad" },
+      }),
+    );
+    await assertRejects(
+      () => loadGate1Record(docPath, { stateDir }),
+      Gate1RecordError,
+      "malformed otherDesignSweep",
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("runSweepNoteCli and runCli route sweep-note and validate arguments", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-sweep-cli-rec-" });
+  const out: string[] = [];
+  const err: string[] = [];
+  const io = { log: (m: string) => out.push(m), errorLog: (m: string) => err.push(m) };
+
+  try {
+    const docPath = path.join(tempDir, "owner.md");
+    const otherPath = path.join(tempDir, "other.md");
+    const stateDir = path.join(tempDir, "state");
+    await Deno.writeTextFile(docPath, MINIMAL_DESIGN_DOC);
+    await Deno.writeTextFile(otherPath, MINIMAL_DESIGN_DOC);
+
+    assertEquals(await runSweepNoteCli(["--help"], io), 0);
+    assertEquals(await runSweepNoteCli([], io), 1);
+    assertEquals(await runSweepNoteCli([docPath], io), 1);
+    assertEquals(await runSweepNoteCli([docPath, otherPath], io), 1);
+    assertEquals(
+      await runSweepNoteCli(
+        [docPath, otherPath, "--reason", "Unaffected workflow", "--state-dir", stateDir],
+        io,
+      ),
+      0,
+    );
+    assertEquals(out.some((l) => l.includes("[design:sweep-note] Recorded note")), true);
+
+    assertEquals(await runCli(["sweep-note", "--help"]), 0);
+    assertEquals(await runCli(["sweep_note", "--help"]), 0);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
 });

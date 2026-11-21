@@ -31,6 +31,7 @@ import {
   approveGate1Record,
   formatGate1Status,
   getGate1Status,
+  recordSweepNote,
 } from "./gate1_record.ts";
 import { runLintDocCli } from "./lint_doc.ts";
 import { runLintPlanCli } from "./lint_plan.ts";
@@ -56,7 +57,8 @@ export async function runGate1Cli(
 ): Promise<number> {
   const flags = parseArgs(args, {
     boolean: ["no-open", "help"],
-    string: ["doc", "screenshot-path", "state-dir"],
+    string: ["doc", "screenshot-path", "state-dir", "changed", "dropbox-dir"],
+    collect: ["changed"],
     alias: {
       h: "help",
     },
@@ -77,6 +79,8 @@ Arguments:
 
 Options:
   --doc <path>              Explicit design document path
+  --changed <term>          Changed ruling term to check across other design docs (repeatable)
+  --dropbox-dir <path>      Override the design-documents root (also DESIGN_DOCS_ROOT)
   --screenshot-path <path>  Override output screenshot file path
   --no-open                 Skip launching Google Chrome
   --state-dir <path>        Override Gate 1 state directory
@@ -93,6 +97,9 @@ Options:
     return 1;
   }
 
+  const rawChanged = flags.changed as string[] | undefined;
+  const changedTerms = rawChanged !== undefined ? rawChanged.map(String) : options?.changedTerms;
+
   try {
     const result = await runGate1({
       docPath,
@@ -102,7 +109,10 @@ Options:
       openBrowserImpl: options?.openBrowserImpl,
       display: options?.display,
       stateDir: flags["state-dir"] || options?.stateDir,
+      dropboxDir: flags["dropbox-dir"] ? String(flags["dropbox-dir"]) : options?.dropboxDir,
+      changedTerms,
       nowImpl: options?.nowImpl,
+      readOtherDesignDocImpl: options?.readOtherDesignDocImpl,
     });
 
     console.log(`[design:gate1] Rendered HTML: ${result.htmlPath}`);
@@ -114,6 +124,13 @@ Options:
     }
     if (result.recordPath) {
       console.log(`[design:gate1] Gate 1 record opened: ${result.recordPath}`);
+    }
+    if (result.otherDesignSweep) {
+      console.log(
+        `[design:gate1] Checked other designs for ${
+          result.otherDesignSweep.terms.map((t) => `"${t}"`).join(", ")
+        }: ${result.otherDesignSweep.entries.length} hit(s)/note(s) settled`,
+      );
     }
     const rows = result.premiseRows;
     const source = rows.carried
@@ -470,6 +487,89 @@ Exit codes:
   return 0;
 }
 
+export interface SweepNoteCliOptions {
+  stateDir?: string;
+  nowImpl?: () => Date;
+  log?: (msg: string) => void;
+  errorLog?: (msg: string) => void;
+}
+
+export async function runSweepNoteCli(
+  args: string[],
+  options?: SweepNoteCliOptions,
+): Promise<number> {
+  const log = options?.log ?? console.log;
+  const errorLog = options?.errorLog ?? console.error;
+
+  const flags = parseArgs(args, {
+    boolean: ["help"],
+    string: ["doc", "other", "reason", "state-dir"],
+    alias: { h: "help" },
+    default: { help: false },
+  });
+
+  if (flags.help) {
+    log(`Usage: deno task design:sweep-note <doc.md> <other.md> --reason "<why>" [options]
+
+Records a note on <doc.md>'s Gate 1 record explaining why a hit in <other.md> is unaffected
+or why <other.md> cannot be read.
+
+Arguments:
+  <doc.md>              Path to design document being presented at Gate 1
+  <other.md>            Path to the other design document hit or unreadable
+
+Options:
+  --reason <why>        Explanation of why the other design is unaffected or unreadable
+  --doc <path>          Explicit presented design document path
+  --other <path>        Explicit other design document path
+  --state-dir <path>    Override Gate 1 state directory
+  -h, --help            Show this help message
+`);
+    return 0;
+  }
+
+  const positional = flags._.map(String);
+  const docPath = flags.doc || positional[0] || "";
+  const otherPath = flags.other || (flags.doc ? positional[0] : positional[1]) || "";
+  const reason = flags.reason !== undefined ? String(flags.reason) : "";
+  const usage = 'Usage: deno task design:sweep-note <doc.md> <other.md> --reason "<why>"';
+
+  if (!docPath) {
+    errorLog("Error: Missing required presented design document path.");
+    errorLog(usage);
+    return 1;
+  }
+  if (!otherPath) {
+    errorLog("Error: Missing required other design document path.");
+    errorLog(usage);
+    return 1;
+  }
+  if (!reason.trim()) {
+    errorLog("Error: Missing required --reason argument.");
+    errorLog(usage);
+    return 1;
+  }
+
+  try {
+    const { record, recordPath } = await recordSweepNote(docPath, otherPath, reason, {
+      stateDir: flags["state-dir"] || options?.stateDir,
+      nowImpl: options?.nowImpl,
+    });
+    const lastNote = record.sweepNotes?.[record.sweepNotes.length - 1];
+    log(
+      `[design:sweep-note] Recorded note for ${
+        lastNote?.otherPath ?? otherPath
+      } on ${record.docPath}`,
+    );
+    log(`[design:sweep-note] Reason: "${lastNote?.reason ?? reason.trim()}"`);
+    log(`[design:sweep-note] Record: ${recordPath}`);
+    return 0;
+  } catch (err) {
+    errorLog(`[design:sweep-note] Error: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+}
+
 export async function runCli(
   args: string[],
   options?: Partial<Gate1Options>,
@@ -531,6 +631,10 @@ export async function runCli(
 
   if (firstArg === "gate1-status" || firstArg === "gate1_status") {
     return await runGate1StatusCli(args.slice(1));
+  }
+
+  if (firstArg === "sweep-note" || firstArg === "sweep_note") {
+    return await runSweepNoteCli(args.slice(1));
   }
 
   if (firstArg === "gate1") {
