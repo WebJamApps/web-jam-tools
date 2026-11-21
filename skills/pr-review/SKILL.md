@@ -146,6 +146,7 @@ the pairing while preserving self-review, actual-identity, duplicate-review and 
       - `Claude Sonnet 5.5` (e.g. `Claude Code — Sonnet 5.5` / `Claude Code — Claude Sonnet 5.5`)
       - `Claude Haiku 5.5` (e.g. `Claude Code — Haiku 5.5` / `Claude Code — Claude Haiku 5.5`)
     - **Older Haiku footers:** A pull request already signed `Claude Haiku 4.5` keeps its footer and is read as a Haiku author; the current roster is used only when signing new work.
+    - **Older Sol and Astra footers:** A pull request already signed `GPT-6.1 Sol` or `GPT-6 Astra` keeps its footer and is read as a Sol or Astra author. Those names left the roster when the team moved to `GPT-6.2 Sol` and `GPT-6.2 Astra`.
   - Determines review status for each candidate PR using the head-SHA comparison from Step 1's "Already-Reviewed Check":
     - Compares the commit SHA of the newest automated review (`reviews | map(select((.body // "") | test("(?i)## PR Review Summary"))) | last | .commit.oid`) against the PR's current head commit SHA (`commits | last | .oid`).
     - If equal (`head_sha == last_review_sha`), mark as `reviewed at current head`. Already-reviewed PRs are included in the pick-list rather than filtered out.

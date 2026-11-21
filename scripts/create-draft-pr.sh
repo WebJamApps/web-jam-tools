@@ -185,10 +185,12 @@ ROSTER=(
   # Codex CLI running GPT-6 Luna — trial lane for Haiku-tier work (Josh, 2026-09-30).
   "GPT-6 Luna"
   "GPT-6.1 Terra"
-  # Codex CLI running GPT-6.1 Sol — default coding and review model on Plus (Josh, 2026-10-02).
-  "GPT-6.1 Sol"
-  # Codex CLI running GPT-6 Astra — reserved for REAPER recording (Josh, 2026-10-02).
-  "GPT-6 Astra"
+  # Codex CLI running GPT-6.2 Sol — hardest coding work, on the Opus rung. Replaced
+  # GPT-6.1 Sol when Josh moved the team to GPT-6.2 (web-jam-tools#1868).
+  "GPT-6.2 Sol"
+  # Codex CLI running GPT-6.2 Astra — architect with Neon: design-issue runs and only work
+  # Josh names; takes no audio. Replaced GPT-6 Astra (web-jam-tools#1868).
+  "GPT-6.2 Astra"
 )
 
 MATCHED_AUTHOR_MODEL=""
@@ -219,8 +221,8 @@ author_roster_check() {
         "Claude Fable 5.2") PR_MODEL_LABEL="Fable" ;;
         "Gemini Argon") PR_MODEL_LABEL="Argon" ;;
         "Gemini Neon") PR_MODEL_LABEL="Neon" ;;
-        "GPT-6.1 Sol") PR_MODEL_LABEL="Sol" ;;
-        "GPT-6 Astra") PR_MODEL_LABEL="Astra" ;;
+        "GPT-6.2 Sol") PR_MODEL_LABEL="Sol" ;;
+        "GPT-6.2 Astra") PR_MODEL_LABEL="Astra" ;;
         "Claude Sonnet 5.5") PR_MODEL_LABEL="Sonnet" ;;
         "Claude Opus") PR_MODEL_LABEL="Opus" ;;
         *) PR_MODEL_LABEL="" ;;

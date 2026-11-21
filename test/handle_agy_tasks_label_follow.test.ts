@@ -128,7 +128,7 @@ async function withModel(
         path,
         JSON.stringify({
           type: "turn_context",
-          payload: { model: `gpt-6.1-${model.toLowerCase()}` },
+          payload: { model: model === "Sol" ? "gpt-6.2-sol" : "gpt-6.1-terra" },
         }) + "\n",
       );
       // A contradictory typed author must never replace the recorded Codex model.
@@ -213,7 +213,7 @@ Deno.test("setup refuses absent or contradictory recorded identity before branch
     { CODEX_THREAD_ID: "invalid", CLAUDE_CODE_SESSION_ID: "fixture" },
   ];
   for (const env of contexts) {
-    const result = await setupFixture(["Sol"], env, "Codex — GPT-6.1 Sol");
+    const result = await setupFixture(["Sol"], env, "Codex — GPT-6.2 Sol");
     assertEquals(result.code, 1);
     assertEquals(result.branches, "");
   }

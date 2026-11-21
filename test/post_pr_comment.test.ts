@@ -58,7 +58,7 @@ Deno.test("agy comment missing evidence refuses before GitHub or roster subproce
 
 Deno.test("Codex repost preserves the helper signature already checked by the push path", () =>
   withSigningFixture(async (signing) => {
-    const body = "Fixed formatting.\n🤖 Fixed by Codex — GPT-6.1 Sol\n";
+    const body = "Fixed formatting.\n🤖 Fixed by Codex — GPT-6.2 Sol\n";
     const calls: string[][] = [];
     assertEquals(
       await run(
@@ -100,7 +100,7 @@ for (
   const [name, body, expected] of [
     [
       "o: work footer",
-      "Notes\r\n\r\n🤖 Work by Codex — GPT-6.1 Sol\r\n",
+      "Notes\r\n\r\n🤖 Work by Codex — GPT-6.2 Sol\r\n",
       `Notes\r\n\r\n🤖 Work by ${LUNA_SIGNATURE}\r\n`,
     ],
     [
@@ -110,12 +110,12 @@ for (
     ],
     [
       "q: two work footers",
-      "🤖 Work by Codex — GPT-6.1 Sol\nDetails\n  🤖 Work by Codex — GPT-6\n",
+      "🤖 Work by Codex — GPT-6.2 Sol\nDetails\n  🤖 Work by Codex — GPT-6\n",
       `🤖 Work by ${LUNA_SIGNATURE}\nDetails\n  🤖 Work by ${LUNA_SIGNATURE}\n`,
     ],
     [
       "r: review summary",
-      `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by Codex — GPT-6.1 Sol\n`,
+      `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by Codex — GPT-6.2 Sol\n`,
       `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by ${LUNA_SIGNATURE}\n`,
     ],
   ] as const
@@ -172,7 +172,7 @@ Deno.test("signing comment s: unsigned text stays byte exact without consulting 
 });
 
 Deno.test("signing comment v: unset session preserves signature text and the file transport", async () => {
-  const body = "Notes\n\n🤖 Work by Codex — GPT-6.1 Sol\n";
+  const body = "Notes\n\n🤖 Work by Codex — GPT-6.2 Sol\n";
   const calls: string[][] = [];
   assertEquals(
     await run(
@@ -197,7 +197,7 @@ Deno.test("signing comment v: unset session preserves signature text and the fil
     "--body-file",
     "/tmp/example-comment.md",
   ]);
-  assertEquals(calls.find((cmd) => cmd[1] === "--check-author")![2], "Codex — GPT-6.1 Sol");
+  assertEquals(calls.find((cmd) => cmd[1] === "--check-author")![2], "Codex — GPT-6.2 Sol");
 });
 
 Deno.test("signing comment t: missing session prevents posting even with a roster name", () =>
@@ -390,7 +390,7 @@ Deno.test("post-pr-comment: exits 0 and posts for a body with Sol or Sonnet 5.5 
   const codeSol = await run(
     ARGS,
     fakeDeps({
-      readFileText: () => Promise.resolve("Done.\n\n🤖 Work by Codex — GPT-6.1 Sol (high)\n"),
+      readFileText: () => Promise.resolve("Done.\n\n🤖 Work by Codex — GPT-6.2 Sol (high)\n"),
       runCmd: (cmd) => {
         if (cmd.includes("--check-author")) {
           probeCheckedAuthor = cmd[cmd.length - 1];
@@ -404,7 +404,7 @@ Deno.test("post-pr-comment: exits 0 and posts for a body with Sol or Sonnet 5.5 
     }),
   );
   assertEquals(codeSol, 0);
-  assertEquals(probeCheckedAuthor, "Codex — GPT-6.1 Sol (high)");
+  assertEquals(probeCheckedAuthor, "Codex — GPT-6.2 Sol (high)");
   assertEquals(ghCommentPosted, true);
 
   // Test Sonnet 5.5
@@ -431,14 +431,14 @@ Deno.test("post-pr-comment: exits 0 and posts for a body with Sol or Sonnet 5.5 
   assertEquals(ghCommentPosted, true);
 });
 
-Deno.test("post-pr-comment: posts a body whose footer line is 🤖 Work by Codex — GPT-6 Astra (high)", async () => {
+Deno.test("post-pr-comment: posts a body whose footer line is 🤖 Work by Codex — GPT-6.2 Astra (high)", async () => {
   let probeCheckedAuthor = "";
   let ghCommentPosted = false;
 
   const code = await run(
     ARGS,
     fakeDeps({
-      readFileText: () => Promise.resolve("Done.\n\n🤖 Work by Codex — GPT-6 Astra (high)\n"),
+      readFileText: () => Promise.resolve("Done.\n\n🤖 Work by Codex — GPT-6.2 Astra (high)\n"),
       runCmd: (cmd) => {
         if (cmd.includes("--check-author")) {
           probeCheckedAuthor = cmd[cmd.length - 1];
@@ -452,7 +452,7 @@ Deno.test("post-pr-comment: posts a body whose footer line is 🤖 Work by Codex
     }),
   );
   assertEquals(code, 0);
-  assertEquals(probeCheckedAuthor, "Codex — GPT-6 Astra (high)");
+  assertEquals(probeCheckedAuthor, "Codex — GPT-6.2 Astra (high)");
   assertEquals(ghCommentPosted, true);
 });
 

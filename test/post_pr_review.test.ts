@@ -81,9 +81,9 @@ const ARGS = [
 Deno.test("signing review u: only the closing reviewer line becomes Luna before posting", () =>
   withSigningFixture(async (signing) => {
     const body =
-      `${REVIEW_SUMMARY_HEADER}\r\n**Approved**\r\n🤖 Reviewed by Claude Code — Opus\r\nNotes\r\n\r\n🤖 Reviewed by Codex — GPT-6.1 Sol\r\n\r\n`;
+      `${REVIEW_SUMMARY_HEADER}\r\n**Approved**\r\n🤖 Reviewed by Claude Code — Opus\r\nNotes\r\n\r\n🤖 Reviewed by Codex — GPT-6.2 Sol\r\n\r\n`;
     const expected = body.replace(
-      "🤖 Reviewed by Codex — GPT-6.1 Sol",
+      "🤖 Reviewed by Codex — GPT-6.2 Sol",
       `🤖 Reviewed by ${LUNA_SIGNATURE}`,
     );
     const calls: string[][] = [];
@@ -134,7 +134,7 @@ Deno.test("signing review v: unset session preserves the original review file", 
       fakeDeps({
         readFileText: () =>
           Promise.resolve(
-            `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by Codex — GPT-6.1 Sol\n`,
+            `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by Codex — GPT-6.2 Sol\n`,
           ),
         signing: {
           env: () => undefined,

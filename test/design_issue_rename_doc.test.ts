@@ -16,7 +16,7 @@ import {
 
 const OLD = "sample-design-2026-01-01.md";
 const NEW = "sample-design.md";
-const AUTHOR = "Codex — GPT-6.1 Sol";
+const AUTHOR = "Codex — GPT-6.2 Sol";
 const content = (name: string) =>
   `# Sample\n\n${name}\n\n## Load-bearing premises\n\n| Premise | Proof | Proved |\n|---|---|---|\n| Names ${name} | Read ${name} | 2026-01-01 |\n`;
 async function fixture() {

@@ -70,8 +70,8 @@ for (const surface of ["claude", "codex"]) {
       "claude-opus-5-5",
       "claude-fable-5-2",
       "gpt-6-luna",
-      "gpt-6.1-sol",
-      "gpt-6-astra",
+      "gpt-6.2-sol",
+      "gpt-6.2-astra",
       "gemini-4-argon-high",
       "gemini-4-hydrogen-high",
     ]
@@ -82,7 +82,9 @@ for (const surface of ["claude", "codex"]) {
       const prefix = surface === "codex" ? "mcp__codex_apps__gmail_" : "mcp__gmail__";
       for (const tool of ["search_emails", "read_email", "modify_email"]) {
         const note = await probe(surface, model, prefix + tool);
-        const expensive = surface === "codex" ? model === "gpt-6-astra" : /opus|fable/.test(model);
+        const expensive = surface === "codex"
+          ? model === "gpt-6.2-astra"
+          : /opus|fable/.test(model);
         if (expensive) {
           assertStringIncludes(note!, "Gmail model note: this session runs on");
           assertStringIncludes(note!, "A one-off lookup needs no question.");

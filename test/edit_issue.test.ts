@@ -228,7 +228,7 @@ Deno.test("signing edit l: dry run prints the looked-up Luna footer", () =>
         await run([
           ...BASE,
           "--author",
-          "Codex — GPT-6.1 Sol",
+          "Codex — GPT-6.2 Sol",
           "--body-file",
           "/tmp/b.md",
           "--dry-run",
@@ -239,7 +239,7 @@ Deno.test("signing edit l: dry run prints the looked-up Luna footer", () =>
       console.log = log;
     }
     assertEquals(output.join("\n").includes(`🤖 Authored by ${LUNA_SIGNATURE}`), true);
-    assertEquals(output.join("\n").includes("🤖 Authored by Codex — GPT-6.1 Sol"), false);
+    assertEquals(output.join("\n").includes("🤖 Authored by Codex — GPT-6.2 Sol"), false);
     assertEquals(calls.some((cmd) => cmd[0] === "gh"), false);
   }));
 const PROBE = "/fake/create-draft-pr.sh";

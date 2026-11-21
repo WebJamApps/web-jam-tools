@@ -213,19 +213,19 @@ for (const surface of ["claude", "codex"] as const) {
     const fixture = await createFixFixture(surface);
     const comment = `${fixture.repoDir}/c.md`;
     const childId = "12345678-1234-5678-abcd-123456789abd";
-    const parentAuthor = surface === "claude" ? "Claude Code — Claude Opus" : "Codex — GPT-6.1 Sol";
+    const parentAuthor = surface === "claude" ? "Claude Code — Claude Opus" : "Codex — GPT-6.2 Sol";
     const helperAuthor = surface === "claude"
       ? "Claude Code — Claude Haiku 5.5"
       : "Codex — GPT-6 Luna";
     const outsider = surface === "claude"
       ? "Claude Code — Claude Sonnet 5.5"
-      : "Codex — GPT-6 Astra";
+      : "Codex — GPT-6.2 Astra";
     try {
       await fixture.writeSession([fixCall.text]);
       if (surface === "codex") {
         await Deno.writeTextFile(
           fixture.sessionPath,
-          (await Deno.readTextFile(fixture.sessionPath)).replace("gpt-6-luna", "gpt-6.1-sol"),
+          (await Deno.readTextFile(fixture.sessionPath)).replace("gpt-6-luna", "gpt-6.2-sol"),
         );
       }
       const helperPath = surface === "claude"
