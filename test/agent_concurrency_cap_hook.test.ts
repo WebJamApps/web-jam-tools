@@ -384,6 +384,45 @@ Deno.test("cap: a reservation that cannot be saved leaves the admitted launch of
   });
 });
 
+Deno.test("cap: a full-cap refusal stands when the pruned list cannot be saved", async () => {
+  await withSandbox(async (box) => {
+    await fillSlots(box, 2);
+    // The list is readable but cannot be replaced: a directory now stands where the file was.
+    const listPath = `${box.stateDir}/${SESSION_ID}.running.json`;
+    const listText = Deno.readTextFileSync(listPath);
+    Deno.removeSync(listPath);
+    Deno.mkdirSync(listPath);
+    const unsavable: CapDeps = {
+      ...box.deps,
+      readState: (path) => path === listPath ? listText : box.deps.readState(path),
+    };
+
+    const launch = launchPayload({ model: "opus", description: "queued", tool_use_id: "toolu_f" });
+    assertDenied(await decideLaunch(launch, unsavable), "already running");
+    assertEquals((await queuedLaunches(box)).map((q) => q.id), ["toolu_f"]);
+    const leftovers = [...Deno.readDirSync(box.stateDir)].map((e) => e.name).filter((n) =>
+      n.endsWith(".tmp")
+    );
+    assertEquals(leftovers, []);
+
+    // The same call evaluated again is still one entry and still refused.
+    assertDenied(await decideLaunch(launch, unsavable), "already running");
+    assertEquals((await queuedLaunches(box)).length, 1);
+  });
+});
+
+Deno.test("cap: a queue that cannot be written at full cap queues nothing and allows with a note", async () => {
+  await withSandbox(async (box) => {
+    await fillSlots(box, 2);
+    const queuePath = `${box.stateDir}/${SESSION_ID}.queue.jsonl`;
+    Deno.mkdirSync(queuePath);
+    const decision = await decideLaunch(launchPayload({ model: "opus" }), box.deps);
+    assertEquals(decision.decision, "allow");
+    assertStringIncludes((decision as { note?: string }).note ?? "", "could not be used");
+    assertEquals(runningSummary(box), ["busy1:running", "busy2:running"]);
+  });
+});
+
 Deno.test("cap: a different launch stays queued when another one is admitted", async () => {
   await withSandbox(async (box) => {
     await fillSlots(box, 2);

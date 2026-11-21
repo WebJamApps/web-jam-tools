@@ -47,6 +47,10 @@
  * An admitted launch updates the queue before it saves the reservation. A failure on the way leaves
  * the two agreeing: before the queue is written nothing has changed; after it, the launch is off the
  * queue and runs without a reservation, which SubagentStart then records as a running entry.
+ *
+ * A refused launch is denied once it is on the queue. Saving the list after that only tidies
+ * expired entries, so a failure there is ignored: the refusal stands and the queued launch never
+ * also runs. A queue that cannot be written changes nothing, and the launch is allowed with a note.
  *   <session_id>.lock/          a directory made with mkdir while one hook rewrites the files
  */
 
@@ -453,7 +457,13 @@ export async function decideLaunch(
     if (entries.length >= MAX_RUNNING_SUBAGENTS) {
       const queued = withLaunchQueued(queueText, id, input, deps);
       if (queued !== queueText) writeAtomic(paths.queue, queued);
-      saveList(paths.list, entries);
+      // The launch is queued, so the refusal must be returned whatever happens next. Saving the
+      // pruned list only tidies expired entries; the next read prunes them again if it fails.
+      try {
+        saveList(paths.list, entries);
+      } catch {
+        // not a reason to let a queued launch run as well
+      }
       return { full: entries };
     }
     // The queue first, the reservation second: the header says what a failure leaves behind.
