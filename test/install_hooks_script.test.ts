@@ -332,6 +332,19 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
       } $HOME/.claude/hooks/block-canonical-clone-change.sh`],
     );
 
+    const questionEntries = settings.hooks.PreToolUse.flatMap(
+      (entry: { matcher: string; hooks: Array<{ command: string }> }) =>
+        entry.hooks.filter((h) => h.command.endsWith("/block-tool-after-question.sh"))
+          .map(() => entry.matcher),
+    );
+    assertEquals(questionEntries, [".*"]);
+    assertEquals(
+      allAgyPreToolUseCmds.filter((c) => c.endsWith("/block-tool-after-question.sh")),
+      [`$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${
+        btoa(".*")
+      } $HOME/.claude/hooks/block-tool-after-question.sh`],
+    );
+
     // web-jam-tools#1236: regenerate-memory-index.sh registered in PostToolUse
     const postToolEntries = settings.hooks.PostToolUse.flatMap(
       (entry: { matcher?: string; hooks?: Array<{ command?: string }> }) =>
