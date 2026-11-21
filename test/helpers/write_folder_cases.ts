@@ -209,8 +209,9 @@ export async function verifyFolderRow(
       const output = await process.output();
       const stdout = new TextDecoder().decode(output.stdout);
       const stderr = new TextDecoder().decode(output.stderr);
-      const denied = row.repositoryWrite ||
-        (hook === "opus-delegation-gate" && !!row.unknownFiles?.length);
+      const agyExitsEarly = surface === "agy" && hook === "opus-delegation-gate";
+      const denied = !agyExitsEarly &&
+        (row.repositoryWrite || (hook === "opus-delegation-gate" && !!row.unknownFiles?.length));
       const result = stdout.trim() ? JSON.parse(stdout) : {};
       if (surface === "agy") {
         assertEquals(output.code, 0, stderr);
@@ -224,6 +225,9 @@ export async function verifyFolderRow(
         ]);
         assert(Object.keys(result).every((key) => fields.has(key)), stdout);
         assertEquals(result.decision, denied ? "deny" : "allow", row.name + stdout);
+        if (agyExitsEarly) {
+          assertEquals(result.reason, undefined, row.name + stdout);
+        }
       } else if (hook === "feature-branch-guard") {
         assertEquals(output.code, denied ? 2 : 0, row.name + stderr);
       } else {
@@ -234,7 +238,7 @@ export async function verifyFolderRow(
           row.name + stdout,
         );
       }
-      if (!denied && (row.unknownDirectory || row.unknownFiles?.length)) {
+      if (!agyExitsEarly && !denied && (row.unknownDirectory || row.unknownFiles?.length)) {
         const note = surface === "agy"
           ? result.reason
           : result.hookSpecificOutput?.additionalContext;

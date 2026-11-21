@@ -30,8 +30,14 @@ async function runHook(
   const input = JSON.stringify(payload);
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH],
-    // CircleCI's Bash startup file can prepend real binaries ahead of the test fixtures.
-    env: { ...env, BASH_ENV: "" },
+    // CircleCI's Bash startup file can prepend real binaries ahead of the test fixtures,
+    // and live ~/.claude/state/workflow-switch.json must not release unrelated test cases.
+    env: {
+      WORKFLOW_SWITCH_PATH: "/nonexistent/workflow-switch.json",
+      WORKFLOW_SWITCH_LOG_PATH: "/nonexistent/workflow-switch.log",
+      ...env,
+      BASH_ENV: "",
+    },
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -909,13 +915,130 @@ Deno.test("Bash: an approved Opus session, a Sonnet session, a non-auto subagent
   );
 });
 
-Deno.test("Bash: an agy payload naming an Opus model without a transcript allows by workflow default", async () => {
+Deno.test("Bash: an agy payload naming an Opus model without a transcript exits 0 silently", async () => {
   const res = await runHook(
     bashPayload("echo x > src/a.ts", "/nonexistent.jsonl", {
       modelName: "claude-opus-4-6-thinking",
     }),
   );
-  assertAllowed(res);
+  assertEquals(res.code, 0);
+  assertEquals(res.stdout, "");
+  assertEquals(res.stderr, "");
+});
+
+Deno.test("agy early exit: claude-opus-5-5-high and all other agy models exit 0 silently across Bash, apply_patch, Edit, Write, and NotebookEdit (web-jam-tools#1896)", async () => {
+  const agyModels = [
+    "claude-opus-5-5-high",
+    "gemini-4-hydrogen-high",
+    "gemini-4-argon-high",
+    "gemini-4-neon-high",
+    "claude-sonnet-5-5-high",
+  ];
+
+  // Even when a Claude Code unauthorized-Opus transcript is supplied, non-empty modelName exits 0
+  // before tool-branch parsing or transcript checks run.
+  await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    for (const modelName of agyModels) {
+      const payloads: Array<{ label: string; body: Record<string, unknown> }> = [
+        {
+          label: "Bash",
+          body: bashPayload(`echo x > ${IN_REPO_FILE}`, transcript_path, { modelName }),
+        },
+        {
+          label: "apply_patch",
+          body: applyPatchPayload(`*** Add File: ${IN_REPO_FILE}\n+test\n`, transcript_path, {
+            modelName,
+          }),
+        },
+        {
+          label: "Edit",
+          body: {
+            tool_name: "Edit",
+            tool_input: { file_path: IN_REPO_FILE },
+            cwd: REPO_DIR,
+            transcript_path,
+            modelName,
+          },
+        },
+        {
+          label: "Write",
+          body: {
+            tool_name: "Write",
+            tool_input: { file_path: IN_REPO_FILE },
+            cwd: REPO_DIR,
+            transcript_path,
+            modelName,
+          },
+        },
+        {
+          label: "NotebookEdit",
+          body: {
+            tool_name: "NotebookEdit",
+            tool_input: { notebook_path: `${REPO_DIR}/nb.ipynb` },
+            cwd: REPO_DIR,
+            transcript_path,
+            modelName,
+          },
+        },
+      ];
+
+      for (const { label, body } of payloads) {
+        const res = await runHook(body);
+        assertEquals(res.code, 0, `${modelName} ${label} exit code`);
+        assertEquals(res.stdout, "", `${modelName} ${label} should produce empty stdout`);
+        assertEquals(res.stderr, "", `${modelName} ${label} should produce empty stderr`);
+      }
+    }
+
+    // Blank / whitespace modelName does not bypass Claude Code transcript checks.
+    for (const blankModel of ["", "   "]) {
+      const res = await runHook({
+        tool_name: "Edit",
+        tool_input: { file_path: IN_REPO_FILE },
+        cwd: REPO_DIR,
+        transcript_path,
+        modelName: blankModel,
+      });
+      assertEquals(res.code, 0);
+      assertDenied(res.stdout, ["opus edit ok"]);
+    }
+  });
+});
+
+Deno.test("agy shim end-to-end: claude-opus-5-5-high edit_file and run_command allow silently (web-jam-tools#1896)", async () => {
+  const shimPath = new URL("../hooks/agy-hook-shim.sh", import.meta.url).pathname;
+  const matcherB64 = btoa("Bash|Write|Edit|NotebookEdit");
+  const env = { AGY_HOOK_RECORD_PATH: "off", BASH_ENV: "" };
+
+  for (
+    const toolCall of [
+      { name: "edit_file", args: { TargetFile: IN_REPO_FILE } },
+      { name: "write_to_file", args: { TargetFile: IN_REPO_FILE } },
+      { name: "run_command", args: { CommandLine: `echo x > ${IN_REPO_FILE}`, Cwd: REPO_DIR } },
+    ]
+  ) {
+    const child = new Deno.Command("bash", {
+      args: [shimPath, "PreToolUse", matcherB64, SCRIPT_PATH],
+      env,
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "piped",
+    }).spawn();
+    const writer = child.stdin.getWriter();
+    await writer.write(
+      new TextEncoder().encode(
+        JSON.stringify({
+          conversationId: "conv-opus-agy-test",
+          modelName: "claude-opus-5-5-high",
+          toolCall,
+        }),
+      ),
+    );
+    await writer.close();
+    const { code, stdout, stderr } = await child.output();
+    assertEquals(code, 0, `${toolCall.name}: ${new TextDecoder().decode(stderr)}`);
+    assertEquals(JSON.parse(new TextDecoder().decode(stdout)), { decision: "allow" });
+  }
 });
 
 Deno.test("Bash reproduction: deno eval containing a Python heredoc writing via pathlib allows", async () => {
