@@ -2050,9 +2050,9 @@ Deno.test("Appendix D plan steps after merge case 7: - row 2: install the skill 
   assertStringIncludes(found[0].message, "row 2: no command");
 });
 
-// --- Appendix D — "A plan built from several designs" (web-jam-tools#1683, Cases 1–11, 13–14) ---
+// --- Appendix D — "A plan built from several designs" ---
 
-Deno.test("Appendix D multi-design Case 1: eight-column plan table without Design is refused as plan table not found, naming expected header", async () => {
+Deno.test("Appendix D several designs, row 1: the eight-column header is refused, naming the expected header", async () => {
   const tmpDir = await Deno.makeTempDir();
   try {
     const planFile = path.join(tmpDir, "plan.md");
@@ -2081,284 +2081,53 @@ Deno.test("Appendix D multi-design Case 1: eight-column plan table without Desig
   }
 });
 
-Deno.test("Appendix D multi-design Case 2 & 11: two --design-doc flags pass when each non-epic, non-Josh row closes on heading in its own Design doc, printing one Gate 1 approval line per design", async () => {
-  const tmpDir = await Deno.makeTempDir();
-  try {
-    const dirA = path.join(tmpDir, "Token_Savings");
-    const dirB = path.join(tmpDir, "Hooks");
-    await Deno.mkdir(dirA, { recursive: true });
-    await Deno.mkdir(dirB, { recursive: true });
-    const docA = path.join(dirA, "a-design.md");
-    const docB = path.join(dirB, "b-design.md");
-    const contentA = "# Design A\n\n## Alpha Behavior\n\nDetails A.\n";
-    const contentB = "# Design B\n\n## Beta Behavior\n\nDetails B.\n";
-    await Deno.writeTextFile(docA, contentA);
-    await Deno.writeTextFile(docB, contentB);
-    await openGate1Record(docA, contentA, { stateDir: tmpDir });
-    await approveGate1Record(docA, "Approved A.", { stateDir: tmpDir });
-    await openGate1Record(docB, contentB, { stateDir: tmpDir });
-    await approveGate1Record(docB, "Approved B.", { stateDir: tmpDir });
-
-    const planFile = path.join(tmpDir, "plan.md");
-    await Deno.writeTextFile(
-      planFile,
-      planTableDoc([
-        "| 1 | Coordinate cross-design work | Epic | Opus | High | web-jam-tools | Token_Savings/a-design.md | Unit tests cover both | all children close |",
-        '| 2 | Implement alpha feature | row 1 | Terra | High | web-jam-tools | Token_Savings/a-design.md | Unit tests assert Alpha Behavior | builds "Alpha Behavior" |',
-        '| 3 | Implement beta hook | row 1 | Terra | High | web-jam-tools | Hooks/b-design.md | Unit tests assert Beta Behavior | builds "Beta Behavior" |',
-      ]),
-    );
-
-    const logs: string[] = [];
-    const errors: string[] = [];
-    let passedRenderOpts: unknown = undefined;
-    const code = await lintPlanCli(
-      [planFile, "--design-doc", docA, "--design-doc", docB, "--state-dir", tmpDir, "--no-open"],
-      {
-        schema: TEST_SCHEMA,
-        runGh: emptyOpenIssues,
-        log: (l) => logs.push(l),
-        errorLog: (e) => errors.push(e),
-        renderDesignDocFileImpl: (_inPath, _outPath, opts) => {
-          passedRenderOpts = opts;
-        },
-      },
-    );
-    assertEquals(code, 0, errors.join("\n"));
-    assertEquals(passedRenderOpts, { isPlanPage: true });
-    const approvalLines = logs.filter((l) => l.startsWith("Gate 1 approval recorded "));
-    assertEquals(approvalLines.length, 2);
-    assertEquals(
-      approvalLines.some((l) => l.includes("a-design.md") && l.includes("Approved A.")),
-      true,
-    );
-    assertEquals(
-      approvalLines.some((l) => l.includes("b-design.md") && l.includes("Approved B.")),
-      true,
-    );
-
-    // Case 11: single --design-doc prints one Gate 1 approval line
-    const singlePlan = path.join(tmpDir, "single-plan.md");
-    await Deno.writeTextFile(
-      singlePlan,
-      planTableDoc([
-        "| 1 | Coordinate A work | Epic | Opus | High | web-jam-tools | a-design.md | Unit tests cover every validator rule | all children close |",
-        '| 2 | Implement alpha feature | row 1 | Terra | High | web-jam-tools | a-design.md | Unit tests cover every validator rule | builds "Alpha Behavior" |',
-      ]),
-    );
-    const singleLogs: string[] = [];
-    const singleCode = await lintPlanCli(
-      [singlePlan, "--design-doc", docA, "--state-dir", tmpDir, "--no-open"],
-      {
-        schema: TEST_SCHEMA,
-        runGh: emptyOpenIssues,
-        log: (l) => singleLogs.push(l),
-        errorLog: (e) => errors.push(e),
-        renderDesignDocFileImpl: () => {},
-      },
-    );
-    assertEquals(singleCode, 0);
-    assertEquals(singleLogs.filter((l) => l.startsWith("Gate 1 approval recorded ")).length, 1);
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
-});
-
-Deno.test("Appendix D multi-design Case 3: two --design-doc flags where one doc is not approved at Gate 1 fails naming the unapproved doc", async () => {
-  const tmpDir = await Deno.makeTempDir();
-  try {
-    const docA = path.join(tmpDir, "a-design.md");
-    const docB = path.join(tmpDir, "b-design.md");
-    const contentA = "# Design A\n\n## Alpha Behavior\n";
-    const contentB = "# Design B\n\n## Beta Behavior\n";
-    await Deno.writeTextFile(docA, contentA);
-    await Deno.writeTextFile(docB, contentB);
-    await openGate1Record(docA, contentA, { stateDir: tmpDir });
-    await approveGate1Record(docA, "Approved A.", { stateDir: tmpDir });
-    await openGate1Record(docB, contentB, { stateDir: tmpDir }); // open, not approved
-
-    const planFile = path.join(tmpDir, "plan.md");
-    await Deno.writeTextFile(
-      planFile,
-      planTableDoc([
-        "| 1 | Coordinate work | Epic | Opus | High | web-jam-tools | a-design.md | Unit tests cover every validator rule | all children close |",
-        '| 2 | Implement alpha | row 1 | Terra | High | web-jam-tools | a-design.md | Unit tests cover every validator rule | builds "Alpha Behavior" |',
-        '| 3 | Implement beta | row 1 | Terra | High | web-jam-tools | b-design.md | Unit tests cover every validator rule | builds "Beta Behavior" |',
-      ]),
-    );
-
-    const res = await lintPlanFile(planFile, {
-      schema: TEST_SCHEMA,
-      designDocPaths: [docA, docB],
-      stateDir: tmpDir,
-      runGh: emptyOpenIssues,
-    });
-    assertEquals(res.valid, false);
-    const gateViolations = findRule(res.violations, "gate1-approval-missing");
-    assertEquals(gateViolations.length, 1);
-    assertStringIncludes(gateViolations[0].message, "b-design.md");
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
-});
-
-Deno.test("Appendix D multi-design Case 4 & 13 & 14: Closes when headings are checked strictly per row's own Design doc, never pooled", async () => {
-  const tmpDir = await Deno.makeTempDir();
-  try {
-    const dirA = path.join(tmpDir, "Token_Savings");
-    const dirB = path.join(tmpDir, "Hooks");
-    await Deno.mkdir(dirA, { recursive: true });
-    await Deno.mkdir(dirB, { recursive: true });
-    const docA = path.join(dirA, "a-design.md");
-    const docB = path.join(dirB, "b-design.md");
-    const contentA = "# Design A\n\n## The command\n\n## The rule\n";
-    const contentB = "# Design B\n\n## Hook Setup\n";
-    await Deno.writeTextFile(docA, contentA);
-    await Deno.writeTextFile(docB, contentB);
-    await openGate1Record(docA, contentA, { stateDir: tmpDir });
-    await approveGate1Record(docA, "Approved A.", { stateDir: tmpDir });
-    await openGate1Record(docB, contentB, { stateDir: tmpDir });
-    await approveGate1Record(docB, "Approved B.", { stateDir: tmpDir });
-
-    // Case 4: Row 2 points to Hooks/b-design.md but names "The command" (only in doc A)
-    const planMismatch = path.join(tmpDir, "plan-mismatch.md");
-    await Deno.writeTextFile(
-      planMismatch,
-      planTableDoc([
-        '| 1 | Implement command | web-jam-tools#1 "Epic" | Terra | High | web-jam-tools | Token_Savings/a-design.md | Unit tests cover every validator rule | builds "The command" |',
-        '| 2 | Hook uses wrong heading | web-jam-tools#1 "Epic" | Terra | High | web-jam-tools | Hooks/b-design.md | Unit tests cover every validator rule | builds "The command" |',
-      ]),
-    );
-    const res4 = await lintPlanFile(planMismatch, {
-      schema: TEST_SCHEMA,
-      designDocPaths: [docA, docB],
-      stateDir: tmpDir,
-      runGh: emptyOpenIssues,
-    });
-    assertEquals(res4.valid, false);
-    const unknown4 = findRule(res4.violations, "closes-when-unknown-heading");
-    assertEquals(unknown4.length, 1);
-    assertStringIncludes(unknown4[0].message, "Row 2");
-    assertStringIncludes(unknown4[0].message, "The command");
-    assertStringIncludes(unknown4[0].message, "b-design.md");
-
-    // Case 13: Row points to doc B naming shared heading "The rule" when doc B does not have it
-    const plan13 = path.join(tmpDir, "plan-13.md");
-    await Deno.writeTextFile(
-      plan13,
-      planTableDoc([
-        '| 1 | Implement rule A | web-jam-tools#1 "Epic" | Terra | High | web-jam-tools | Token_Savings/a-design.md | Unit tests cover every validator rule | builds "The command" |',
-        '| 2 | Hook claims missing rule | web-jam-tools#1 "Epic" | Terra | High | web-jam-tools | Hooks/b-design.md | Unit tests cover every validator rule | builds "The rule" |',
-      ]),
-    );
-    const res13 = await lintPlanFile(plan13, {
-      schema: TEST_SCHEMA,
-      designDocPaths: [docA, docB],
-      stateDir: tmpDir,
-      runGh: emptyOpenIssues,
-    });
-    assertEquals(res13.valid, false);
-    assertEquals(findRule(res13.violations, "closes-when-unknown-heading").length, 1);
-
-    // Case 14: Once doc B also has "## The rule", it passes
-    const contentBWithRule = "# Design B\n\n## Hook Setup\n\n## The rule\n";
-    await Deno.writeTextFile(docB, contentBWithRule);
-    await openGate1Record(docB, contentBWithRule, { stateDir: tmpDir });
-    await approveGate1Record(docB, "Approved B v2.", { stateDir: tmpDir });
-    const res14 = await lintPlanFile(plan13, {
-      schema: TEST_SCHEMA,
-      designDocPaths: [docA, docB],
-      stateDir: tmpDir,
-      runGh: emptyOpenIssues,
-    });
-    assertEquals(res14.valid, true, JSON.stringify(res14.violations));
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
-});
-
-Deno.test("Appendix D multi-design Cases 5–10: Design cell validation rules", () => {
-  // Case 5: Epic row with Design = approved doc and Closes when = when its children close -> passes
-  const doc5 = planTableDoc([
-    "| 1 | Coordinate delivery | Epic | Opus | High | web-jam-tools | Token_Savings/a-design.md | Unit tests cover every validator rule | when its children close |",
-    "| 2 | Implement work | row 1 | Terra | High | web-jam-tools | Token_Savings/a-design.md | Unit tests cover every validator rule | `deno task test` passes |",
-  ]);
-  assertEquals(
-    validate(doc5, { designDocPaths: ["/tmp/Token_Savings/a-design.md"] }),
-    [],
-  );
-
-  // Case 6: Epic row whose Design is blank -> fail
-  const doc6 = planTableDoc([
-    "| 1 | Coordinate delivery | Epic | Opus | High | web-jam-tools | | Unit tests cover every validator rule | when its children close |",
-    "| 2 | Implement work | row 1 | Terra | High | web-jam-tools | a-design.md | Unit tests cover every validator rule | `deno task test` passes |",
-  ]);
-  for (const blankCell of ["", "**"]) {
-    const plan = doc6.replace("| web-jam-tools | |", `| web-jam-tools | ${blankCell} |`);
-    const v6 = findRule(
-      validate(plan, { designDocPaths: ["/tmp/a-design.md"] }),
+Deno.test("Appendix D several designs, row 6: a blank Design cell is refused, naming the row", () => {
+  for (const design of ["", "**"]) {
+    const plan = planTableDoc([
+      `| 1 | Coordinate delivery | Epic | Opus | High | web-jam-tools | ${design} | Unit tests cover every validator rule | All child sub-issues close |`,
+    ]);
+    const violations = findRule(
+      validate(plan, { designDocPaths: ["/tmp/Ops/a-design.md"] }),
       "cell-missing",
     );
-    assertEquals(v6.length, 1);
-    assertEquals(v6[0].column, "Design");
+    assertEquals(violations.length, 1);
+    assertEquals(violations[0].column, "Design");
+    assertStringIncludes(violations[0].message, "Row 1");
   }
+});
 
-  // Case 7: Row whose Design names a design not passed with --design-doc -> fail, naming row and design
-  const doc7 = planTableDoc([
-    "| 1 | Implement work | web-jam-tools#1 | Terra | High | web-jam-tools | unlisted-design.md | Unit tests cover every validator rule | `deno task test` passes |",
+Deno.test("Appendix D several designs, row 7: two paths in one Design cell are refused", () => {
+  const plan = planTableDoc([
+    "| 1 | Implement work | web-jam-tools#1 | Terra | High | web-jam-tools | Ops/a-design.md, Hooks/b-design.md | Unit tests cover every validator rule | `deno task test` passes |",
   ]);
-  const v7 = findRule(
-    validate(doc7, { designDocPaths: ["/tmp/a-design.md"] }),
-    "design-not-provided",
-  );
-  assertEquals(v7.length, 1);
-  assertStringIncludes(v7[0].message, "Row 1");
-  assertStringIncludes(v7[0].message, "unlisted-design.md");
-
-  // Case 8: Row whose Design lists two designs -> fail, citing one design per row
-  const doc8 = planTableDoc([
-    "| 1 | Implement work | web-jam-tools#1 | Terra | High | web-jam-tools | a-design.md, b-design.md | Unit tests cover every validator rule | `deno task test` passes |",
-  ]);
-  const v8 = findRule(
-    validate(doc8, { designDocPaths: ["/tmp/a-design.md", "/tmp/b-design.md"] }),
+  const violations = findRule(
+    validate(plan, { designDocPaths: ["/tmp/Ops/a-design.md", "/tmp/Hooks/b-design.md"] }),
     "design-multiple",
   );
-  assertEquals(v8.length, 1);
-  assertStringIncludes(v8[0].message, "Row 1");
-  assertStringIncludes(v8[0].message, "one design per row");
+  assertEquals(violations.length, 1);
+  assertStringIncludes(violations[0].message, "Row 1");
+  assertStringIncludes(violations[0].message, "one design per row");
+});
 
-  // Case 9: Two --design-doc flags passed; no row uses the second -> fail, naming unused --design-doc
-  const doc9 = planTableDoc([
-    "| 1 | Implement work | web-jam-tools#1 | Terra | High | web-jam-tools | a-design.md | Unit tests cover every validator rule | `deno task test` passes |",
-  ]);
-  const v9 = findRule(
-    validate(doc9, { designDocPaths: ["/tmp/a-design.md", "/tmp/unused-design.md"] }),
-    "unused-design-doc",
-  );
-  assertEquals(v9.length, 1);
-  assertStringIncludes(v9[0].message, "unused-design.md");
-
-  // Case 10: Ambiguous basename matching two --design-doc flags in different folders -> fail, naming row and both docs
-  const doc10 = planTableDoc([
-    "| 1 | Coordinate work | Epic | Opus | High | web-jam-tools | Token_Savings/x-design.md | Unit tests cover every validator rule | all children close |",
+Deno.test("A Design basename shared by two supplied designs is ambiguous", () => {
+  const plan = planTableDoc([
+    "| 1 | Coordinate work | Epic | Opus | High | web-jam-tools | Ops/x-design.md | Unit tests cover every validator rule | all children close |",
     "| 2 | Implement shared name | row 1 | Terra | High | web-jam-tools | x-design.md | Unit tests cover every validator rule | `deno task test` passes |",
     "| 3 | Implement hooks part | row 1 | Terra | High | web-jam-tools | Hooks/x-design.md | Unit tests cover every validator rule | `deno task test` passes |",
   ]);
-  const v10 = findRule(
-    validate(doc10, {
-      designDocPaths: ["/tmp/Token_Savings/x-design.md", "/tmp/Hooks/x-design.md"],
+  const violations = findRule(
+    validate(plan, {
+      designDocPaths: ["/tmp/Ops/x-design.md", "/tmp/Hooks/x-design.md"],
     }),
     "design-ambiguous",
   );
-  assertEquals(v10.length, 1);
-  assertStringIncludes(v10[0].message, "Row 2");
-  assertStringIncludes(v10[0].message, "Token_Savings/x-design.md");
-  assertStringIncludes(v10[0].message, "Hooks/x-design.md");
+  assertEquals(violations.length, 1);
+  assertStringIncludes(violations[0].message, "Row 2");
+  assertStringIncludes(violations[0].message, "Ops/x-design.md");
+  assertStringIncludes(violations[0].message, "Hooks/x-design.md");
 });
 
-// --- Appendix D — "A plan built from several designs": the literal fixture, in design-row order ---
-// `<R>/Ops/a-design.md` has `### The command` and `## Both surfaces`; `<R>/Hooks/b-design.md` has
-// `### The private-folder guard` and `## Both surfaces`; each has an approved Gate 1 record.
+// The Appendix D fixture uses two designs with one shared heading.
 
 async function multiDesignRoot(): Promise<
   { root: string; docA: string; docB: string; contentA: string; contentB: string }
@@ -2375,13 +2144,16 @@ async function multiDesignRoot(): Promise<
   return { root, docA, docB, contentA, contentB };
 }
 
-async function approveBoth(
+async function recordDesignApprovals(
   r: { root: string; docA: string; docB: string; contentA: string; contentB: string },
+  approveSecond = true,
 ) {
   await openGate1Record(r.docA, r.contentA, { stateDir: r.root });
   await approveGate1Record(r.docA, "Approved A.", { stateDir: r.root });
   await openGate1Record(r.docB, r.contentB, { stateDir: r.root });
-  await approveGate1Record(r.docB, "Approved B.", { stateDir: r.root });
+  if (approveSecond) {
+    await approveGate1Record(r.docB, "Approved B.", { stateDir: r.root });
+  }
 }
 
 const MD_EPIC =
@@ -2395,10 +2167,10 @@ function mdRow(
   return `| ${n} | ${title} | row 1 | Terra | High | web-jam-tools | ${design} | Unit tests cover every validator rule | ${closes} |`;
 }
 
-Deno.test("Appendix D several designs, design rows 2, 3, 5 and 14: each row passes against its own design, a heading both designs have passes in the row's own, and an epic row closes on its children", async () => {
+Deno.test("Appendix D several designs, rows 2, 3, 5, 12 and 14: each row passes against its own design and the CLI prints both Gate 1 approvals", async () => {
   const r = await multiDesignRoot();
   try {
-    await approveBoth(r);
+    await recordDesignApprovals(r);
     const planFile = path.join(r.root, "plan.md");
     await Deno.writeTextFile(
       planFile,
@@ -2419,22 +2191,43 @@ Deno.test("Appendix D several designs, design rows 2, 3, 5 and 14: each row pass
         ),
       ]),
     );
-    const res = await lintPlanFile(planFile, {
-      schema: TEST_SCHEMA,
-      designDocPaths: [r.docA, r.docB],
-      stateDir: r.root,
-      runGh: emptyOpenIssues,
-    });
-    assertEquals(res.valid, true, JSON.stringify(res.violations));
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const code = await lintPlanCli(
+      [
+        planFile,
+        "--design-doc",
+        r.docA,
+        "--design-doc",
+        r.docB,
+        "--state-dir",
+        r.root,
+        "--no-open",
+      ],
+      {
+        schema: TEST_SCHEMA,
+        runGh: emptyOpenIssues,
+        log: (line) => logs.push(line),
+        errorLog: (line) => errors.push(line),
+        renderDesignDocFileImpl: () => {},
+      },
+    );
+    assertEquals(code, 0, errors.join("\n"));
+    const approvals = logs.filter((line) => line.startsWith("Gate 1 approval recorded "));
+    assertEquals(approvals.length, 2);
+    assertStringIncludes(approvals[0], "Ops/a-design.md");
+    assertStringIncludes(approvals[0], '"Approved A."');
+    assertStringIncludes(approvals[1], "Hooks/b-design.md");
+    assertStringIncludes(approvals[1], '"Approved B."');
   } finally {
     await Deno.remove(r.root, { recursive: true });
   }
 });
 
-Deno.test('Appendix D several designs, design row 4: row 2 on Hooks/b-design.md closing on "The command" fails, naming row 2, The command and Hooks/b-design.md', async () => {
+Deno.test("Appendix D several designs, row 4: a heading from another design is refused, naming the row, heading and design", async () => {
   const r = await multiDesignRoot();
   try {
-    await approveBoth(r);
+    await recordDesignApprovals(r);
     const planFile = path.join(r.root, "plan.md");
     await Deno.writeTextFile(
       planFile,
@@ -2465,10 +2258,10 @@ Deno.test('Appendix D several designs, design row 4: row 2 on Hooks/b-design.md 
   }
 });
 
-Deno.test("Appendix D several designs, design rows 8 and 9: a Design cell Ops/c-design.md not given with --design-doc fails naming the row and path, and a --design-doc named by no row fails naming it", async () => {
+Deno.test("Appendix D several designs, rows 8 and 9: an unlisted cell path and an unused flag path are both refused", async () => {
   const r = await multiDesignRoot();
   try {
-    await approveBoth(r);
+    await recordDesignApprovals(r);
     const planFile = path.join(r.root, "plan.md");
     await Deno.writeTextFile(
       planFile,
@@ -2496,44 +2289,53 @@ Deno.test("Appendix D several designs, design rows 8 and 9: a Design cell Ops/c-
   }
 });
 
-Deno.test("Appendix D several designs, design row 11: a design changed since its Gate 1 approval is refused, naming Hooks/b-design.md", async () => {
-  const r = await multiDesignRoot();
-  try {
-    await approveBoth(r);
-    await Deno.writeTextFile(r.docB, r.contentB + "\n## Added after approval\n");
-    const planFile = path.join(r.root, "plan.md");
-    await Deno.writeTextFile(
-      planFile,
-      planTableDoc([
-        MD_EPIC,
-        mdRow(2, "Add the command parser", "Ops/a-design.md", 'builds "The command" as written'),
-        mdRow(
-          3,
-          "Block the private folder reads",
-          "Hooks/b-design.md",
-          'builds "The private-folder guard" as written',
-        ),
-      ]),
-    );
-    const res = await lintPlanFile(planFile, {
-      schema: TEST_SCHEMA,
-      designDocPaths: [r.docA, r.docB],
-      stateDir: r.root,
-      runGh: emptyOpenIssues,
-    });
-    assertEquals(res.valid, false);
-    const v = findRule(res.violations, "gate1-approval-missing");
-    assertEquals(v.length, 1);
-    assertStringIncludes(v[0].message, "Hooks/b-design.md");
-  } finally {
-    await Deno.remove(r.root, { recursive: true });
-  }
-});
+for (
+  const gate of [
+    { row: 10, description: "still open at Gate 1", changed: false },
+    { row: 11, description: "changed after Gate 1 approval", changed: true },
+  ]
+) {
+  Deno.test(`Appendix D several designs, row ${gate.row}: a design ${gate.description} is refused, naming the design`, async () => {
+    const r = await multiDesignRoot();
+    try {
+      await recordDesignApprovals(r, gate.changed);
+      if (gate.changed) {
+        await Deno.writeTextFile(r.docB, r.contentB + "\n## Added after approval\n");
+      }
+      const planFile = path.join(r.root, "plan.md");
+      await Deno.writeTextFile(
+        planFile,
+        planTableDoc([
+          MD_EPIC,
+          mdRow(2, "Add the command parser", "Ops/a-design.md", 'builds "The command" as written'),
+          mdRow(
+            3,
+            "Block the private folder reads",
+            "Hooks/b-design.md",
+            'builds "The private-folder guard" as written',
+          ),
+        ]),
+      );
+      const res = await lintPlanFile(planFile, {
+        schema: TEST_SCHEMA,
+        designDocPaths: [r.docA, r.docB],
+        stateDir: r.root,
+        runGh: emptyOpenIssues,
+      });
+      assertEquals(res.valid, false);
+      const v = findRule(res.violations, "gate1-approval-missing");
+      assertEquals(v.length, 1);
+      assertStringIncludes(v[0].message, "Hooks/b-design.md");
+    } finally {
+      await Deno.remove(r.root, { recursive: true });
+    }
+  });
+}
 
-Deno.test("Appendix D several designs, design row 13: one 11-row plan, Ops/a-design.md on rows 1-7 and Hooks/b-design.md on rows 8-11, is one successful lint invocation, one HTML page, one plan table with total 11 and every row visible at first open in filing order", async () => {
+Deno.test("Appendix D several designs, row 13: lint renders one plan table with all 11 rows visible in filing order and the total above it", async () => {
   const r = await multiDesignRoot();
   try {
-    await approveBoth(r);
+    await recordDesignApprovals(r);
     const aTitles = [
       "Add the command parser",
       "Wire the retry loop",
@@ -2561,7 +2363,6 @@ Deno.test("Appendix D several designs, design row 13: one 11-row plan, Ops/a-des
     const planFile = path.join(r.root, "plan.md");
     await Deno.writeTextFile(planFile, planTableDoc(rows));
 
-    const logs: string[] = [];
     const errors: string[] = [];
     let renders = 0;
     const { renderDesignDocFile } = await import("../scripts/render_design_doc.ts");
@@ -2579,7 +2380,7 @@ Deno.test("Appendix D several designs, design row 13: one 11-row plan, Ops/a-des
       {
         schema: TEST_SCHEMA,
         runGh: emptyOpenIssues,
-        log: (l) => logs.push(l),
+        log: () => {},
         errorLog: (e) => errors.push(e),
         renderDesignDocFileImpl: (i, o, opts) => {
           renders++;
@@ -2591,10 +2392,17 @@ Deno.test("Appendix D several designs, design row 13: one 11-row plan, Ops/a-des
     assertEquals(renders, 1);
     const html = await Deno.readTextFile(path.join(r.root, "plan.html"));
     assertEquals(html.match(/<table[ >]/g)?.length, 1);
-    assertStringIncludes(html, '<p class="plan-table-total">Total rows: 11</p>');
+    const total = '<p class="plan-table-total">Total rows: 11</p>';
+    assertStringIncludes(html, total);
+    assertEquals(html.indexOf(total) < html.indexOf("<table"), true);
     assertEquals(html.match(/data-default-size="all"/g)?.length, 1);
-    assertStringIncludes(html, 'var initialOptionValue = defaultSizeAttr === "all"');
-    const order = [...aTitles, ...bTitles].map((t) => html.indexOf(t));
+    assertStringIncludes(
+      html,
+      'var initialOptionValue = defaultSizeAttr === "all" ? "all" : String(DEFAULT_PAGE_SIZE);',
+    );
+    const order = ["Coordinate the shared work", ...aTitles, ...bTitles].map((t) =>
+      html.indexOf(t)
+    );
     assertEquals(order.every((n) => n > 0), true);
     assertEquals([...order].sort((x, y) => x - y), order);
   } finally {

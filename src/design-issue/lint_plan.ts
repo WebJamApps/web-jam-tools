@@ -1848,7 +1848,9 @@ export async function runLintPlanCli(
     log(`Usage: deno task design:lint-plan <plan.md> --design-doc <doc.md> [options]
 
 Validates the Gate 2 plan table's cell values in a design document:
-  - verifies Gate 1 approval record on disk for --design-doc <doc.md>
+  - verifies the Gate 1 approval record on disk for each --design-doc
+  - each Design cell names one supplied design and each supplied design is used
+  - required Closes when headings exist in the design named by that row
   - missing values (empty, whitespace-only, "-"/"—"/"N/A")
   - unknown model tiers (against skills/fix-labels/labels.yaml)
   - unknown repos (against ACTIVE_REPOS in src/shared/repos.ts)
@@ -1875,7 +1877,7 @@ Arguments:
   <plan.md>               Path to markdown file containing the plan table
 
 Options:
-  --design-doc <path>     Canonical design document path to verify Gate 1 approval
+  --design-doc <path>     Repeat once per design named in the Design column
   --doc <path>            Explicit plan document path
   --display <display>     X11 display to open browser on (defaults to $DISPLAY or :0)
   --no-open               Skip opening <plan>.html in Google Chrome

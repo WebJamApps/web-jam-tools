@@ -2300,52 +2300,9 @@ Deno.test("Appendix D plan steps after merge case 9: row 2 holding both commands
   }
 });
 
-// --- Appendix D — "A plan built from several designs" (web-jam-tools#1683, Cases 15–18) ---
+// --- Appendix D — "A plan built from several designs" ---
 
-Deno.test("Appendix D multi-design Case 15: plan.json items pointing to two designs file when each points at a heading in its own design", async () => {
-  const tmpDir = await Deno.makeTempDir();
-  try {
-    const docA = path.join(tmpDir, "a-design.md");
-    const docB = path.join(tmpDir, "b-design.md");
-    await Deno.writeTextFile(docA, "# Design A\n\n## Alpha Behavior\n\nDetails A.\n");
-    await Deno.writeTextFile(docB, "# Design B\n\n## Beta Behavior\n\nDetails B.\n");
-
-    const { result } = await fileParentFixture({
-      repo: "web-jam-tools",
-      designDoc: docA,
-      epic: {
-        title: "Coordinate multi-design work",
-        type: "Epic",
-        labels: ["Opus"],
-        escalationReason: "Container epic",
-        body:
-          `## What this builds\n\nEpic (${docA})\n\n## Acceptance criteria\n\n- [ ] Closes when all children close\n`,
-      },
-      children: [
-        {
-          title: "Implement alpha behavior",
-          designDoc: docA,
-          labels: ["Terra"],
-          body:
-            `## What this builds\n\nSee ${docA}.\n\n## Acceptance criteria\n\n- [ ] Builds "Alpha Behavior"\n`,
-        },
-        {
-          title: "Implement beta behavior",
-          design_doc: docB,
-          labels: ["Terra"],
-          body:
-            `## What this builds\n\nSee ${docB}.\n\n## Acceptance criteria\n\n- [ ] Builds "Beta Behavior"\n`,
-        },
-      ],
-    });
-    assertEquals(result.totalIssuesFiled, 3);
-    assertEquals(result.children.length, 2);
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
-});
-
-Deno.test("Appendix D multi-design Case 16: plan.json item missing designDoc with no top-level fallback is refused before filing, naming the item", async () => {
+Deno.test("Missing item designDoc without a plan fallback is refused, naming the item", async () => {
   const tmpDir = await Deno.makeTempDir();
   try {
     const docA = path.join(tmpDir, "a-design.md");
@@ -2362,7 +2319,7 @@ Deno.test("Appendix D multi-design Case 16: plan.json item missing designDoc wit
             tier: "Terra",
             designDoc: docA,
             body:
-              `## What this builds\n\nAlpha\n\n## Acceptance criteria\n\n- [ ] Builds "Alpha Behavior"\n`,
+              `## What this builds\n\nSee ${docA}.\n\n## Acceptance criteria\n\n- [ ] Builds "Alpha Behavior"\n`,
           },
           {
             title: "Second item missing designDoc",
@@ -2393,102 +2350,6 @@ Deno.test("Appendix D multi-design Case 16: plan.json item missing designDoc wit
   }
 });
 
-Deno.test("Appendix D multi-design Case 17: plan.json item with designDoc B whose body points at A or criterion names heading only in A is refused", async () => {
-  const tmpDir = await Deno.makeTempDir();
-  try {
-    const docA = path.join(tmpDir, "a-design.md");
-    const docB = path.join(tmpDir, "b-design.md");
-    await Deno.writeTextFile(docA, "# Design A\n\n## Alpha Heading\n");
-    await Deno.writeTextFile(docB, "# Design B\n\n## Beta Heading\n");
-
-    // 17a: body names docA while item.designDoc is docB
-    await assertRejects(
-      () =>
-        fileParentFixture({
-          repo: "web-jam-tools",
-          children: [
-            {
-              title: "Mismatched pointer item",
-              parent: 1,
-              designDoc: docB,
-              labels: ["Terra"],
-              body:
-                `## What this builds\n\nDesign: ${docA}\n\n## Acceptance criteria\n\n- [ ] Builds "Beta Heading"\n`,
-            },
-          ],
-        }),
-      Error,
-      "differs from its designDoc",
-    );
-
-    // 17b: criterion names heading only in docA while item.designDoc is docB
-    const err17b = await assertRejects(
-      () =>
-        fileParentFixture({
-          repo: "web-jam-tools",
-          children: [
-            {
-              title: "Wrong heading item",
-              parent: 1,
-              designDoc: docB,
-              labels: ["Terra"],
-              body:
-                `## What this builds\n\nDesign: ${docB}\n\n## Acceptance criteria\n\n- [ ] Builds "Alpha Heading"\n`,
-            },
-          ],
-        }),
-      Error,
-      "Alpha Heading",
-    );
-    assertStringIncludes(err17b.message, "Wrong heading item");
-    assertStringIncludes(err17b.message, "b-design.md");
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
-});
-
-Deno.test("Appendix D multi-design Case 18: unreadable item.designDoc refuses before filing and names the unreadable path", async () => {
-  const tmpDir = await Deno.makeTempDir();
-  try {
-    const docA = path.join(tmpDir, "a-design.md");
-    const missingDoc = path.join(tmpDir, "does-not-exist-design.md");
-    await Deno.writeTextFile(docA, "# Design A\n\n## Alpha Heading\n");
-
-    const err = await assertRejects(
-      () =>
-        fileParentFixture({
-          repo: "web-jam-tools",
-          designDoc: docA,
-          epic: {
-            title: "Coordinate multi-design epic",
-            type: "Epic",
-            labels: ["Opus"],
-            escalationReason: "Container epic",
-            body:
-              "## What this builds\n\nEpic\n\n## Acceptance criteria\n\n- [ ] Closes when children close\n",
-          },
-          children: [
-            {
-              title: "Item with unreadable design",
-              designDoc: missingDoc,
-              labels: ["Terra"],
-              body:
-                "## What this builds\n\nWork\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
-            },
-          ],
-        }),
-      Error,
-      "cannot be read",
-    );
-    assertStringIncludes(err.message, "Item with unreadable design");
-    assertStringIncludes(err.message, missingDoc);
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
-});
-
-// --- Appendix D "A plan built from several designs": refusals happen before the first issue is filed ---
-
 async function refusedBeforeFiling(plan: Record<string, unknown>): Promise<{
   error: Error;
   createCalls: number;
@@ -2515,17 +2376,48 @@ async function refusedBeforeFiling(plan: Record<string, unknown>): Promise<{
 
 async function multiDesignFiles(): Promise<{ root: string; docA: string; docB: string }> {
   const root = await Deno.makeTempDir();
-  const docA = path.join(root, "a-design.md");
-  const docB = path.join(root, "b-design.md");
+  await Deno.mkdir(path.join(root, "Ops"));
+  await Deno.mkdir(path.join(root, "Hooks"));
+  const docA = path.join(root, "Ops", "a-design.md");
+  const docB = path.join(root, "Hooks", "b-design.md");
   await Deno.writeTextFile(docA, "# A\n\n### The command\n\n## Both surfaces\n");
   await Deno.writeTextFile(docB, "# B\n\n### The private-folder guard\n\n## Both surfaces\n");
   return { root, docA, docB };
 }
 
-const criteria = (c: string) =>
-  `## What this builds\n\nWork.\n\n## Acceptance criteria\n\n- [ ] ${c}\n`;
+const designBody = (design: string, criterion: string) =>
+  `## What this builds\n\nSee ${design}.\n\n## Acceptance criteria\n\n- [ ] ${criterion}\n`;
 
-Deno.test("Appendix D several designs, file-plan row 16: an item on b-design.md whose criterion names a heading only a-design.md has is refused before any issue is filed, naming the item, the line and the path", async () => {
+Deno.test("Appendix D several designs, row 15: two items file against their respective designs", async () => {
+  const { root, docA, docB } = await multiDesignFiles();
+  try {
+    for (const key of ["designDoc", "design_doc"]) {
+      const { result } = await fileParentFixture({
+        repo: "web-jam-tools",
+        designDoc: docA,
+        children: [
+          {
+            title: "Add the command parser",
+            parent: 1,
+            designDoc: docA,
+            body: designBody(docA, 'builds "The command" as written'),
+          },
+          {
+            title: "Guard the private folder",
+            parent: 1,
+            [key]: docB,
+            body: designBody(docB, 'builds "The private-folder guard" as written'),
+          },
+        ],
+      });
+      assertEquals(result.totalIssuesFiled, 2, key);
+    }
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("Appendix D several designs, row 16: a heading from another design is refused before filing, naming the item, line and path", async () => {
   const { root, docA, docB } = await multiDesignFiles();
   try {
     const { error, createCalls } = await refusedBeforeFiling({
@@ -2536,7 +2428,7 @@ Deno.test("Appendix D several designs, file-plan row 16: an item on b-design.md 
         parent: 1,
         tier: "Terra",
         designDoc: docB,
-        body: `${criteria('builds "The command" as written').replace("Work.", `See ${docB}.`)}`,
+        body: designBody(docB, 'builds "The command" as written'),
       }],
     });
     assertEquals(createCalls, 0);
@@ -2549,7 +2441,7 @@ Deno.test("Appendix D several designs, file-plan row 16: an item on b-design.md 
   }
 });
 
-Deno.test("Appendix D several designs, file-plan row 17: an item with no designDoc is read against the plan's designDoc", async () => {
+Deno.test("Appendix D several designs, row 17: an item with no designDoc inherits the plan design", async () => {
   const { root, docA } = await multiDesignFiles();
   try {
     const { result } = await fileParentFixture({
@@ -2566,7 +2458,7 @@ Deno.test("Appendix D several designs, file-plan row 17: an item with no designD
       children: [{
         title: "Add the command parser",
         labels: ["Terra"],
-        body: criteria('builds "The command" as written').replace("Work.", `See ${docA}.`),
+        body: designBody(docA, 'builds "The command" as written'),
       }],
     });
     assertEquals(result.totalIssuesFiled, 2);
@@ -2579,10 +2471,7 @@ Deno.test("Appendix D several designs, file-plan row 17: an item with no designD
         title: "Add the command parser",
         parent: 1,
         tier: "Terra",
-        body: criteria('builds "The private-folder guard" as written').replace(
-          "Work.",
-          `See ${docA}.`,
-        ),
+        body: designBody(docA, 'builds "The private-folder guard" as written'),
       }],
     });
     assertEquals(createCalls, 0);
@@ -2593,7 +2482,7 @@ Deno.test("Appendix D several designs, file-plan row 17: an item with no designD
   }
 });
 
-Deno.test("Appendix D several designs, file-plan row 18: a mismatched body design is refused before any issue is filed, with explicit and inherited designDoc", async () => {
+Deno.test("Appendix D several designs, row 18: an explicit or inherited design mismatch is refused before filing", async () => {
   const { root, docA, docB } = await multiDesignFiles();
   try {
     for (const assignment of [{ plan: docA, item: docB }, { plan: docB, item: undefined }]) {
@@ -2605,10 +2494,7 @@ Deno.test("Appendix D several designs, file-plan row 18: a mismatched body desig
           parent: 1,
           tier: "Terra",
           designDoc: assignment.item,
-          body: criteria('builds "The private-folder guard" as written').replace(
-            "Work.",
-            `See ${docA}.`,
-          ),
+          body: designBody(docA, 'builds "The private-folder guard" as written'),
         }],
       });
       assertEquals(createCalls, 0);
@@ -2621,9 +2507,9 @@ Deno.test("Appendix D several designs, file-plan row 18: a mismatched body desig
   }
 });
 
-Deno.test("Appendix D several designs, file-plan row 19: an item whose designDoc cannot be read is refused before any issue is filed, naming the path", async () => {
+Deno.test("Appendix D several designs, row 19: an unreadable item design is refused before filing, naming the path", async () => {
   const { root, docA } = await multiDesignFiles();
-  const gone = path.join(root, "gone-design.md");
+  const gone = path.join(root, "Hooks", "gone-design.md");
   try {
     const { error, createCalls } = await refusedBeforeFiling({
       repo: "web-jam-tools",
@@ -2633,11 +2519,12 @@ Deno.test("Appendix D several designs, file-plan row 19: an item whose designDoc
         parent: 1,
         tier: "Terra",
         designDoc: gone,
-        body: criteria("`deno task test` passes"),
+        body: designBody(gone, "`deno task test` passes"),
       }],
     });
     assertEquals(createCalls, 0);
     assertStringIncludes(error.message, "cannot be read");
+    assertStringIncludes(error.message, "Guard the private folder");
     assertStringIncludes(error.message, gone);
   } finally {
     await Deno.remove(root, { recursive: true });
