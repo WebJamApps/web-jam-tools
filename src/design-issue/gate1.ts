@@ -9,7 +9,13 @@ import type { CommandRunner } from "../shared/repos.ts";
 import { renderDesignDoc } from "../../scripts/render_design_doc.ts";
 import { lintDesignDoc, presentingDay, stripCellDecoration, toLocalIsoDate } from "./lint_doc.ts";
 import { verifyCitations, type VerifyCitationsResult } from "./verify_citations.ts";
-import { loadGate1Record, openGate1Record, parsePremisesTable } from "./gate1_record.ts";
+import {
+  loadGate1Record,
+  openGate1Record,
+  type OtherDesignSweepResult,
+  parsePremisesTable,
+} from "./gate1_record.ts";
+import { hasDecisionRowDated, scanOtherDesignDocs } from "./sweep_other_designs.ts";
 
 export interface Gate1Options {
   docPath: string;
@@ -29,6 +35,10 @@ export interface Gate1Options {
   stateDir?: string;
   openGate1RecordImpl?: typeof openGate1Record;
   nowImpl?: () => Date;
+  /** Terms changed by rulings in this run (`--changed "<term>"`). */
+  changedTerms?: string[];
+  /** Optional reader override for cross-design sweep tests. */
+  readOtherDesignDocImpl?: (filePath: string) => Promise<string>;
 }
 
 export interface Gate1Result {
@@ -39,6 +49,7 @@ export interface Gate1Result {
   opened: boolean;
   recordPath?: string;
   premiseRows: { fresh: number; carried: number; sourceDate?: string; source?: string };
+  otherDesignSweep?: OtherDesignSweepResult;
 }
 
 /**
@@ -279,9 +290,72 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
     }
   }
 
+  // Checking the other designs ("Checking the other designs" in design-issue-file-issue-design):
+  // when the decision record holds a row dated the presenting day, at least one --changed term is
+  // required; when --changed terms are supplied, every other *-design*.md under the root must
+  // pass (revised today or noted via design:sweep-note), and unreadable designs block until noted.
+  const rawChangedTerms = options.changedTerms ?? [];
+  for (const term of rawChangedTerms) {
+    if (!term || term.trim() === "") {
+      throw new Error("Refusing design:gate1: --changed requires a non-empty search term.");
+    }
+  }
+  const changedTerms = Array.from(new Set(rawChangedTerms.map((t) => t.trim())));
+  const today = presentingDay(now);
+  if (changedTerms.length === 0 && hasDecisionRowDated(markdownContent, today)) {
+    throw new Error(
+      `Design document at ${absDocPath} has a decision record row dated ${today} — refusing Gate 1 without at least one --changed "<term>" argument.`,
+    );
+  }
+
+  let otherDesignSweep: OtherDesignSweepResult | undefined;
+  if (changedTerms.length > 0) {
+    const rootDir = resolveDesignDocsRoot(options.dropboxDir);
+    const scan = await scanOtherDesignDocs({
+      docPath: absDocPath,
+      changedTerms,
+      rootDir,
+      todayIso: today,
+      sweepNotes: record?.sweepNotes ?? [],
+      readTextFileImpl: options.readOtherDesignDocImpl,
+    });
+
+    if (scan.unsettled.length > 0 || scan.unchecked.length > 0) {
+      const details: string[] = [];
+      for (const hit of scan.unsettled) {
+        details.push(
+          `  - ${hit.otherPath} (lines ${hit.lines.join(", ")}; terms: ${
+            hit.terms.map((t) => `"${t}"`).join(", ")
+          })`,
+        );
+      }
+      for (const item of scan.unchecked) {
+        details.push(
+          `  - ${item.otherPath} (unchecked — cannot be read: ${item.error})`,
+        );
+      }
+      throw new Error(
+        `Refusing Gate 1: ${
+          scan.unsettled.length + scan.unchecked.length
+        } other design document(s) remain unsettled for changed term(s) ${
+          changedTerms.map((t) => `"${t}"`).join(", ")
+        }. Revise each affected design with a revision row dated ${today}, or record a note with deno task design:sweep-note ${absDocPath} <other.md> --reason "<why>":\n${
+          details.join("\n")
+        }`,
+      );
+    }
+
+    otherDesignSweep = {
+      terms: scan.terms,
+      checkedAt: now.toISOString(),
+      presentingDay: today,
+      entries: scan.entries,
+    };
+  }
+
   const htmlPath = resolveHtmlPath(absDocPath);
   const fallbackTitle = path.basename(absDocPath, path.extname(absDocPath));
-  const renderedHtml = renderDesignDoc(markdownContent, fallbackTitle);
+  const renderedHtml = renderDesignDoc(markdownContent, fallbackTitle, { otherDesignSweep });
 
   if (!renderedHtml || renderedHtml.trim() === "") {
     throw new Error(`Rendered HTML for ${absDocPath} is empty`);
@@ -310,9 +384,9 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
   const recordOpener = options.openGate1RecordImpl || openGate1Record;
   const { recordPath } = await recordOpener(absDocPath, markdownContent, {
     stateDir: options.stateDir,
+    otherDesignSweep,
   });
 
-  const today = presentingDay(now);
   const rows = parsePremisesTable(markdownContent).rows;
   const fresh = rows.filter((row) => stripCellDecoration(row.proved) === today).length;
   const carried = rows.filter((row) => stripCellDecoration(row.proved) < today).length;
@@ -327,6 +401,7 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
     opened,
     recordPath,
     premiseRows: { fresh, carried, sourceDate, source: record?.premiseRowsSource },
+    ...(otherDesignSweep ? { otherDesignSweep } : {}),
   };
 }
 

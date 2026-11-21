@@ -1,9 +1,12 @@
 import * as path from "jsr:@std/path@^1.0.0";
+import type { OtherDesignSweepResult } from "../src/design-issue/gate1_record.ts";
 import { PLAN_TABLE_HEADER } from "../src/design-issue/plan_table.ts";
 
 export interface RenderDesignDocOptions {
   /** Render as a Gate 2 issue plan page (file row order, total row count, pager opens on "All"). */
   isPlanPage?: boolean;
+  /** Render the Gate 1 cross-design sweep summary table when present. */
+  otherDesignSweep?: OtherDesignSweepResult;
 }
 
 /**
@@ -242,6 +245,67 @@ function orderTableRows(
   return rows.toReversed().sort((a, b) => provedDate(b).localeCompare(provedDate(a)));
 }
 
+function renderOtherDesignSweepSection(sweep: OtherDesignSweepResult): string {
+  const title = "Other designs checked for changed rulings";
+  const slug = slugify(title);
+  const termsHtml = sweep.terms.map((t) => `<code>${escapeHtml(t)}</code>`).join(", ");
+  let contentHtml: string;
+  if (sweep.entries.length === 0) {
+    contentHtml = `<p>No hits found in other design documents.</p>`;
+  } else {
+    const rowsHtml = sweep.entries.map((entry) => {
+      const termsCell = entry.terms.length > 0
+        ? entry.terms.map((t) => `<code>${escapeHtml(t)}</code>`).join(", ")
+        : "—";
+      const linesCell = entry.lines.length > 0 ? entry.lines.join(", ") : "—";
+      const statusLabel = entry.status === "revised"
+        ? "Revised"
+        : entry.status === "noted"
+        ? "Noted"
+        : "Unchecked (unreadable, noted)";
+      const detailParts: string[] = [];
+      if (entry.revisionDate) {
+        detailParts.push(`Revised on ${escapeHtml(entry.revisionDate)}`);
+      }
+      if (entry.reason) {
+        detailParts.push(escapeHtml(entry.reason));
+      }
+      const detailCell = detailParts.length > 0 ? detailParts.join("; ") : "—";
+      return (
+        `<tr>\n` +
+        `  <td><code>${escapeHtml(entry.otherPath)}</code></td>\n` +
+        `  <td>${termsCell}</td>\n` +
+        `  <td>${linesCell}</td>\n` +
+        `  <td>${statusLabel}</td>\n` +
+        `  <td>${detailCell}</td>\n` +
+        `</tr>`
+      );
+    }).join("\n");
+    contentHtml =
+      `<div class="table-wrapper">\n` +
+      `<table>\n` +
+      `<thead>\n` +
+      `<tr>\n` +
+      `  <th>Design</th>\n` +
+      `  <th>Terms</th>\n` +
+      `  <th>Lines</th>\n` +
+      `  <th>Status</th>\n` +
+      `  <th>Reason / Revision</th>\n` +
+      `</tr>\n` +
+      `</thead>\n` +
+      `<tbody>\n${rowsHtml}\n</tbody>\n` +
+      `</table>\n` +
+      `</div>`;
+  }
+  return (
+    `<section class="other-design-sweep" id="other-designs-checked">\n` +
+    `<h2 id="${slug}">${escapeHtml(title)}</h2>\n` +
+    `<p><strong>Changed terms:</strong> ${termsHtml}</p>\n` +
+    `${contentHtml}\n` +
+    `</section>`
+  );
+}
+
 /** Converts a Markdown document into a standalone HTML document adhering to design rules. */
 export function renderDesignDoc(
   markdownContent: string,
@@ -276,6 +340,18 @@ export function renderDesignDoc(
       usedSlugs.add(slug);
       tocEntries.push({ title: cleanTitle || headingText, slug });
     }
+  }
+
+  if (options?.otherDesignSweep && !options.isPlanPage) {
+    const sweepTitle = "Other designs checked for changed rulings";
+    const baseSlug = slugify(sweepTitle);
+    let slug = baseSlug;
+    let counter = 1;
+    while (usedSlugs.has(slug)) {
+      slug = `${baseSlug}-${counter++}`;
+    }
+    usedSlugs.add(slug);
+    tocEntries.push({ title: sweepTitle, slug });
   }
 
   // Generate TOC HTML
@@ -511,6 +587,10 @@ export function renderDesignDoc(
 
   if (inAppendixDetails) {
     bodyHtmlParts.push(`</div>\n</details>`);
+  }
+
+  if (options?.otherDesignSweep && !options.isPlanPage) {
+    bodyHtmlParts.push(renderOtherDesignSweepSection(options.otherDesignSweep));
   }
 
   const bodyHtml = bodyHtmlParts.join("\n\n");

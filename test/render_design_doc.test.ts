@@ -1056,3 +1056,91 @@ Deno.test("Plan page: only the Gate 2 table starts on all, and the revision hist
   assertEquals(regularHtml.includes('class="plan-table-total"'), false);
   assertEquals(regularHtml.includes('data-default-size="all"'), false);
 });
+
+Deno.test("Gate 1 page renders otherDesignSweep table with revised, noted, and unreadable-noted entries", () => {
+  const md = `# Owner Design
+
+## Revision History
+
+| Version | Date | Summary |
+|---|---|---|
+| 1.0.0 | 2026-11-21 | Initial |
+
+## Body
+
+Rule content.
+`;
+  const html = renderDesignDoc(md, "Owner", {
+    otherDesignSweep: {
+      terms: ["Hydrogen", "2.28.0"],
+      checkedAt: "2026-11-21T12:00:00Z",
+      presentingDay: "2026-11-21",
+      entries: [
+        {
+          otherPath: "/tmp/docs/pointer-design.md",
+          lines: [14],
+          terms: ["Hydrogen"],
+          status: "revised",
+          revisionDate: "2026-11-21",
+        },
+        {
+          otherPath: "/tmp/docs/workflow-design.md",
+          lines: [9, 22],
+          terms: ["Hydrogen", "2.28.0"],
+          status: "noted",
+          reason: "Uses owner result in local workflow <script> & nothing restated",
+        },
+        {
+          otherPath: "/tmp/docs/locked-design.md",
+          lines: [],
+          terms: [],
+          status: "unreadable-noted",
+          reason: "Permission denied on archive mount",
+        },
+      ],
+    },
+  });
+
+  assertStringIncludes(html, 'href="#other-designs-checked-for-changed-rulings"');
+  assertStringIncludes(
+    html,
+    '<h2 id="other-designs-checked-for-changed-rulings">Other designs checked for changed rulings</h2>',
+  );
+  assertStringIncludes(html, "<code>Hydrogen</code>, <code>2.28.0</code>");
+  assertStringIncludes(html, "<td><code>/tmp/docs/pointer-design.md</code></td>");
+  assertStringIncludes(html, "<td>Revised</td>");
+  assertStringIncludes(html, "<td>Revised on 2026-11-21</td>");
+  assertStringIncludes(html, "<td>9, 22</td>");
+  assertStringIncludes(html, "<td>Noted</td>");
+  assertStringIncludes(
+    html,
+    "<td>Uses owner result in local workflow &lt;script&gt; &amp; nothing restated</td>",
+  );
+  assertStringIncludes(html, "<td>Unchecked (unreadable, noted)</td>");
+  assertStringIncludes(html, "<td>Permission denied on archive mount</td>");
+});
+
+Deno.test("Gate 1 page renders otherDesignSweep with zero hits and omits it on plan pages", () => {
+  const md = "# Owner\n\n## Section\nBody.\n";
+  const html = renderDesignDoc(md, "Owner", {
+    otherDesignSweep: {
+      terms: ["Hydrogen"],
+      checkedAt: "2026-11-21T12:00:00Z",
+      presentingDay: "2026-11-21",
+      entries: [],
+    },
+  });
+  assertStringIncludes(html, "Other designs checked for changed rulings");
+  assertStringIncludes(html, "No hits found in other design documents.");
+
+  const planHtml = renderDesignDoc(md, "Owner", {
+    isPlanPage: true,
+    otherDesignSweep: {
+      terms: ["Hydrogen"],
+      checkedAt: "2026-11-21T12:00:00Z",
+      presentingDay: "2026-11-21",
+      entries: [],
+    },
+  });
+  assertFalse(planHtml.includes("other-design-sweep"));
+});

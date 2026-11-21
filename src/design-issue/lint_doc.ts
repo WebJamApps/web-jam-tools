@@ -533,7 +533,7 @@ function computeBacktickSpanRanges(line: string): Array<{ start: number; end: nu
 /** A single row of a markdown table, split on unescaped `|` that is not inside a backtick code
  * span and not escaped as `\|`, trimmed, with the leading/trailing empty cells produced by a
  * `| a | b |`-style line dropped. */
-function splitTableRow(line: string): string[] {
+export function splitTableRow(line: string): string[] {
   const trimmed = line.trim();
   const codeSpans = computeBacktickSpanRanges(trimmed);
   const isInCodeSpan = (idx: number) => codeSpans.some((r) => idx >= r.start && idx < r.end);

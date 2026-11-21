@@ -87,6 +87,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   // PreToolUse guard (web-jam-tools#1141) — refuses shell command naming any
   // of the 16 private Dropbox folders.
   "block-private-folder-read.sh",
+  // PreToolUse guard (web-jam-tools#1860) — refuses an agent read of a file
+  // holding a Social Security, card, routing or bank account number.
+  "block-personal-numbers-read.sh",
   // PreToolUse guard (web-jam-tools#1580) — refuses changing existing production
   // media or removing/moving lead-sheet documents in ~/Dropbox/joshandmariamusic.
   "block-production-media-change.sh",

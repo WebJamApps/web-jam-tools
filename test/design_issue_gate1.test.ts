@@ -39,7 +39,14 @@ import {
   getGate1RecordPath,
   getGate1Status,
   loadGate1Record,
+  recordSweepNote,
 } from "../src/design-issue/gate1_record.ts";
+import {
+  extractSearchableLines,
+  findChangedTermHits,
+  hasDecisionRowDated,
+  hasRevisionRowDated,
+} from "../src/design-issue/sweep_other_designs.ts";
 
 // A minimal document that still satisfies design:lint-doc's required sections (web-jam-tools#815)
 // — used by tests below that are exercising gate1's render/screenshot/browser mechanics, not the
@@ -2024,4 +2031,364 @@ Deno.test("epics case 20: the test files that reach the browser launcher record 
   } finally {
     await Deno.remove(standInDir, { recursive: true });
   }
+});
+
+// --- "Checking the other designs" (web-jam-tools#1870) ---
+
+const SWEEP_FIXTURES_DIR = new URL(
+  "./fixtures/design-issue/other-designs-sweep",
+  import.meta.url,
+).pathname;
+
+async function copySweepFixture(name: string, destDir: string): Promise<string> {
+  const destPath = path.join(destDir, name);
+  const content = await Deno.readTextFile(path.join(SWEEP_FIXTURES_DIR, name));
+  await Deno.writeTextFile(destPath, content);
+  return destPath;
+}
+
+Deno.test("checking other designs: decision record row dated presenting day refuses Gate 1 without --changed", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-sweep-req-changed-" });
+  const docsDir = path.join(tempDir, "docs", "Token_Savings");
+  const stateDir = path.join(tempDir, "state");
+  await Deno.mkdir(docsDir, { recursive: true });
+
+  try {
+    const ownerPath = await copySweepFixture("owner-tier-order-design.md", docsDir);
+    const fixedNow = () => new Date(2026, 10, 21, 12, 0, 0);
+
+    assertEquals(hasDecisionRowDated(await Deno.readTextFile(ownerPath), "2026-11-21"), true);
+    assertEquals(hasDecisionRowDated(await Deno.readTextFile(ownerPath), "2026-11-20"), false);
+
+    await assertRejects(
+      () =>
+        runGate1({
+          docPath: ownerPath,
+          noOpen: true,
+          dropboxDir: path.join(tempDir, "docs"),
+          stateDir,
+          nowImpl: fixedNow,
+          screenshotImpl: () => Promise.resolve({ sizeBytes: 1234 }),
+          verifyCitationsImpl: (_c, d) =>
+            Promise.resolve({ valid: true, violations: [], docPath: d }),
+        }),
+      Error,
+      'refusing Gate 1 without at least one --changed "<term>" argument',
+    );
+
+    await assertRejects(
+      () =>
+        runGate1({
+          docPath: ownerPath,
+          noOpen: true,
+          dropboxDir: path.join(tempDir, "docs"),
+          stateDir,
+          nowImpl: fixedNow,
+          changedTerms: ["   "],
+          screenshotImpl: () => Promise.resolve({ sizeBytes: 1234 }),
+          verifyCitationsImpl: (_c, d) =>
+            Promise.resolve({ valid: true, violations: [], docPath: d }),
+        }),
+      Error,
+      "--changed requires a non-empty search term",
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("checking other designs: whole-word case-sensitive search excludes history and searches backticks, quotes, and case lists", () => {
+  const doc = `# Test
+## Revision History
+| Version | Date | Summary |
+|---|---|---|
+| 1.0.0 | 2026-10-01 | Hydrogen history |
+
+## Body
+Lowercase hydrogen and Hydrogen2 and myHydrogen must not match.
+Whole word Hydrogen and \`Hydrogen\` and "Hydrogen" and Hydrogen-labeled must match.
+
+> Verbatim quote mentioning Hydrogen must not match.
+
+## Load-bearing premises
+| Premise | Proof | Proved |
+|---|---|---|
+| Hydrogen premise | Checked | 2026-10-01 |
+
+## Appendix C — Decision Record
+| # | Decision | Outcome |
+|---|---|---|
+| 1 | Hydrogen choice | Shared |
+
+## Appendix D — Premises that turned out false
+| Premise | Reason |
+|---|---|
+| Hydrogen was slow | False |
+
+## Appendix E — Case Lists
+| Case | Outcome |
+|---|---|
+| \`Hydrogen\` | shared lane |
+`;
+  const searchable = extractSearchableLines(doc);
+  assertEquals(searchable.some((l) => l.text.includes("Hydrogen history")), false);
+  assertEquals(searchable.some((l) => l.text.includes("Verbatim quote")), false);
+  assertEquals(searchable.some((l) => l.text.includes("Hydrogen premise")), false);
+  assertEquals(searchable.some((l) => l.text.includes("Hydrogen choice")), false);
+  assertEquals(searchable.some((l) => l.text.includes("Hydrogen was slow")), false);
+
+  const hits = findChangedTermHits(doc, ["Hydrogen"]);
+  assertEquals(hits.terms, ["Hydrogen"]);
+  assertEquals(hits.lines, [9, 31]);
+});
+
+Deno.test("checking other designs: fixtures distinguish second normative table (unsettled) vs pointer (settled) and historical quotes vs local workflow (noted)", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-sweep-fixtures-" });
+  const docsRoot = path.join(tempDir, "docs");
+  const tokenDir = path.join(docsRoot, "Token_Savings");
+  const opsDir = path.join(docsRoot, "Operations");
+  const resumeDir = path.join(docsRoot, "resume-records");
+  const stateDir = path.join(tempDir, "state");
+  await Deno.mkdir(tokenDir, { recursive: true });
+  await Deno.mkdir(opsDir, { recursive: true });
+  await Deno.mkdir(resumeDir, { recursive: true });
+
+  const fixedNow = () => new Date(2026, 10, 21, 12, 0, 0);
+  const runBaseOpts = {
+    noOpen: true,
+    dropboxDir: docsRoot,
+    stateDir,
+    nowImpl: fixedNow,
+    changedTerms: ["Hydrogen"],
+    screenshotImpl: () => Promise.resolve({ sizeBytes: 1234 }),
+    verifyCitationsImpl: (_c: string, d: string) =>
+      Promise.resolve({ valid: true, violations: [], docPath: d }),
+  };
+
+  try {
+    const ownerPath = await copySweepFixture("owner-tier-order-design.md", tokenDir);
+    // resume-records copy must be ignored even though it mentions Hydrogen.
+    await copySweepFixture("duplicate-normative-table-design.md", resumeDir);
+    const duplicatePath = await copySweepFixture("duplicate-normative-table-design.md", opsDir);
+    await copySweepFixture("historical-only-design.md", opsDir);
+
+    // 1. Unsettled: second normative table + prescriptive case list refuses Gate 1 with lines and terms.
+    const unsettledErr = await assertRejects(
+      () => runGate1({ ...runBaseOpts, docPath: ownerPath }),
+      Error,
+      "Refusing Gate 1",
+    );
+    assertStringIncludes(unsettledErr.message, duplicatePath);
+    assertStringIncludes(unsettledErr.message, "lines 13, 29");
+    assertStringIncludes(unsettledErr.message, '"Hydrogen"');
+    assertEquals(unsettledErr.message.includes("historical-only-design.md"), false);
+    assertEquals(unsettledErr.message.includes("resume-records"), false);
+
+    // 2. Replace duplicate normative table with pointer-to-owner fixture (revised today) + local workflow fixture.
+    await Deno.remove(duplicatePath);
+    const pointerPath = await copySweepFixture("pointer-to-owner-design.md", opsDir);
+    const workflowPath = await copySweepFixture("local-workflow-design.md", opsDir);
+    assertEquals(hasRevisionRowDated(await Deno.readTextFile(pointerPath), "2026-11-21"), true);
+
+    // Local workflow is unsettled until noted via design:sweep-note.
+    const workflowUnsettledErr = await assertRejects(
+      () => runGate1({ ...runBaseOpts, docPath: ownerPath }),
+      Error,
+      workflowPath,
+    );
+    assertEquals(workflowUnsettledErr.message.includes(pointerPath), false);
+
+    // Record sweep-note for local workflow.
+    await recordSweepNote(
+      ownerPath,
+      workflowPath,
+      "Local workflow consumes owner result without restating specification",
+      { stateDir, nowImpl: fixedNow },
+    );
+
+    // 3. Now Gate 1 succeeds, records both settled entries, and renders them into HTML.
+    const result = await runGate1({ ...runBaseOpts, docPath: ownerPath });
+    assertEquals(result.otherDesignSweep?.terms, ["Hydrogen"]);
+    assertEquals(result.otherDesignSweep?.entries.length, 2);
+
+    const pointerEntry = result.otherDesignSweep?.entries.find((e) => e.otherPath === pointerPath);
+    assertEquals(pointerEntry?.status, "revised");
+    assertEquals(pointerEntry?.revisionDate, "2026-11-21");
+
+    const workflowEntry = result.otherDesignSweep?.entries.find((e) =>
+      e.otherPath === workflowPath
+    );
+    assertEquals(workflowEntry?.status, "noted");
+    assertEquals(
+      workflowEntry?.reason,
+      "Local workflow consumes owner result without restating specification",
+    );
+
+    const record = await loadGate1Record(ownerPath, { stateDir });
+    assertEquals(record?.otherDesignSweep?.entries.length, 2);
+
+    const html = await Deno.readTextFile(result.htmlPath);
+    assertStringIncludes(html, "Other designs checked for changed rulings");
+    assertStringIncludes(html, pointerPath);
+    assertStringIncludes(html, "Revised on 2026-11-21");
+    assertStringIncludes(html, workflowPath);
+    assertStringIncludes(
+      html,
+      "Local workflow consumes owner result without restating specification",
+    );
+    assertEquals(html.includes("historical-only-design.md"), false);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("checking other designs: unreadable design blocks as unchecked until noted via design:sweep-note", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-sweep-unreadable-" });
+  const docsRoot = path.join(tempDir, "docs");
+  const tokenDir = path.join(docsRoot, "Token_Savings");
+  const stateDir = path.join(tempDir, "state");
+  await Deno.mkdir(tokenDir, { recursive: true });
+
+  const fixedNow = () => new Date(2026, 10, 21, 12, 0, 0);
+
+  try {
+    const ownerPath = await copySweepFixture("owner-tier-order-design.md", tokenDir);
+    const brokenSymlinkPath = path.join(tokenDir, "unreadable-archive-design.md");
+    await Deno.symlink(path.join(tempDir, "missing-target.md"), brokenSymlinkPath);
+
+    const uncheckedErr = await assertRejects(
+      () =>
+        runGate1({
+          docPath: ownerPath,
+          noOpen: true,
+          dropboxDir: docsRoot,
+          stateDir,
+          nowImpl: fixedNow,
+          changedTerms: ["Hydrogen"],
+          screenshotImpl: () => Promise.resolve({ sizeBytes: 1234 }),
+          verifyCitationsImpl: (_c, d) =>
+            Promise.resolve({ valid: true, violations: [], docPath: d }),
+        }),
+      Error,
+      "unchecked — cannot be read",
+    );
+    assertStringIncludes(uncheckedErr.message, brokenSymlinkPath);
+
+    await recordSweepNote(
+      ownerPath,
+      brokenSymlinkPath,
+      "Dangling archive symlink pending drive sync",
+      { stateDir, nowImpl: fixedNow },
+    );
+
+    const result = await runGate1({
+      docPath: ownerPath,
+      noOpen: true,
+      dropboxDir: docsRoot,
+      stateDir,
+      nowImpl: fixedNow,
+      changedTerms: ["Hydrogen"],
+      screenshotImpl: () => Promise.resolve({ sizeBytes: 1234 }),
+      verifyCitationsImpl: (_c, d) => Promise.resolve({ valid: true, violations: [], docPath: d }),
+    });
+    assertEquals(result.otherDesignSweep?.entries, [
+      {
+        otherPath: brokenSymlinkPath,
+        lines: [],
+        terms: [],
+        status: "unreadable-noted",
+        reason: "Dangling archive symlink pending drive sync",
+      },
+    ]);
+
+    const html = await Deno.readTextFile(result.htmlPath);
+    assertStringIncludes(html, "Unchecked (unreadable, noted)");
+    assertStringIncludes(html, "Dangling archive symlink pending drive sync");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("checking other designs: CLI --changed and --dropbox-dir work and deno.json registers design:sweep-note with scoped permissions", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-sweep-cli-" });
+  const docsRoot = path.join(tempDir, "docs");
+  const tokenDir = path.join(docsRoot, "Token_Savings");
+  const stateDir = path.join(tempDir, "state");
+  await Deno.mkdir(tokenDir, { recursive: true });
+
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const origLog = console.log;
+  const origErr = console.error;
+  console.log = (...args: unknown[]) => logs.push(args.join(" "));
+  console.error = (...args: unknown[]) => errors.push(args.join(" "));
+
+  try {
+    const ownerPath = await copySweepFixture("owner-tier-order-design.md", tokenDir);
+    await copySweepFixture("historical-only-design.md", tokenDir);
+
+    const badExit = await runGate1Cli(
+      [ownerPath, "--changed", "", "--dropbox-dir", docsRoot, "--state-dir", stateDir, "--no-open"],
+      {
+        nowImpl: () => new Date(2026, 10, 21, 12, 0, 0),
+        screenshotImpl: () => Promise.resolve({ sizeBytes: 1234 }),
+      },
+    );
+    assertEquals(badExit, 1);
+    assertStringIncludes(errors.join("\n"), "--changed requires a non-empty search term");
+
+    const okExit = await runGate1Cli(
+      [
+        ownerPath,
+        "--changed",
+        "Hydrogen",
+        "--dropbox-dir",
+        docsRoot,
+        "--state-dir",
+        stateDir,
+        "--no-open",
+      ],
+      {
+        nowImpl: () => new Date(2026, 10, 21, 12, 0, 0),
+        screenshotImpl: () => Promise.resolve({ sizeBytes: 1234 }),
+      },
+    );
+    assertEquals(okExit, 0);
+    assertStringIncludes(logs.join("\n"), '[design:gate1] Checked other designs for "Hydrogen"');
+
+    const repoRoot = path.resolve(path.dirname(path.fromFileUrl(import.meta.url)), "..");
+    const denoConfig = JSON.parse(await Deno.readTextFile(path.join(repoRoot, "deno.json")));
+    const sweepTask: string | undefined = denoConfig.tasks?.["design:sweep-note"];
+    assertEquals(typeof sweepTask, "string");
+    assertEquals(sweepTask?.includes(" -A "), false);
+    assertEquals(sweepTask?.includes("--allow-env="), true);
+    assertEquals(sweepTask?.includes("--allow-read="), true);
+    assertEquals(sweepTask?.includes("--allow-write="), true);
+
+    const helpRun = await new Deno.Command(Deno.execPath(), {
+      args: ["task", "--config", path.join(repoRoot, "deno.json"), "design:sweep-note", "--help"],
+      cwd: repoRoot,
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(helpRun.success, true, new TextDecoder().decode(helpRun.stderr));
+    assertStringIncludes(new TextDecoder().decode(helpRun.stdout), "deno task design:sweep-note");
+  } finally {
+    console.log = origLog;
+    console.error = origErr;
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("skills/design-issue/SKILL.md covers single-owner and Checking the other designs instructions before Gate 1", async () => {
+  const repoRoot = path.resolve(path.dirname(path.fromFileUrl(import.meta.url)), "..");
+  const skillText = await Deno.readTextFile(path.join(repoRoot, "skills/design-issue/SKILL.md"));
+  assertStringIncludes(skillText, '"Checking the other designs"');
+  assertStringIncludes(skillText, '"One document owns each rule"');
+  assertStringIncludes(skillText, '--changed "<term>"');
+  assertStringIncludes(skillText, "pointer to the owning document and its section");
+  assertStringIncludes(
+    skillText,
+    'deno task design:sweep-note <doc.md> <other.md> --reason "<why>"',
+  );
 });
