@@ -10,6 +10,7 @@ import {
   loadToken,
   type RepoApproval,
 } from "../../hooks/lib/check_issue_approval_token.ts";
+import { resolveCodexTokenOwnerSync } from "../../hooks/lib/codex_session_reader.ts";
 import {
   checkDuplicateTitle,
   type CommandRunner as DedupCommandRunner,
@@ -83,6 +84,8 @@ export interface IssueData {
 
 export interface ExecDeps {
   signing?: RunningModelOptions;
+  /** Optional env lookup for approval-token checks (tests only; defaults to `Deno.env.get`). */
+  approvalEnv?: (name: string) => string | undefined;
   runCmd: (
     cmd: string[],
     stdin?: string,
@@ -238,12 +241,40 @@ export function checkApprovalToken(
   title: string,
   tokenPath?: string,
   nowMs: number = Date.now(),
+  options?: { env?: (name: string) => string | undefined },
 ): ApprovalCheckResult {
-  const override = tokenPath || Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+  if (tokenPath) {
+    return checkApprovalTokenSingleFile(repoFull, title, tokenPath, nowMs);
+  }
+  const env = options?.env ?? ((name: string) => Deno.env.get(name));
+  const override = env("ISSUE_APPROVAL_TOKEN_PATH");
+  const codexThreadId = env("CODEX_THREAD_ID");
+  if (codexThreadId) {
+    let codexOwnerId: string;
+    try {
+      codexOwnerId = resolveCodexTokenOwnerSync({
+        threadId: codexThreadId,
+        env,
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+    const codexTokenPath = override || `${defaultTokenDir(env)}/${codexOwnerId}.json`;
+    return checkApprovalTokenSingleFileForSession(
+      repoFull,
+      title,
+      codexTokenPath,
+      codexOwnerId,
+      nowMs,
+    );
+  }
   if (override) {
     return checkApprovalTokenSingleFile(repoFull, title, override, nowMs);
   }
-  return checkApprovalTokenDirectory(repoFull, title, defaultTokenDir(), nowMs);
+  return checkApprovalTokenDirectory(repoFull, title, defaultTokenDir(env), nowMs);
 }
 
 function checkApprovalTokenSingleFile(
@@ -258,6 +289,32 @@ function checkApprovalTokenSingleFile(
       ok: false,
       reason:
         `No approval token found at ${tokenPath}. Get Josh's explicit approval for this plan first (via /design-issue's plan gate), or ask him directly.`,
+    };
+  }
+  return checkLoadedToken(token, repoFull, title, nowMs);
+}
+
+function checkApprovalTokenSingleFileForSession(
+  repoFull: string,
+  title: string,
+  tokenPath: string,
+  expectedSessionId: string,
+  nowMs: number,
+): ApprovalCheckResult {
+  const token = loadToken(tokenPath);
+  if (!token) {
+    return {
+      ok: false,
+      reason:
+        `No approval token found at ${tokenPath}. Get Josh's explicit approval for this plan first (via /design-issue's plan gate), or ask him directly.`,
+    };
+  }
+  if (token.session_id !== expectedSessionId) {
+    return {
+      ok: false,
+      reason: isExpired(token, nowMs)
+        ? `Approval token belongs to a different session and does not apply here. It is also already expired (expires_at: ${token.expires_at}).`
+        : "Approval token belongs to a different session and does not apply here.",
     };
   }
   return checkLoadedToken(token, repoFull, title, nowMs);
@@ -623,7 +680,7 @@ export async function createIssueAndVerify(
   options: CreateIssueOptions,
   deps: ExecDeps = defaultExecDeps,
   approvalCheck: (repoFull: string, title: string) => ApprovalCheckResult = (repoFull, title) =>
-    checkApprovalToken(repoFull, title),
+    checkApprovalToken(repoFull, title, undefined, Date.now(), { env: deps.approvalEnv }),
 ): Promise<string> {
   if (!options.title) {
     throw new Error("Missing required argument --title");

@@ -1197,7 +1197,13 @@ async function withDefaultTokenDir(
   const dir = `${homeDir}/.claude/state/issue-approval-tokens`;
   const prevHome = Deno.env.get("HOME");
   const prevOverride = Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+  const prevCodexThread = Deno.env.get("CODEX_THREAD_ID");
+  const prevCodexHome = Deno.env.get("CODEX_HOME");
+  const prevSurface = Deno.env.get("WJT_SURFACE");
   Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
+  Deno.env.delete("CODEX_THREAD_ID");
+  Deno.env.delete("CODEX_HOME");
+  Deno.env.delete("WJT_SURFACE");
   Deno.env.set("HOME", homeDir);
   try {
     await fn(dir);
@@ -1206,6 +1212,12 @@ async function withDefaultTokenDir(
     else Deno.env.set("HOME", prevHome);
     if (prevOverride === undefined) Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
     else Deno.env.set("ISSUE_APPROVAL_TOKEN_PATH", prevOverride);
+    if (prevCodexThread === undefined) Deno.env.delete("CODEX_THREAD_ID");
+    else Deno.env.set("CODEX_THREAD_ID", prevCodexThread);
+    if (prevCodexHome === undefined) Deno.env.delete("CODEX_HOME");
+    else Deno.env.set("CODEX_HOME", prevCodexHome);
+    if (prevSurface === undefined) Deno.env.delete("WJT_SURFACE");
+    else Deno.env.set("WJT_SURFACE", prevSurface);
     await Deno.remove(homeDir, { recursive: true });
   }
 }
@@ -1337,6 +1349,12 @@ Deno.test("createIssueAndVerify (default approvalCheck, no third arg): succeeds 
     },
     async (tokenPath) => {
       const prevEnv = Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+      const prevCodexThread = Deno.env.get("CODEX_THREAD_ID");
+      const prevCodexHome = Deno.env.get("CODEX_HOME");
+      const prevSurface = Deno.env.get("WJT_SURFACE");
+      Deno.env.delete("CODEX_THREAD_ID");
+      Deno.env.delete("CODEX_HOME");
+      Deno.env.delete("WJT_SURFACE");
       Deno.env.set("ISSUE_APPROVAL_TOKEN_PATH", tokenPath);
       try {
         const mockDeps: ExecDeps = {
@@ -1375,6 +1393,12 @@ Deno.test("createIssueAndVerify (default approvalCheck, no third arg): succeeds 
         } else {
           Deno.env.set("ISSUE_APPROVAL_TOKEN_PATH", prevEnv);
         }
+        if (prevCodexThread === undefined) Deno.env.delete("CODEX_THREAD_ID");
+        else Deno.env.set("CODEX_THREAD_ID", prevCodexThread);
+        if (prevCodexHome === undefined) Deno.env.delete("CODEX_HOME");
+        else Deno.env.set("CODEX_HOME", prevCodexHome);
+        if (prevSurface === undefined) Deno.env.delete("WJT_SURFACE");
+        else Deno.env.set("WJT_SURFACE", prevSurface);
       }
     },
   );
