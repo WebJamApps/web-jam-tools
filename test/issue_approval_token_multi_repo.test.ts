@@ -356,6 +356,59 @@ Deno.test("groupApprovalArgs reads mixed long, short and equals forms in order",
   );
 });
 
+Deno.test("groupApprovalArgs reads -t - as the title - and -tRelease 2 as the title Release 2", () => {
+  assertEquals(
+    groupApprovalArgs(["-r", "WebJamApps/JaMmusic", "-t", "-", "-tRelease 2"]),
+    { approvals: [{ repo: "WebJamApps/JaMmusic", titles: ["-", "Release 2"] }] },
+  );
+});
+
+Deno.test("groupApprovalArgs reads -r - as the repository -, as parseArgs does", () => {
+  assertEquals(
+    groupApprovalArgs(["-r", "-", "-t", "a"]),
+    { approvals: [{ repo: "-", titles: ["a"] }] },
+  );
+});
+
+Deno.test("groupApprovalArgs orders a grouped -tr by its letters", () => {
+  assertEquals(
+    groupApprovalArgs([
+      "-r",
+      "WebJamApps/JaMmusic",
+      "-t",
+      "a",
+      "-tr",
+      "WebJamApps/web-jam-back",
+      "-t",
+      "b",
+    ]),
+    {
+      approvals: [
+        { repo: "WebJamApps/JaMmusic", titles: ["a", ""] },
+        { repo: "WebJamApps/web-jam-back", titles: ["b"] },
+      ],
+    },
+  );
+});
+
+Deno.test("writer: -t - and -tRelease 2 are written as approved titles", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const tokenPath = `${dir}/token.json`;
+    const res = await runWriter(
+      dir,
+      ["--session-id", SESSION, "-r", "WebJamApps/web-jam-tools", "-t", "-", "-tRelease 2"],
+      tokenPath,
+    );
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(loadToken(tokenPath)?.approvals, [
+      { repo: "WebJamApps/web-jam-tools", titles: ["-", "Release 2"] },
+    ]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 Deno.test("writer refuses: a title before any --repo", async () => {
   const dir = await Deno.makeTempDir();
   try {

@@ -137,86 +137,72 @@ const WRITER_ARGS_OPTIONS = {
   },
 } as const;
 
-const NUMERIC_VALUE = /^-?\d+(\.\d*)?(e-?\d+)?$/;
+/** How many --repo and --title values `parseArgs` collects from `argv`. */
+function countRepoAndTitle(argv: string[]): { repo: number; title: number } {
+  const parsed = parseArgs(argv, WRITER_ARGS_OPTIONS);
+  return {
+    repo: [parsed.repo ?? []].flat().length,
+    title: [parsed.title ?? []].flat().length,
+  };
+}
 
 /**
  * Reads the command line's --repo/-r and --title/-t flags IN ORDER, so each title belongs to the
- * repository written before it. The scan mirrors how `parseArgs` splits those two options (`--`
- * ends parsing, `--x=V`, `-x=V`, `-xV`, grouped short flags such as `-jr V`, and a value taken from
- * the next argument only when it does not start with "-"), and the result is then compared with
- * `parseArgs`'s own collected `repo` and `title` lists: if they ever differ the call refuses, so an
- * approved title is never dropped or attached to the wrong repository. `extraTitles` (from
- * --titles, --titles-file or bare arguments, which carry no position) join the only repository
- * when exactly one is named. Returns an error string for a title before any repository, a
- * repository with no title, or extra titles that cannot say which of several repositories they
- * belong to.
+ * repository written before it. The values and their argument boundaries come from `parseArgs`
+ * itself, so every form it accepts reads the same here (`--`, `--x=V`, `-x=V`, `-xV`, `-x -`,
+ * grouped short flags such as `-jr V`). Only the interleaving is added: `parseArgs` is run on each
+ * growing prefix of `argv`, and the argument at which a repository or title count rises is where
+ * that flag sits. A flag counts the moment its own argument appears, before its value does, so the
+ * order never depends on a later argument. When one grouped argument such as `-tr` raises both
+ * counts, its letters give their order. If the placed flags ever disagree with `parseArgs`'s own
+ * counts the call refuses, so an approved title is never dropped or attached to the wrong
+ * repository. `extraTitles` (from --titles, --titles-file or bare arguments, which carry no
+ * position) join the only repository when exactly one is named. Returns an error string for a
+ * title before any repository, a repository with no title, or extra titles that cannot say which
+ * of several repositories they belong to.
  */
 export function groupApprovalArgs(
   argv: string[],
   extraTitles: string[] = [],
 ): { approvals: RepoApproval[] } | { error: string } {
-  const groups: RepoApproval[] = [];
-  const seen: { repo: string[]; title: string[] } = { repo: [], title: [] };
-  const shortKinds: Record<string, "repo" | "title"> = { r: "repo", t: "title" };
-  const nextValue = (i: number) => {
-    const next = argv[i + 1];
-    return next !== undefined && !next.startsWith("-")
-      ? { value: next, skip: 1 }
-      : { value: "", skip: 0 };
-  };
-  const record = (kind: "repo" | "title", value: string): string | undefined => {
-    if (kind === "repo") {
-      groups.push({ repo: value, titles: [] });
-    } else if (groups.length === 0) {
-      return `--title "${value}" comes before any --repo`;
-    } else {
-      groups[groups.length - 1].titles.push(value);
-    }
-    seen[kind].push(value);
-  };
+  const order: Array<"repo" | "title"> = [];
+  let before = { repo: 0, title: 0 };
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--") break;
-    if (arg.startsWith("--")) {
-      const eq = arg.indexOf("=");
-      const name = eq < 0 ? arg.slice(2) : arg.slice(2, eq);
-      if (name !== "repo" && name !== "title") continue;
-      let value = arg.slice(eq + 1);
-      if (eq < 0) {
-        const next = nextValue(i);
-        value = next.value;
-        i += next.skip;
-      }
-      const error = record(name, value);
-      if (error) return { error };
-    } else if (arg.length > 1 && arg[0] === "-") {
-      for (let j = 1; j < arg.length; j++) {
-        const kind = shortKinds[arg[j]];
-        const rest = arg.slice(j + 1);
-        let value = "";
-        let groupEnds = true;
-        if (rest.startsWith("=")) value = rest.slice(1);
-        else if (rest !== "" && (NUMERIC_VALUE.test(rest) || /\W/.test(rest[0]))) value = rest;
-        else if (rest === "") {
-          const next = nextValue(i);
-          value = next.value;
-          i += next.skip;
-        } else groupEnds = false;
-        const error = kind && record(kind, value);
-        if (error) return { error };
-        if (groupEnds) break;
+    const after = countRepoAndTitle(argv.slice(0, i + 1));
+    const rise = { repo: after.repo - before.repo, title: after.title - before.title };
+    if (rise.repo > 0 && rise.title > 0) {
+      for (const letter of argv[i].slice(1)) {
+        const kind = letter === "r" ? "repo" : letter === "t" ? "title" : undefined;
+        if (kind && rise[kind] > 0) {
+          order.push(kind);
+          rise[kind]--;
+        }
       }
     }
+    for (const kind of ["repo", "title"] as const) {
+      for (let k = 0; k < rise[kind]; k++) order.push(kind);
+    }
+    before = after;
   }
   const parsed = parseArgs(argv, WRITER_ARGS_OPTIONS);
-  for (const kind of ["repo", "title"] as const) {
-    const expected = [parsed[kind] ?? []].flat().map(String);
-    if (expected.length !== seen[kind].length || expected.some((v, k) => v !== seen[kind][k])) {
-      return {
-        error:
-          "could not read which --repo each --title belongs to; write each one as --repo <owner/repo> --title <title>",
-      };
-    }
+  const values = {
+    repo: [parsed.repo ?? []].flat().map(String),
+    title: [parsed.title ?? []].flat().map(String),
+  };
+  const placed = (kind: "repo" | "title") => order.filter((k) => k === kind).length;
+  if (placed("repo") !== values.repo.length || placed("title") !== values.title.length) {
+    return {
+      error:
+        "could not read which --repo each --title belongs to; write each one as --repo <owner/repo> --title <title>",
+    };
+  }
+  const groups: RepoApproval[] = [];
+  const next = { repo: 0, title: 0 };
+  for (const kind of order) {
+    const value = values[kind][next[kind]++];
+    if (kind === "repo") groups.push({ repo: value, titles: [] });
+    else if (groups.length === 0) return { error: `--title "${value}" comes before any --repo` };
+    else groups[groups.length - 1].titles.push(value);
   }
   const extras = extraTitles.map((t) => t.trim()).filter((t) => t.length > 0);
   if (extras.length > 0) {
