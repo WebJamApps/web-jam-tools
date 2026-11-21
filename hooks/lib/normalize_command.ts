@@ -76,10 +76,10 @@ function startsShellComment(text: string, index: number): boolean {
   return previous < 0 || (/[\s;&|()<>]/.test(text[previous]) && !escapedAt(previous));
 }
 
-type Quote = "'" | '"' | null;
+export type Quote = "'" | '"' | null;
 type Marker = [string, boolean];
 
-function scanHeredocLine(line: string, quote: Quote = null): {
+export function scanHeredocLine(line: string, quote: Quote = null): {
   marker: Marker | null;
   markerIndex: number;
   quote: Quote;
@@ -448,6 +448,7 @@ function splitPlainOperators(
   let inDquote = false;
   let escaped = false;
   let substitutionDepth = 0;
+  let braceExpansionDepth = 0;
   let inBacktick = false;
   let i = 0;
   const n = text.length;
@@ -548,6 +549,18 @@ function splitPlainOperators(
         continue;
       }
       flush(ch);
+      i++;
+      continue;
+    }
+    if (ch === "{" && (braceExpansionDepth > 0 || text[i - 1] === "$")) {
+      braceExpansionDepth++;
+      current += ch;
+      i++;
+      continue;
+    }
+    if (ch === "}" && braceExpansionDepth > 0) {
+      braceExpansionDepth--;
+      current += ch;
       i++;
       continue;
     }
