@@ -596,3 +596,11 @@ Dispatching via a thin Haiku subagent is prohibited.
   assertEquals(singularResult.violations.length, 1);
   assertEquals(singularResult.violations[0].linkText, "Haiku subagent");
 });
+
+Deno.test("skills/fix-pr/SKILL.md lints clean: it names Claude Code and Codex machinery and mentions agy (web-jam-tools#1337)", async () => {
+  const result = await lintSkillFile(
+    path.fromFileUrl(new URL("../skills/fix-pr/SKILL.md", import.meta.url)),
+  );
+  assertEquals(result.violations, []);
+  assert(result.valid);
+});
