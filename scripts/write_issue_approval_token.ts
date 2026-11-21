@@ -428,19 +428,21 @@ export interface AntigravityWriteTarget {
 }
 
 /**
- * Antigravity discovery: agy has no hook-delivered payload here either, and unlike Claude Code its
- * transcript path cannot be located from a session id (Antigravity keys transcripts by
- * conversationId, which this script is never told directly). The one existing, real record of that
- * identity is hooks/lib/agy_hook_shim.ts's recordInvocation() — already writing every agy tool
- * call's full payload (conversationId, transcriptPath) to AGY_HOOK_RECORD_PATH (default
- * /tmp/agy-hook-invocations.jsonl) for an unrelated purpose (web-jam-tools#816).
+ * Antigravity discovery uses two sources with separate roles. The conversation id and transcript
+ * path come from the caller, which receives them from the skill-run hook (AGY_CONVERSATION_ID,
+ * AGY_TRANSCRIPT_PATH); unlike Claude Code, agy's transcript cannot be located from a session id,
+ * because Antigravity keys transcripts by conversationId. The shared record written by
+ * hooks/lib/agy_hook_shim.ts's recordInvocation() — every agy tool call's payload (conversationId,
+ * transcriptPath) appended to AGY_HOOK_RECORD_PATH (default /tmp/agy-hook-invocations.jsonl,
+ * web-jam-tools#816) — only corroborates that pair: it never supplies the conversation in strict
+ * mode.
  *
- * In non-strict mode (the default for the approval-token CLI until its own strict update lands),
- * the newest valid row naming any conversation is used. In strict mode (used by fix-pr push), the
- * caller must supply the conversation id and transcript path handed to it by the skill-run hook;
- * strict mode refuses any damaged record, passes over rows of other conversations or rows naming no
- * conversation, and reads the transcript only when one of that conversation's rows names the exact
- * same transcript path (web-jam-tools#1845).
+ * Both commands that read what Josh typed on agy, fix-pr push and this token writer, use strict
+ * mode (web-jam-tools#1845, web-jam-tools#1846): the caller supplies the conversation id and
+ * transcript path handed to it by the skill-run hook; strict mode refuses any damaged record, passes
+ * over rows of other conversations or rows naming no conversation, and reads the transcript only
+ * when one of that conversation's rows names the exact same transcript path. Non-strict mode, which
+ * takes the newest valid row naming any conversation, has no production caller.
  *
  * Antigravity's transcript carries no in-band signal distinguishing a subagent's turn from a
  * person's: a subagent's opening prompt, composed by its parent, is filed as USER_INPUT /
@@ -650,7 +652,13 @@ export async function resolveWriteContext(
   const claudeCode = await resolveClaudeCodeWriteContext(options.sessionId);
   if (claudeCode) return claudeCode;
 
-  const antigravity = await resolveAntigravityWriteContext();
+  // The conversation the skill-run hook handed this command, read in strict mode: never the newest
+  // row of the shared record, which can be another conversation's (web-jam-tools#1846).
+  const antigravity = await resolveAntigravityWriteContext(true, {
+    conversationId: Deno.env.get("AGY_CONVERSATION_ID"),
+    transcriptPath: Deno.env.get("AGY_TRANSCRIPT_PATH"),
+    recordPath: Deno.env.get("AGY_HOOK_RECORD_PATH"),
+  });
   if (antigravity && antigravity.ownConversationId === options.sessionId) return antigravity;
 
   return { entries: [], ownConversationId: null, isSubagentInvocation: false };
