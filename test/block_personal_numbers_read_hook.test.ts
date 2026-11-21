@@ -11,8 +11,10 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import * as path from "jsr:@std/path@^1.0.0";
 import {
+  checkPath,
   checkPayload,
   MAX_SWEEP_FILES,
+  newSweep,
   refusalFor,
 } from "../hooks/lib/check_personal_numbers_read.ts";
 
@@ -111,11 +113,38 @@ const designDir = `${HOME}/Dropbox/web-jam-llms/AI_Misbehaves`;
 const mainRepo = `${HOME}/WebJamApps/web-jam-tools`;
 const demoWorktree = `${FIX}/tmp/agy-worktrees/web-jam-tools-demo`;
 
-/** A git worktree at `dir` whose `.git` file points into `repo`'s .git/worktrees/. */
+function git(args: string[]): void {
+  const out = new Deno.Command("git", {
+    args: ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
+    env: { HOME, GIT_CONFIG_NOSYSTEM: "1" },
+    stdout: "null",
+    stderr: "piped",
+  }).outputSync();
+  if (out.code !== 0) throw new Error(new TextDecoder().decode(out.stderr));
+}
+
+/** A real repository at `dir`, made by `git init`, with one commit. */
+function gitRepo(dir: string): void {
+  try {
+    Deno.statSync(`${dir}/.git`);
+    return;
+  } catch {
+    // not made yet
+  }
+  git(["init", "-q", dir]);
+  git(["-C", dir, "commit", "-q", "--allow-empty", "-m", "init"]);
+}
+
+/** A real linked worktree of `repo` at `dir`, made by `git worktree add`. */
 function worktreeOf(repo: string, dir: string): void {
-  const gitdir = `${repo}/.git/worktrees/${path.basename(dir)}`;
-  Deno.mkdirSync(gitdir, { recursive: true });
-  put(`${dir}/.git`, `gitdir: ${gitdir}\n`);
+  gitRepo(repo);
+  try {
+    Deno.statSync(`${dir}/.git`);
+    return;
+  } catch {
+    // not made yet
+  }
+  git(["-C", repo, "worktree", "add", "-q", "--detach", dir]);
 }
 
 const ROWS: Row[] = [
@@ -199,7 +228,7 @@ const ROWS: Row[] = [
     tool: "Bash",
     arg: "cat ~/WebJamApps/JaMmusic/test/checkout.test.ts",
     setup: () => {
-      Deno.mkdirSync(`${HOME}/WebJamApps/JaMmusic/.git`, { recursive: true });
+      gitRepo(`${HOME}/WebJamApps/JaMmusic`);
       put(
         `${HOME}/WebJamApps/JaMmusic/test/checkout.test.ts`,
         'const card = "4539 1488 0343 6467";\n',
@@ -478,7 +507,7 @@ Deno.test("files over 5 MB and binary files are not read", () => {
 
 Deno.test("a link inside a repository to a file outside it is checked where it points", () => {
   put(stub, "SSN: 123-45-6789\n");
-  Deno.mkdirSync(`${HOME}/WebJamApps/Linked/.git`, { recursive: true });
+  gitRepo(`${HOME}/WebJamApps/Linked`);
   const link = `${HOME}/WebJamApps/Linked/stub-link.txt`;
   try {
     Deno.removeSync(link);
@@ -571,7 +600,7 @@ Deno.test(
   withFixtureHome(() => {
     const cases: Array<[string, () => void]> = [
       // a whole clone outside ~/WebJamApps: `.git` is a folder, not a worktree's file
-      ["clone", () => Deno.mkdirSync(`${FIX}/tmp/clone/.git`, { recursive: true })],
+      ["clone", () => gitRepo(`${FIX}/tmp/clone`)],
       // a worktree of a repository outside ~/WebJamApps
       ["elsewhere", () => worktreeOf(`${FIX}/other-repo`, `${FIX}/tmp/elsewhere`)],
       // a `.git` file whose gitdir does not exist
@@ -583,8 +612,18 @@ Deno.test(
       [
         "not-worktrees",
         () => {
+          gitRepo(mainRepo);
           Deno.mkdirSync(`${mainRepo}/.git/modules/x`, { recursive: true });
           put(`${FIX}/tmp/not-worktrees/.git`, `gitdir: ${mainRepo}/.git/modules/x\n`);
+        },
+      ],
+      // a real worktree's `.git` file copied into another folder: its
+      // worktree's gitdir points back at the real worktree, not this folder
+      [
+        "copied",
+        () => {
+          worktreeOf(mainRepo, demoWorktree);
+          put(`${FIX}/tmp/copied/.git`, Deno.readTextFileSync(`${demoWorktree}/.git`));
         },
       ],
       // a gitdir that climbs out of .git/worktrees/ with ..
@@ -626,3 +665,234 @@ Deno.test(
     assertEquals(verdict.kind, "allow");
   }),
 );
+
+// --- Review of 2026-11-21: links, real working trees, search roots and the budget ---
+
+function shell(command: string, cwd = FIX) {
+  return checkPayload(JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd }));
+}
+
+function relink(target: string, link: string): void {
+  Deno.mkdirSync(path.dirname(link), { recursive: true });
+  try {
+    Deno.removeSync(link);
+  } catch {
+    // first use
+  }
+  Deno.symlinkSync(target, link);
+}
+
+Deno.test(
+  "a reader that follows links has each link inside a working tree checked where it points",
+  withFixtureHome(() => {
+    put(stub, "SSN: 123-45-6789\n");
+    const repo = `${HOME}/WebJamApps/LinkRepo`;
+    gitRepo(repo);
+    relink(stub, `${repo}/docs/stub-link.txt`);
+    relink(`${HOME}/Downloads`, `${repo}/downloads-link`);
+    for (
+      const command of [
+        `grep -R foo ${repo}`,
+        `grep --dereference-recursive foo ${repo}`,
+        `rg -L foo ${repo}`,
+        `rg --follow foo ${repo}`,
+      ]
+    ) {
+      assertEquals(shell(command).kind, "found", command);
+    }
+    // grep -r and rg do not follow a link they meet inside a folder, so they read
+    // only the tree's own files, all inside the working tree.
+    for (const command of [`grep -r foo ${repo}`, `rg foo ${repo}`]) {
+      assertEquals(shell(command).kind, "allow", command);
+    }
+  }),
+);
+
+Deno.test(
+  "a linked folder outside any working tree is walked only for a reader that follows links",
+  withFixtureHome(() => {
+    put(stub, "SSN: 123-45-6789\n");
+    const dir = `${FIX}/tmp/linked-folder`;
+    put(`${dir}/clean.txt`, "nothing here\n");
+    relink(`${HOME}/Downloads`, `${dir}/downloads`);
+    assertEquals(shell(`grep -R foo ${dir}`).kind, "found");
+    assertEquals(shell(`grep -r foo ${dir}`).kind, "allow");
+  }),
+);
+
+Deno.test(
+  "a link back up the tree ends the walk instead of looping",
+  withFixtureHome(() => {
+    const dir = `${FIX}/tmp/cycle`;
+    put(`${dir}/clean.txt`, "nothing here\n");
+    relink(dir, `${dir}/sub/loop`);
+    assertEquals(shell(`grep -R foo ${dir}`).kind, "allow");
+    put(`${dir}/sub/leak.txt`, "SSN: 123-45-6789\n");
+    assertEquals(shell(`grep -R foo ${dir}`).kind, "found");
+  }),
+);
+
+Deno.test(
+  "under ~/WebJamApps only a real repository's .git makes a working tree",
+  withFixtureHome(() => {
+    const cases: Array<[string, () => void]> = [
+      // an empty folder named .git
+      ["EmptyGit", () => Deno.mkdirSync(`${HOME}/WebJamApps/EmptyGit/.git`, { recursive: true })],
+      // a file named .git holding nothing git wrote
+      ["FileGit", () => put(`${HOME}/WebJamApps/FileGit/.git`, "not git\n")],
+      // a .git file pointing at a repository's own .git, not at a worktree of it
+      [
+        "PointsAtRepo",
+        () => {
+          gitRepo(mainRepo);
+          put(`${HOME}/WebJamApps/PointsAtRepo/.git`, `gitdir: ${mainRepo}/.git\n`);
+        },
+      ],
+      // a .git folder that is a link to a real repository's .git
+      [
+        "LinkedGit",
+        () => {
+          gitRepo(mainRepo);
+          relink(`${mainRepo}/.git`, `${HOME}/WebJamApps/LinkedGit/.git`);
+        },
+      ],
+    ];
+    for (const [name, setup] of cases) {
+      setup();
+      const file = `${HOME}/WebJamApps/${name}/test/stub.txt`;
+      put(file, "SSN: 123-45-6789\n");
+      const verdict = checkPayload(
+        JSON.stringify({ tool_name: "Read", tool_input: { file_path: file } }),
+      );
+      assertEquals(verdict.kind, "found", name);
+    }
+    // A real repository, and a real worktree under ~/WebJamApps (as .claude/worktrees/ is).
+    gitRepo(`${HOME}/WebJamApps/RealRepo`);
+    worktreeOf(mainRepo, `${mainRepo}/.claude/worktrees/inner`);
+    for (
+      const file of [
+        `${HOME}/WebJamApps/RealRepo/test/stub.txt`,
+        `${mainRepo}/.claude/worktrees/inner/test/stub.txt`,
+      ]
+    ) {
+      put(file, "SSN: 123-45-6789\n");
+      const verdict = checkPayload(
+        JSON.stringify({ tool_name: "Read", tool_input: { file_path: file } }),
+      );
+      assertEquals(verdict.kind, "allow", file);
+    }
+  }),
+);
+
+Deno.test(
+  "grep -r and rg search the folder they run in when given no input, whatever the pattern names",
+  withFixtureHome(() => {
+    const cwd = `${FIX}/tmp/search-cwd`;
+    put(`${cwd}/leak.txt`, "SSN: 123-45-6789\n");
+    // A file named like the pattern must not stand in for an input.
+    put(`${cwd}/PENN`, "nothing here\n");
+    for (
+      const command of [
+        "grep -r PENN",
+        "grep -rn PENN",
+        "grep -r -e PENN",
+        "grep -r --regexp=PENN",
+        "grep -rA 3 PENN",
+        "grep -r --include '*.txt' PENN",
+        "rg PENN",
+        "rg -g '*.txt' PENN",
+        "rg -e PENN",
+      ]
+    ) {
+      assertEquals(shell(command, cwd).kind, "found", command);
+    }
+  }),
+);
+
+Deno.test(
+  "an input given to grep -r or rg is searched instead of the folder they run in",
+  withFixtureHome(() => {
+    const cwd = `${FIX}/tmp/search-cwd`;
+    put(`${cwd}/leak.txt`, "SSN: 123-45-6789\n");
+    const clean = `${FIX}/tmp/search-clean`;
+    put(`${clean}/notes.txt`, "PENN STATION 22.86\n");
+    for (
+      const command of [
+        `grep -r PENN ${clean}`,
+        `grep -rA 3 PENN ${clean}`,
+        `grep -r -e PENN ${clean}`,
+        `rg -g '*.md' PENN ${clean}`,
+        `rg PENN ${clean}`,
+      ]
+    ) {
+      assertEquals(shell(command, cwd).kind, "allow", command);
+    }
+  }),
+);
+
+Deno.test(
+  "a pattern or ignore file grep or rg reads is checked",
+  withFixtureHome(() => {
+    const patterns = `${FIX}/tmp/patterns.txt`;
+    put(patterns, "123-45-6789\n");
+    const clean = `${FIX}/tmp/search-clean`;
+    put(`${clean}/notes.txt`, "PENN STATION 22.86\n");
+    for (
+      const command of [
+        `grep -f ${patterns} ${clean}/notes.txt`,
+        `grep -rf ${patterns} ${clean}`,
+        `grep --file=${patterns} ${clean}/notes.txt`,
+        `rg -f ${patterns} ${clean}`,
+        `rg --ignore-file ${patterns} PENN ${clean}`,
+      ]
+    ) {
+      assertEquals(shell(command).kind, "found", command);
+    }
+  }),
+);
+
+Deno.test("a check that runs past the budget on the last file refuses rather than allows", () => {
+  const file = `${FIX}/tmp/budget/clean.txt`;
+  put(file, "nothing here\n");
+  // Within the budget for the sweep's start and checkPath's own check; past it
+  // when checkFile finishes.
+  let calls = 0;
+  const sweep = newSweep(8_000, () => (++calls >= 3 ? 10_000 : 0));
+  const verdict = checkPath(file, sweep);
+  assertEquals(verdict.kind, "unreadable");
+  assertStringIncludes(refusalFor(verdict) ?? "", "could not finish checking it in time");
+  // The same file with time to spare is allowed.
+  assertEquals(checkPath(file, newSweep()).kind, "allow");
+});
+
+Deno.test("a folder walk that runs past the budget refuses, naming the folder", () => {
+  const dir = `${FIX}/tmp/budget-dir`;
+  Deno.mkdirSync(`${dir}/a`, { recursive: true });
+  let calls = 0;
+  // Within the budget for the sweep's start, checkPath and the walk's one entry;
+  // past it when the empty subfolder's walk ends.
+  const sweep = newSweep(8_000, () => (++calls >= 4 ? 10_000 : 0));
+  const verdict = checkPath(dir, sweep);
+  assertEquals(verdict.kind, "unreadable");
+  assertStringIncludes(refusalFor(verdict) ?? "", dir);
+  assertStringIncludes(refusalFor(verdict) ?? "", "than the guard can check in time");
+});
+
+Deno.test("a PDF conversion is stopped at the end of the budget and refuses", () => {
+  const bin = `${FIX}/slow-bin`;
+  put(`${bin}/pdftotext`, "#!/bin/sh\nsleep 5\n");
+  Deno.chmodSync(`${bin}/pdftotext`, 0o755);
+  const pdf = `${FIX}/tmp/slow.pdf`;
+  put(pdf, pdfWithText("nothing here"));
+  const realPath = Deno.env.get("PATH") ?? "/usr/bin:/bin";
+  Deno.env.set("PATH", `${bin}:${realPath}`);
+  try {
+    const started = Date.now();
+    const verdict = checkPath(pdf, newSweep(300));
+    assertEquals(verdict.kind, "unreadable");
+    assertStringIncludes(refusalFor(verdict) ?? "", "could not finish checking it in time");
+    assert(Date.now() - started < 3_000, "the slow conversion was not cut off");
+  } finally {
+    Deno.env.set("PATH", realPath);
+  }
+});

@@ -21,4 +21,4 @@
 set -euo pipefail
 
 HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-exec "$HOOK_DIR/lib/run_hook.sh" --group safety --name block-personal-numbers-read deno run --no-config --allow-env --allow-read --allow-run=pdftotext "$HOOK_DIR/lib/check_personal_numbers_read.ts" "$@"
+exec "$HOOK_DIR/lib/run_hook.sh" --group safety --name block-personal-numbers-read deno run --no-config --allow-env --allow-read --allow-run=pdftotext,timeout "$HOOK_DIR/lib/check_personal_numbers_read.ts" "$@"

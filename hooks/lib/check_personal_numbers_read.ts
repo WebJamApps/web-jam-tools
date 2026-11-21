@@ -22,8 +22,8 @@
  *     unresolved variable, or a relative path after a `cd` the shared reader cannot
  *     follow, is passed over; every literal path in the same command is still checked.
  *   - Refuse, failing closed (exit 2): the guard cannot open a file the call
- *     names, cannot read the call itself, or a folder sweep passes
- *     MAX_SWEEP_FILES files or SWEEP_TIME_LIMIT_MS.
+ *     names, cannot read the call itself, a folder sweep passes MAX_SWEEP_FILES
+ *     files, or the call's checks, PDF conversion included, pass SWEEP_TIME_LIMIT_MS.
  *
  * Used on Claude Code (PreToolUse `Bash|Read`), agy (through agy-hook-shim.sh,
  * on `run_command` and `view_file|read_file`) and Codex (PreToolUse `Bash`, WJT_SURFACE=codex).
@@ -138,31 +138,72 @@ function errorDetail(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** A path's canonical location, or the path itself when it cannot be resolved. */
+function realOr(p: string): string {
+  try {
+    return Deno.realPathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+/**
+ * Whether `gitDir` is a repository's own metadata folder: a real folder, not a
+ * link, holding a well-formed HEAD and the `objects` and `refs` folders git
+ * keeps there. An empty folder or a file merely named `.git` is not one.
+ */
+function isRepositoryGitDir(gitDir: string): boolean {
+  try {
+    if (!Deno.lstatSync(gitDir).isDirectory) return false;
+    if (
+      !/^(?:ref: refs\/\S+|[0-9a-f]{40}|[0-9a-f]{64})\s*$/.test(
+        Deno.readTextFileSync(path.join(gitDir, "HEAD")),
+      )
+    ) return false;
+    return Deno.lstatSync(path.join(gitDir, "objects")).isDirectory &&
+      Deno.lstatSync(path.join(gitDir, "refs")).isDirectory;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether `dotGit`, a regular file, makes its folder a linked worktree of a
+ * ~/WebJamApps repository, as `git worktree add` sets one up. Its `gitdir:`
+ * must resolve to ~/WebJamApps/<repo>/.git/worktrees/<name> of a real
+ * repository, that folder must hold the worktree's HEAD, and its `gitdir`
+ * file must point back at this very `.git` file, so a `.git` file copied or
+ * written by hand into another folder never makes that folder a worktree.
+ */
+function isWebJamAppsWorktree(dotGit: string, realRoot: string): boolean {
+  try {
+    if (!Deno.lstatSync(dotGit).isFile) return false;
+    const match = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(Deno.readTextFileSync(dotGit));
+    if (!match) return false;
+    const gitdir = Deno.realPathSync(path.resolve(path.dirname(dotGit), match[1]));
+    if (!gitdir.startsWith(realRoot + "/")) return false;
+    const parts = gitdir.slice(realRoot.length + 1).split("/");
+    if (parts.length !== 4 || parts[1] !== ".git" || parts[2] !== "worktrees") return false;
+    if (!isRepositoryGitDir(path.join(realRoot, parts[0], ".git"))) return false;
+    if (!Deno.lstatSync(path.join(gitdir, "HEAD")).isFile) return false;
+    const back = Deno.readTextFileSync(path.join(gitdir, "gitdir")).trim();
+    return Deno.realPathSync(path.resolve(gitdir, back)) === Deno.realPathSync(dotGit);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * A file or folder inside a git working tree of a ~/WebJamApps repository,
  * judged on its real location so a link inside a repository never exempts what
- * it points at. That is a working tree under ~/WebJamApps itself, or a git
- * worktree elsewhere (such as /tmp/agy-worktrees/...) whose `.git` file carries
- * a `gitdir:` resolving inside ~/WebJamApps/<repo>/.git/worktrees/. Any other
- * path, under /tmp or not, is never trusted.
+ * it points at. That is a folder under ~/WebJamApps whose `.git` is a real
+ * repository's metadata folder, or a linked worktree anywhere (such as
+ * /tmp/agy-worktrees/...) whose `.git` file git set up for a ~/WebJamApps
+ * repository (isWebJamAppsWorktree). Any other path, under /tmp or not, is
+ * never trusted, and a clone outside ~/WebJamApps is not exempt.
  */
 export function insideWebJamAppsRepo(realPath: string, home = homeDir()): boolean {
-  const root = path.join(home, "WebJamApps");
-  if (realPath.startsWith(root + "/")) {
-    let dir = realPath;
-    while (dir.startsWith(root + "/")) {
-      try {
-        Deno.lstatSync(path.join(dir, ".git"));
-        return true;
-      } catch {
-        // not a working tree root at this level
-      }
-      dir = path.dirname(dir);
-    }
-    return false;
-  }
-  // Outside ~/WebJamApps: the nearest `.git` decides, and only a worktree's
-  // `.git` file pointing into a ~/WebJamApps repository exempts.
+  const realRoot = realOr(path.join(home, "WebJamApps"));
   let dir = realPath;
   for (;;) {
     const dotGit = path.join(dir, ".git");
@@ -172,39 +213,14 @@ export function insideWebJamAppsRepo(realPath: string, home = homeDir()): boolea
     } catch {
       // no `.git` at this level
     }
-    if (info) return info.isFile && worktreeOfWebJamAppsRepo(dotGit, dir, root);
+    if (info?.isDirectory && dir.startsWith(realRoot + "/") && isRepositoryGitDir(dotGit)) {
+      return true;
+    }
+    if (info?.isFile && isWebJamAppsWorktree(dotGit, realRoot)) return true;
     const parent = path.dirname(dir);
     if (parent === dir) return false;
     dir = parent;
   }
-}
-
-/** Whether a worktree's `.git` file names a gitdir inside ~/WebJamApps/<repo>/.git/worktrees/. */
-function worktreeOfWebJamAppsRepo(dotGit: string, worktree: string, root: string): boolean {
-  let text: string;
-  try {
-    text = Deno.readTextFileSync(dotGit);
-  } catch {
-    return false;
-  }
-  const match = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(text);
-  if (!match) return false;
-  let gitdir: string;
-  try {
-    gitdir = Deno.realPathSync(path.resolve(worktree, match[1]));
-  } catch {
-    return false; // a gitdir that does not exist is no worktree
-  }
-  const realRoot = (() => {
-    try {
-      return Deno.realPathSync(root);
-    } catch {
-      return root;
-    }
-  })();
-  if (!gitdir.startsWith(realRoot + "/")) return false;
-  const [repo, dotGitDir, worktrees, name] = gitdir.slice(realRoot.length + 1).split("/");
-  return Boolean(repo) && dotGitDir === ".git" && worktrees === "worktrees" && Boolean(name);
 }
 
 /** The design document's two files, whose literal-case tables carry made-up numbers on purpose. */
@@ -226,18 +242,44 @@ export function isExemptDesignDoc(realFile: string, home = homeDir()): boolean {
   });
 }
 
-interface Sweep {
+/**
+ * One call's budget: every file and folder the call names shares it, so the
+ * whole check ends inside run_hook.sh's 15-second timeout. `visited` holds the
+ * real path of every folder already walked, so a link back up the tree ends
+ * the walk instead of looping. `now` is the clock, replaceable in tests.
+ */
+export interface Sweep {
   files: number;
   deadline: number;
+  visited: Set<string>;
+  now: () => number;
 }
 
-function pdfText(file: string): { ok: true; text: string } | { ok: false; detail: string } {
+export function newSweep(limitMs = SWEEP_TIME_LIMIT_MS, now: () => number = Date.now): Sweep {
+  return { files: 0, deadline: now() + limitMs, visited: new Set(), now };
+}
+
+const OUT_OF_TIME = "the guard could not finish checking it in time";
+const TOO_MANY = "more files under it than the guard can check in time";
+
+function outOfTime(sweep: Sweep): boolean {
+  return sweep.now() > sweep.deadline;
+}
+
+/** pdftotext's text, run under `timeout` so a slow PDF cannot outlast the call's budget. */
+function pdfText(
+  file: string,
+  sweep: Sweep,
+): { ok: true; text: string } | { ok: false; detail: string } {
+  const remainingMs = sweep.deadline - sweep.now();
+  if (remainingMs <= 0) return { ok: false, detail: OUT_OF_TIME };
   try {
-    const out = new Deno.Command("pdftotext", {
-      args: ["-q", file, "-"],
+    const out = new Deno.Command("timeout", {
+      args: ["-k", "1", `${(remainingMs / 1000).toFixed(3)}s`, "pdftotext", "-q", file, "-"],
       stdout: "piped",
       stderr: "null",
     }).outputSync();
+    if (out.code === 124 || out.code === 137) return { ok: false, detail: OUT_OF_TIME };
     if (out.code !== 0) return { ok: false, detail: `pdftotext exited ${out.code}` };
     return { ok: true, text: new TextDecoder().decode(out.stdout) };
   } catch (err) {
@@ -246,7 +288,7 @@ function pdfText(file: string): { ok: true; text: string } | { ok: false; detail
 }
 
 /** Check one regular file the call names. `realFile` is its resolved location. */
-function checkFile(file: string, realFile: string, size: number): Verdict {
+function checkFile(file: string, realFile: string, size: number, sweep: Sweep): Verdict {
   if (insideWebJamAppsRepo(realFile) || isExemptDesignDoc(realFile)) return ALLOW;
   if (size > MAX_FILE_BYTES) return ALLOW;
   const ext = path.extname(realFile).slice(1).toLowerCase();
@@ -259,7 +301,7 @@ function checkFile(file: string, realFile: string, size: number): Verdict {
   }
   let text: string;
   if (new TextDecoder().decode(bytes.subarray(0, 5)) === "%PDF-") {
-    const pdf = pdfText(file);
+    const pdf = pdfText(file, sweep);
     if (!pdf.ok) return { kind: "unreadable", file, detail: pdf.detail };
     text = pdf.text;
   } else if (bytes.subarray(0, 8192).includes(0)) {
@@ -268,15 +310,20 @@ function checkFile(file: string, realFile: string, size: number): Verdict {
     text = new TextDecoder().decode(bytes);
   }
   const findings = detectPersonalNumbers(text);
-  return findings.length ? { kind: "found", file, what: describeKinds(findings) } : ALLOW;
+  if (findings.length) return { kind: "found", file, what: describeKinds(findings) };
+  // A check that ran past the budget never allows.
+  return outOfTime(sweep) ? { kind: "unreadable", file, detail: OUT_OF_TIME } : ALLOW;
 }
 
 /**
  * Check a path the call names: a regular file, or every regular file under a
- * folder. A path that does not exist names nothing and is allowed (the call
- * itself will fail); one the guard cannot look at refuses.
+ * folder that the reader would read. A path that does not exist names nothing
+ * and is allowed (the call itself will fail); one the guard cannot look at
+ * refuses. `follow` is true for a reader that follows links while it walks a
+ * folder (`grep -R`, `rg -L`).
  */
-export function checkPath(target: string, sweep: Sweep = newSweep()): Verdict {
+export function checkPath(target: string, sweep: Sweep = newSweep(), follow = false): Verdict {
+  if (outOfTime(sweep)) return { kind: "unreadable", file: target, detail: OUT_OF_TIME };
   let info: Deno.FileInfo;
   try {
     info = Deno.statSync(target);
@@ -292,59 +339,65 @@ export function checkPath(target: string, sweep: Sweep = newSweep()): Verdict {
   } catch (err) {
     return { kind: "unreadable", file: target, detail: errorDetail(err) };
   }
-  if (info.isFile) return checkFile(target, real, info.size);
+  if (info.isFile) return checkFile(target, real, info.size, sweep);
   if (!info.isDirectory) return ALLOW; // a socket, device or pipe is not a regular file
-  if (insideWebJamAppsRepo(real)) return ALLOW;
-  return checkFolder(target, sweep);
+  const exempt = insideWebJamAppsRepo(real);
+  // A reader that does not follow links reads only the tree's own files, all
+  // inside the working tree. One that follows links is walked for its links.
+  if (exempt && !follow) return ALLOW;
+  return checkFolder(target, real, sweep, follow, exempt);
 }
 
-export function newSweep(): Sweep {
-  return { files: 0, deadline: Date.now() + SWEEP_TIME_LIMIT_MS };
-}
-
-function checkFolder(folder: string, sweep: Sweep): Verdict {
-  let entries: Deno.DirEntry[];
+/**
+ * Walk a folder as the reader would. The budget is checked before each entry
+ * and again before the folder is allowed, so a walk that runs past it refuses.
+ * In an exempt working tree only links are checked, each judged where it
+ * points: every other entry is inside the tree.
+ */
+function checkFolder(
+  folder: string,
+  real: string,
+  sweep: Sweep,
+  follow: boolean,
+  exempt: boolean,
+): Verdict {
+  if (sweep.visited.has(real)) return ALLOW; // a link back up the tree: already walked
+  sweep.visited.add(real);
   try {
-    entries = [...Deno.readDirSync(folder)];
+    for (const entry of Deno.readDirSync(folder)) {
+      if (++sweep.files > MAX_SWEEP_FILES || outOfTime(sweep)) {
+        return { kind: "unreadable", file: folder, detail: TOO_MANY };
+      }
+      const child = path.join(folder, entry.name);
+      let verdict: Verdict;
+      if (entry.isSymlink) {
+        let info: Deno.FileInfo;
+        try {
+          info = Deno.statSync(child);
+        } catch (err) {
+          if (err instanceof Deno.errors.NotFound) continue; // a dangling link names nothing
+          return { kind: "unreadable", file: child, detail: errorDetail(err) };
+        }
+        if (info.isFile) {
+          verdict = checkPath(child, sweep, follow); // judged where it points
+        } else if (info.isDirectory && follow) {
+          verdict = checkPath(child, sweep, follow);
+        } else continue; // a linked folder the reader does not follow
+      } else if (entry.isDirectory) {
+        const realChild = path.join(real, entry.name);
+        const childExempt = exempt || insideWebJamAppsRepo(realChild);
+        if (childExempt && !follow) continue;
+        verdict = checkFolder(child, realChild, sweep, follow, childExempt);
+      } else if (entry.isFile) {
+        if (exempt) continue;
+        verdict = checkPath(child, sweep, follow);
+      } else continue;
+      if (verdict.kind !== "allow") return verdict;
+    }
   } catch (err) {
     return { kind: "unreadable", file: folder, detail: errorDetail(err) };
   }
-  for (const entry of entries) {
-    const child = path.join(folder, entry.name);
-    if (++sweep.files > MAX_SWEEP_FILES || Date.now() > sweep.deadline) {
-      return {
-        kind: "unreadable",
-        file: folder,
-        detail: `more files under it than the guard can check in time`,
-      };
-    }
-    let verdict: Verdict;
-    if (entry.isSymlink) {
-      // A linked file is checked where it points; a linked folder is not followed.
-      let info: Deno.FileInfo;
-      try {
-        info = Deno.statSync(child);
-      } catch (err) {
-        if (err instanceof Deno.errors.NotFound) continue; // a dangling link names nothing
-        return { kind: "unreadable", file: child, detail: errorDetail(err) };
-      }
-      if (!info.isFile) continue;
-      verdict = checkPath(child, sweep);
-    } else if (entry.isDirectory) {
-      let realChild: string;
-      try {
-        realChild = Deno.realPathSync(child);
-      } catch (err) {
-        return { kind: "unreadable", file: child, detail: errorDetail(err) };
-      }
-      if (insideWebJamAppsRepo(realChild)) continue;
-      verdict = checkFolder(child, sweep);
-    } else if (entry.isFile) {
-      verdict = checkPath(child, sweep);
-    } else continue;
-    if (verdict.kind !== "allow") return verdict;
-  }
-  return ALLOW;
+  return outOfTime(sweep) ? { kind: "unreadable", file: folder, detail: TOO_MANY } : ALLOW;
 }
 
 const GLOB_CHARS = /[*?[]/;
@@ -377,68 +430,222 @@ function expandGlob(word: string): string[] {
   return bases.filter(Boolean);
 }
 
-/** The words of one simple command, with redirection operators kept apart. */
-function operandWords(argv: string[]): { operands: string[]; recursive: boolean } {
-  const name = path.basename(argv[0]);
-  const operands: string[] = [];
-  let recursive = name === "rg";
-  let endOfOptions = false;
-  for (let i = 1; i < argv.length; i++) {
-    const word = argv[i];
-    // Output redirections name a file written, not read; an input one names a file read.
+/** What a reader command reads, as its own option parser would see it. */
+interface ReaderArgs {
+  /** File and folder operands: the reader's inputs. */
+  inputs: string[];
+  /** Other files it reads: an input redirection, or a pattern or ignore file. */
+  alsoReads: string[];
+  /** It walks folders, and with no input searches the folder it runs in. */
+  recursive: boolean;
+  /** It follows links while walking a folder. */
+  follow: boolean;
+}
+
+/** Split off shell redirections: a file written is not read; a file redirected in is. */
+function splitRedirections(words: string[]): { words: string[]; redirectedIn: string[] } {
+  const kept: string[] = [];
+  const redirectedIn: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
     if (/^\d*(?:>>?|&>>?|>&|<>)$/.test(word)) {
       i++;
       continue;
     }
     if (/^\d*(?:>>?|&>>?|>&)/.test(word)) continue;
     if (/^\d*<$/.test(word)) {
-      if (i + 1 < argv.length) operands.push(argv[++i]);
+      if (i + 1 < words.length) redirectedIn.push(words[++i]);
       continue;
     }
     if (/^\d*<[^<]/.test(word)) {
-      operands.push(word.replace(/^\d*</, ""));
+      redirectedIn.push(word.replace(/^\d*</, ""));
       continue;
     }
     if (/^\d*<</.test(word)) continue;
+    kept.push(word);
+  }
+  return { words: kept, redirectedIn };
+}
+
+/**
+ * The options of `grep` and `rg` that take a value, and those whose value is a
+ * file the reader opens. Both parsers take options before, between and after
+ * operands until `--`, as GNU getopt and ripgrep do.
+ */
+const SEARCH_OPTIONS = {
+  grep: {
+    shortValue: new Set("efmABCdD"),
+    longValue: new Set([
+      "regexp",
+      "file",
+      "max-count",
+      "after-context",
+      "before-context",
+      "context",
+      "directories",
+      "devices",
+      "label",
+      "include",
+      "exclude",
+      "exclude-dir",
+      "exclude-from",
+      "binary-files",
+      "group-separator",
+    ]),
+    readsFile: new Set(["f", "file", "exclude-from"]),
+    pattern: new Set(["e", "f", "regexp", "file"]),
+  },
+  rg: {
+    shortValue: new Set("efgtTmABCjMdEr"),
+    longValue: new Set([
+      "regexp",
+      "file",
+      "glob",
+      "iglob",
+      "type",
+      "type-not",
+      "type-add",
+      "type-clear",
+      "max-count",
+      "after-context",
+      "before-context",
+      "context",
+      "threads",
+      "max-columns",
+      "max-depth",
+      "max-filesize",
+      "encoding",
+      "replace",
+      "pre",
+      "pre-glob",
+      "ignore-file",
+      "path-separator",
+      "sort",
+      "sortr",
+      "color",
+      "colors",
+      "context-separator",
+      "field-match-separator",
+      "field-context-separator",
+      "dfa-size-limit",
+      "regex-size-limit",
+      "engine",
+      "hostname-bin",
+      "hyperlink-format",
+      "generate",
+    ]),
+    readsFile: new Set(["f", "file", "ignore-file"]),
+    pattern: new Set(["e", "f", "regexp", "file"]),
+  },
+} as const;
+
+/** `grep` and `rg`: the pattern and option values are not inputs; a pattern file is read. */
+function searchArgs(name: "grep" | "rg", words: string[]): ReaderArgs {
+  const spec = SEARCH_OPTIONS[name];
+  const positionals: string[] = [];
+  const alsoReads: string[] = [];
+  let recursive = name === "rg";
+  let follow = false;
+  let patternGiven = false;
+  let endOfOptions = false;
+  const takeValue = (option: string, value: string | undefined) => {
+    if (value === undefined) return;
+    if ((spec.readsFile as ReadonlySet<string>).has(option) && value !== "-") alsoReads.push(value);
+    if ((spec.pattern as ReadonlySet<string>).has(option)) patternGiven = true;
+  };
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    if (endOfOptions || word === "-" || !word.startsWith("-")) {
+      positionals.push(word);
+      continue;
+    }
+    if (word === "--") {
+      endOfOptions = true;
+      continue;
+    }
+    if (word.startsWith("--")) {
+      const eq = word.indexOf("=");
+      const option = word.slice(2, eq === -1 ? undefined : eq);
+      if (option === "recursive") recursive = true;
+      if (option === "dereference-recursive") recursive = follow = true;
+      if (name === "rg" && option === "follow") follow = true;
+      if (name === "rg" && (option === "files" || option === "type-list")) patternGiven = true;
+      if (eq !== -1) takeValue(option, word.slice(eq + 1));
+      else if ((spec.longValue as ReadonlySet<string>).has(option)) takeValue(option, words[++i]);
+      continue;
+    }
+    // A bundle of short options: `-rn`, `-A3`, `-e PATTERN`, `-rnePATTERN`.
+    for (let j = 1; j < word.length; j++) {
+      const c = word[j];
+      if (spec.shortValue.has(c)) {
+        takeValue(c, j + 1 < word.length ? word.slice(j + 1) : words[++i]);
+        break;
+      }
+      if (name === "grep" && c === "r") recursive = true;
+      if (name === "grep" && c === "R") recursive = follow = true;
+      if (name === "rg" && c === "L") follow = true;
+    }
+  }
+  // With no -e or -f, the first operand is the pattern, not a file.
+  const inputs = patternGiven ? positionals : positionals.slice(1);
+  return { inputs: inputs.filter((w) => w !== "-"), alsoReads, recursive, follow };
+}
+
+/**
+ * Any other reader: every word that is not an option may name a file it reads
+ * (a script or filter that names no existing file is passed over when checked),
+ * and the value of an `--opt=value` form can name a file too.
+ */
+function plainReaderArgs(words: string[]): ReaderArgs {
+  const inputs: string[] = [];
+  let endOfOptions = false;
+  for (const word of words) {
     if (!endOfOptions && word === "--") {
       endOfOptions = true;
       continue;
     }
     if (word === "-") continue; // standard input
     if (!endOfOptions && word.startsWith("-")) {
-      if (
-        name === "grep" && (/^-[^-]*[rR]/.test(word) || /^--(?:dereference-)?recursive$/.test(word))
-      ) {
-        recursive = true;
-      }
-      // The value of an `--opt=value` form can name a file (`--file=patterns`).
       const eq = word.indexOf("=");
-      if (word.startsWith("--") && eq !== -1) operands.push(word.slice(eq + 1));
+      if (word.startsWith("--") && eq !== -1) inputs.push(word.slice(eq + 1));
       continue;
     }
-    // Option values and patterns land here too; a word that names no existing
-    // file is passed over when it is checked, so they cost nothing.
-    operands.push(word);
+    inputs.push(word);
   }
-  return { operands, recursive };
+  return { inputs, alsoReads: [], recursive: false, follow: false };
 }
 
-/** Every literal path a reader command names, resolved against the folder it runs in. */
-function readerTargets(argv: string[], cwd: string | null): string[] {
-  const { operands, recursive } = operandWords(argv);
+function readerArgs(argv: string[]): ReaderArgs {
+  const name = path.basename(argv[0]);
+  const { words, redirectedIn } = splitRedirections(argv.slice(1));
+  const args = name === "grep" || name === "rg" ? searchArgs(name, words) : plainReaderArgs(words);
+  return { ...args, alsoReads: [...args.alsoReads, ...redirectedIn] };
+}
+
+/** Resolve shell words to literal paths against the folder the command runs in. */
+function resolveWords(words: string[], cwd: string | null): string[] {
   const home = homeDir();
-  const targets: string[] = [];
-  for (const word of operands) {
+  const out: string[] = [];
+  for (const word of words) {
     if (!word) continue;
-    const words = GLOB_CHARS.test(word) ? expandGlobFrom(word, cwd, home) : [word];
-    for (const w of words) {
+    const expanded = GLOB_CHARS.test(word) ? expandGlobFrom(word, cwd, home) : [word];
+    for (const w of expanded) {
       const resolved = resolveCommandPath(w, cwd, home);
-      if (resolved !== null) targets.push(resolved);
+      if (resolved !== null) out.push(resolved);
     }
   }
-  // `grep -r` and `rg` with no path that exists search the folder they run in.
-  if (recursive && cwd !== null && !targets.some((t) => exists(t))) targets.push(cwd);
-  return targets;
+  return out;
+}
+
+/** Every literal path a reader command reads, and whether it follows links in folders. */
+function readerTargets(argv: string[], cwd: string | null): { targets: string[]; follow: boolean } {
+  const args = readerArgs(argv);
+  const inputs = resolveWords(args.inputs, cwd);
+  const targets = [...inputs, ...resolveWords(args.alsoReads, cwd)];
+  // `grep -r` and `rg` given no input search the folder they run in. An input
+  // that does not exist is not counted, so a misread operand can only widen the check.
+  if (args.recursive && cwd !== null && !inputs.some((t) => exists(t))) targets.push(cwd);
+  return { targets, follow: args.follow };
 }
 
 function expandGlobFrom(word: string, cwd: string | null, home: string): string[] {
@@ -464,11 +671,15 @@ function exists(p: string): boolean {
 }
 
 /** The verdict on a shell command: the first file any reader command in it names that refuses. */
-export function checkShellCommand(command: string, cwd: string | null, depth = 0): Verdict {
+export function checkShellCommand(
+  command: string,
+  cwd: string | null,
+  depth = 0,
+  sweep: Sweep = newSweep(),
+): Verdict {
   if (depth > MAX_NESTED_DEPTH) {
     return { kind: "unreadable", file: "the command", detail: "too many nested shells to follow" };
   }
-  const sweep = newSweep();
   for (const part of commandPartsInFolders(command, cwd, homeDir())) {
     if (part.script) continue; // a program that opens a file itself is out of scope
     const tokens = splitShellTokens(part.text);
@@ -482,15 +693,16 @@ export function checkShellCommand(command: string, cwd: string | null, depth = 0
       };
     }
     if (resolution.kind === "nested") {
-      const verdict = checkShellCommand(resolution.command, part.cwd, depth + 1);
+      const verdict = checkShellCommand(resolution.command, part.cwd, depth + 1, sweep);
       if (verdict.kind !== "allow") return verdict;
       continue;
     }
     const argv = resolution.argv.slice(resolution.argv.findIndex((w) => !ASSIGN_RE.test(w)));
     if (argv.length && ASSIGN_RE.test(argv[0])) continue; // assignments only
     if (!argv.length || !READER_COMMANDS.has(path.basename(argv[0]))) continue;
-    for (const target of readerTargets(argv, part.cwd)) {
-      const verdict = checkPath(target, sweep);
+    const { targets, follow } = readerTargets(argv, part.cwd);
+    for (const target of targets) {
+      const verdict = checkPath(target, sweep, follow);
       if (verdict.kind !== "allow") return verdict;
     }
   }
