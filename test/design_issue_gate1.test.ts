@@ -2332,6 +2332,9 @@ Deno.test("checking other designs: CLI --changed and --dropbox-dir work and deno
       {
         nowImpl: () => new Date(2026, 10, 21, 12, 0, 0),
         screenshotImpl: () => Promise.resolve({ sizeBytes: 1234 }),
+        // The fixture's citations are made up; never look them up on GitHub (CI has no gh).
+        verifyCitationsImpl: (_c, d) =>
+          Promise.resolve({ valid: true, violations: [], docPath: d }),
       },
     );
     assertEquals(badExit, 1);
@@ -2351,6 +2354,9 @@ Deno.test("checking other designs: CLI --changed and --dropbox-dir work and deno
       {
         nowImpl: () => new Date(2026, 10, 21, 12, 0, 0),
         screenshotImpl: () => Promise.resolve({ sizeBytes: 1234 }),
+        // The fixture's citations are made up; never look them up on GitHub (CI has no gh).
+        verifyCitationsImpl: (_c, d) =>
+          Promise.resolve({ valid: true, violations: [], docPath: d }),
       },
     );
     assertEquals(okExit, 0);

@@ -891,6 +891,21 @@ Deno.test("a check that runs past the budget on the last file refuses rather tha
   assertEquals(checkPath(file, newSweep()).kind, "allow");
 });
 
+Deno.test("a folder sweep that runs out of time on a file refuses naming the folder, not the file", () => {
+  const dir = `${FIX}/tmp/budget-file-in-dir`;
+  put(`${dir}/sub/clean.txt`, "nothing here\n");
+  let calls = 0;
+  // Within the budget for the sweep's start, the walk's entries and checkPath; past it when
+  // checkFile finishes the one file, as on a slow machine.
+  const sweep = newSweep(8_000, () => (++calls >= 6 ? 10_000 : 0));
+  const verdict = checkPath(dir, sweep);
+  const refusal = refusalFor(verdict) ?? "";
+  assertEquals(verdict.kind, "unreadable");
+  assertStringIncludes(refusal, `could not read ${dir} (`);
+  assertStringIncludes(refusal, "more files under it than the guard can check in time");
+  assert(!refusal.includes("clean.txt"), refusal);
+});
+
 Deno.test("a folder walk that runs past the budget refuses, naming the folder", () => {
   const dir = `${FIX}/tmp/budget-dir`;
   Deno.mkdirSync(`${dir}/a`, { recursive: true });

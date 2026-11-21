@@ -47,9 +47,31 @@ export interface ScanOtherDesignDocsResult {
   unchecked: UncheckedDesignDoc[];
 }
 
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/**
+ * Whether `needle` occurs in `text` with no `boundary` character directly before it (when
+ * `checkBefore`) or directly after it (when `checkAfter`). A plain string search, so no pattern is
+ * ever built from the needle. An empty needle matches, as an empty pattern would.
+ */
+function hasBoundedOccurrence(
+  text: string,
+  needle: string,
+  boundary: RegExp,
+  checkBefore = true,
+  checkAfter = true,
+): boolean {
+  if (needle === "") return true;
+  for (let i = text.indexOf(needle); i !== -1; i = text.indexOf(needle, i + 1)) {
+    const before = i > 0 ? text[i - 1] : "";
+    const after = text[i + needle.length] ?? "";
+    if ((!checkBefore || !boundary.test(before)) && (!checkAfter || !boundary.test(after))) {
+      return true;
+    }
+  }
+  return false;
 }
+
+const DATE_CHAR = /[0-9-]/;
+const WORD_CHAR = /[A-Za-z0-9_]/;
 
 function resolveRealPathOrNull(absPath: string): string | null {
   try {
@@ -103,7 +125,7 @@ function isHistorySectionHeading(headingText: string): boolean {
 export function hasDecisionRowDated(markdown: string, dateIso: string): boolean {
   if (!markdown || !dateIso) return false;
   const lines = markdown.split(/\r?\n/);
-  const datePattern = new RegExp(`(?<![0-9-])${escapeRegExp(dateIso)}(?![0-9-])`);
+  const isDated = (cell: string) => hasBoundedOccurrence(cell, dateIso, DATE_CHAR);
 
   let openFence: { char: string; length: number } | null = null;
   let decisionSectionLevel: number | null = null;
@@ -171,7 +193,7 @@ export function hasDecisionRowDated(markdown: string, dateIso: string): boolean 
       continue;
     }
 
-    if (cells.some((cell) => datePattern.test(stripCellDecoration(cell)))) {
+    if (cells.some((cell) => isDated(stripCellDecoration(cell)))) {
       return true;
     }
   }
@@ -323,10 +345,11 @@ export function extractSearchableLines(markdown: string): SearchableLine[] {
   return result;
 }
 
-function buildWholeWordRegex(term: string): RegExp {
-  const prefix = /^[A-Za-z0-9_]/.test(term) ? "(?<![A-Za-z0-9_])" : "";
-  const suffix = /[A-Za-z0-9_]$/.test(term) ? "(?![A-Za-z0-9_])" : "";
-  return new RegExp(`${prefix}${escapeRegExp(term)}${suffix}`);
+/** A whole-word test for `term`: a word character may not touch a word-character end of it. */
+function wholeWordMatcher(term: string): (text: string) => boolean {
+  const checkBefore = /^[A-Za-z0-9_]/.test(term);
+  const checkAfter = /[A-Za-z0-9_]$/.test(term);
+  return (text) => hasBoundedOccurrence(text, term, WORD_CHAR, checkBefore, checkAfter);
 }
 
 /**
@@ -337,14 +360,14 @@ export function findChangedTermHits(
   terms: string[],
 ): { lines: number[]; terms: string[] } {
   const searchable = extractSearchableLines(markdown);
-  const compiled = terms.map((term) => ({ term, regex: buildWholeWordRegex(term) }));
+  const compiled = terms.map((term) => ({ term, matches: wholeWordMatcher(term) }));
   const matchedLines: number[] = [];
   const matchedTermsSet = new Set<string>();
 
   for (const { lineNum, text } of searchable) {
     let lineMatched = false;
-    for (const { term, regex } of compiled) {
-      if (regex.test(text)) {
+    for (const { term, matches } of compiled) {
+      if (matches(text)) {
         matchedTermsSet.add(term);
         lineMatched = true;
       }
