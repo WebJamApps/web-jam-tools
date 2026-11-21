@@ -165,8 +165,9 @@ Deno.test("buildApprovalToken: builds valid token with defaults", () => {
   });
 
   assertEquals(token.session_id, "sess-123");
-  assertEquals(token.repo, "WebJamApps/web-jam-tools");
-  assertEquals(token.titles, ["Fix bug A", "Add feature B"]);
+  assertEquals(token.approvals, [
+    { repo: "WebJamApps/web-jam-tools", titles: ["Fix bug A", "Add feature B"] },
+  ]);
   const expMs = Date.parse(token.expires_at);
   assertEquals(Number.isNaN(expMs), false);
   assert(expMs > Date.now() + 3 * 3600_000);
@@ -178,7 +179,7 @@ Deno.test("buildApprovalToken: preserves existing owner in repo string", () => {
     repo: "CustomOwner/my-repo",
     titles: ["Title 1"],
   });
-  assertEquals(token.repo, "CustomOwner/my-repo");
+  assertEquals(token.approvals.map((a) => a.repo), ["CustomOwner/my-repo"]);
 });
 
 Deno.test("buildApprovalToken: honors custom explicit expiresAt", () => {
@@ -397,8 +398,9 @@ Deno.test("CLI: writes token via repeated --title arguments", async () => {
     const loaded = loadToken(tokenPath);
     assert(loaded !== null);
     assertEquals(loaded?.session_id, "cli-session");
-    assertEquals(loaded?.repo, "WebJamApps/web-jam-tools");
-    assertEquals(loaded?.titles, ["Title One", "Title Two"]);
+    assertEquals(loaded?.approvals, [
+      { repo: "WebJamApps/web-jam-tools", titles: ["Title One", "Title Two"] },
+    ]);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -424,8 +426,9 @@ Deno.test("CLI: writes token via --titles JSON array and --json stdout", async (
     assertEquals(res.code, 0, res.stderr);
     const parsedStdout = JSON.parse(res.stdout);
     assertEquals(parsedStdout.session_id, "json-session");
-    assertEquals(parsedStdout.repo, "WebJamApps/JaMmusic");
-    assertEquals(parsedStdout.titles, ["Song list fix", "Tour dates update"]);
+    assertEquals(parsedStdout.approvals, [
+      { repo: "WebJamApps/JaMmusic", titles: ["Song list fix", "Tour dates update"] },
+    ]);
 
     const loaded = loadToken(tokenPath);
     assertEquals(loaded, parsedStdout);
@@ -454,7 +457,7 @@ Deno.test("CLI: writes token via --titles-file argument", async () => {
 
     assertEquals(res.code, 0, res.stderr);
     const loaded = loadToken(tokenPath);
-    assertEquals(loaded?.titles, ["File Title 1", "File Title 2"]);
+    assertEquals(loaded?.approvals[0].titles, ["File Title 1", "File Title 2"]);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -469,7 +472,7 @@ Deno.test("CLI: fails with exit code 1 when required arguments are missing (auth
     // case.
     const authEnv = await writeAuthorizingTranscriptFixture(dir, "/file-issue do the thing");
     const res = await runCli(
-      ["--repo", "web-jam-tools"],
+      ["--repo", "web-jam-tools", "--title", "Some title"],
       { ...envWithoutAmbientSessionId(), ...authEnv },
     );
     assertEquals(res.code, 1);

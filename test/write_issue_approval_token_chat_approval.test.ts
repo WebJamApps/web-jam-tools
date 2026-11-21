@@ -307,7 +307,7 @@ Deno.test("CLI chat approval: reply 'yes, go' after the titles were shown writes
     assertEquals(r.code, 0, r.stderr);
     assert(await exists(r.tokenPath));
     const token = JSON.parse(await Deno.readTextFile(r.tokenPath));
-    assertEquals(token.titles, TITLES);
+    assertEquals(token.approvals[0].titles, TITLES);
     assertEquals(token.session_id, "sess-chat-1");
   } finally {
     await Deno.remove(r.dir, { recursive: true });
@@ -564,7 +564,9 @@ Deno.test("CLI chat approval: a shortened title is refused, the complete title w
   const full = await runWriter(transcript, [LONG_TITLE]);
   try {
     assertEquals(full.code, 0, full.stderr);
-    assertEquals(JSON.parse(await Deno.readTextFile(full.tokenPath)).titles, [LONG_TITLE]);
+    assertEquals(JSON.parse(await Deno.readTextFile(full.tokenPath)).approvals[0].titles, [
+      LONG_TITLE,
+    ]);
   } finally {
     await Deno.remove(full.dir, { recursive: true });
   }
@@ -650,7 +652,7 @@ Deno.test("CLI chat approval: a formatted fragment inside a longer title is refu
   const full = await runWriter(transcript, [longer]);
   try {
     assertEquals(full.code, 0, full.stderr);
-    assertEquals(JSON.parse(await Deno.readTextFile(full.tokenPath)).titles, [longer]);
+    assertEquals(JSON.parse(await Deno.readTextFile(full.tokenPath)).approvals[0].titles, [longer]);
   } finally {
     await Deno.remove(full.dir, { recursive: true });
   }
@@ -670,7 +672,7 @@ Deno.test("CLI chat approval: a list title that contains the word title is not s
   const full = await runWriter(transcript, [longer]);
   try {
     assertEquals(full.code, 0, full.stderr);
-    assertEquals(JSON.parse(await Deno.readTextFile(full.tokenPath)).titles, [longer]);
+    assertEquals(JSON.parse(await Deno.readTextFile(full.tokenPath)).approvals[0].titles, [longer]);
   } finally {
     await Deno.remove(full.dir, { recursive: true });
   }
@@ -690,7 +692,7 @@ Deno.test("CLI chat approval: a span between punctuation inside a longer title i
   const full = await runWriter(transcript, [longer]);
   try {
     assertEquals(full.code, 0, full.stderr);
-    assertEquals(JSON.parse(await Deno.readTextFile(full.tokenPath)).titles, [longer]);
+    assertEquals(JSON.parse(await Deno.readTextFile(full.tokenPath)).approvals[0].titles, [longer]);
   } finally {
     await Deno.remove(full.dir, { recursive: true });
   }
@@ -706,7 +708,7 @@ Deno.test("CLI chat approval: titles shown across two assistant messages write t
   ]);
   try {
     assertEquals(r.code, 0, r.stderr);
-    assertEquals(JSON.parse(await Deno.readTextFile(r.tokenPath)).titles, TITLES);
+    assertEquals(JSON.parse(await Deno.readTextFile(r.tokenPath)).approvals[0].titles, TITLES);
   } finally {
     await Deno.remove(r.dir, { recursive: true });
   }

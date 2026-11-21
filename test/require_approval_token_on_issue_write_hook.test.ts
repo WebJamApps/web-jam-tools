@@ -385,6 +385,37 @@ Deno.test("sub_issue_write add with a token from ANOTHER session is DENIED", asy
   );
 });
 
+function liveMultiRepoToken(): Record<string, unknown> {
+  return {
+    session_id: "session-A",
+    approvals: [
+      { repo: "WebJamApps/JaMmusic", titles: ["Book Us form: x"] },
+      { repo: "WebJamApps/web-jam-back", titles: ["model/inquiry: y"] },
+    ],
+    expires_at: futureIso(),
+  };
+}
+
+Deno.test("issue_write create naming no owner/repo is DENIED even when the title is approved somewhere", async () => {
+  await withTokenFile(liveMultiRepoToken(), async (tokenPath) => {
+    const res = await runHook(issueWriteCreate("Book Us form: x", "session-A", "", ""), tokenPath);
+    assertDenyReason(
+      res,
+      "issue_write create call names no owner/repo, so the approved plan's repository cannot be checked.",
+    );
+  });
+});
+
+Deno.test("sub_issue_write add naming no owner/repo is DENIED even with a live token", async () => {
+  await withTokenFile(liveMultiRepoToken(), async (tokenPath) => {
+    const res = await runHook(subIssueWriteAdd("session-A", "", ""), tokenPath);
+    assertDenyReason(
+      res,
+      "sub_issue_write add call names no owner/repo, so the parent's repository cannot be checked against the approved plan.",
+    );
+  });
+});
+
 Deno.test("sub_issue_write remove (not add) passes through untouched even with no token", async () => {
   await withTokenFile(null, async (tokenPath) => {
     const res = await runHook(subIssueWriteRemove("session-A"), tokenPath);

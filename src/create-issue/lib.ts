@@ -4,9 +4,11 @@
 
 import {
   type ApprovalToken,
+  checkTitleInRepo,
   defaultTokenDir,
   isExpired,
   loadToken,
+  type RepoApproval,
 } from "../../hooks/lib/check_issue_approval_token.ts";
 import {
   checkDuplicateTitle,
@@ -266,6 +268,11 @@ function checkApprovalTokenSingleFile(
  * `repoFull` + `title`. A single malformed or unrelated file is skipped, not treated as a refusal —
  * only "no matching file at all" or "every matching file expired" refuses. A missing or unlistable
  * directory fails closed (web-jam-tools#1158 acceptance criteria).
+ *
+ * When no live file matches, the refusal keeps the same distinct reasons as `checkTitleInRepo`,
+ * judged over the approvals of every unexpired file: no live approval in `repoFull` at all (naming
+ * the repositories the live tokens do cover), the title approved only in another repository, or the
+ * title not approved anywhere. An expired match still wins over all of these.
  */
 function checkApprovalTokenDirectory(
   repoFull: string,
@@ -285,23 +292,52 @@ function checkApprovalTokenDirectory(
   }
 
   let sawExpiredMatch = false;
+  const liveApprovals: RepoApproval[] = [];
   for (const entry of entries) {
     if (!entry.isFile || !entry.name.endsWith(".json")) continue;
     const token = loadToken(`${dir}/${entry.name}`);
     if (!token) continue; // unreadable or malformed — skip, don't refuse the whole check on it
-    if (token.repo !== repoFull || !token.titles.includes(title)) continue;
-    if (!isExpired(token, nowMs)) {
-      return { ok: true };
-    }
+    const expired = isExpired(token, nowMs);
+    if (!expired) liveApprovals.push(...token.approvals);
+    // web-jam-tools#1858 "scripts/write_issue_approval_token: one approval token covers every
+    // repository of an approved plan": the token matches only when this repository is paired with
+    // this exact title in one of its approvals.
+    if (!checkTitleInRepo(token, repoFull, title).ok) continue;
+    if (!expired) return { ok: true };
     sawExpiredMatch = true;
   }
 
-  return {
-    ok: false,
-    reason: sawExpiredMatch
-      ? `Every approval token in ${dir} matching ${repoFull} / "${title}" has expired.`
-      : `"${title}" is not among the titles approved by any live token in ${dir}.`,
-  };
+  if (sawExpiredMatch) {
+    return {
+      ok: false,
+      reason: `Every approval token in ${dir} matching ${repoFull} / "${title}" has expired.`,
+    };
+  }
+  const notApproved = `"${title}" is not among the titles approved by any live token in ${dir}.`;
+  if (liveApprovals.length === 0) return { ok: false, reason: notApproved };
+  if (!liveApprovals.some((a) => a.repo === repoFull)) {
+    const covered = [...new Set(liveApprovals.map((a) => a.repo))];
+    return {
+      ok: false,
+      reason: `No approval in ${repoFull}: the live approval tokens in ${dir} cover ${
+        covered.join(", ")
+      }.`,
+    };
+  }
+  const elsewhere = [
+    ...new Set(
+      liveApprovals.filter((a) => a.repo !== repoFull && a.titles.includes(title)).map((a) =>
+        a.repo
+      ),
+    ),
+  ];
+  if (elsewhere.length > 0) {
+    return {
+      ok: false,
+      reason: `"${title}" is approved in ${elsewhere.join(", ")} only, not in ${repoFull}.`,
+    };
+  }
+  return { ok: false, reason: notApproved };
 }
 
 function checkLoadedToken(
@@ -313,15 +349,8 @@ function checkLoadedToken(
   if (isExpired(token, nowMs)) {
     return { ok: false, reason: `Approval token expired at ${token.expires_at}.` };
   }
-  if (token.repo !== repoFull) {
-    return { ok: false, reason: `Approval token is scoped to ${token.repo}, not ${repoFull}.` };
-  }
-  if (!token.titles.includes(title)) {
-    return {
-      ok: false,
-      reason: `"${title}" is not among the titles approved in this plan's approval token.`,
-    };
-  }
+  const titleCheck = checkTitleInRepo(token, repoFull, title);
+  if (!titleCheck.ok) return { ok: false, reason: titleCheck.reason };
   return { ok: true };
 }
 

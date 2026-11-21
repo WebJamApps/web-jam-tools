@@ -1,13 +1,22 @@
 /**
  * Writes the issue-approval token when the /design-issue plan gate passes (web-jam-tools#595).
  *
- * Writes an approval token in the shape parsed by hooks/lib/check_issue_approval_token.ts:
+ * Writes an approval token in the shape parsed by hooks/lib/check_issue_approval_token.ts. One token
+ * covers the whole approved plan, every repository in it (web-jam-tools#1858
+ * "scripts/write_issue_approval_token: one approval token covers every repository of an approved
+ * plan"):
  *   {
  *     "session_id": "<the session that got approval>",
- *     "repo": "<owner>/<repo>",
- *     "titles": ["exact title 1", "exact title 2", ...],
+ *     "approvals": [
+ *       { "repo": "<owner>/<repo>", "titles": ["exact title 1", ...] },
+ *       { "repo": "<owner>/<other>", "titles": ["exact title 2", ...] }
+ *     ],
  *     "expires_at": "<ISO 8601 timestamp>"
  *   }
+ *
+ * On the command line the approvals are grouped: each --title belongs to the --repo written before
+ * it. A --title before any --repo, or a --repo with no --title, refuses. A later write in the same
+ * session replaces the whole token, never one repository of it.
  *
  * Default token path: $HOME/.claude/state/issue-approval-tokens/<session-id>.json — one file per
  * session (web-jam-tools#1158), so two sessions writing approval at the same time never overwrite
@@ -34,9 +43,11 @@
  * CLI usage:
  *   deno run --allow-env --allow-read --allow-write scripts/write_issue_approval_token.ts \
  *     --session-id "<session-id>" \
- *     --repo "WebJamApps/web-jam-tools" \
+ *     --repo "WebJamApps/JaMmusic" \
  *     --title "Title 1" \
- *     --title "Title 2"
+ *     --repo "WebJamApps/web-jam-back" \
+ *     --title "Title 2" \
+ *     --title "Title 3"
  */
 
 import { dirname } from "@std/path";
@@ -48,6 +59,7 @@ import {
   isExpired,
   isSafeSessionId,
   loadToken,
+  type RepoApproval,
 } from "../hooks/lib/check_issue_approval_token.ts";
 import {
   conversationIdFromTranscriptPath,
@@ -63,11 +75,152 @@ import {
 
 export interface WriteApprovalTokenOptions {
   sessionId: string;
-  repo: string;
-  titles: string[];
+  /** Every repository of the approved plan with its titles. Takes precedence over repo/titles. */
+  approvals?: RepoApproval[];
+  /** A one-repository plan: shorthand for `approvals: [{ repo, titles }]`. */
+  repo?: string;
+  titles?: string[];
   expiresAt?: string;
   ttlHours?: number;
   tokenPath?: string;
+}
+
+/** "name" becomes "WebJamApps/name"; "owner/name" is kept. Empty stays empty. */
+function qualifyRepo(raw: string): string {
+  const repo = raw.trim();
+  if (!repo) return "";
+  return repo.includes("/") ? repo : `WebJamApps/${repo}`;
+}
+
+/**
+ * Normalizes the plan's approvals: qualified repository names, trimmed non-empty titles, and one
+ * entry per repository (a repository written twice has its titles merged in order). Throws when the
+ * plan names no repository or a repository with no title.
+ */
+function normalizeApprovals(raw: RepoApproval[]): RepoApproval[] {
+  if (raw.length === 0) throw new Error("repo is required and cannot be empty");
+  const merged = new Map<string, string[]>();
+  for (const approval of raw) {
+    const repo = qualifyRepo(approval.repo ?? "");
+    if (!repo) throw new Error("repo is required and cannot be empty");
+    const titles = (approval.titles ?? []).map((t) => t.trim()).filter((t) => t.length > 0);
+    if (titles.length === 0) {
+      throw new Error(`titles must contain at least one non-empty title for ${repo}`);
+    }
+    const existing = merged.get(repo) ?? [];
+    for (const title of titles) if (!existing.includes(title)) existing.push(title);
+    merged.set(repo, existing);
+  }
+  return [...merged].map(([repo, titles]) => ({ repo, titles }));
+}
+
+/** The writer's command-line options; the main block and `groupApprovalArgs` both parse with it. */
+const WRITER_ARGS_OPTIONS = {
+  string: [
+    "session-id",
+    "repo",
+    "title",
+    "titles",
+    "titles-file",
+    "expires-at",
+    "ttl-hours",
+    "token-path",
+  ],
+  boolean: ["json", "help"],
+  collect: ["title", "repo"],
+  alias: {
+    s: "session-id",
+    r: "repo",
+    t: "title",
+    p: "token-path",
+    h: "help",
+  },
+} as const;
+
+/** How many --repo and --title values `parseArgs` collects from `argv`. */
+function countRepoAndTitle(argv: string[]): { repo: number; title: number } {
+  const parsed = parseArgs(argv, WRITER_ARGS_OPTIONS);
+  return {
+    repo: [parsed.repo ?? []].flat().length,
+    title: [parsed.title ?? []].flat().length,
+  };
+}
+
+/**
+ * Reads the command line's --repo/-r and --title/-t flags IN ORDER, so each title belongs to the
+ * repository written before it. The values and their argument boundaries come from `parseArgs`
+ * itself, so every form it accepts reads the same here (`--`, `--x=V`, `-x=V`, `-xV`, `-x -`,
+ * grouped short flags such as `-jr V`). Only the interleaving is added: `parseArgs` is run on each
+ * growing prefix of `argv`, and the argument at which a repository or title count rises is where
+ * that flag sits. A flag counts the moment its own argument appears, before its value does, so the
+ * order never depends on a later argument. When one grouped argument such as `-tr` raises both
+ * counts, its letters give their order. If the placed flags ever disagree with `parseArgs`'s own
+ * counts the call refuses, so an approved title is never dropped or attached to the wrong
+ * repository. `extraTitles` (from --titles, --titles-file or bare arguments, which carry no
+ * position) join the only repository when exactly one is named. Returns an error string for a
+ * title before any repository, a repository with no title, or extra titles that cannot say which
+ * of several repositories they belong to.
+ */
+export function groupApprovalArgs(
+  argv: string[],
+  extraTitles: string[] = [],
+): { approvals: RepoApproval[] } | { error: string } {
+  const order: Array<"repo" | "title"> = [];
+  let before = { repo: 0, title: 0 };
+  for (let i = 0; i < argv.length; i++) {
+    const after = countRepoAndTitle(argv.slice(0, i + 1));
+    const rise = { repo: after.repo - before.repo, title: after.title - before.title };
+    if (rise.repo > 0 && rise.title > 0) {
+      for (const letter of argv[i].slice(1)) {
+        const kind = letter === "r" ? "repo" : letter === "t" ? "title" : undefined;
+        if (kind && rise[kind] > 0) {
+          order.push(kind);
+          rise[kind]--;
+        }
+      }
+    }
+    for (const kind of ["repo", "title"] as const) {
+      for (let k = 0; k < rise[kind]; k++) order.push(kind);
+    }
+    before = after;
+  }
+  const parsed = parseArgs(argv, WRITER_ARGS_OPTIONS);
+  const values = {
+    repo: [parsed.repo ?? []].flat().map(String),
+    title: [parsed.title ?? []].flat().map(String),
+  };
+  const placed = (kind: "repo" | "title") => order.filter((k) => k === kind).length;
+  if (placed("repo") !== values.repo.length || placed("title") !== values.title.length) {
+    return {
+      error:
+        "could not read which --repo each --title belongs to; write each one as --repo <owner/repo> --title <title>",
+    };
+  }
+  const groups: RepoApproval[] = [];
+  const next = { repo: 0, title: 0 };
+  for (const kind of order) {
+    const value = values[kind][next[kind]++];
+    if (kind === "repo") groups.push({ repo: value, titles: [] });
+    else if (groups.length === 0) return { error: `--title "${value}" comes before any --repo` };
+    else groups[groups.length - 1].titles.push(value);
+  }
+  const extras = extraTitles.map((t) => t.trim()).filter((t) => t.length > 0);
+  if (extras.length > 0) {
+    if (groups.length > 1) {
+      return {
+        error:
+          "--titles, --titles-file and bare titles cannot say which --repo they belong to; write --title after each --repo instead",
+      };
+    }
+    if (groups.length === 1) groups[0].titles.push(...extras);
+    else return { error: "titles were given with no --repo" };
+  }
+  for (const group of groups) {
+    if (!group.titles.some((t) => t.trim().length > 0)) {
+      return { error: `--repo ${group.repo || '""'} has no --title` };
+    }
+  }
+  return { approvals: groups };
 }
 
 /**
@@ -87,20 +240,13 @@ export function buildApprovalToken(options: WriteApprovalTokenOptions): Approval
     );
   }
 
-  let repo = options.repo?.trim();
-  if (!repo) {
-    throw new Error("repo is required and cannot be empty");
-  }
-  if (!repo.includes("/")) {
-    repo = `WebJamApps/${repo}`;
-  }
-
-  const titles = (options.titles || [])
-    .map((t) => t.trim())
-    .filter((t) => t.length > 0);
-  if (titles.length === 0) {
-    throw new Error("titles must contain at least one non-empty title");
-  }
+  const approvals = normalizeApprovals(
+    options.approvals && options.approvals.length > 0
+      ? options.approvals
+      : options.repo?.trim()
+      ? [{ repo: options.repo, titles: options.titles ?? [] }]
+      : [],
+  );
 
   let expiresAt = options.expiresAt?.trim();
   if (!expiresAt) {
@@ -115,8 +261,7 @@ export function buildApprovalToken(options: WriteApprovalTokenOptions): Approval
 
   return {
     session_id: sessionId,
-    repo,
-    titles,
+    approvals,
     expires_at: expiresAt,
   };
 }
@@ -314,9 +459,9 @@ export async function resolveAntigravityWriteContext(
     return null;
   }
 
-  const recordPath = (target?.recordPath !== undefined
-    ? target.recordPath
-    : Deno.env.get("AGY_HOOK_RECORD_PATH")) || "/tmp/agy-hook-invocations.jsonl";
+  const recordPath =
+    (target?.recordPath !== undefined ? target.recordPath : Deno.env.get("AGY_HOOK_RECORD_PATH")) ||
+    "/tmp/agy-hook-invocations.jsonl";
   let text: string;
   try {
     text = await Deno.readTextFile(recordPath);
@@ -526,27 +671,7 @@ export async function authorizeWrite(
 
 if (import.meta.main) {
   try {
-    const args = parseArgs(Deno.args, {
-      string: [
-        "session-id",
-        "repo",
-        "title",
-        "titles",
-        "titles-file",
-        "expires-at",
-        "ttl-hours",
-        "token-path",
-      ],
-      boolean: ["json", "help"],
-      collect: ["title"],
-      alias: {
-        s: "session-id",
-        r: "repo",
-        t: "title",
-        p: "token-path",
-        h: "help",
-      },
-    });
+    const args = parseArgs(Deno.args, WRITER_ARGS_OPTIONS);
 
     if (args.help) {
       console.log(
@@ -555,10 +680,16 @@ if (import.meta.main) {
 Options:
   -s, --session-id <id>     Session ID that received plan-gate approval (defaults to
                             $CODEX_THREAD_ID, $CLAUDE_CODE_SESSION_ID, $CLAUDE_SESSION_ID, or $SESSION_ID)
-  -r, --repo <owner/repo>   Target repository (e.g. WebJamApps/web-jam-tools)
-  -t, --title <title>       Approved issue title (can be repeated)
-  --titles <list|json>      Approved titles as JSON array or comma-separated list
-  --titles-file <path>      Path to file with titles (one per line or JSON array)
+  -r, --repo <owner/repo>   A repository of the approved plan (e.g. WebJamApps/web-jam-tools);
+                            repeat it once per repository
+  -t, --title <title>       An approved issue title; it belongs to the --repo written before it
+                            (repeat it for every title in that repository)
+  --titles <list|json>      Approved titles as JSON array or comma-separated list (one --repo only)
+  --titles-file <path>      Path to file with titles, one per line or a JSON array (one --repo only)
+
+One token covers the whole plan: run the writer once with every repository and its titles, e.g.
+  --repo WebJamApps/JaMmusic --title "A" --repo WebJamApps/web-jam-back --title "B" --title "C"
+A later write in the same session replaces the whole token.
   --ttl-hours <hours>       Token TTL in hours (default: 4)
   --expires-at <iso>        Explicit expiration ISO 8601 timestamp
   -p, --token-path <path>   Override token output path (defaults to $ISSUE_APPROVAL_TOKEN_PATH or ~/.claude/state/issue-approval-tokens/<session-id>.json)
@@ -575,14 +706,10 @@ Options:
       Deno.env.get("CLAUDE_SESSION_ID") ||
       Deno.env.get("SESSION_ID") ||
       "";
-    const repo = args.repo || "";
-
+    // --title values are read in order alongside --repo by groupApprovalArgs() below; these are the
+    // positionless title sources, which can only join a plan that names exactly one repository.
     const titles: string[] = [];
-    if (Array.isArray(args.title)) {
-      titles.push(...args.title);
-    } else if (typeof args.title === "string" && args.title) {
-      titles.push(args.title);
-    }
+    const hasTitleFlag = (args.title as unknown[]).length > 0;
 
     if (args.titles) {
       try {
@@ -611,9 +738,17 @@ Options:
       }
     }
 
-    if (titles.length === 0 && args._.length > 0) {
+    if (!hasTitleFlag && titles.length === 0 && args._.length > 0) {
       titles.push(...args._.map(String));
     }
+
+    const grouped = groupApprovalArgs(Deno.args, titles);
+    if ("error" in grouped) {
+      console.error(`Refused to write approval token: ${grouped.error}.`);
+      Deno.exit(1);
+    }
+    const approvals = grouped.approvals;
+    const allTitles = approvals.flatMap((a) => a.titles);
 
     const ttlHours = args["ttl-hours"] ? Number(args["ttl-hours"]) : undefined;
     const expiresAt = args["expires-at"];
@@ -641,7 +776,7 @@ Options:
       sessionId,
       transcriptPath: testTranscriptPath || undefined,
       conversationId: testConversationId || undefined,
-      titles,
+      titles: allTitles,
     });
     if (!authorization.ok) {
       console.error(`Refused to write approval token: ${authorization.reason}`);
@@ -650,8 +785,7 @@ Options:
 
     const { token, path } = await writeApprovalToken({
       sessionId,
-      repo,
-      titles,
+      approvals,
       ttlHours,
       expiresAt,
       tokenPath,
