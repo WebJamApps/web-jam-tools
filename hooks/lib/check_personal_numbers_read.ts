@@ -244,19 +244,22 @@ export function isExemptDesignDoc(realFile: string, home = homeDir()): boolean {
 
 /**
  * One call's budget: every file and folder the call names shares it, so the
- * whole check ends inside run_hook.sh's 15-second timeout. `visited` holds the
- * real path of every folder already walked, so a link back up the tree ends
- * the walk instead of looping. `now` is the clock, replaceable in tests.
+ * whole check ends inside run_hook.sh's 15-second timeout. `visited` maps the
+ * real path of every folder already walked to whether that walk followed links,
+ * so a link back up the tree ends the walk instead of looping. A walk that
+ * follows links checks everything one that does not checks, and more, so a
+ * folder walked without following links is walked again by a reader that
+ * follows them. `now` is the clock, replaceable in tests.
  */
 export interface Sweep {
   files: number;
   deadline: number;
-  visited: Set<string>;
+  visited: Map<string, boolean>;
   now: () => number;
 }
 
 export function newSweep(limitMs = SWEEP_TIME_LIMIT_MS, now: () => number = Date.now): Sweep {
-  return { files: 0, deadline: now() + limitMs, visited: new Set(), now };
+  return { files: 0, deadline: now() + limitMs, visited: new Map(), now };
 }
 
 const OUT_OF_TIME = "the guard could not finish checking it in time";
@@ -361,8 +364,10 @@ function checkFolder(
   follow: boolean,
   exempt: boolean,
 ): Verdict {
-  if (sweep.visited.has(real)) return ALLOW; // a link back up the tree: already walked
-  sweep.visited.add(real);
+  // Already walked, or being walked further up this walk, with at least this coverage.
+  const walkedFollowing = sweep.visited.get(real);
+  if (walkedFollowing === true || (walkedFollowing === false && !follow)) return ALLOW;
+  sweep.visited.set(real, follow);
   try {
     for (const entry of Deno.readDirSync(folder)) {
       if (++sweep.files > MAX_SWEEP_FILES || outOfTime(sweep)) {

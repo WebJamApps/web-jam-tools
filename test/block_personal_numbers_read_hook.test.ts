@@ -733,6 +733,32 @@ Deno.test(
 );
 
 Deno.test(
+  "a folder walked without following links is walked again for a later reader that follows them",
+  withFixtureHome(() => {
+    put(stub, "SSN: 123-45-6789\n");
+    const dir = `${FIX}/tmp/mixed-walk`;
+    put(`${dir}/clean.txt`, "nothing here\n");
+    relink(`${HOME}/Downloads`, `${dir}/downloads`);
+    const repo = `${HOME}/WebJamApps/MixedRepo`;
+    gitRepo(repo);
+    relink(stub, `${repo}/docs/stub-link.txt`);
+    for (
+      const command of [
+        `grep -r foo ${dir}; grep -R foo ${dir}`,
+        `grep -r foo ${dir} && rg -L foo ${dir}`,
+        `grep -r foo ${dir}; bash -c "grep -R foo ${dir}"`,
+        `rg foo ${repo}; grep -R foo ${repo}`,
+        `grep -R foo ${dir}; grep -r foo ${dir}`,
+      ]
+    ) {
+      assertEquals(shell(command).kind, "found", command);
+    }
+    // A plain walk after another plain walk of the same folder still allows.
+    assertEquals(shell(`grep -r foo ${dir}; grep -r bar ${dir}`).kind, "allow");
+  }),
+);
+
+Deno.test(
   "under ~/WebJamApps only a real repository's .git makes a working tree",
   withFixtureHome(() => {
     const cases: Array<[string, () => void]> = [
