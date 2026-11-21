@@ -38,6 +38,8 @@ const EXPECTED_SKILL_DIRS = [
   "drive-cleanup",
   "file-issue",
   "fix-labels",
+  // web-jam-tools#1337: fix one pull request on the model set in the terminal, one push.
+  "fix-pr",
   "handle-gmails",
   "memory-cleanup",
   "pr-review",
