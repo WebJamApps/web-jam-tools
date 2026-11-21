@@ -314,13 +314,17 @@ Review the PR diff, description, mergeability, and non-CircleCI status checks (S
 5. **Single Semver Version Bump per PR**:
    - Check `package.json` (or `deno.json` for `web-jam-tools`).
    - The version must be bumped on the PR's first commit and must strictly exceed the current `origin/dev` tip (matching `.circleci/config.yml:127`, "Version bump check (PR branches only)", with the strictly-greater comparison at lines 130-160).
-   - **Suggestion, not Must Fix**: any version-bump irregularity within the PR under review — a
-     version that fails to strictly exceed the `origin/dev` tip (mechanical drift from `dev` moving
-     under an open PR, not a defect the author introduced), or a follow-up commit that re-bumps the
-     version when `dev` did not move (a gratuitous double bump). CircleCI's version-bump gate
-     genuinely fails on a stale version and keeps the merge blocked deterministically — that gate,
-     not the review's judgment, is what enforces it, so the review reports it as a Suggestion rather
-     than wearing a 🛑 for something CI already reports and a rebase already clears.
+   - **Suggestion, not Must Fix (`🟡`, never `🛑`)**: any version-bump irregularity within the PR
+     under review — including a **missing version bump** (`package.json` / `deno.json` unchanged in
+     the PR diff), a version that fails to strictly exceed the `origin/dev` tip (whether omitted on
+     the branch, collapsed out by a rebase, or fallen behind from `dev` moving under an open PR), or
+     a follow-up commit that re-bumps the version when `dev` did not move (a gratuitous double bump).
+     Report it under `### 🟡 Suggestions` with `🟡` on the `**Semver Bump**` checklist row, **never**
+     under `### 🛑 Must Fix Items` and **never** with `🛑` or `**🛑 Changes Requested**` on its
+     account. CircleCI's version-bump gate genuinely fails on a missing or stale version and keeps
+     the merge blocked deterministically — that gate, not the review's judgment, is what enforces it,
+     so the review reports it as a Suggestion rather than wearing a 🛑 for something CI already
+     reports and a version bump or rebase already clears.
    - **Exception — re-bumping when `dev` advances**: If `origin/dev` advances to or past the PR's version after the PR's first commit, re-bumping in a follow-up commit to clear the new `origin/dev` tip is required and explicitly correct — do NOT flag this as a finding.
 
 6. **Package-Lock Engine Alignment**:
@@ -426,8 +430,9 @@ afterward.
      test plan, architectural judgment, guardrails):
      - `**✅ Approved**` (clean diff, no Must Fix items found in Step 2)
      - `**🛑 Changes Requested**` (any Must Fix item found in Step 2, or a blocking defect exists)
-     - A version-bump finding (Step 2 item 5) is always a Suggestion, never a Must Fix — this
-       classification does not depend on whether it is the only finding.
+     - A version-bump finding (Step 2 item 5 — including a missing version bump, a version that
+       fails to strictly exceed `origin/dev`, or a gratuitous double bump) is always a Suggestion,
+       never a Must Fix — this classification does not depend on whether it is the only finding.
        The verdict is a separate question: it stays green on the strength of this finding alone
        only when the version-bump finding is the sole finding; it never by itself produces
        `**🛑 Changes Requested**`, in this post or in Step 4's follow-up.
@@ -438,13 +443,13 @@ afterward.
      - A raw-`any`-in-a-test-file finding (Step 2 item 9) and a leftover-debug-output-in-a-test-file finding (Step 2 item 4) are always Suggestions, never Must Fix. Neither by itself produces `**🛑 Changes Requested**`, in this post or in Step 4's follow-up, and a post whose only findings are of these kinds carries `**✅ Approved**`.
    - **Icon meaning**: A 🛑 icon marks an unresolved problem that blocks merge, and nothing else. Narration, context, notes on which commits arrived, and a previously-reported finding that has since been fixed never carry 🛑 — a fixed finding is reported with ✅ (see "Changes Since Last Review" below), because it is no longer a problem. A 🟡 icon marks a non-blocking finding about the artifact being merged; a 🔵 icon marks a cosmetic PR/issue-body prose nit, which never blocks merge either.
    - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. This initial post never includes CircleCI here; a CircleCI failure (or unresolved-at-cap status) surfaces as a new Must Fix line in Step 4's failure follow-up, posted only when CircleCI does not pass. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
-     - Exception: `Version bump check (PR branches only)` failing (or unresolved) is never listed here — Step 4 item 5's carve-out reports it under Suggestions instead of under `### 🛑 Must Fix Items`, whether it fails alone or alongside another job.
+     - Exception: a missing, stale, or double semver version bump (Step 2 item 5) and `Version bump check (PR branches only)` failing (or unresolved) are never listed here — report them under Suggestions instead of under `### 🛑 Must Fix Items`, whether found alone or alongside another issue.
    - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it.
      - **Incremental re-review (ancestor case)**: State `last_review_sha..head_sha` (exclusive start, inclusive end) and that earlier commits are outside this review and retain their previous review.
      - **Rebased PR (non-ancestor case)**: State in one line that the branch was rebased after the review at `<last_review_sha>` and that this review therefore covers the whole pull request against its base (rather than stating an incremental range or excluding earlier commits).
      A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
    - **Checklist Verification**: Status of mergeability, Snyk audits, scope, semver bump, package-lock engine alignment, test plan, architectural audits, and guardrails. The initial post never carries a CircleCI row, and no later post ever restates this checklist — when CircleCI fails, Step 4's follow-up reports that failure alone rather than reprinting these rows. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **Snyk**: ✅ ...`).
-     The **Semver Bump** row is an exception to that icon pairing: since a version-bump finding is a Suggestion, not a Must Fix (Step 2 item 5), that row is prefixed 🟡 whenever the version has fallen behind `origin/dev` or was gratuitously double-bumped, and prefixed ✅ otherwise — it is never prefixed with the Must-Fix stop-sign icon.
+     The **Semver Bump** row is an exception to that icon pairing: since any version-bump finding (including a missing version bump, a version that has fallen behind or fails to strictly exceed `origin/dev`, or a gratuitous double bump) is a Suggestion, not a Must Fix (Step 2 item 5), that row is prefixed 🟡 whenever a version bump is missing, fails to strictly exceed `origin/dev`, or was gratuitously double-bumped, and prefixed ✅ otherwise — it is never prefixed with the Must-Fix stop-sign icon.
      The **Guardrails** and **Scope** rows are exceptions too. Guardrails is prefixed 🟡 when its only finding is raw `any` in a test file (Step 2 item 9); Scope is prefixed 🟡 when its only finding is leftover debug output in a test file (Step 2 item 4). Each is prefixed 🛑 when it has any other finding of its own, and ✅ otherwise.
    - **Suggestions** (`### 🟡 Suggestions`): Specific code references or line numbers where concrete code-quality or design improvements are suggested — findings about the artifact being merged (the diff itself, including its version field). Prefix each suggestion line with 🟡. If none, render `### Suggestions` with `✅ None`.
      - **Exclusion of PR/Issue-Body Prose**: A finding about the wording of the PR's own description or a linked issue's body — the Step 2 item 11 class — is **never** a Suggestion. It goes under `### 🔵 Nits` below, so a reader can tell at a glance that fixing it means editing a description, not pushing a commit. Everything the Step 2 item 5 version-bump carve-out and the Step 2 item 8 Playwright E2E coverage suggestion produce stays here under Suggestions: both are findings about the artifact being merged, not about prose.
@@ -452,7 +457,7 @@ afterward.
      - **Exclusion of Process & Git Mechanics Trivia**: This section is strictly for code-relevant improvement suggestions tied directly to the diff under review. It **never** carries process/mechanics trivia, speculative workflow commentary, or git/semver heads-ups that are not defects in the PR itself.
        - **Never post cross-PR version-bump collision warnings** (e.g. noting that another open PR shares the same semver target and might merge first) or git workflow lectures — those describe another PR's state, not a defect in the diff under review.
        - These trivia items are **dropped, not redirected** — they go unreported everywhere, under Suggestions and under Nits alike. Nits is not an overflow bin for what this exclusion removes; it holds the Step 2 item 11 body-prose class and nothing else.
-       - A version-bump irregularity found *within the PR under review* is different: Step 2 item 5 evaluates that PR's own commits and reports both a gratuitous double bump and a version that fails to strictly exceed `origin/dev` as a Suggestion, so either belongs in this section as a real, permitted finding.
+       - A version-bump irregularity found *within the PR under review* is different: Step 2 item 5 evaluates that PR's own commits and reports a missing version bump, a gratuitous double bump, or a version that fails to strictly exceed `origin/dev` as a Suggestion, never a Must Fix, so any of those belongs in this section as a real, permitted finding.
    - **Nits** (`### 🔵 Nits`): Cosmetic, non-blocking findings about the PR's own description or a linked issue's body — the Step 2 item 11 class ("Issue Body & PR Body Prose (Never a Must Fix)"): stale, incomplete, or drifted Summary, Non-goals, acceptance-criteria wording, "Files changed" lists, and "How to test locally" / test-plan narration. **Placed directly beneath `### 🟡 Suggestions`** in the post body, as the last section. Prefix each nit line with 🔵. If none, render `### Nits` with `✅ None`.
      - **Scope, exactly**: this section holds the Step 2 item 11 body-prose class and nothing else. A finding about the code, the tests, or the version field is a Suggestion (or a Must Fix), not a Nit.
      - **Never a merge blocker**: like a Suggestion, a Nit never produces `**🛑 Changes Requested**` on its own, and it is never restated in Step 4's follow-up post. On a re-review, a Nit that has since been edited away is reported once with ✅ under `### Changes Since Last Review`, exactly like any other fixed finding.
@@ -599,13 +604,15 @@ resolves green, the review is already complete and nothing further is posted.
    `deno task post-pr-review` again for this PR (see item 6 below). Write a scratch file (e.g.
    `/tmp/pr-review-<Repo>-<pr-num>-ci.md` — never inside the repo, per AGENTS.md convention).
 
-   - **Version-bump-only carve-out**: `Version bump check (PR branches only)` failing is `dev`
-     moving under an open PR, not a defect the review's judgment adds anything to — CircleCI already
-     reports it deterministically and a rebase clears it (same reasoning as Step 2 item 5). When it
-     is the **only** failing (or still-unresolved) job, the follow-up reports it under
-     `### 🟡 Suggestions`, not Must Fix, and the verdict does not go red on it alone — post
-     `**✅ Approved**` unless post #1 already reported an unrelated Must Fix, in which case repeat
-     post #1's verdict line verbatim.
+   - **Version-bump-only carve-out**: `Version bump check (PR branches only)` failing (including
+     when the CircleCI job such as `ci/circleci: gate` or `ci/circleci: build` fails solely on the
+     `Version bump check (PR branches only)` step because a version bump is missing or behind
+     `origin/dev`) is `dev` moving under an open PR or an unbumped version, not a defect the
+     review's judgment adds anything to — CircleCI already reports it deterministically and a
+     version bump or rebase clears it (same reasoning as Step 2 item 5). When it is the **only**
+     failing (or still-unresolved) check, the follow-up reports it under `### 🟡 Suggestions`, not
+     Must Fix, and the verdict does not go red on it alone — post `**✅ Approved**` unless post #1
+     already reported an unrelated Must Fix, in which case repeat post #1's verdict line verbatim.
    - **Any other failing job — alone or mixed with a failing version-bump job**: keeps today's
      behavior. The non-version-bump job(s) drive `**🛑 Changes Requested**` and a `### 🛑 Must Fix
      Items` line each. A concurrently-failing version-bump job does not add a second Must Fix line —
@@ -646,11 +653,12 @@ This binds the reviewing model AND the session relaying the review to Josh:
 
 - **Never recommend merging a PR with a known unfixed defect in the code or artifact being merged**, however small, and never soften a real finding into a "nice to have" so that it can be waved through. If it is wrong, it is Must Fix or it is not a finding at all. This binary applies to defects in the code/artifact being merged, with four named exceptions — not a precedence rule, since each is a distinct case the binary was never meant to cover:
   - Issue-body or PR-body description prose is never a Must Fix, handled instead under Step 2's item 11 ("Issue Body & PR Body Prose (Never a Must Fix)") and reported under `### 🔵 Nits` — never under `### 🟡 Suggestions`.
-  - A version-bump irregularity within the PR under review — either a version that fails to
-    strictly exceed `origin/dev`, or a gratuitous double bump — is a Suggestion, not a Must Fix, per
-    Step 2 item 5. CircleCI's version-bump gate still deterministically blocks the merge on a stale
-    version regardless of what the review says; the review's severity reflects that a reviewer's
-    judgment adds nothing to what CI already reports and a rebase already clears.
+  - A version-bump irregularity within the PR under review — a missing version bump, a version that
+    fails to strictly exceed `origin/dev`, or a gratuitous double bump — is a Suggestion, not a Must
+    Fix, per Step 2 item 5. CircleCI's version-bump gate still deterministically blocks the merge on
+    a missing or stale version regardless of what the review says; the review's severity reflects
+    that a reviewer's judgment adds nothing to what CI already reports and a version bump or rebase
+    already clears.
   - Raw `any` introduced in a test file is a Suggestion, not a Must Fix, per Step 2 item 9 (Josh, 2026-10-02). The review still reports it, and the repos' own `AGENTS.md` rules still tell authors not to write it.
   - Leftover debug output introduced in a test file is a Suggestion, not a Must Fix, per Step 2 item 4 (Josh, 2026-10-02). The review still reports it.
 - **Never propose a follow-up issue as the answer to a defect found in the PR under review.** A new issue is where NEW work goes, not where this PR's known problems are parked.

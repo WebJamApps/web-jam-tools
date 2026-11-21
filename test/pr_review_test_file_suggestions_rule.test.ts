@@ -89,3 +89,32 @@ Deno.test("skills/pr-review/SKILL.md defines test-file carve-outs for raw any an
     "Leftover debug output introduced in a test file is a Suggestion, not a Must Fix, per Step 2 item 4 (Josh, 2026-10-02). The review still reports it.",
   );
 });
+
+Deno.test("skills/pr-review/SKILL.md defines a missing version bump as a Suggestion (🟡) and never a Must Fix (🛑)", async () => {
+  const content = await Deno.readTextFile(SKILL_MD_PATH);
+
+  assertStringIncludes(
+    content,
+    "**Suggestion, not Must Fix (`🟡`, never `🛑`)**: any version-bump irregularity within the PR\n     under review — including a **missing version bump** (`package.json` / `deno.json` unchanged in\n     the PR diff)",
+  );
+  assertStringIncludes(
+    content,
+    "A version-bump finding (Step 2 item 5 — including a missing version bump, a version that\n       fails to strictly exceed `origin/dev`, or a gratuitous double bump) is always a Suggestion,\n       never a Must Fix",
+  );
+  assertStringIncludes(
+    content,
+    "Exception: a missing, stale, or double semver version bump (Step 2 item 5) and `Version bump check (PR branches only)` failing (or unresolved) are never listed here — report them under Suggestions instead of under `### 🛑 Must Fix Items`",
+  );
+  assertStringIncludes(
+    content,
+    "that row is prefixed 🟡 whenever a version bump is missing, fails to strictly exceed `origin/dev`, or was gratuitously double-bumped, and prefixed ✅ otherwise — it is never prefixed with the Must-Fix stop-sign icon.",
+  );
+  assertStringIncludes(
+    content,
+    "Step 2 item 5 evaluates that PR's own commits and reports a missing version bump, a gratuitous double bump, or a version that fails to strictly exceed `origin/dev` as a Suggestion, never a Must Fix",
+  );
+  assertStringIncludes(
+    content,
+    "A version-bump irregularity within the PR under review — a missing version bump, a version that\n    fails to strictly exceed `origin/dev`, or a gratuitous double bump — is a Suggestion, not a Must\n    Fix, per Step 2 item 5.",
+  );
+});
