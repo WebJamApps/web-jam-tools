@@ -66,6 +66,9 @@ export function readHookRegistrations(source: string, home: string): Record<Even
         }
         const matcher = script === "haiku-only-gmail-gate.sh"
           ? "mcp__codex_apps__gmail_.*"
+          // Codex reads files only through its shell tool (web-jam-tools#1860).
+          : script === "block-personal-numbers-read.sh"
+          ? "Bash"
           : paired
           ? parts[0]
           : event === "SessionStart"
