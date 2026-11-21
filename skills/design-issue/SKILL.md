@@ -438,7 +438,7 @@ When `/design-issue` resolves an existing issue into paired implementation and J
 
 **Finding.** With no argument the skill scans all 8 active repos for open `Needs Design` issues and offers them as candidates.
 
-**Adding — automatic, inside one guard rail.** The skill may add the label to an existing issue too under-specified to plan against, and to a follow-up it knowingly defers to a later design run. It may never add it to anything in the approved plan's executable set. For open-ended design work, file a deferred stub with `Opus` and `Needs Design` under the tier-order design cited above.
+**Adding.** Apply `Needs Design` to existing issues that need more specification and to follow-ups deferred to a later design run. Exclude the approved plan's executable items. For open-ended design work, file a deferred stub with `Opus` and `Needs Design` under the tier-order design cited above.
 
 **Removing — never automatic, and the ask carries its reason.** Only Josh can say that a design is completed or not. Removing the `Needs Design` label and rewriting the issue's stale body sections happen in the same run — never separately (striking questions the design document answers, repointing design references, and reconciling scope). Use `deno task design:stale-bodies` (`web-jam-tools#746`) to find stale sections. The plan presented at Gate 2 lists every `Needs Design` label to be removed, each with its 4 parts, every time:
 
