@@ -2582,10 +2582,24 @@ const FIX_PR_RULES: ReadonlyArray<[string, string]> = [
     "4. **agy only: `/learn`.** Run `/learn`; if it edits the repository's `AGENTS.md`, commit that alone on the branch as `chore: fold /learn updates into AGENTS.md`.",
   ],
   ["one push per call", "This run pushes a single time."],
+  [
+    "unpublished local commits",
+    "stop and name those commits: they exist nowhere else, and the reset would discard them.",
+  ],
+  [
+    "CI build for the head commit",
+    "Use that build only when its `vcs_revision` is the pull request's head commit.",
+  ],
+  ["signed log link", "Never print, log or quote an `output_url`"],
+  [
+    "log credential check",
+    "replace each line it flags with `[credential-like value withheld]`.",
+  ],
 ];
 
 /** The fix-pr skill's load-bearing rules (web-jam-tools#1337): who fixes, who pushes, the signed
- * comment, the helper rules, the agy /learn step, and exactly one push. Wrapping is ignored. */
+ * comment, the helper rules, the agy /learn step, exactly one push, the guard on unpublished
+ * local commits, and how CI logs are found and shown. Wrapping is ignored. */
 export function assertFixPrSkillRules(text: string): void {
   const flat = text.replace(/\s+/g, " ");
   for (const [rule, phrase] of FIX_PR_RULES) {
@@ -2621,4 +2635,13 @@ Deno.test("fix-pr rule check fails when the helper rule is dropped (web-jam-tool
     "",
   );
   assertThrows(() => assertFixPrSkillRules(unasked), Error, "helper he did not ask for");
+});
+
+Deno.test("fix-pr rule check fails when the guard on unpublished local commits is dropped (web-jam-tools#1337)", () => {
+  const unguarded = FIX_PR_TEXT.replace(
+    /they exist nowhere else,\s+and the reset would discard them\./,
+    "",
+  );
+  assert(unguarded !== FIX_PR_TEXT, "fixture must actually drop the guard");
+  assertThrows(() => assertFixPrSkillRules(unguarded), Error, "unpublished local commits");
 });

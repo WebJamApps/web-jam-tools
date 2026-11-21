@@ -42,15 +42,33 @@ Design section: "What happens when Josh types it".
    - `gh pr view <number> --repo WebJamApps/<Repo> --json number,url,state,headRefName,baseRefName,isCrossRepository,mergeable,mergeStateStatus,reviews`.
    - Stop and refuse when it is not open, when its head is `dev` or `main`, or when
      `isCrossRepository` is true.
-   - CI: take the build number from the CircleCI link in
-     `gh pr checks <number> --repo WebJamApps/<Repo>`, fetch
-     `https://circleci.com/api/v1.1/project/github/WebJamApps/<Repo>/<build>`, and read the
-     `output_url` of every action flagged `failed`. Load `CIRCLECI_TOKEN` from the environment
-     inside a script file, never on a command line.
+   - CI, in one script file (load `CIRCLECI_TOKEN` from the environment there, never on a command
+     line):
+     - Find the newest build on the branch. The check link `gh pr checks` shows carries workflow and
+       job ids, not a build number, so look the build up by branch:
+       `https://circleci.com/api/v1.1/project/github/WebJamApps/<Repo>/tree/<branch, URL-encoded>?limit=1&shallow=true`.
+       Its `build_num` is the build; its `workflows.job_id` is the job id in the check link.
+     - Use that build only when its `vcs_revision` is the pull request's head commit. When the
+       lookup fails, returns no build, or returns one for another commit, CI is unknown: say so in
+       the report with the reason, and never treat it as a passing build.
+     - Fetch `https://circleci.com/api/v1.1/project/github/WebJamApps/<Repo>/<build_num>` and, for
+       every action flagged `failed`, fetch its `output_url` inside the same script. Never print,
+       log or quote an `output_url`: it is a signed link that opens the log to whoever holds it.
+     - Before any log text is shown, quoted or written to a file, check each line with
+       `findCredentialLiteral` from `hooks/lib/detect_credential_literal.ts` and replace each line
+       it flags with `[credential-like value withheld]`.
    - Review: the Must Fix items in the latest review carrying `## PR Review Summary`.
    - If none of this shows a problem, report that and end without changes.
-2. **Fix** in a `/tmp` worktree of the branch, never the canonical clone:
-   `git -C ~/WebJamApps/<Repo> fetch origin dev <branch>`, then
+2. **Fix** in a `/tmp` worktree of the branch, never the canonical clone. First
+   `git -C ~/WebJamApps/<Repo> fetch origin dev <branch>`. Then protect any local copy of the
+   branch, because `worktree add -B` resets an existing local branch to the remote one:
+   - When `git -C ~/WebJamApps/<Repo> worktree list` shows `<branch>` checked out anywhere, stop and
+     name that worktree; never take it over.
+   - When a local `<branch>` exists and
+     `git -C ~/WebJamApps/<Repo> rev-list origin/<branch>..<branch>` lists any commit, stop and name
+     those commits: they exist nowhere else, and the reset would discard them.
+
+   Only then
    `git -C ~/WebJamApps/<Repo> worktree add -B <branch> /tmp/fix-pr-<number> origin/<branch>`.
    Rebase onto `origin/dev`, settle conflicts, bump the version again under the rule kept in
    `skills/pr-review/SKILL.md`, and repair formatting, lint, tests and every Must Fix item.
@@ -71,7 +89,7 @@ Design section: "What happens when Josh types it".
    fails, the command prints a `deno task post-pr-comment` line; run that line, which only posts.
 7. **Report**: the pull request link, commits pushed, fixes made, and the CI build link from that
    push. Waiting for the build happens only on request; then report its outcome, quoting the failed
-   step's output if it failed.
+   step's output if it failed, read and checked as step 1 sets out.
 
 This run pushes a single time. A red build afterwards is Josh's to act on: no retry and no second
 model. A new call is a new run.
