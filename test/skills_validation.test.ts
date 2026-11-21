@@ -1281,87 +1281,90 @@ Deno.test("skills/design-issue/SKILL.md contains Design Tiers and Delegation Rul
   );
 });
 
-Deno.test("design-issue symlink resolves into fixture canonical clone across Claude Code, agy, and Codex fixture surfaces", async () => {
-  const root = new URL("../", import.meta.url).pathname;
-  const tempDir = await Deno.makeTempDir({ prefix: "design_issue_symlink_test_" });
-  try {
-    const fixtureCanonical = join(tempDir, "canonical-clone");
-    const tempHome = join(tempDir, "home");
+// web-jam-tools#1337 runs the same three-surface check for fix-pr.
+for (const skill of ["design-issue", "fix-pr"]) {
+  Deno.test(`${skill} symlink resolves into fixture canonical clone across Claude Code, agy, and Codex fixture surfaces`, async () => {
+    const root = new URL("../", import.meta.url).pathname;
+    const tempDir = await Deno.makeTempDir({ prefix: `${skill.replace("-", "_")}_symlink_test_` });
+    try {
+      const fixtureCanonical = join(tempDir, "canonical-clone");
+      const tempHome = join(tempDir, "home");
 
-    await Deno.mkdir(join(fixtureCanonical, "skills/design-issue"), { recursive: true });
-    await Deno.copyFile(
-      `${SKILLS_DIR}design-issue/SKILL.md`,
-      join(fixtureCanonical, "skills/design-issue/SKILL.md"),
-    );
+      await Deno.mkdir(join(fixtureCanonical, `skills/${skill}`), { recursive: true });
+      await Deno.copyFile(
+        `${SKILLS_DIR}${skill}/SKILL.md`,
+        join(fixtureCanonical, `skills/${skill}/SKILL.md`),
+      );
 
-    // 1. Claude Code and agy installation
-    const claudeDest = join(tempHome, ".claude/skills");
-    const agyDest = join(tempHome, ".gemini/config/plugins/webjam-tasks/skills");
-    await installSkills({
-      repoDir: fixtureCanonical,
-      claudeDest,
-      agyDest,
-      claudeBackupDest: join(tempHome, ".claude/skills-backups"),
-      agyBackupDest: join(tempHome, ".gemini/config/plugins/webjam-tasks/skills-backups"),
-      allowNonCanonical: true,
-      allowUnsafeForTesting: true,
-      quiet: true,
-    });
+      // 1. Claude Code and agy installation
+      const claudeDest = join(tempHome, ".claude/skills");
+      const agyDest = join(tempHome, ".gemini/config/plugins/webjam-tasks/skills");
+      await installSkills({
+        repoDir: fixtureCanonical,
+        claudeDest,
+        agyDest,
+        claudeBackupDest: join(tempHome, ".claude/skills-backups"),
+        agyBackupDest: join(tempHome, ".gemini/config/plugins/webjam-tasks/skills-backups"),
+        allowNonCanonical: true,
+        allowUnsafeForTesting: true,
+        quiet: true,
+      });
 
-    // 2. Codex installation
-    await Deno.mkdir(join(fixtureCanonical, "scripts"), { recursive: true });
-    const hooksSh = await Deno.readTextFile(join(root, "scripts/install-hooks.sh"));
-    await Deno.writeTextFile(join(fixtureCanonical, "scripts/install-hooks.sh"), hooksSh);
-    await Deno.mkdir(join(fixtureCanonical, "codex/rules"), { recursive: true });
-    const rules = await Deno.readTextFile(join(root, "codex/rules/web-jam-tools.rules"));
-    await Deno.writeTextFile(join(fixtureCanonical, "codex/rules/web-jam-tools.rules"), rules);
+      // 2. Codex installation
+      await Deno.mkdir(join(fixtureCanonical, "scripts"), { recursive: true });
+      const hooksSh = await Deno.readTextFile(join(root, "scripts/install-hooks.sh"));
+      await Deno.writeTextFile(join(fixtureCanonical, "scripts/install-hooks.sh"), hooksSh);
+      await Deno.mkdir(join(fixtureCanonical, "codex/rules"), { recursive: true });
+      const rules = await Deno.readTextFile(join(root, "codex/rules/web-jam-tools.rules"));
+      await Deno.writeTextFile(join(fixtureCanonical, "codex/rules/web-jam-tools.rules"), rules);
 
-    await Deno.mkdir(join(tempHome, ".claude/hooks"), { recursive: true });
-    const { readHookRegistrations } = await import("../src/install-codex/hooks.ts");
-    for (const groups of Object.values(readHookRegistrations(hooksSh, tempHome))) {
-      for (const group of groups) {
-        const name = group.hooks[0].command.split("/").at(-1)!.slice(0, -1);
-        await Deno.writeTextFile(join(tempHome, ".claude/hooks", name), "#!/bin/sh\nexit 0\n");
+      await Deno.mkdir(join(tempHome, ".claude/hooks"), { recursive: true });
+      const { readHookRegistrations } = await import("../src/install-codex/hooks.ts");
+      for (const groups of Object.values(readHookRegistrations(hooksSh, tempHome))) {
+        for (const group of groups) {
+          const name = group.hooks[0].command.split("/").at(-1)!.slice(0, -1);
+          await Deno.writeTextFile(join(tempHome, ".claude/hooks", name), "#!/bin/sh\nexit 0\n");
+        }
+      }
+
+      const code = installCodex({ home: tempHome, repo: fixtureCanonical });
+      assertEquals(code, 0, "installCodex should succeed");
+
+      const claudeSymlink = join(claudeDest, skill);
+      const claudeStat = Deno.lstatSync(claudeSymlink);
+      assertEquals(claudeStat.isSymlink, true, "Claude Code skill must be a symlink");
+      assertEquals(
+        await Deno.realPath(claudeSymlink),
+        await Deno.realPath(join(fixtureCanonical, `skills/${skill}`)),
+        "Claude Code skill must resolve into fixture canonical clone",
+      );
+
+      const agySymlink = join(agyDest, skill);
+      const agyStat = Deno.lstatSync(agySymlink);
+      assertEquals(agyStat.isSymlink, true, "agy skill must be a symlink");
+      assertEquals(
+        await Deno.realPath(agySymlink),
+        await Deno.realPath(join(fixtureCanonical, `skills/${skill}`)),
+        "agy skill must resolve into fixture canonical clone",
+      );
+
+      const codexSymlink = join(tempHome, ".codex/skills", skill);
+      const codexStat = Deno.lstatSync(codexSymlink);
+      assertEquals(codexStat.isSymlink, true, "Codex skill must be a symlink");
+      assertEquals(
+        await Deno.realPath(codexSymlink),
+        await Deno.realPath(join(fixtureCanonical, `skills/${skill}`)),
+        "Codex skill must resolve into fixture canonical clone",
+      );
+    } finally {
+      try {
+        await Deno.remove(tempDir, { recursive: true });
+      } catch {
+        // ignore cleanup errors
       }
     }
-
-    const code = installCodex({ home: tempHome, repo: fixtureCanonical });
-    assertEquals(code, 0, "installCodex should succeed");
-
-    const claudeSymlink = join(claudeDest, "design-issue");
-    const claudeStat = Deno.lstatSync(claudeSymlink);
-    assertEquals(claudeStat.isSymlink, true, "Claude Code skill must be a symlink");
-    assertEquals(
-      await Deno.realPath(claudeSymlink),
-      await Deno.realPath(join(fixtureCanonical, "skills/design-issue")),
-      "Claude Code skill must resolve into fixture canonical clone",
-    );
-
-    const agySymlink = join(agyDest, "design-issue");
-    const agyStat = Deno.lstatSync(agySymlink);
-    assertEquals(agyStat.isSymlink, true, "agy skill must be a symlink");
-    assertEquals(
-      await Deno.realPath(agySymlink),
-      await Deno.realPath(join(fixtureCanonical, "skills/design-issue")),
-      "agy skill must resolve into fixture canonical clone",
-    );
-
-    const codexSymlink = join(tempHome, ".codex/skills/design-issue");
-    const codexStat = Deno.lstatSync(codexSymlink);
-    assertEquals(codexStat.isSymlink, true, "Codex skill must be a symlink");
-    assertEquals(
-      await Deno.realPath(codexSymlink),
-      await Deno.realPath(join(fixtureCanonical, "skills/design-issue")),
-      "Codex skill must resolve into fixture canonical clone",
-    );
-  } finally {
-    try {
-      await Deno.remove(tempDir, { recursive: true });
-    } catch {
-      // ignore cleanup errors
-    }
-  }
-});
+  });
+}
 
 Deno.test("skills/design-issue/SKILL.md contains installer-scope rule", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
@@ -2558,4 +2561,90 @@ Deno.test("docs/ai-team-playbook.md and skills: triage issues to model labels by
       assertStringIncludes(target, `web-jam-tools/skills/${skill}`);
     }
   }
+});
+
+// --- skills/fix-pr (web-jam-tools#1337) ---
+
+const FIX_PR_PUSH =
+  'deno task --config ~/WebJamApps/web-jam-tools/deno.json push --repo-dir "$PWD" --fix-comment';
+
+const FIX_PR_RULES: ReadonlyArray<[string, string]> = [
+  ["selected fixer", "Whatever model runs this session does the work."],
+  ["push owner", "this session keeps step 6, since only the session Josh typed into may push."],
+  ["signed comment", "Its final line is the signature, `🤖 Fixed by <tool> — <model>`."],
+  ["helper he did not ask for", "A helper exists only when the call asks for one by model."],
+  [
+    "agy helper",
+    "fix-pr never opens a second agy process or hands its push right to another conversation",
+  ],
+  [
+    "agy /learn step",
+    "4. **agy only: `/learn`.** Run `/learn`; if it edits the repository's `AGENTS.md`, commit that alone on the branch as `chore: fold /learn updates into AGENTS.md`.",
+  ],
+  ["one push per call", "This run pushes a single time."],
+  [
+    "unpublished local commits",
+    "stop and name those commits: they exist nowhere else, and the reset would discard them.",
+  ],
+  [
+    "CI build for the head commit",
+    "It uses that build only when it built the pull request's head commit.",
+  ],
+  [
+    "CI read through the sanitized report",
+    "Never fetch CircleCI logs any other way, and quote CI output only from its report.",
+  ],
+  [
+    "raw logs and signed links stay inside",
+    "Raw logs and their signed `output_url` links never leave it",
+  ],
+];
+
+/** The fix-pr skill's load-bearing rules (web-jam-tools#1337): who fixes, who pushes, the signed
+ * comment, the helper rules, the agy /learn step, exactly one push, the guard on unpublished
+ * local commits, and how CI logs are found and shown. Wrapping is ignored. */
+export function assertFixPrSkillRules(text: string): void {
+  const flat = text.replace(/\s+/g, " ");
+  for (const [rule, phrase] of FIX_PR_RULES) {
+    assertStringIncludes(flat, phrase, `skills/fix-pr/SKILL.md must keep the ${rule} rule`);
+  }
+  const pushes = flat.split(FIX_PR_PUSH).length - 1;
+  assertEquals(pushes, 1, `skills/fix-pr/SKILL.md must push exactly once (found ${pushes})`);
+}
+
+const FIX_PR_TEXT = await Deno.readTextFile(`${SKILLS_DIR}fix-pr/SKILL.md`);
+
+Deno.test("skills/fix-pr/SKILL.md keeps the selected fixer, push owner, signed comment, helper and /learn rules, and pushes once (web-jam-tools#1337)", () => {
+  assertFixPrSkillRules(FIX_PR_TEXT);
+});
+
+Deno.test("fix-pr rule check fails when the agy /learn step is omitted (web-jam-tools#1337)", () => {
+  const withoutLearn = FIX_PR_TEXT.replace(
+    /4\. \*\*agy only: `\/learn`\.\*\*[\s\S]*?(?=\n5\. )/,
+    "",
+  );
+  assert(withoutLearn !== FIX_PR_TEXT, "fixture must actually drop the /learn step");
+  assertThrows(() => assertFixPrSkillRules(withoutLearn), Error, "agy /learn step");
+});
+
+Deno.test("fix-pr rule check fails when a second push is introduced (web-jam-tools#1337)", () => {
+  const twoPushes = `${FIX_PR_TEXT}\n${FIX_PR_PUSH} /tmp/again.md\n`;
+  assertThrows(() => assertFixPrSkillRules(twoPushes), Error, "must push exactly once (found 2)");
+});
+
+Deno.test("fix-pr rule check fails when the helper rule is dropped (web-jam-tools#1337)", () => {
+  const unasked = FIX_PR_TEXT.replace(
+    "A helper exists only when the call asks for one by model.",
+    "",
+  );
+  assertThrows(() => assertFixPrSkillRules(unasked), Error, "helper he did not ask for");
+});
+
+Deno.test("fix-pr rule check fails when the guard on unpublished local commits is dropped (web-jam-tools#1337)", () => {
+  const unguarded = FIX_PR_TEXT.replace(
+    /they exist nowhere else,\s+and the reset would discard them\./,
+    "",
+  );
+  assert(unguarded !== FIX_PR_TEXT, "fixture must actually drop the guard");
+  assertThrows(() => assertFixPrSkillRules(unguarded), Error, "unpublished local commits");
 });

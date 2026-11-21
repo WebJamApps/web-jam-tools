@@ -397,6 +397,14 @@ function checkFolder(
         if (exempt) continue;
         verdict = checkPath(child, sweep, follow);
       } else continue;
+      // Running out of time anywhere under this folder is the folder's sweep limit: name the
+      // folder in the design's words, not the file that happened to be last.
+      if (
+        verdict.kind === "unreadable" &&
+        (verdict.detail === OUT_OF_TIME || verdict.detail === TOO_MANY)
+      ) {
+        return { kind: "unreadable", file: folder, detail: TOO_MANY };
+      }
       if (verdict.kind !== "allow") return verdict;
     }
   } catch (err) {

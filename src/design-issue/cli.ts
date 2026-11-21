@@ -113,6 +113,7 @@ Options:
       changedTerms,
       nowImpl: options?.nowImpl,
       readOtherDesignDocImpl: options?.readOtherDesignDocImpl,
+      verifyCitationsImpl: options?.verifyCitationsImpl,
     });
 
     console.log(`[design:gate1] Rendered HTML: ${result.htmlPath}`);
