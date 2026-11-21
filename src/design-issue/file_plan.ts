@@ -425,21 +425,13 @@ export async function filePlan(
   }
 
   // Validate every body, including epics and manual steps, before any issue is filed.
+  const bodies = new Map<PlanIssueItem, string>();
   for (const { item } of allItems) {
-    const bodyPath = item.bodyFile || item.body_file || item.bodyPath;
-    let body = item.body ?? "";
-    if (bodyPath) {
-      try {
-        body = await deps.readFileText(path.resolve(expandHome(bodyPath)));
-      } catch (err) {
-        throw new Error(
-          `Refused to file plan — cannot read body file "${bodyPath}" for issue "${item.title}": ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      }
+    const body = await resolvePlanItemBody(item, deps);
+    if (body !== undefined) {
+      await checkDesignBody(body);
+      bodies.set(item, body);
     }
-    await checkDesignBody(body);
   }
 
   // Pre-validate titles, Gate 2 approval tokens, and ensure explicit IDs do not collide
@@ -595,41 +587,25 @@ export async function filePlan(
       designHeadingsByDoc.set(resolvedItemDesignDoc, itemDesignHeadings);
     }
 
+    const body = bodies.get(item);
+    for (const bodyDesignPath of extractDesignDocPathsFromBody(body ?? "")) {
+      if (normalizeDesignDocPath(bodyDesignPath) !== resolvedItemDesignDoc) {
+        throw new Error(
+          `Refused to file plan — issue "${item.title}" body names "${bodyDesignPath}", which differs from its designDoc "${rawItemDesignDoc}".`,
+        );
+      }
+    }
+
     if (isEpic || item.type?.toLowerCase() === "epic") continue;
     const labels = resolvedLabels.get(item) ?? [];
     const tier = item.tier ?? item.model ?? item.modelTier;
     const hasModelLabel = labels.some((l) => modelLabels.has(l));
     if (!hasModelLabel && (labels.includes("Josh") || tier?.trim() === "Josh")) continue;
 
-    const bodyPath = item.bodyFile || item.body_file || item.bodyPath;
-    let body: string | undefined = item.body;
-    if (bodyPath) {
-      try {
-        body = await deps.readFileText(path.resolve(expandHome(bodyPath)));
-      } catch (err) {
-        throw new Error(
-          `Refused to file plan — cannot read body file "${bodyPath}" for issue "${item.title}": ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      }
-    }
-
     if (body === undefined) {
       throw new Error(
         `Refused to file plan — issue "${item.title}" body has no "## Acceptance criteria" section.`,
       );
-    }
-
-    const hasItemDesignDoc = Boolean((item.designDoc ?? item.design_doc ?? "").trim());
-    if (hasItemDesignDoc) {
-      for (const bodyDesignPath of extractDesignDocPathsFromBody(body)) {
-        if (normalizeDesignDocPath(bodyDesignPath) !== resolvedItemDesignDoc) {
-          throw new Error(
-            `Refused to file plan — issue "${item.title}" body names "${bodyDesignPath}", which differs from its designDoc "${rawItemDesignDoc}".`,
-          );
-        }
-      }
     }
 
     validateIssueBodyCriteria(item.title, body, itemDesignHeadings, {

@@ -414,7 +414,7 @@ function checkRowDesignCell(
 ): ResolvedDesignDocArg | undefined {
   const raw = row.cells[COL_DESIGN];
   const rowNum = stripMdMarkers(row.cells[COL_NUM]).trim() || String(allRows.indexOf(row) + 1);
-  if (isMissingValue(raw)) {
+  if (isMissingValue(stripDesignCellMarkers(raw))) {
     violations.push({
       rule: "cell-missing",
       line: row.line,

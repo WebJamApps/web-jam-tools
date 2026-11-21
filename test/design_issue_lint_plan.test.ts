@@ -2293,12 +2293,15 @@ Deno.test("Appendix D multi-design Cases 5–10: Design cell validation rules", 
     "| 1 | Coordinate delivery | Epic | Opus | High | web-jam-tools | | Unit tests cover every validator rule | when its children close |",
     "| 2 | Implement work | row 1 | Terra | High | web-jam-tools | a-design.md | Unit tests cover every validator rule | `deno task test` passes |",
   ]);
-  const v6 = findRule(
-    validate(doc6, { designDocPaths: ["/tmp/a-design.md"] }),
-    "cell-missing",
-  );
-  assertEquals(v6.length, 1);
-  assertEquals(v6[0].column, "Design");
+  for (const blankCell of ["", "**"]) {
+    const plan = doc6.replace("| web-jam-tools | |", `| web-jam-tools | ${blankCell} |`);
+    const v6 = findRule(
+      validate(plan, { designDocPaths: ["/tmp/a-design.md"] }),
+      "cell-missing",
+    );
+    assertEquals(v6.length, 1);
+    assertEquals(v6[0].column, "Design");
+  }
 
   // Case 7: Row whose Design names a design not passed with --design-doc -> fail, naming row and design
   const doc7 = planTableDoc([

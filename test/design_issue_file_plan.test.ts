@@ -4,6 +4,7 @@
 import { assertEquals, assertRejects, assertStringIncludes, assertThrows } from "@std/assert";
 import * as path from "@std/path";
 import { DESIGN_BODY_CASES } from "./support/design_body_cases.ts";
+import { designPathsInBody } from "../src/shared/design_body.ts";
 
 for (const row of DESIGN_BODY_CASES) {
   Deno.test(`file-plan one design: ${row.name}`, async () => {
@@ -14,6 +15,8 @@ for (const row of DESIGN_BODY_CASES) {
       );
       // A later child must be rejected before the epic can be filed.
       fixture.children[1].body += `\n${row.body}`;
+      const [bodyDesignDoc] = designPathsInBody(row.body);
+      if (!row.refused && bodyDesignDoc) fixture.children[1].designDoc = bodyDesignDoc;
       const planPath = path.join(dir, "plan.json");
       await Deno.writeTextFile(planPath, JSON.stringify(fixture));
       const calls: string[][] = [];
@@ -23,7 +26,7 @@ for (const row of DESIGN_BODY_CASES) {
           dryRun: !row.refused,
           approvalCheck: APPROVE_ALL,
           deps: {
-            readFileText: (p) => Deno.readTextFile(p),
+            readFileText: (p) => Deno.readTextFile(p === bodyDesignDoc ? fixture.designDoc : p),
             runCmd: (cmd) => {
               calls.push(cmd);
               throw new Error("Unexpected gh call");
@@ -134,38 +137,40 @@ Deno.test("agy plan refuses missing record before any subprocess call", () =>
     );
     assertEquals(calls, []);
   }));
-Deno.test("file-plan: unreadable body file refuses before filing, naming file and issue", async () => {
-  const dir = await Deno.makeTempDir();
-  try {
-    const fixture = JSON.parse(
-      await Deno.readTextFile("test/fixtures/design-issue/fixture-plan.json"),
-    );
-    fixture.children[0].bodyFile = "/nonexistent/missing-body.md";
-    const planPath = path.join(dir, "plan.json");
-    await Deno.writeTextFile(planPath, JSON.stringify(fixture));
-    const execute = () =>
-      realFilePlan({
-        planPath,
-        dryRun: true,
-        approvalCheck: APPROVE_ALL,
-        deps: {
-          readFileText: (p) => Deno.readTextFile(p),
-          runCmd: () => {
-            throw new Error("Unexpected gh call");
+Deno.test("file-plan: unreadable body file refuses before filing, naming file and issue", () =>
+  withSigningFixture(async (signing) => {
+    const dir = await Deno.makeTempDir();
+    try {
+      const fixture = JSON.parse(
+        await Deno.readTextFile("test/fixtures/design-issue/fixture-plan.json"),
+      );
+      fixture.children[0].bodyFile = "/nonexistent/missing-body.md";
+      const planPath = path.join(dir, "plan.json");
+      await Deno.writeTextFile(planPath, JSON.stringify(fixture));
+      const execute = () =>
+        realFilePlan({
+          planPath,
+          dryRun: true,
+          approvalCheck: APPROVE_ALL,
+          deps: {
+            signing,
+            readFileText: (p) => Deno.readTextFile(p),
+            runCmd: () => {
+              throw new Error("Unexpected gh call");
+            },
           },
-        },
-      });
-    const error = await assertRejects(
-      execute,
-      Error,
-      "Refused to file plan — cannot read body file",
-    );
-    assertStringIncludes(error.message, "/nonexistent/missing-body.md");
-    assertStringIncludes(error.message, fixture.children[0].title);
-  } finally {
-    await Deno.remove(dir, { recursive: true });
-  }
-});
+        });
+      const error = await assertRejects(
+        execute,
+        Error,
+        "Refused to file plan — cannot read body file",
+      );
+      assertStringIncludes(error.message, "/nonexistent/missing-body.md");
+      assertStringIncludes(error.message, fixture.children[0].title);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  }));
 
 Deno.test("signing plan m: every dry-run body has the looked-up Luna footer", () =>
   withSigningFixture(async (signing) => {
@@ -2588,27 +2593,29 @@ Deno.test("Appendix D several designs, file-plan row 17: an item with no designD
   }
 });
 
-Deno.test("Appendix D several designs, file-plan row 18: an item on b-design.md whose body names a-design.md is refused before any issue is filed, naming the item and both paths", async () => {
+Deno.test("Appendix D several designs, file-plan row 18: a mismatched body design is refused before any issue is filed, with explicit and inherited designDoc", async () => {
   const { root, docA, docB } = await multiDesignFiles();
   try {
-    const { error, createCalls } = await refusedBeforeFiling({
-      repo: "web-jam-tools",
-      designDoc: docA,
-      children: [{
-        title: "Guard the private folder",
-        parent: 1,
-        tier: "Terra",
-        designDoc: docB,
-        body: criteria('builds "The private-folder guard" as written').replace(
-          "Work.",
-          `See ${docA}.`,
-        ),
-      }],
-    });
-    assertEquals(createCalls, 0);
-    assertStringIncludes(error.message, "Guard the private folder");
-    assertStringIncludes(error.message, docA);
-    assertStringIncludes(error.message, docB);
+    for (const assignment of [{ plan: docA, item: docB }, { plan: docB, item: undefined }]) {
+      const { error, createCalls } = await refusedBeforeFiling({
+        repo: "web-jam-tools",
+        designDoc: assignment.plan,
+        children: [{
+          title: "Guard the private folder",
+          parent: 1,
+          tier: "Terra",
+          designDoc: assignment.item,
+          body: criteria('builds "The private-folder guard" as written').replace(
+            "Work.",
+            `See ${docA}.`,
+          ),
+        }],
+      });
+      assertEquals(createCalls, 0);
+      assertStringIncludes(error.message, "Guard the private folder");
+      assertStringIncludes(error.message, docA);
+      assertStringIncludes(error.message, docB);
+    }
   } finally {
     await Deno.remove(root, { recursive: true });
   }
