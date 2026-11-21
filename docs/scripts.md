@@ -271,6 +271,20 @@ deno task circleci-settings
 
 See [docs/circleci-project-settings.md](circleci-project-settings.md) for full documentation.
 
+### `ci-failure-report.ts`
+
+The fix-pr skill's only way to read CI (web-jam-tools#1337). It finds the newest CircleCI build on a
+branch through the v1.1 `tree/<branch>` endpoint, uses it only when it built the given head commit,
+and prints each failed step with its exit code and the last 30 lines of its output. Raw logs and
+their signed `output_url` links never leave the script, and `src/ci-failure-report/report.ts`
+withholds every credential-like value first, multi-line private keys included. A missing build, a
+build for another commit or a failed lookup prints `CI unknown`. `CIRCLECI_TOKEN` is read from the
+environment when set; public projects need none.
+
+```bash
+deno task ci-failure-report --repo web-jam-tools --branch <branch> --head <commit>
+```
+
 ### `gitleaks.sh`
 
 Runs `gitleaks detect` with repository configuration and shared `.gitleaks.toml` rules

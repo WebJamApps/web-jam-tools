@@ -23,6 +23,7 @@
     "sheet-music:generate": "deno run --allow-read --allow-write src/sheet-music/generate_docx.ts",
     "sheet-music:check-lyrics": "bash scripts/sheet-music-check-lyrics.sh",
     "circleci-settings": "deno run --allow-net --allow-env scripts/circleci-settings.ts",
+    "ci-failure-report": "deno run --allow-net=circleci.com --allow-env=CIRCLECI_TOKEN scripts/ci-failure-report.ts",
     "gitleaks": "bash scripts/gitleaks.sh",
     "install-skills": "deno run --allow-env --allow-run --allow-read --allow-write scripts/install-skills.ts",
     "install-codex": "deno run --allow-env=HOME --allow-read --allow-write scripts/install-codex.ts",

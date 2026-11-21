@@ -2588,12 +2588,15 @@ const FIX_PR_RULES: ReadonlyArray<[string, string]> = [
   ],
   [
     "CI build for the head commit",
-    "Use that build only when its `vcs_revision` is the pull request's head commit.",
+    "It uses that build only when it built the pull request's head commit.",
   ],
-  ["signed log link", "Never print, log or quote an `output_url`"],
   [
-    "log credential check",
-    "replace each line it flags with `[credential-like value withheld]`.",
+    "CI read through the sanitized report",
+    "Never fetch CircleCI logs any other way, and quote CI output only from its report.",
+  ],
+  [
+    "raw logs and signed links stay inside",
+    "Raw logs and their signed `output_url` links never leave it",
   ],
 ];
 
