@@ -447,3 +447,34 @@ Deno.test("extractFooterEntries preserves exact original line", () => {
     { line: "🤖 Work by   Custom Model (high)  ", author: "Custom Model (high)" },
   ]);
 });
+
+// Literal rows from "The output scanner's header pattern" in the secret-guards design.
+const shortHeaderFlag = "-H";
+const exampleHeaderValue = variedFakeBody(20, 41);
+
+const headerCases = [
+  [
+    "CORS preflight in Markdown",
+    "3. A `curl -X OPTIONS` probe with `" + shortHeaderFlag +
+    ' "Origin: https://web-jam.com"` and `' + shortHeaderFlag +
+    ' "Access-Control-Request-Method: POST"` was refused as an "Auth header flag".',
+    false,
+  ],
+  [
+    "API version in Markdown",
+    "The probe sent `" + shortHeaderFlag + ' "X-GitHub-Api-Version: 2026-03-10"`.',
+    false,
+  ],
+  [
+    "authorization in Markdown",
+    "Run `curl " + shortHeaderFlag + ' "Authorization: Bearer ' + exampleHeaderValue +
+    '" https://api.example.com/v1/items`.',
+    true,
+  ],
+] as const;
+
+for (const [name, input, blocked] of headerCases) {
+  Deno.test(`header pattern: ${name}`, () => {
+    assertEquals(checkNoCredentialLiteral(input).ok, !blocked);
+  });
+}

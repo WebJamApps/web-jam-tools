@@ -307,3 +307,76 @@ Deno.test("a realistic (non-degenerate, unmarked) high-entropy token in tool_res
     throw new Error(`expected a realistic token to still be caught, got: ${res.stderr}`);
   }
 });
+
+// Literal rows from "The output scanner's header pattern" in the secret-guards design.
+const shortHeaderFlag = "-H";
+const exampleHeaderValue = variedFakeBody(20, 41);
+const longHeaderFlag = "--header";
+const helpFlag = "-h";
+
+const headerCases = [
+  [
+    "authorization bearer",
+    "curl " + shortHeaderFlag + ' "Authorization: Bearer ' + exampleHeaderValue + '"',
+    true,
+  ],
+  [
+    "authorization token",
+    "curl " + shortHeaderFlag + ' "Authorization: token ' + exampleHeaderValue + '"',
+    true,
+  ],
+  [
+    "authorization basic",
+    "curl " + shortHeaderFlag + " 'Authorization: Basic " + exampleHeaderValue + "'",
+    true,
+  ],
+  ["API key", "curl " + longHeaderFlag + ' "X-Api-Key: ' + exampleHeaderValue + '"', true],
+  ["auth token", "curl " + shortHeaderFlag + ' "X-Auth-Token: ' + exampleHeaderValue + '"', true],
+  ["session cookie", "curl " + shortHeaderFlag + ' "Cookie: sid=' + exampleHeaderValue + '"', true],
+  [
+    "webhook secret",
+    "curl " + shortHeaderFlag + ' "X-Webhook-Secret: ' + exampleHeaderValue + '"',
+    true,
+  ],
+  [
+    "custom bearer header",
+    "curl " + shortHeaderFlag + ' "X-Custom-Header: Bearer ' + exampleHeaderValue + '"',
+    true,
+  ],
+  [
+    "help flag before another log line",
+    "token-guard exit=0 :: deno task create-issue " + helpFlag +
+    "\ntoken-guard exit=0 :: deno task create-issue",
+    false,
+  ],
+  ["help flag before tokens", "ls " + helpFlag + "\ntokens", false],
+  ["help flag beside a directory", "df " + helpFlag + " tokenized-backup-directory", false],
+  [
+    "GitHub Accept header",
+    "gh api " + shortHeaderFlag + ' "Accept: application/vnd.github.diff"',
+    false,
+  ],
+  [
+    "GitHub API version",
+    "gh api " + shortHeaderFlag + ' "X-GitHub-Api-Version: 2022-11-28"',
+    false,
+  ],
+  ["JSON content type", "curl " + shortHeaderFlag + ' "Content-Type: application/json"', false],
+  ["language preference", "curl " + shortHeaderFlag + ' "Accept-Language: en-US"', false],
+  [
+    "requested-with header",
+    "curl " + shortHeaderFlag + ' "X-Requested-With: XMLHttpRequest"',
+    false,
+  ],
+  ["user agent", "curl " + shortHeaderFlag + ' "User-Agent: WebJamBot-HealthCheck"', false],
+  ["request ID", "curl " + shortHeaderFlag + ' "X-Request-Id: req-2026-11-21-001"', false],
+  ["authorization variable", "curl " + shortHeaderFlag + ' "Authorization: Bearer $TOKEN"', false],
+] as const;
+
+for (const [name, input, blocked] of headerCases) {
+  Deno.test(`header pattern: ${name}`, async () => {
+    const result = await runHook(input);
+    assertEquals(result.code, blocked ? 2 : 0);
+    assertEquals(result.stderr.includes("CREDENTIAL-SHAPED LITERAL DETECTED"), blocked);
+  });
+}

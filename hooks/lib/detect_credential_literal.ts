@@ -170,6 +170,26 @@ export function looksSynthetic(value: string): boolean {
  */
 const JWT_TOKEN_PATTERN = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/;
 
+// HTTP field names are tokens. Only the flag spelling is case-sensitive.
+const HEADER_NAME_CHAR = String.raw`[A-Za-z0-9_!#$%&'*+.^\x60|~-]`;
+const CREDENTIAL_HEADER_NAME = "(?i:(?=(?:cookie|set-cookie):|" + HEADER_NAME_CHAR +
+  "*(?:auth|token|secret|password|passwd|passphrase|session|signature|jwt|bearer|" +
+  "(?:api|access|private|client|master|app|subscription|x)[-_]?key)))";
+const HEADER_PREFIX = String.raw`${HEADER_NAME_CHAR}+:[ \t]*`;
+const AUTH_SCHEME = "(?i:Bearer|Basic|Token|Secret|Digest|ApiKey)";
+const HEADER_LITERAL_CHAR = String.raw`[^\s"'\x60]`;
+const HEADER_LITERAL_START = String.raw`(?![$<])`;
+// A scheme with a variable or missing operand must not fall through to the bare-value branch.
+const NON_SCHEME_OR_BOOLEAN = String.raw`(?!(?:${AUTH_SCHEME}|(?i:true|false))(?=$|[\s"'\x60]))`;
+const AUTH_HEADER_FLAG = new RegExp([
+  String.raw`(?<![\w-])(?:--header|-H)[ \t]+["']?(?:`,
+  String.raw`${HEADER_PREFIX}${AUTH_SCHEME}[ \t]+`,
+  `${HEADER_LITERAL_START}${HEADER_LITERAL_CHAR}{4,}`,
+  "|",
+  `${CREDENTIAL_HEADER_NAME}${HEADER_PREFIX}${NON_SCHEME_OR_BOOLEAN}`,
+  `${HEADER_LITERAL_START}${HEADER_LITERAL_CHAR}{6,})`,
+].join(""));
+
 export const SPECIFIC_PATTERNS: Array<[string, RegExp]> = [
   ["Google/Gemini API key", /AIza[0-9A-Za-z_-]{35}/],
   ["GitHub token", /gh[pousr]_[A-Za-z0-9]{36,}/],
@@ -184,10 +204,7 @@ export const SPECIFIC_PATTERNS: Array<[string, RegExp]> = [
   ["JWT token", JWT_TOKEN_PATTERN],
   ["Bearer token", /\bBearer\s+[A-Za-z0-9._~+/-]{15,}=*/i],
   ["MongoDB connection string", /mongodb(?:\+srv)?:\/\/[^\s"']+/i],
-  [
-    "Auth header flag",
-    /(?:--header|-H)\s+["']?(?:[A-Za-z0-9_-]+:\s*)?(?:Bearer|token|Basic|Secret|[A-Za-z0-9_-]{15,})/i,
-  ],
+  ["Auth header flag", AUTH_HEADER_FLAG],
 ];
 
 /**
