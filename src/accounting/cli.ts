@@ -1,21 +1,30 @@
 // src/accounting/cli.ts
-// Command-line interface for Web Jam LLC double-entry accounting in hledger (web-jam-tools#1764).
+// Command-line interface for Web Jam LLC's books (web-jam-tools#1764). Entries, receipts and the
+// check use rustledger's Beancount books (web-jam-tools#1865); import and month close keep the
+// journal file until web-jam-tools#1866.
 
 import { parseArgs } from "@std/cli/parse-args";
 import * as path from "@std/path";
 import { expandHome } from "../design-issue/gate1.ts";
 import { closeMonth } from "./close_month.ts";
 import { convertBankFile } from "./convert.ts";
-import { appendEntryToJournal, createEntry } from "./entry.ts";
+import { appendEntryToBooks, assertBeancountTarget, createEntry } from "./entry.ts";
 import { importStatement } from "./import.ts";
 import { fileReceipt } from "./receipt.ts";
-import { verifyJournalBalances } from "./verify.ts";
+import { checkBooks } from "./verify.ts";
 
 export function getDefaultBooksDir(): string {
   const home = Deno.env.get("HOME") || "/home/joshua";
   return path.join(home, "Dropbox", "web-jam-llms", "financial", "books");
 }
 
+/** The year's Beancount books, which entry and verify use. */
+export function getDefaultBooksPath(year?: number): string {
+  const yr = year || new Date().getFullYear();
+  return path.join(getDefaultBooksDir(), `${yr}.beancount`);
+}
+
+/** The year's journal file, which import and month close use until web-jam-tools#1866. */
 export function getDefaultJournalPath(year?: number): string {
   const yr = year || new Date().getFullYear();
   return path.join(getDefaultBooksDir(), `${yr}.journal`);
@@ -44,6 +53,7 @@ export async function runCli(args: string[]): Promise<number> {
       "account",
       "rules",
       "journal",
+      "books",
       "books-dir",
       "year",
       "month",
@@ -71,7 +81,7 @@ export async function runCli(args: string[]): Promise<number> {
   const command = flags._.length > 0 ? String(flags._[0]) : "";
 
   if (flags.help || !command || command === "help") {
-    console.log(`Web Jam LLC Accounting CLI (hledger)
+    console.log(`Web Jam LLC Accounting CLI (rustledger)
 
 Usage:
   deno task accounting:entry [options]
@@ -82,12 +92,12 @@ Usage:
   deno task accounting:verify [options]
 
 Commands:
-  entry         Add a double-entry transaction to the journal
+  entry         Add an entry to the year's Beancount books (--books, default <year>.beancount)
   receipt       File a receipt PDF from inbox/ to receipts/<year>/
   convert       Convert Quicken/QuickBooks (QFX, OFX, QBO, QIF) to CSV
-  import        Import a CSV statement into the journal with duplicate prevention
-  close-month   Assert statement balances, snapshot journal, and generate reports
-  verify        Verify internal balancing and balance assertions in a journal
+  import        Import a CSV statement into the year's .journal file with duplicate prevention
+  close-month   Assert statement balances in the .journal file, snapshot it, and generate reports
+  verify        Check the year's Beancount books with rledger check (--books)
   init-books    Scaffold the private books directory hierarchy
 `);
     return 0;
@@ -108,9 +118,14 @@ Commands:
 
         const date = flags.date || new Date().toISOString().slice(0, 10);
         const year = parseInt(date.slice(0, 4), 10);
-        const journalPath = flags.journal
-          ? path.resolve(expandHome(flags.journal))
-          : getDefaultJournalPath(year);
+        if (flags.journal) {
+          console.error("Error: entry writes the Beancount books; name them with --books.");
+          return 1;
+        }
+        const booksPath = flags.books
+          ? path.resolve(expandHome(flags.books))
+          : getDefaultBooksPath(year);
+        assertBeancountTarget(booksPath, "accounting:entry");
 
         const amount = Number(flags.amount);
         if (!flags.amount.trim() || !Number.isFinite(amount)) {
@@ -131,8 +146,8 @@ Commands:
           isDraw: flags.draw,
         });
 
-        await appendEntryToJournal(journalPath, tx);
-        console.log(`[accounting:entry] Transaction added to ${journalPath}`);
+        await appendEntryToBooks(booksPath, tx);
+        console.log(`[accounting:entry] Entry added to ${booksPath}`);
         return 0;
       }
 
@@ -263,26 +278,26 @@ Commands:
       }
 
       case "verify": {
-        const journalPath = flags.journal
-          ? path.resolve(expandHome(flags.journal))
-          : getDefaultJournalPath();
-
-        const content = await Deno.readTextFile(journalPath);
-        const result = verifyJournalBalances(content);
-
-        if (!result.valid) {
-          console.error(
-            `[accounting:verify] FAILED (${result.errors.length} error(s)):\n${
-              result.errors.join("\n")
-            }`,
-          );
+        if (flags.journal) {
+          console.error("Error: verify checks the Beancount books; name them with --books.");
           return 1;
         }
+        const booksPath = flags.books
+          ? path.resolve(expandHome(flags.books))
+          : getDefaultBooksPath(flags.year ? parseInt(flags.year, 10) : undefined);
 
-        console.log(
-          `[accounting:verify] PASS: Journal ${journalPath} is balanced (${result.assertionsChecked} assertion(s) verified).`,
-        );
-        return 0;
+        const result = await checkBooks(booksPath);
+        if (result.outcome === "pass") {
+          console.log(`[accounting:verify] PASS: rledger check finds ${booksPath} valid.`);
+          return 0;
+        }
+        if (result.outcome === "fail") {
+          console.error(`[accounting:verify] FAILED: rledger check found errors in ${booksPath}:`);
+          console.error(result.message);
+          return 1;
+        }
+        console.error(`[accounting:verify] REFUSED: ${result.message}`);
+        return 2;
       }
 
       case "init-books": {

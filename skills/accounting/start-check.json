@@ -1,4 +1,4 @@
 {
   "by_name": "run /accounting to record Penn Station lunch 22.86",
-  "on_its_own": "Record a double-entry transaction in hledger for Penn Station $22.86 lunch meeting"
+  "on_its_own": "Record a double-entry transaction in the rustledger books for Penn Station $22.86 lunch meeting"
 }

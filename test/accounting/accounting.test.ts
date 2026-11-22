@@ -1,9 +1,17 @@
 // test/accounting/accounting.test.ts
-// Unit tests for Web Jam LLC double-entry accounting in hledger (web-jam-tools#1764).
+// Tests for Web Jam LLC's books (web-jam-tools#1764): entries, receipts and the check in rustledger's
+// Beancount books (web-jam-tools#1865), and import and month close on the journal file until
+// web-jam-tools#1866. Every figure here is made up.
 
-import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
 import * as path from "@std/path";
-import { runCli } from "../../src/accounting/cli.ts";
+import { getDefaultBooksPath, getDefaultJournalPath, runCli } from "../../src/accounting/cli.ts";
 import { closeMonth } from "../../src/accounting/close_month.ts";
 import {
   convertBankFile,
@@ -13,15 +21,79 @@ import {
   parseOfx,
   parseQif,
 } from "../../src/accounting/convert.ts";
-import { createEntry, formatTransaction } from "../../src/accounting/entry.ts";
+import {
+  appendEntryToBooks,
+  assertBeancountAccount,
+  createEntry,
+  formatBeancountTransaction,
+  formatTransaction,
+  parseBeancount,
+} from "../../src/accounting/entry.ts";
 import { importStatement } from "../../src/accounting/import.ts";
-import { fileReceipt } from "../../src/accounting/receipt.ts";
-import { verifyJournalBalances } from "../../src/accounting/verify.ts";
+import { fileReceipt, receiptMetadataLine } from "../../src/accounting/receipt.ts";
+import { checkBooks, verifyJournalBalances } from "../../src/accounting/verify.ts";
 import { installSkills } from "../../src/install-skills/lib.ts";
 
 const FIXTURES_DIR = path.resolve(
   new URL("./fixtures", import.meta.url).pathname,
 );
+
+const INSTALL_RUSTLEDGER = path.resolve(
+  new URL("../../scripts/install-rustledger.sh", import.meta.url).pathname,
+);
+
+let rustledgerDir: Promise<string> | undefined;
+
+/**
+ * The directory holding `rledger`, unpacked once per test run into a temporary directory by
+ * `scripts/install-rustledger.sh` after it checks the release's published SHA-256 checksum —
+ * the same release CircleCI installs — and removed when the test process ends.
+ */
+function rledgerDir(): Promise<string> {
+  rustledgerDir ??= (async () => {
+    const dir = await Deno.makeTempDir({ prefix: "rustledger-test-" });
+    globalThis.addEventListener("unload", () => {
+      try {
+        Deno.removeSync(dir, { recursive: true });
+      } catch {
+        // already gone
+      }
+    });
+    const out = await new Deno.Command("bash", {
+      args: [INSTALL_RUSTLEDGER, dir],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    if (out.code !== 0) {
+      throw new Error(`install-rustledger.sh failed: ${new TextDecoder().decode(out.stderr)}`);
+    }
+    return dir;
+  })();
+  return rustledgerDir;
+}
+
+async function rledgerPath(): Promise<string> {
+  return path.join(await rledgerDir(), "rledger");
+}
+
+/** Runs `fn` with HOME and PATH set for the CLI, restoring both afterwards. */
+async function withEnv<T>(
+  vars: { HOME?: string; PATH?: string },
+  fn: () => Promise<T>,
+): Promise<T> {
+  const saved = { HOME: Deno.env.get("HOME"), PATH: Deno.env.get("PATH") };
+  try {
+    for (const [key, value] of Object.entries(vars)) {
+      if (value !== undefined) Deno.env.set(key, value);
+    }
+    return await fn();
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) Deno.env.delete(key);
+      else Deno.env.set(key, value);
+    }
+  }
+}
 
 Deno.test("detectBankFormat identifies OFX, QIF, and CSV correctly", () => {
   assertEquals(detectBankFormat("<OFX><STMTTRN></STMTTRN></OFX>"), "ofx");
@@ -387,7 +459,8 @@ Deno.test("fileReceipt files PDF from inbox/ into receipts/<year>/", async () =>
 Deno.test("accounting CLI runs subcommands cleanly", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "accounting-test-cli-" });
   try {
-    const journalPath = path.join(tempDir, "2026.journal");
+    const booksPath = path.join(tempDir, "2026.beancount");
+    const rledger = await rledgerDir();
 
     // 1. Help flag
     const helpExit = await runCli(["--help"]);
@@ -414,17 +487,20 @@ Deno.test("accounting CLI runs subcommands cleanly", async () => {
       "Lunch Meeting",
       "--attendees",
       "Josh, Maria",
-      "--journal",
-      journalPath,
+      "--books",
+      booksPath,
     ]);
     assertEquals(entryExit, 0);
 
-    const journalContent = await Deno.readTextFile(journalPath);
-    assertStringIncludes(journalContent, "2026-01-15 Penn Station");
-    assertStringIncludes(journalContent, "Expenses:Meals");
+    const booksContent = await Deno.readTextFile(booksPath);
+    assertStringIncludes(booksContent, '2026-01-15 * "Penn Station"');
+    assertStringIncludes(booksContent, "Expenses:Meals");
 
-    // 4. verify subcommand
-    const verifyExit = await runCli(["verify", "--journal", journalPath]);
+    // 4. verify subcommand runs rledger check from PATH
+    const verifyExit = await withEnv(
+      { PATH: `${rledger}:${Deno.env.get("PATH") ?? ""}` },
+      () => runCli(["verify", "--books", booksPath]),
+    );
     assertEquals(verifyExit, 0);
 
     // 5. convert subcommand
@@ -479,5 +555,323 @@ Deno.test("installSkills installs accounting skill into Claude Code and agy dest
     assertStringIncludes(agyTarget, "skills/accounting");
   } finally {
     await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+// ---- Beancount books in rustledger (web-jam-tools#1865) ----
+
+Deno.test("Beancount entries carry date, place, amount, category, purpose, receipt, attendees and owner", () => {
+  const meal = createEntry({
+    date: "2026-11-10",
+    description: 'Penn "Station" \\ Deli',
+    amount: 22.86,
+    category: "Expenses:Meals",
+    fromAccount: "Liabilities:CreditCard",
+    purpose: "Lunch meeting",
+    attendees: "Josh, Maria",
+    receipt: "receipts/2026/2026-11-10-penn-station.pdf",
+  });
+  const text = formatBeancountTransaction(meal);
+  assertStringIncludes(text, '2026-11-10 * "Penn \\"Station\\" \\\\ Deli"');
+  assertStringIncludes(text, '  purpose: "Lunch meeting"');
+  assertStringIncludes(text, '  attendees: "Josh, Maria"');
+  assertStringIncludes(text, '  receipt: "receipts/2026/2026-11-10-penn-station.pdf"');
+  assert(/\n {2}Expenses:Meals\s+22\.86 USD\n/.test(text), text);
+  assert(/\n {2}Liabilities:CreditCard\s+-22\.86 USD\n/.test(text), text);
+
+  const [parsed] = parseBeancount(text);
+  assertEquals(parsed.date, "2026-11-10");
+  assertEquals(parsed.description, 'Penn "Station" \\ Deli');
+  assertEquals(parsed.tags, {
+    purpose: "Lunch meeting",
+    attendees: "Josh, Maria",
+    receipt: "receipts/2026/2026-11-10-penn-station.pdf",
+  });
+  assertEquals(parsed.postings.map((p) => [p.account, p.amount, p.commodity]), [
+    ["Expenses:Meals", 22.86, "USD"],
+    ["Liabilities:CreditCard", -22.86, "USD"],
+  ]);
+
+  const owner = formatBeancountTransaction(
+    createEntry({
+      date: "2026-11-12",
+      description: "Office Depot",
+      amount: 15,
+      category: "Expenses:Supplies",
+      owner: "Josh",
+    }),
+  );
+  assertStringIncludes(owner, '  owner: "Josh"');
+  assert(/Equity:OwnerContributions:Josh\s+-15\.00 USD/.test(owner), owner);
+
+  assertEquals(
+    receiptMetadataLine("receipts/2026/2026-11-10-penn-station.pdf"),
+    'receipt: "receipts/2026/2026-11-10-penn-station.pdf"',
+  );
+});
+
+Deno.test("Beancount account names are checked before anything is written", () => {
+  for (const good of ["Expenses:Meals", "Equity:OwnerDraws:Maria", "Assets:Checking:Truist"]) {
+    assertBeancountAccount(good);
+  }
+  for (const bad of ["Meals", "Expenses:meals", "Expenses:Office Supplies", "Costs:Meals"]) {
+    assertThrows(() => assertBeancountAccount(bad), Error, "is not a Beancount account name");
+  }
+});
+
+Deno.test("entries and filed receipts written to Beancount books pass rledger check", async () => {
+  const booksDir = await Deno.makeTempDir({ prefix: "accounting-test-books-" });
+  try {
+    const rledger = await rledgerPath();
+    const booksPath = path.join(booksDir, "2026.beancount");
+    await Deno.mkdir(path.join(booksDir, "inbox"));
+    await Deno.writeTextFile(path.join(booksDir, "inbox", "scan.pdf"), "%PDF-1.4 made-up scan");
+
+    const filed = await fileReceipt({
+      booksDir,
+      year: 2026,
+      date: "2026-11-10",
+      place: "Penn Station",
+      sourceFile: "scan.pdf",
+    });
+    assertEquals(filed.relativePath, "receipts/2026/2026-11-10-penn-station.pdf");
+    assertStringIncludes(filed.message, receiptMetadataLine(filed.relativePath!));
+
+    await appendEntryToBooks(
+      booksPath,
+      createEntry({
+        date: "2026-11-10",
+        description: "Penn Station",
+        amount: 22.86,
+        category: "Expenses:Meals",
+        fromAccount: "Liabilities:CreditCard",
+        purpose: "Lunch meeting",
+        attendees: "Josh, Maria",
+        receipt: filed.relativePath,
+      }),
+    );
+    await appendEntryToBooks(
+      booksPath,
+      createEntry({
+        date: "2026-11-12",
+        description: "Office Depot",
+        amount: 15,
+        category: "Expenses:Supplies",
+        owner: "Josh",
+      }),
+    );
+    await appendEntryToBooks(
+      booksPath,
+      createEntry({
+        date: "2026-11-15",
+        description: "Supermarket",
+        amount: 40,
+        category: "Equity:OwnerDraws:Maria",
+        fromAccount: "Liabilities:CreditCard",
+        owner: "Maria",
+        isDraw: true,
+      }),
+    );
+
+    const books = await Deno.readTextFile(booksPath);
+    // Each account is opened once, on January 1 of the entries' year.
+    assertEquals(books.match(/^2026-01-01 open Liabilities:CreditCard USD$/gm)?.length, 1);
+    assertStringIncludes(books, "2026-01-01 open Equity:OwnerContributions:Josh USD");
+    assertEquals(parseBeancount(books).length, 3);
+
+    const result = await checkBooks(booksPath, { rledger });
+    assertEquals(result.outcome, "pass", result.message);
+    // --no-cache: nothing but the books is written beside them.
+    const names: string[] = [];
+    for await (const entry of Deno.readDir(booksDir)) names.push(entry.name);
+    assertEquals(names.sort(), ["2026.beancount", "inbox", "receipts"]);
+  } finally {
+    await Deno.remove(booksDir, { recursive: true });
+  }
+});
+
+Deno.test("rledger check fails invalid books and prints its diagnostic", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "accounting-test-invalid-" });
+  try {
+    const rledger = await rledgerDir();
+    const booksPath = path.join(dir, "2026.beancount");
+    await Deno.writeTextFile(
+      booksPath,
+      [
+        "2026-01-01 open Expenses:Meals USD",
+        "2026-01-01 open Liabilities:CreditCard USD",
+        "",
+        '2026-03-14 * "Penn Station"',
+        "  Expenses:Meals            22.86 USD",
+        "  Liabilities:CreditCard   -20.00 USD",
+        "",
+      ].join("\n"),
+    );
+    const before = await Deno.readTextFile(booksPath);
+
+    const result = await checkBooks(booksPath, { rledger: path.join(rledger, "rledger") });
+    assertEquals(result.outcome, "fail");
+    assertStringIncludes(result.message, "does not balance");
+
+    const exit = await withEnv(
+      { PATH: `${rledger}:${Deno.env.get("PATH") ?? ""}` },
+      () => runCli(["verify", "--books", booksPath]),
+    );
+    assertEquals(exit, 1);
+    assertEquals(await Deno.readTextFile(booksPath), before);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("the check refuses when rledger is missing and never reports the books valid", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "accounting-test-no-rledger-" });
+  try {
+    const booksPath = path.join(dir, "2026.beancount");
+    await Deno.writeTextFile(booksPath, "2026-01-01 open Expenses:Meals USD\n");
+
+    const result = await checkBooks(booksPath, { rledger: path.join(dir, "no-such-rledger") });
+    assertEquals(result.outcome, "refuse");
+    assertStringIncludes(result.message, "is not installed or not on PATH");
+
+    // An empty PATH directory: the CLI finds no rledger and refuses with exit 2.
+    const emptyBin = path.join(dir, "bin");
+    await Deno.mkdir(emptyBin);
+    const exit = await withEnv({ PATH: emptyBin }, () => runCli(["verify", "--books", booksPath]));
+    assertEquals(exit, 2);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("the check refuses books it cannot read", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "accounting-test-unreadable-" });
+  try {
+    const rledger = await rledgerPath();
+
+    const missing = await checkBooks(path.join(dir, "2026.beancount"), { rledger });
+    assertEquals(missing.outcome, "refuse");
+    assertStringIncludes(missing.message, "Cannot read the books");
+
+    const folder = path.join(dir, "folder.beancount");
+    await Deno.mkdir(folder);
+    const notAFile = await checkBooks(folder, { rledger });
+    assertEquals(notAFile.outcome, "refuse");
+    assertStringIncludes(notAFile.message, "is not a file");
+
+    const locked = path.join(dir, "locked.beancount");
+    await Deno.writeTextFile(locked, "2026-01-01 open Expenses:Meals USD\n");
+    await Deno.chmod(locked, 0o000);
+    // Only where the lock takes effect: a root user still reads a file with no read bit.
+    const lockHolds = await Deno.readTextFile(locked).then(() => false, () => true);
+    if (lockHolds) {
+      const unreadable = await checkBooks(locked, { rledger });
+      assertEquals(unreadable.outcome, "refuse");
+      assertStringIncludes(unreadable.message, "Cannot read the books");
+    }
+    await Deno.chmod(locked, 0o600);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("entry and verify use the year's .beancount books and refuse any other file", async () => {
+  const home = await Deno.makeTempDir({ prefix: "accounting-test-home-" });
+  try {
+    await withEnv({ HOME: home }, async () => {
+      assertEquals(
+        getDefaultBooksPath(2026),
+        path.join(home, "Dropbox", "web-jam-llms", "financial", "books", "2026.beancount"),
+      );
+      const entry = [
+        "entry",
+        "--date",
+        "2026-02-03",
+        "--desc",
+        "Guitar Center",
+        "--amount",
+        "12.50",
+        "--category",
+        "Expenses:Supplies",
+        "--from",
+        "Liabilities:CreditCard",
+      ];
+      assertEquals(await runCli(entry), 0);
+      assertStringIncludes(await Deno.readTextFile(getDefaultBooksPath(2026)), "Guitar Center");
+
+      const journal = path.join(home, "other.journal");
+      assertEquals(await runCli([...entry, "--books", journal]), 1);
+      assertEquals(await runCli([...entry, "--journal", journal]), 1);
+      await assertRejects(() => Deno.stat(journal), Deno.errors.NotFound);
+      assertEquals(await runCli(["verify", "--books", journal]), 1);
+    });
+  } finally {
+    await Deno.remove(home, { recursive: true });
+  }
+});
+
+Deno.test("import and month close keep their .journal defaults and refuse explicit Beancount books, leaving them intact", async () => {
+  const home = await Deno.makeTempDir({ prefix: "accounting-test-legacy-" });
+  try {
+    await withEnv({ HOME: home }, async () => {
+      const statement = path.join(home, "statement.csv");
+      await Deno.writeTextFile(
+        statement,
+        "Date,Description,Amount,Id\n2026-01-10,Made-up Deposit,100.00,T1\n",
+      );
+
+      // Import with no --journal writes the year's .journal file.
+      const journal = getDefaultJournalPath();
+      assertEquals(path.extname(journal), ".journal");
+      assertEquals(
+        await runCli(["import", "--statement", statement, "--account", "Assets:Checking:Truist"]),
+        0,
+      );
+      assertStringIncludes(await Deno.readTextFile(journal), "Made-up Deposit");
+
+      // Month close with no --journal works on the same year's .journal file.
+      const year = String(new Date().getFullYear());
+      const closeArgs = ["close-month", "--year", year, "--month", "1"];
+      const journalBeforeClose = await Deno.readTextFile(journal);
+      assertEquals(
+        await runCli([...closeArgs, "--balance", "Assets:Checking:Truist=100.00"]),
+        0,
+      );
+      assert((await Deno.readTextFile(journal)).length > journalBeforeClose.length);
+
+      // An explicit Beancount target is refused before anything is written.
+      const books = path.join(home, "2026.beancount");
+      const original = "2026-01-01 open Expenses:Meals USD\n";
+      await Deno.writeTextFile(books, original);
+      assertEquals(
+        await runCli(["import", "--statement", statement, "--journal", books]),
+        1,
+      );
+      assertEquals(
+        await runCli([
+          ...closeArgs,
+          "--balance",
+          "Assets:Checking:Truist=100.00",
+          "--journal",
+          books,
+        ]),
+        1,
+      );
+      assertEquals(await Deno.readTextFile(books), original);
+      await assertRejects(
+        () => importStatement({ statementPath: statement, journalPath: books }),
+        Error,
+        "refuses the Beancount books",
+      );
+      await assertRejects(
+        () =>
+          closeMonth({ year: 2026, month: 1, balances: { "Assets:Cash": 1 }, journalPath: books }),
+        Error,
+        "refuses the Beancount books",
+      );
+      assertEquals(await Deno.readTextFile(books), original);
+    });
+  } finally {
+    await Deno.remove(home, { recursive: true });
   }
 });

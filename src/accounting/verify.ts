@@ -1,8 +1,71 @@
 // src/accounting/verify.ts
-// Verify transaction balance equality and balance assertions (web-jam-tools#1764).
+// Check the Beancount books with `rledger check` (web-jam-tools#1865), and keep the journal
+// balance checks month close uses until web-jam-tools#1866.
 
-import { parseJournal } from "./entry.ts";
-import { VerificationResult } from "./types.ts";
+import { assertBeancountTarget, parseJournal } from "./entry.ts";
+import { BooksCheckResult, VerificationResult } from "./types.ts";
+
+export interface CheckBooksOptions {
+  /** The rustledger program to run; `rledger` on PATH unless a test names another. */
+  rledger?: string;
+}
+
+/**
+ * Runs `rledger check` on the year's Beancount books: `pass` when it exits 0, `fail` with its
+ * diagnostic when it exits 1, and `refuse` when the books cannot be read, `rledger` cannot be run,
+ * or it exits any other way. `--no-cache` keeps it from writing a cache file beside the books.
+ */
+export async function checkBooks(
+  booksPath: string,
+  options: CheckBooksOptions = {},
+): Promise<BooksCheckResult> {
+  assertBeancountTarget(booksPath, "accounting:verify");
+  try {
+    const info = await Deno.stat(booksPath);
+    if (!info.isFile) {
+      return { outcome: "refuse", message: `${booksPath} is not a file, so it cannot be checked.` };
+    }
+    await Deno.readTextFile(booksPath);
+  } catch (err) {
+    return {
+      outcome: "refuse",
+      message: `Cannot read the books at ${booksPath}, so they cannot be checked: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
+
+  const program = options.rledger ?? "rledger";
+  let output: Deno.CommandOutput;
+  try {
+    output = await new Deno.Command(program, {
+      args: ["check", "--no-cache", booksPath],
+      env: { NO_COLOR: "1" },
+      stdin: "null",
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+  } catch (err) {
+    const reason = err instanceof Deno.errors.NotFound
+      ? `${program} is not installed or not on PATH`
+      : `${program} could not be run: ${err instanceof Error ? err.message : String(err)}`;
+    return { outcome: "refuse", message: `${reason}, so the books cannot be checked.` };
+  }
+
+  const decoder = new TextDecoder();
+  const text = [decoder.decode(output.stdout), decoder.decode(output.stderr)]
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join("\n");
+  if (output.code === 0) return { outcome: "pass", message: text };
+  if (output.code === 1) return { outcome: "fail", message: text };
+  return {
+    outcome: "refuse",
+    message: `${program} check exited ${output.code}, so the books could not be checked${
+      text ? `:\n${text}` : "."
+    }`,
+  };
+}
 
 export function verifyJournalBalances(journalContent: string): VerificationResult {
   const transactions = parseJournal(journalContent).sort((a, b) => a.date.localeCompare(b.date));

@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import {
   categorizeTransaction,
   importStatement,
@@ -103,15 +103,15 @@ Deno.test("registered accounting entry task can access HOME", async () => {
         "1",
         "--category",
         "Expenses:Meals",
-        "--journal",
-        `${books}/journal`,
+        "--books",
+        `${books}/2026.beancount`,
       ],
       stdin: "null",
       stdout: "piped",
       stderr: "piped",
     }).output();
     assertEquals(result.code, 0, new TextDecoder().decode(result.stderr));
-    assertEquals((await Deno.readTextFile(`${books}/journal`)).includes("Fixture"), true);
+    assertEquals((await Deno.readTextFile(`${books}/2026.beancount`)).includes("Fixture"), true);
     const denied = await new Deno.Command(Deno.execPath(), {
       env: { HOME: dir },
       args: [
@@ -123,15 +123,20 @@ Deno.test("registered accounting entry task can access HOME", async () => {
         "1",
         "--category",
         "Expenses:Meals",
-        "--journal",
-        `${dir}/outside-journal`,
+        "--books",
+        `${dir}/outside.beancount`,
       ],
       stdin: "null",
       stdout: "piped",
       stderr: "piped",
     }).output();
     assertEquals(denied.code, 1);
-    assertEquals(new TextDecoder().decode(denied.stderr).includes("Requires write access"), true);
+    // The writer reads the books before appending, so the task's permissions stop it at the read.
+    assertEquals(
+      /Requires (read|write) access/.test(new TextDecoder().decode(denied.stderr)),
+      true,
+    );
+    await assertRejects(() => Deno.stat(`${dir}/outside.beancount`), Deno.errors.NotFound);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

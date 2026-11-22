@@ -1,8 +1,190 @@
 // src/accounting/entry.ts
-// Format, create, and parse hledger journal entries (web-jam-tools#1764).
+// Create entries, write and read them in the Beancount books rustledger keeps (web-jam-tools#1865),
+// and keep the journal reader and writer that import and month close use until web-jam-tools#1866.
 
 import * as path from "@std/path";
 import { Posting, Transaction } from "./types.ts";
+
+// ---- File-format boundary ----
+
+/** Entries and the check write and read only Beancount books. */
+export function assertBeancountTarget(target: string, command: string): void {
+  if (path.extname(target) !== ".beancount") {
+    throw new Error(
+      `${command} works on the year's Beancount books; '${target}' is not a .beancount file.`,
+    );
+  }
+}
+
+/** Import and month close keep the journal format until web-jam-tools#1866 moves them. */
+export function assertJournalTarget(target: string, command: string): void {
+  if (path.extname(target) === ".beancount") {
+    throw new Error(
+      `${command} still writes the year's .journal file; it refuses the Beancount books '${target}' and wrote nothing.`,
+    );
+  }
+}
+
+// ---- Beancount books ----
+
+export const BOOKS_COMMODITY = "USD";
+
+const ACCOUNT_ROOTS = new Set(["Assets", "Liabilities", "Equity", "Income", "Expenses"]);
+
+/** A Beancount account: a root type, then parts that start with a capital letter or digit. */
+export function assertBeancountAccount(account: string): void {
+  const parts = account.split(":");
+  const valid = parts.length >= 2 && ACCOUNT_ROOTS.has(parts[0]) &&
+    parts.slice(1).every((part) => /^[A-Z0-9][A-Za-z0-9-]*$/.test(part));
+  if (!valid) {
+    throw new Error(
+      `'${account}' is not a Beancount account name: it must start with Assets, Liabilities, Equity, Income or Expenses, and each part after a ':' must start with a capital letter or digit, with no spaces.`,
+    );
+  }
+}
+
+/** Quote text as a Beancount string, on one line. */
+export function quoteBeancount(text: string): string {
+  const oneLine = text.replace(/\r?\n/g, " ").trim();
+  return `"${oneLine.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+export function formatBeancountAmount(amount: number): string {
+  return `${amount.toFixed(2)} ${BOOKS_COMMODITY}`;
+}
+
+/**
+ * One entry in Beancount: the date, the place or payer, a metadata line for each of purpose,
+ * attendees, owner and receipt that is set, and the two postings.
+ */
+export function formatBeancountTransaction(tx: Transaction): string {
+  const lines = [`${tx.date} ${tx.status ?? "*"} ${quoteBeancount(tx.description)}`];
+  for (const [key, value] of Object.entries(tx.tags ?? {})) {
+    if (!value || !value.trim()) continue;
+    if (!/^[a-z][A-Za-z0-9_-]*$/.test(key)) {
+      throw new Error(`'${key}' is not a Beancount metadata key.`);
+    }
+    lines.push(`  ${key}: ${quoteBeancount(value)}`);
+  }
+  if (tx.comment && tx.comment.trim()) {
+    lines.push(`  ; ${tx.comment.replace(/\r?\n/g, " ").trim()}`);
+  }
+  for (const p of tx.postings) {
+    assertBeancountAccount(p.account);
+    lines.push(`  ${p.account.padEnd(34)}  ${formatBeancountAmount(p.amount).padStart(14)}`);
+  }
+  return lines.join("\n") + "\n";
+}
+
+/** The accounts the books open with an `open` directive. */
+export function openedAccounts(content: string): Set<string> {
+  const opened = new Set<string>();
+  for (const line of content.split(/\r?\n/)) {
+    const match = line.match(/^\d{4}-\d{2}-\d{2}\s+open\s+(\S+)/);
+    if (match) opened.add(match[1]);
+  }
+  return opened;
+}
+
+function unquoteBeancount(text: string): string {
+  return text.slice(1, -1).replace(/\\(["\\])/g, "$1");
+}
+
+/** Reads the transactions the entry writer produces back out of Beancount books. */
+export function parseBeancount(content: string): Transaction[] {
+  const transactions: Transaction[] = [];
+  let current: Transaction | null = null;
+  const header =
+    /^(\d{4}-\d{2}-\d{2})\s+([*!]|txn)\s+("(?:[^"\\]|\\.)*")(?:\s+("(?:[^"\\]|\\.)*"))?/;
+
+  const finish = () => {
+    if (current && current.postings.length > 0) transactions.push(current);
+    current = null;
+  };
+
+  for (const line of content.split(/\r?\n/)) {
+    if (!line.startsWith(" ") && !line.startsWith("\t")) {
+      finish();
+      const match = line.match(header);
+      if (match) {
+        const first = unquoteBeancount(match[3]);
+        const second = match[4] ? unquoteBeancount(match[4]) : undefined;
+        current = {
+          date: match[1],
+          status: match[2] === "!" ? "!" : "*",
+          description: second === undefined ? first : `${first} ${second}`.trim(),
+          postings: [],
+          tags: {},
+        };
+      }
+      continue;
+    }
+    if (!current) continue;
+    const tx: Transaction = current;
+    const trimmed = line.trim();
+    const meta = trimmed.match(/^([a-z][A-Za-z0-9_-]*):\s+("(?:[^"\\]|\\.)*")$/);
+    if (meta) {
+      tx.tags[meta[1]] = unquoteBeancount(meta[2]);
+      continue;
+    }
+    if (trimmed.startsWith(";")) {
+      const body = trimmed.slice(1).trim();
+      tx.comment = tx.comment ? `${tx.comment}; ${body}` : body;
+      continue;
+    }
+    const posting = trimmed.match(
+      /^([A-Z][A-Za-z0-9:-]*)\s+([-+]?[0-9,]*\.?[0-9]+)\s+([A-Z][A-Z0-9'._-]*)$/,
+    );
+    if (posting) {
+      tx.postings.push({
+        account: posting[1],
+        amount: Number(posting[2].replace(/,/g, "")),
+        commodity: posting[3],
+      });
+    }
+  }
+  finish();
+  return transactions;
+}
+
+async function readBooksOrEmpty(booksPath: string): Promise<string> {
+  try {
+    return await Deno.readTextFile(booksPath);
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) return "";
+    throw new Error(
+      `Cannot read the books at ${booksPath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
+ * Appends one entry to the year's Beancount books, first opening, on January 1 of the entry's
+ * year, any account the books do not open yet, so `rledger check` accepts the entry.
+ */
+export async function appendEntryToBooks(booksPath: string, tx: Transaction): Promise<void> {
+  assertBeancountTarget(booksPath, "accounting:entry");
+  const formatted = formatBeancountTransaction(tx);
+  const existing = await readBooksOrEmpty(booksPath);
+  const opened = openedAccounts(existing);
+  const openLines = [...new Set(tx.postings.map((p) => p.account))]
+    .filter((account) => !opened.has(account))
+    .map((account) => `${tx.date.slice(0, 4)}-01-01 open ${account} ${BOOKS_COMMODITY}`);
+
+  const block = (openLines.length > 0 ? openLines.join("\n") + "\n\n" : "") + formatted;
+  const prefix = existing.length === 0
+    ? ""
+    : existing.endsWith("\n\n")
+    ? ""
+    : existing.endsWith("\n")
+    ? "\n"
+    : "\n\n";
+
+  await Deno.mkdir(path.dirname(booksPath), { recursive: true });
+  await Deno.writeTextFile(booksPath, existing + prefix + block);
+}
+
+// ---- Journal (import and month close, until web-jam-tools#1866) ----
 
 export function formatAmount(amount: number, commodity = "$"): string {
   const sign = amount < 0 ? "-" : "";
