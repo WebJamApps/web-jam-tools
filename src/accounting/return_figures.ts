@@ -33,8 +33,10 @@ export interface FigureSpec {
   formName: string;
   /** The line number printed beside the figure. */
   line: string;
-  /** The words printed beside the figure, by which it is found. */
-  words: string;
+  /** The words printed beside the figure, by which it is found, any run of spaces between them. */
+  words: RegExp;
+  /** The line number as its own token, not part of a longer number. */
+  linePattern: RegExp;
 }
 
 /** The three figures the design names, in the order the output lists them. */
@@ -44,21 +46,24 @@ export const FIGURES: readonly FigureSpec[] = [
     form: "federal",
     formName: "Form 1040",
     line: "11a",
-    words: "This is your adjusted gross income",
+    words: /This\s+is\s+your\s+adjusted\s+gross\s+income/i,
+    linePattern: /(?<![\w,])11a(?!\w)/i,
   },
   {
     name: "Federal total tax",
     form: "federal",
     formName: "Form 1040",
     line: "24",
-    words: "This is your total tax",
+    words: /This\s+is\s+your\s+total\s+tax/i,
+    linePattern: /(?<![\w,])24(?!\w)/,
   },
   {
     name: "Virginia tax",
     form: "virginia",
     formName: "Form 760",
     line: "18",
-    words: "Net Amount of Tax",
+    words: /Net\s+Amount\s+of\s+Tax/i,
+    linePattern: /(?<![\w,])18(?!\w)/,
   },
 ];
 
@@ -72,10 +77,6 @@ export class ReturnFiguresRefusal extends Error {
     super(message);
     this.name = "ReturnFiguresRefusal";
   }
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // An amount as a return prints it: optional sign or parentheses, optional "$", whole dollars with
@@ -102,8 +103,7 @@ function readAmount(tail: string): string | null {
 
 /** Finds one figure in a return's text by the words printed beside it. */
 export function findFigure(text: string, spec: FigureSpec): FigureResult {
-  const words = new RegExp(spec.words.split(/\s+/).map(escapeRegex).join("\\s+"), "i");
-  const rows = text.split(/\r?\n|\f/).filter((row) => words.test(row));
+  const rows = text.split(/\r?\n|\f/).filter((row) => spec.words.test(row));
   if (rows.length === 0) {
     return { spec, found: false, reason: "its printed words were not found" };
   }
@@ -111,10 +111,9 @@ export function findFigure(text: string, spec: FigureSpec): FigureResult {
     return { spec, found: false, reason: "its printed words appear on more than one row" };
   }
   const row = rows[0];
-  const match = row.match(words)!;
+  const match = row.match(spec.words)!;
   const rest = row.slice(match.index! + match[0].length);
-  const label = new RegExp(`(?<![\\w,])${escapeRegex(spec.line)}(?!\\w)`, "i");
-  const labelMatch = rest.match(label);
+  const labelMatch = rest.match(spec.linePattern);
   if (!labelMatch) {
     return { spec, found: false, reason: "its line number was not found beside its words" };
   }
