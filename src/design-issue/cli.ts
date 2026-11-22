@@ -33,6 +33,7 @@ import {
   getGate1Status,
   recordSweepNote,
 } from "./gate1_record.ts";
+import { verifyReplyTypedByJosh } from "./gate1_reply.ts";
 import { runLintDocCli } from "./lint_doc.ts";
 import { runLintPlanCli } from "./lint_plan.ts";
 import { runLintRunbookCli } from "./lint_runbook.ts";
@@ -152,8 +153,23 @@ export interface Gate1ApproveCliOptions {
   reply?: string;
   replyFile?: string;
   stateDir?: string;
+  /** Environment lookup for the session-transcript check; tests point it at fixtures. */
+  env?: (name: string) => string | undefined;
   log?: (msg: string) => void;
   errorLog?: (msg: string) => void;
+}
+
+/**
+ * The session whose transcript holds Josh's reply: --session-id, else this session's own id from
+ * the tool that is running the command (web-jam-tools#1412).
+ */
+export function sessionIdFor(
+  flag: unknown,
+  env: (name: string) => string | undefined,
+): string {
+  if (typeof flag === "string" && flag.trim()) return flag.trim();
+  return env("CODEX_THREAD_ID") || env("AGY_CONVERSATION_ID") ||
+    env("CLAUDE_CODE_SESSION_ID") || "";
 }
 
 export async function runGate1ApproveCli(
@@ -165,7 +181,7 @@ export async function runGate1ApproveCli(
 
   const flags = parseArgs(args, {
     boolean: ["help"],
-    string: ["doc", "reply", "reply-file", "state-dir"],
+    string: ["doc", "reply", "reply-file", "state-dir", "session-id"],
     alias: {
       h: "help",
     },
@@ -185,6 +201,9 @@ Arguments:
 Options:
   --reply <text>        Verbatim text of the approving reply
   --reply-file <path>   Path to file containing verbatim text of the approving reply
+  --session-id <id>     The session Josh replied in (defaults to this session's own id). The reply
+                        is recorded only when it appears word for word in one of Josh's own turns
+                        of that session after the latest design:gate1 presentation.
   --doc <path>          Explicit design document path
   --state-dir <path>    Override Gate 1 state directory
   -h, --help            Show this help message
@@ -232,7 +251,13 @@ Options:
   const stateDir = flags["state-dir"] || options?.stateDir;
 
   try {
-    const result = await approveGate1Record(docPath, reply, { stateDir });
+    const env = options?.env ?? ((name: string) => Deno.env.get(name));
+    const sessionId = sessionIdFor(flags["session-id"], env);
+    const result = await approveGate1Record(docPath, reply, {
+      stateDir,
+      verifyReply: (presentedAt) =>
+        verifyReplyTypedByJosh({ sessionId, reply, after: presentedAt, env }),
+    });
     log(`[design:gate1-approve] Gate 1 approved for ${result.record.docPath}`);
     log(`[design:gate1-approve] Recorded reply: "${result.record.reply}"`);
     log(`[design:gate1-approve] Fingerprint: ${result.record.approvedFingerprint}`);
@@ -245,6 +270,8 @@ Options:
 
 export interface Gate1AdoptCliOptions {
   stateDir?: string;
+  /** Environment lookup for the session-transcript check; tests point it at fixtures. */
+  env?: (name: string) => string | undefined;
   log?: (msg: string) => void;
   errorLog?: (msg: string) => void;
 }
@@ -257,7 +284,7 @@ export async function runGate1AdoptCli(
   const errorLog = options?.errorLog ?? console.error;
   const flags = parseArgs(args, {
     boolean: ["help"],
-    string: ["doc", "reply", "reply-file", "state-dir"],
+    string: ["doc", "reply", "reply-file", "state-dir", "session-id"],
     alias: { h: "help" },
     default: { help: false },
   });
@@ -269,11 +296,14 @@ Stores a design document's current premise rows, with the dates they already car
 Gate 1 record, for a document Josh approved before premise rows were kept. Records Josh's reply
 verbatim. Does NOT approve Gate 1. Refuses when the record already holds premise rows, on an
 empty reply, on a missing or malformed premises table or Proved date, or when the record or
-document cannot be read.
+document cannot be read, or when the reply is not text Josh typed in that session.
 
 Options:
   --reply <text>        Josh's reply, verbatim
   --reply-file <path>   Path to a file containing Josh's reply
+  --session-id <id>     The session Josh replied in (defaults to this session's own id). The reply
+                        is recorded only when it appears word for word in one of Josh's own turns
+                        of that session.
   --doc <path>          Explicit design document path
   --state-dir <path>    Override Gate 1 state directory
   -h, --help            Show this help message
@@ -312,8 +342,11 @@ Options:
   }
 
   try {
+    const env = options?.env ?? ((name: string) => Deno.env.get(name));
+    const sessionId = sessionIdFor(flags["session-id"], env);
     const result = await adoptGate1Record(docPath, reply, {
       stateDir: flags["state-dir"] || options?.stateDir,
+      verifyReply: () => verifyReplyTypedByJosh({ sessionId, reply, env }),
     });
     log(
       `[design:gate1-adopt] Adopted ${

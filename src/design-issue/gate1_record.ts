@@ -393,7 +393,11 @@ export async function openGate1Record(
 export async function approveGate1Record(
   docPath: string,
   reply: string,
-  options?: { stateDir?: string },
+  options?: {
+    stateDir?: string;
+    /** Refuses (throws) unless Josh typed the reply after `presentedAt` (web-jam-tools#1412). */
+    verifyReply?: (presentedAt: string) => Promise<unknown>;
+  },
 ): Promise<{ record: Gate1Record; recordPath: string }> {
   const absDocPath = path.resolve(expandHome(docPath.trim()));
 
@@ -462,6 +466,8 @@ export async function approveGate1Record(
       `Document fingerprint (${currentFingerprint}) has changed since it was presented (${record.presentedFingerprint}) — refusing to approve Gate 1. Re-present the document with deno task design:gate1 first.`,
     );
   }
+
+  if (options?.verifyReply) await options.verifyReply(record.presentedAt);
 
   record.approvedAt = new Date().toISOString();
   record.reply = reply;
@@ -555,7 +561,12 @@ export async function recordSweepNote(
 export async function adoptGate1Record(
   docPath: string,
   reply: string,
-  options?: { stateDir?: string; now?: Date },
+  options?: {
+    stateDir?: string;
+    now?: Date;
+    /** Refuses (throws) unless Josh typed the reply (web-jam-tools#1412). */
+    verifyReply?: () => Promise<unknown>;
+  },
 ): Promise<{ record: Gate1Record; recordPath: string }> {
   const absDocPath = path.resolve(expandHome(docPath.trim()));
   if (!reply || reply.trim() === "") {
@@ -583,6 +594,7 @@ export async function adoptGate1Record(
   }
   const now = options?.now ?? new Date();
   const rows = premiseRowsForAdoption(content, toLocalIsoDate(now));
+  if (options?.verifyReply) await options.verifyReply();
 
   const record: Gate1Record = existing ?? {
     docPath: absDocPath,
