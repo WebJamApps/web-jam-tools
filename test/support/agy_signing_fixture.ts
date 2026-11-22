@@ -29,6 +29,12 @@ export const AGY_IDENTITIES = [
     transcriptPath: "/tmp/delta.jsonl",
     author: "agy — Gemini Neon",
   },
+  {
+    conversationId: "epsilon",
+    modelName: "claude-opus-5-5-high",
+    transcriptPath: "/tmp/epsilon.jsonl",
+    author: "agy — Claude Opus",
+  },
 ] as const;
 
 /** Interleaved hook records and per-invocation context, never the workstation's live log. */

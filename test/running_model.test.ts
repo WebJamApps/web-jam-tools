@@ -283,6 +283,9 @@ for (
     ["claude-sonnet-5-5-high", "Claude Sonnet 5.5"],
     ["Claude Sonnet 5.5 (High)", "Claude Sonnet 5.5"],
     ["Claude Sonnet 5.5", "Claude Sonnet 5.5"],
+    ["claude-opus-5-5-high", "Claude Opus"],
+    ["Claude Opus 5.5 (High)", "Claude Opus"],
+    ["Claude Opus", "Claude Opus"],
   ] as const
 ) {
   Deno.test(`running-model reads agy's ${modelName} hook record with neither id set`, () =>
@@ -315,6 +318,10 @@ for (
     [{ ...ARGON_RECORD, modelName: "claude-sonnet-5-5-medium" }, "no author roster entry"],
     [{ ...ARGON_RECORD, modelName: "Claude Sonnet 5.5 (Low)" }, "no author roster entry"],
     [{ ...ARGON_RECORD, modelName: "Claude Sonnet 5.5 (Medium)" }, "no author roster entry"],
+    [{ ...ARGON_RECORD, modelName: "claude-opus-5-5-low" }, "no author roster entry"],
+    [{ ...ARGON_RECORD, modelName: "claude-opus-5-5-medium" }, "no author roster entry"],
+    [{ ...ARGON_RECORD, modelName: "Claude Opus 5.5 (Low)" }, "no author roster entry"],
+    [{ ...ARGON_RECORD, modelName: "Claude Opus 5.5 (Medium)" }, "no author roster entry"],
     [{ ...ARGON_RECORD, modelName: "Totally Fake Model" }, "no author roster entry"],
   ] as const
 ) {
@@ -925,4 +932,41 @@ Deno.test("running-model refuses record whose only row is running conversation w
   withFixture(async (fixture) => {
     await writeArgonRows(fixture, ['{"conversationId":"agy-conversation"}']);
     await refuses(fixture, "no recorded model");
+  }));
+
+Deno.test("running-model resolves agy Claude Opus across interleaved conversations, conversation-less rows, and rejects mismatched context", () =>
+  withFixture(async (fixture) => {
+    const opus = {
+      conversationId: "epsilon",
+      modelName: "claude-opus-5-5-high",
+      transcriptPath: "/tmp/epsilon.jsonl",
+    };
+    const hydrogen = {
+      conversationId: "gamma",
+      modelName: "gemini-4-hydrogen-high",
+      transcriptPath: "/tmp/gamma.jsonl",
+    };
+    await Deno.writeTextFile(
+      fixture.env.AGY_HOOK_RECORD_PATH,
+      [
+        '{"modelName":"Gemini Flash"}',
+        JSON.stringify(opus),
+        '{"conversationId":null,"toolCall":{"name":"run_command"}}',
+        JSON.stringify(hydrogen),
+      ].join("\n") + "\n",
+    );
+    fixture.env.AGY_CONVERSATION_ID = opus.conversationId;
+    fixture.env.AGY_MODEL_NAME = opus.modelName;
+    fixture.env.AGY_TRANSCRIPT_PATH = opus.transcriptPath;
+    await succeeds(fixture, "Claude Opus");
+
+    fixture.env.AGY_MODEL_NAME = "Claude Opus 5.5 (Low)";
+    await refuses(fixture, "no author roster entry");
+
+    fixture.env.AGY_MODEL_NAME = "gemini-4-hydrogen-high";
+    await refuses(fixture, "Contradictory context: modelName");
+
+    fixture.env.AGY_MODEL_NAME = opus.modelName;
+    fixture.env.AGY_TRANSCRIPT_PATH = "/tmp/other.jsonl";
+    await refuses(fixture, "Contradictory context");
   }));
