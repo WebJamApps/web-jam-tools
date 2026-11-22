@@ -1530,6 +1530,7 @@ const MODEL_LABEL_CASES = [
   ["Codex — GPT-6.2 Astra", "Astra"],
   ["Claude Code — Claude Sonnet 5.5", "Sonnet"],
   ["Claude Code — Claude Opus", "Opus"],
+  ["agy — Claude Opus", "Opus"],
 ] as const;
 const LABEL_PR_URL = "https://github.com/WebJamApps/web-jam-tools/pull/9999";
 
@@ -1642,6 +1643,8 @@ for (const identity of AGY_IDENTITIES) {
         ? "Sonnet"
         : identity.conversationId === "delta"
         ? "Neon"
+        : identity.conversationId === "epsilon"
+        ? "Opus"
         : "Hydrogen";
       assertEquals(calls[1], ["pr", "edit", LABEL_PR_URL, "--add-label", label]);
     }, { author: identity.author }));
@@ -1924,6 +1927,11 @@ for (
     ["agy — Claude Sonnet 5.5", 0],
     ["agy — Claude Sonnet 5.5 (Low)", 1],
     ["agy — Claude Sonnet 5.5 (Medium)", 1],
+    ["agy — Claude Opus", 0],
+    ["agy — Claude Opus 5.5 (Low)", 1],
+    ["agy — Claude Opus 5.5 (Medium)", 1],
+    ["agy — Claude Opus (Low)", 1],
+    ["agy — Claude Opus (Medium)", 1],
   ] as const
 ) {
   Deno.test(`create-draft-pr.sh --check-author: ${author} exits ${code}`, async () => {

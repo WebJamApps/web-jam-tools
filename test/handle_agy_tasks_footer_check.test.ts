@@ -208,6 +208,10 @@ Deno.test("allowed agy model names stay roster-checked; retired Flash and low/me
   assertEquals(await derivedAuthor("gemini-4-neon-high"), "agy — Gemini Neon");
   assertEquals(await derivedAuthor("Claude Sonnet 5.5 (High)"), "agy — Claude Sonnet 5.5");
   assertEquals(await derivedAuthor("claude-sonnet-5-5-high"), "agy — Claude Sonnet 5.5");
+  assertEquals(await derivedAuthor("Claude Opus 5.5 (High)"), "agy — Claude Opus");
+  assertEquals(await derivedAuthor("claude-opus-5-5-high"), "agy — Claude Opus");
+  assertEquals(await rosterAccepts(await derivedAuthor("Claude Opus 5.5 (High)")), true);
+  assertEquals(await rosterAccepts(await derivedAuthor("claude-opus-5-5-high")), true);
 
   for (
     const rejected of [
@@ -215,6 +219,10 @@ Deno.test("allowed agy model names stay roster-checked; retired Flash and low/me
       "Gemini 4 Argon (Medium)",
       "Claude Sonnet 5.5 (Low)",
       "Claude Sonnet 5.5 (Medium)",
+      "Claude Opus 5.5 (Low)",
+      "Claude Opus 5.5 (Medium)",
+      "claude-opus-5-5-low",
+      "claude-opus-5-5-medium",
     ]
   ) {
     assertEquals(await rosterAccepts(await derivedAuthor(rejected)), false, rejected);

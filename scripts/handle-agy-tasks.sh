@@ -215,10 +215,14 @@ pr_author_for_model() {
       printf 'agy — Claude Sonnet 5.5'
       return 0
       ;;
+    claude-opus-5-5-high|"Claude Opus 5.5 (High)")
+      printf 'agy — Claude Opus'
+      return 0
+      ;;
   esac
-  # agy models (Gemini Hydrogen, Gemini Argon, Gemini Neon, Claude Sonnet 5.5) run at high effort only, so the
+  # agy models (Gemini Hydrogen, Gemini Argon, Gemini Neon, Claude Sonnet 5.5, Claude Opus) run at high effort only, so the
   # "(High)" effort suffix is dropped too: the roster names the model ("Gemini Hydrogen",
-  # "Gemini Argon", "Gemini Neon", "Claude Sonnet 5.5", web-jam-tools#1202, web-jam-tools#1465). A "(Low)" or
+  # "Gemini Argon", "Gemini Neon", "Claude Sonnet 5.5", "Claude Opus", web-jam-tools#1202, web-jam-tools#1465). A "(Low)" or
   # "(Medium)" suffix is kept so the roster refuses it.
   printf 'agy — %s' "$(printf '%s' "$model" | sed -E 's/^([[:alpha:]]+)[[:space:]]+[0-9]+(\.[0-9]+)*[[:space:]]+/\1 /; s/[[:space:]]+\(High\)$//')"
 }

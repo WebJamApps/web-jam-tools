@@ -73,28 +73,16 @@ export async function claudeRecordedAuthor(
   return uniqueRosterModel(model, roster.filter((entry) => matchesClaudeModel(model, entry)));
 }
 
+const AGY_ROSTER_ALIASES: Record<string, readonly string[]> = {
+  "Gemini Hydrogen": ["Gemini Hydrogen", "gemini-4-hydrogen-high", "Gemini 4 Hydrogen (High)"],
+  "Gemini Argon": ["Gemini Argon", "gemini-4-argon-high", "Gemini 4 Argon (High)"],
+  "Gemini Neon": ["Gemini Neon", "gemini-4-neon-high", "Gemini 4 Neon (High)"],
+  "Claude Sonnet 5.5": ["Claude Sonnet 5.5", "claude-sonnet-5-5-high", "Claude Sonnet 5.5 (High)"],
+  "Claude Opus": ["Claude Opus", "claude-opus-5-5-high", "Claude Opus 5.5 (High)"],
+};
+
 function matchesAgyModel(model: string, entry: string): boolean {
-  if (entry === "Gemini Hydrogen") {
-    return model === "Gemini Hydrogen" ||
-      model === "gemini-4-hydrogen-high" ||
-      model === "Gemini 4 Hydrogen (High)";
-  }
-  if (entry === "Gemini Argon") {
-    return model === "Gemini Argon" ||
-      model === "gemini-4-argon-high" ||
-      model === "Gemini 4 Argon (High)";
-  }
-  if (entry === "Gemini Neon") {
-    return model === "Gemini Neon" ||
-      model === "gemini-4-neon-high" ||
-      model === "Gemini 4 Neon (High)";
-  }
-  if (entry === "Claude Sonnet 5.5") {
-    return model === "Claude Sonnet 5.5" ||
-      model === "claude-sonnet-5-5-high" ||
-      model === "Claude Sonnet 5.5 (High)";
-  }
-  return false;
+  return AGY_ROSTER_ALIASES[entry]?.includes(model) ?? false;
 }
 
 function safeEnv(env: (name: string) => string | undefined, name: string): string | undefined {
