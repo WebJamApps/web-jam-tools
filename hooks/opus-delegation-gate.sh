@@ -55,14 +55,23 @@
 # recorded in <session>/subagents/agent-<id>.meta.json and in its own transcript. D-6 now decides by
 # that real model, and still refuses an Opus subagent that Opus started without Josh asking.
 #
-# agy/Antigravity reaches this script through agy-hook-shim.sh. Its payload carries no agent_id, so
-# the subagent branch is inert there and agy behaviour is unchanged.
+# agy/Antigravity reaches this script through agy-hook-shim.sh. Its payload carries modelName
+# and cannot run Fable, while Opus coding proceeds directly on agy (model-tier-order-design-2026-10-02.md,
+# "The agy model guard"), so any payload with a non-empty modelName exits 0 silently before
+# tool-branch or Claude transcript checks run.
 set -euo pipefail
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 GATE_LIB="$HOOK_DIR/lib/opus_gate.ts"
 
 input=$(cat)
+
+# agy/Antigravity early exit: any non-empty modelName identifies an agy session and proceeds
+# directly across Bash, apply_patch, Edit, Write, and NotebookEdit with no output.
+agy_model="$(printf '%s' "$input" | jq -r '.modelName // empty' 2>/dev/null || true)"
+if [ -n "${agy_model//[[:space:]]/}" ]; then
+  exit 0
+fi
 
 # Step 1: Subagent tool call? (agent_id present and non-empty) — exempt outside auto mode.
 agent_id="$(printf '%s' "$input" | jq -r '.agent_id // empty' 2>/dev/null || true)"
@@ -106,14 +115,6 @@ if [ "$tool_name" = "Bash" ]; then
   # Bash: a command that writes files is judged exactly like an Edit/Write to each of them. hooks/lib/bash_write_targets.ts lists the targets and documents the shapes and known gaps.
   via_bash="1"
 
-  # agy/Antigravity (the shim maps run_command to Bash) names its model in modelName and has no
-  # Claude transcript to read. A non-Opus agy model is never gated; without this, every file write
-  # Flash makes through run_command would fail closed on the unreadable transcript.
-  agy_model="$(printf '%s' "$input" | jq -r '.modelName // empty' 2>/dev/null || true)"
-  if [ -n "$agy_model" ] && ! printf '%s' "$agy_model" | grep -qi 'opus'; then
-    exit 0
-  fi
-
   # Cheap pre-filter: a command with none of these words or a ">" cannot write a file this gate
   # recognizes, so it never pays for a deno start (git status, ls, gh, grep ...).
   if ! printf '%s' "$command_text" | grep -qE '>|\b(tee|sed|perl|ruby|python[0-9.]*|node|nodejs|deno|cp|mv|install|truncate|dd|patch|apply|eval|sh|bash|zsh|ksh|dash)\b'; then
@@ -147,11 +148,6 @@ if [ "$tool_name" = "Bash" ]; then
   fi
 elif [ "$tool_name" = "apply_patch" ]; then
   via_apply_patch="1"
-
-  agy_model="$(printf '%s' "$input" | jq -r '.modelName // empty' 2>/dev/null || true)"
-  if [ -n "$agy_model" ] && ! printf '%s' "$agy_model" | grep -qi 'opus'; then
-    exit 0
-  fi
 
   patch_paths=()
   parse_error=""

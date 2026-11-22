@@ -192,6 +192,9 @@ for (const row of CREATE_ROWS) {
     const savedCodexThread = Deno.env.get("CODEX_THREAD_ID");
     const savedCodexHome = Deno.env.get("CODEX_HOME");
     const savedSurface = Deno.env.get("WJT_SURFACE");
+    const savedAgyConv = Deno.env.get("AGY_CONVERSATION_ID");
+    const savedAgyTranscript = Deno.env.get("AGY_TRANSCRIPT_PATH");
+    const savedAgyModel = Deno.env.get("AGY_MODEL_NAME");
     try {
       const tokenDir = `${home}/.claude/state/issue-approval-tokens`;
       await Deno.mkdir(tokenDir, { recursive: true });
@@ -202,6 +205,9 @@ for (const row of CREATE_ROWS) {
       Deno.env.delete("CODEX_THREAD_ID");
       Deno.env.delete("CODEX_HOME");
       Deno.env.delete("WJT_SURFACE");
+      Deno.env.delete("AGY_CONVERSATION_ID");
+      Deno.env.delete("AGY_TRANSCRIPT_PATH");
+      Deno.env.delete("AGY_MODEL_NAME");
       const check = checkApprovalToken(row.repo, row.title);
       if (row.refuse) {
         assertEquals(check.ok, false);
@@ -220,6 +226,12 @@ for (const row of CREATE_ROWS) {
       else Deno.env.set("CODEX_HOME", savedCodexHome);
       if (savedSurface === undefined) Deno.env.delete("WJT_SURFACE");
       else Deno.env.set("WJT_SURFACE", savedSurface);
+      if (savedAgyConv === undefined) Deno.env.delete("AGY_CONVERSATION_ID");
+      else Deno.env.set("AGY_CONVERSATION_ID", savedAgyConv);
+      if (savedAgyTranscript === undefined) Deno.env.delete("AGY_TRANSCRIPT_PATH");
+      else Deno.env.set("AGY_TRANSCRIPT_PATH", savedAgyTranscript);
+      if (savedAgyModel === undefined) Deno.env.delete("AGY_MODEL_NAME");
+      else Deno.env.set("AGY_MODEL_NAME", savedAgyModel);
       await Deno.remove(home, { recursive: true });
     }
   });
