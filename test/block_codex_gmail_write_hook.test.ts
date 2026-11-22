@@ -2,9 +2,15 @@ import { assertEquals, assertStringIncludes } from "@std/assert";
 
 const hook = new URL("../hooks/block-codex-gmail-write.sh", import.meta.url).pathname;
 
-async function invokeHook(payload: string, path = Deno.env.get("PATH")) {
+async function invokeHook(payload: string, path?: string) {
   const child = new Deno.Command(hook, {
-    env: { WJT_SURFACE: "codex", ...(path === undefined ? {} : { PATH: path }) },
+    // A test PATH must reach the hook exactly as given. CircleCI's BASH_ENV re-exports PATH with
+    // ~/.deno/bin first in every bash it starts, which would put the real deno ahead of a fake
+    // one, so a call that sets PATH starts from an empty environment that has no BASH_ENV.
+    clearEnv: path !== undefined,
+    env: path === undefined
+      ? { WJT_SURFACE: "codex" }
+      : { WJT_SURFACE: "codex", PATH: path, HOME: Deno.env.get("HOME") ?? "" },
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
