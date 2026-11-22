@@ -18,13 +18,13 @@
 import * as path from "jsr:@std/path@^1.0.0";
 import {
   ASSIGN_RE,
-  findHeredocMarker,
   MAX_WRAPPER_ITERATIONS,
-  MAX_WRAPPER_RECURSION_DEPTH,
+  type Quote,
   readInterpreterHeredocs,
   readInterpreterScript,
   resolveThroughWrappers,
   resolveWrapperLayer,
+  scanHeredocLine,
   splitOnOperators,
   splitShellTokens,
   stripHeredocs,
@@ -166,9 +166,16 @@ export function checkCommandForPrivateFolder(command: string, folders: string[])
 const ALLOWED_FOLDERS = new Set(["joshandmariamusic", "web-jam-llms", "mark_henrickson"]);
 const INTERPRETERS = new Set(["python", "python3", "node", "deno", "bash", "sh"]);
 const MAX_SCRIPT_BYTES = 1_000_000;
+const MAX_SCRIPT_DEPTH = 6;
+const MAX_SHELL_DEPTH = 12;
 const CMD_VALUE = "__WJT_CMD_VAL__";
 const COULD_NOT_READ_REFUSAL = "cannot resolve command paths or inspect script — refusing";
 const SHELL_KEYWORDS = new Set(["while", "until", "if", "elif", "then", "do", "else"]);
+
+interface DepthState {
+  scriptDepth: number;
+  shellDepth: number;
+}
 
 function protectSingleQuotedMetachars(text: string): string {
   let out = "";
@@ -228,6 +235,13 @@ interface InspectionContext {
   variables: Map<string, string>;
   scripts: Set<string>;
   scriptText?: boolean;
+  allowProcReadlink?: boolean;
+}
+
+class UnresolvedPathError extends Error {
+  constructor(message: string) {
+    super(message);
+  }
 }
 
 export function unreadableScriptMessage(filename: string): string {
@@ -251,25 +265,262 @@ function namedSocket(text: string): boolean {
   return /\.dropbox\/(?:command_socket|iface_socket)(?=$|[\s"'`),;\/])/m.test(text);
 }
 
+function lookupPathVariable(name: string, context: InspectionContext): string | undefined {
+  if (name === "HOME") return context.home;
+  if (context.variables.has(name)) return context.variables.get(name);
+  return Deno.env.get(name) || undefined;
+}
+
+function globToPatternSource(glob: string): string {
+  let out = "";
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob[i];
+    if (ch === "*") out += "[\\s\\S]*";
+    else if (ch === "?") out += "[\\s\\S]";
+    else if (ch === "[") {
+      const close = glob.indexOf("]", i + 1);
+      if (close > i + 1) {
+        let cls = glob.slice(i + 1, close);
+        if (cls.startsWith("!")) cls = "^" + cls.slice(1);
+        out += `[${cls}]`;
+        i = close;
+        continue;
+      }
+      out += "\\[";
+    } else {
+      out += ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  return out;
+}
+
+function stripAffixGlob(
+  val: string,
+  op: "%" | "%%" | "#" | "##",
+  pat: string,
+): string {
+  const regex = new RegExp(`^${globToPatternSource(pat)}$`);
+  if (op === "%") {
+    for (let i = val.length; i >= 0; i--) {
+      if (regex.test(val.slice(i))) return val.slice(0, i);
+    }
+    return val;
+  }
+  if (op === "%%") {
+    for (let i = 0; i <= val.length; i++) {
+      if (regex.test(val.slice(i))) return val.slice(0, i);
+    }
+    return val;
+  }
+  if (op === "#") {
+    for (let i = 0; i <= val.length; i++) {
+      if (regex.test(val.slice(0, i))) return val.slice(i);
+    }
+    return val;
+  }
+  for (let i = val.length; i >= 0; i--) {
+    if (regex.test(val.slice(0, i))) return val.slice(i);
+  }
+  return val;
+}
+
+function sliceBashSubstring(val: string, offsetRaw: string, lenRaw?: string): string | null {
+  const offTrim = offsetRaw.trim();
+  const offset = Number(offTrim);
+  if (!offTrim || !Number.isInteger(offset)) return null;
+  const start = offset < 0 ? Math.max(val.length + offset, 0) : offset;
+  if (lenRaw === undefined) return val.slice(start);
+  const lenTrim = lenRaw.trim();
+  const len = Number(lenTrim);
+  if (!lenTrim || !Number.isInteger(len)) return null;
+  if (len >= 0) return val.slice(start, start + len);
+  const end = Math.max(val.length + len, 0);
+  return start <= end ? val.slice(start, end) : "";
+}
+
+function findClosingBrace(text: string, openBraceIdx: number): number {
+  let depth = 1;
+  for (let i = openBraceIdx + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "\\" && i + 1 < text.length) {
+      i++;
+      continue;
+    }
+    if (ch === "{") depth++;
+    else if (ch === "}" && --depth === 0) return i;
+  }
+  return -1;
+}
+
+function resolveBracedExpression(
+  inner: string,
+  context: InspectionContext,
+  seen: Set<string>,
+  strict: boolean,
+): string | null {
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(inner)) {
+    if (seen.has(inner)) throw new Error("cyclic path variable");
+    const replacement = lookupPathVariable(inner, context);
+    if (replacement === undefined) {
+      if (strict) throw new UnresolvedPathError("unresolved path variable");
+      return null;
+    }
+    return expandVariablesText(replacement, context, new Set(seen).add(inner), strict);
+  }
+
+  const defMatch = /^([A-Za-z_][A-Za-z0-9_]*)(:-|-)(.*)$/s.exec(inner);
+  if (defMatch) {
+    const [, name, op, defVal] = defMatch;
+    if (seen.has(name)) throw new Error("cyclic path variable");
+    const raw = lookupPathVariable(name, context);
+    const nextSeen = new Set(seen).add(name);
+    if (raw === undefined) {
+      return expandVariablesText(defVal, context, nextSeen, strict);
+    }
+    const resolved = expandVariablesText(raw, context, nextSeen, strict);
+    if (op === ":-" && resolved === "") {
+      return expandVariablesText(defVal, context, nextSeen, strict);
+    }
+    return resolved;
+  }
+
+  const affixMatch = /^([A-Za-z_][A-Za-z0-9_]*)(%%|%|##|#)(.*)$/s.exec(inner);
+  if (affixMatch) {
+    const [, name, op, rawPat] = affixMatch;
+    if (seen.has(name)) throw new Error("cyclic path variable");
+    const raw = lookupPathVariable(name, context);
+    if (raw === undefined) {
+      if (strict) throw new UnresolvedPathError("unresolved path variable");
+      return null;
+    }
+    const nextSeen = new Set(seen).add(name);
+    const resolvedVal = expandVariablesText(raw, context, nextSeen, strict);
+    const resolvedPat = expandVariablesText(rawPat, context, nextSeen, strict);
+    if (resolvedVal === null || resolvedPat === null) return null;
+    return stripAffixGlob(resolvedVal, op as "%" | "%%" | "#" | "##", resolvedPat);
+  }
+
+  const sliceMatch = /^([A-Za-z_][A-Za-z0-9_]*):(?![-+?=])([^:]*)(?::(.*))?$/s.exec(inner);
+  if (sliceMatch) {
+    const [, name, offRaw, lenRaw] = sliceMatch;
+    if (seen.has(name)) throw new Error("cyclic path variable");
+    const raw = lookupPathVariable(name, context);
+    if (raw === undefined) {
+      if (strict) throw new UnresolvedPathError("unresolved path variable");
+      return null;
+    }
+    const resolvedVal = expandVariablesText(raw, context, new Set(seen).add(name), strict);
+    if (resolvedVal === null) return null;
+    const sliced = sliceBashSubstring(resolvedVal, offRaw, lenRaw);
+    if (sliced === null) {
+      if (strict) throw new UnresolvedPathError("unresolved path variable");
+      return null;
+    }
+    return sliced;
+  }
+
+  if (strict) throw new UnresolvedPathError("unresolved path variable");
+  return null;
+}
+
+function expandVariablesText(
+  text: string,
+  context: InspectionContext,
+  seen: Set<string>,
+  strict: boolean,
+): string {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "$") {
+      out += text[i];
+      continue;
+    }
+    if (text[i + 1] === "{") {
+      const close = findClosingBrace(text, i + 1);
+      if (close < 0) {
+        if (strict) throw new UnresolvedPathError("unresolved path variable");
+        out += text.slice(i);
+        break;
+      }
+      const inner = text.slice(i + 2, close);
+      const replaced = resolveBracedExpression(inner, context, seen, strict);
+      if (replaced === null) {
+        out += text.slice(i, close + 1);
+      } else {
+        out += replaced;
+      }
+      i = close;
+      continue;
+    }
+    const bareMatch = /^[A-Za-z_][A-Za-z0-9_]*/.exec(text.slice(i + 1));
+    if (bareMatch) {
+      const name = bareMatch[0];
+      if (seen.has(name)) throw new Error("cyclic path variable");
+      const replacement = lookupPathVariable(name, context);
+      if (replacement === undefined) {
+        if (strict) throw new UnresolvedPathError("unresolved path variable");
+        out += `$${name}`;
+      } else {
+        out += expandVariablesText(replacement, context, new Set(seen).add(name), strict);
+      }
+      i += name.length;
+      continue;
+    }
+    out += text[i];
+  }
+  return out;
+}
+
 /** Resolve variables and tilde without prepending cwd yet, preserving CMD_VALUE semantics. */
 function expandRawPath(value: string, context: InspectionContext): string {
-  const resolveVariables = (text: string, seen = new Set<string>()): string =>
-    text.replace(
-      /\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g,
-      (_, name: string) => {
-        if (seen.has(name)) throw new Error("cyclic path variable");
-        const replacement = name === "HOME"
-          ? context.home
-          : context.variables.has(name)
-          ? context.variables.get(name)
-          : Deno.env.get(name) || undefined;
-        if (replacement === undefined) throw new Error("unresolved path variable");
-        return resolveVariables(replacement, new Set(seen).add(name));
-      },
-    );
-  const expanded = resolveVariables(value.replace(/^~(?=\/|$)/, context.home));
-  if (expanded.includes("$") || expanded.includes("`")) throw new Error("unresolved path");
+  const tildeReplaced = value.replace(/^~(?=\/|$)/, context.home);
+  const expanded = expandVariablesText(tildeReplaced, context, new Set(), true);
+  if (expanded.includes("$") || expanded.includes("`")) {
+    throw new UnresolvedPathError("unresolved path");
+  }
   return expanded;
+}
+
+type ProcKind = "metadata" | "bare-cwd" | "bare-exe" | "traversal";
+
+function classifyProcPath(procPath: string): ProcKind {
+  const parts: string[] = [];
+  for (const part of procPath.slice("/proc".length).split("/")) {
+    if (!part || part === ".") continue;
+    const curBody = parts[1] === "task" && parts.length >= 4 ? parts.slice(3) : parts.slice(1);
+    if (
+      curBody.length >= 1 &&
+      ["cwd", "root", "exe", "fd", "fdinfo", "map_files"].includes(curBody[0])
+    ) {
+      return "traversal";
+    }
+    if (part === "..") {
+      if (parts.length === 0) return "traversal";
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+    const body = parts[1] === "task" && parts.length >= 4 ? parts.slice(3) : parts.slice(1);
+    if (body.length === 0) continue;
+    if (["root", "fd", "fdinfo", "map_files"].includes(body[0])) {
+      return "traversal";
+    }
+    if (body.length > 1 && (body[0] === "cwd" || body[0] === "exe")) {
+      return "traversal";
+    }
+  }
+  if (parts.length === 0) return "traversal";
+  const body = parts[1] === "task" && parts.length >= 4 ? parts.slice(3) : parts.slice(1);
+  if (body.length === 1 && body[0] === "cwd") return "bare-cwd";
+  if (body.length === 1 && body[0] === "exe") return "bare-exe";
+  return "metadata";
+}
+
+function hasProcTraversalInText(rawPath: string): boolean {
+  const normalized = rawPath.replaceAll("//", "/");
+  if (normalized === "/proc" || normalized === "/proc/") return true;
+  if (!normalized.startsWith("/proc/")) return false;
+  return classifyProcPath(normalized) === "traversal";
 }
 
 /** Resolve existing ancestors too, so a new file cannot conceal a symlink traversal. */
@@ -285,9 +536,33 @@ function resolvedPath(value: string, context: InspectionContext): string {
   const root = path.parse(expanded).root;
   if (!root) throw new Error("unresolved path root");
   let current = root;
+  const rawParts = expanded.slice(root.length).split(path.SEPARATOR);
+  // Find the index of the last meaningful component so bare /proc/<id>/cwd or exe
+  // is known to have no trailing subpath.
+  let lastPartIdx = -1;
+  for (let i = rawParts.length - 1; i >= 0; i--) {
+    if (rawParts[i] && rawParts[i] !== ".") {
+      lastPartIdx = i;
+      break;
+    }
+  }
+  const evaluateProcCandidate = (procTarget: string, isFinal: boolean): string | null => {
+    const kind = classifyProcPath(procTarget);
+    if (kind === "metadata") return procTarget;
+    if (
+      (kind === "bare-cwd" || kind === "bare-exe") &&
+      isFinal &&
+      (context.allowProcReadlink || context.scriptText)
+    ) {
+      return procTarget;
+    }
+    throw new Error("cannot resolve a /proc path");
+  };
+
   // Deno normalizes '..' in a realPath argument before reaching the OS. Resolve
   // one component at a time so a symlink is followed before its subsequent '..'.
-  for (const part of expanded.slice(root.length).split(path.SEPARATOR)) {
+  for (let idx = 0; idx < rawParts.length; idx++) {
+    const part = rawParts[idx];
     if (!part || part === ".") continue;
     if (part === "..") {
       current = path.dirname(current);
@@ -295,7 +570,11 @@ function resolvedPath(value: string, context: InspectionContext): string {
     }
     const candidate = path.join(current, part);
     if (candidate === "/proc" || candidate.startsWith("/proc/")) {
-      throw new Error("cannot resolve a /proc path");
+      const restParts = rawParts.slice(idx + 1).filter((p) => p && p !== ".");
+      const fullProcPath = candidate === "/proc"
+        ? (restParts.length > 0 ? `/proc/${restParts.join("/")}` : "/proc")
+        : (restParts.length > 0 ? `${candidate}/${restParts.join("/")}` : candidate);
+      return evaluateProcCandidate(fullProcPath, true)!;
     }
     try {
       current = Deno.realPathSync(candidate);
@@ -315,7 +594,9 @@ function resolvedPath(value: string, context: InspectionContext): string {
       current = candidate;
     }
     if (current === "/proc" || current.startsWith("/proc/")) {
-      throw new Error("cannot resolve a /proc path");
+      const restParts = rawParts.slice(idx + 1).filter((p) => p && p !== ".");
+      const fullProcPath = restParts.length > 0 ? `${current}/${restParts.join("/")}` : current;
+      return evaluateProcCandidate(fullProcPath, idx === lastPartIdx)!;
     }
   }
   return current;
@@ -331,14 +612,68 @@ function isRelativeInside(base: string, target: string): string | null {
   return relative;
 }
 
+function hasSafeLiteralPrefixBeforeUnresolved(value: string, context: InspectionContext): boolean {
+  const tildeReplaced = value.replace(/^~(?=\/|$)/, context.home);
+  const partial = expandVariablesText(tildeReplaced, context, new Set(), false);
+  const dollarIdx = partial.indexOf("$");
+  const tickIdx = partial.indexOf("`");
+  const idx = dollarIdx >= 0 && tickIdx >= 0
+    ? Math.min(dollarIdx, tickIdx)
+    : Math.max(dollarIdx, tickIdx);
+  if (idx <= 0) return false;
+  if (/(?:^|[\\/])\.\.(?:[\\/]|$)/.test(partial)) return false;
+
+  const literalPrefix = partial.slice(0, idx);
+  const lastSlash = literalPrefix.lastIndexOf("/");
+  if (lastSlash < 0) return false;
+  const dirPrefix = literalPrefix.slice(0, lastSlash + 1);
+  if (dirPrefix.includes(CMD_VALUE)) return false;
+
+  let expandedDir: string;
+  let resolvedDir: string;
+  try {
+    expandedDir = expandedPath(dirPrefix, context);
+    resolvedDir = resolvedPath(dirPrefix, context);
+  } catch {
+    return false;
+  }
+
+  const roots = [path.join(context.home, "Dropbox"), "/home/joshua/Dropbox"].flatMap((root) => [
+    root,
+    resolvedPath(root, context),
+  ]);
+  const homes = [context.home, "/home/joshua"].flatMap((home) => [
+    home,
+    resolvedPath(home, context),
+  ]);
+
+  for (const target of [expandedDir, resolvedDir]) {
+    if (target === "/" || homes.includes(target)) return false;
+    for (const root of roots) {
+      if (isRelativeInside(root, target) !== null) return false;
+    }
+  }
+  return true;
+}
+
 function privatePath(value: string, context: InspectionContext, allowRoot = false): string | null {
   // Unknown values inside script text are not paths we can establish. Explicit
-  // Dropbox prefixes are checked separately before any such value is skipped.
+  // Dropbox prefixes and /proc traversal subpaths stay refused before skipping.
   let rawExpanded: string;
   try {
     rawExpanded = expandRawPath(value, context);
   } catch (err) {
-    if (context.scriptText) return null;
+    if (context.scriptText) {
+      if (hasProcTraversalInText(value)) {
+        throw new Error("cannot resolve a /proc path");
+      }
+      return null;
+    }
+    if (
+      err instanceof UnresolvedPathError && hasSafeLiteralPrefixBeforeUnresolved(value, context)
+    ) {
+      return null;
+    }
     throw err;
   }
   const hasCmdValue = rawExpanded.includes(CMD_VALUE);
@@ -429,10 +764,11 @@ function sweepCommand(argv: string[], context: InspectionContext): boolean {
 function inspectScript(
   source: string,
   context: InspectionContext,
-  depth: number,
+  depths: DepthState,
   shell = false,
 ): string | null {
-  if (depth > MAX_WRAPPER_RECURSION_DEPTH) throw new Error("script nesting limit");
+  if (depths.scriptDepth > MAX_SCRIPT_DEPTH) throw new Error("script nesting limit");
+  if (depths.shellDepth > MAX_SHELL_DEPTH) throw new Error("script/wrapper nesting limit");
   context = { ...context, scriptText: true };
   const text = withoutWebAddresses(source.replace(/^\s*(?:#|\/\/).*$/gm, ""));
   if (namedSocket(text)) return "Dropbox desktop socket";
@@ -460,11 +796,11 @@ function inspectScript(
         ? call[3]
         : words.map((word) => `'${word.replaceAll("'", "'\\''")}'`).join(" "),
       context,
-      depth + 1,
+      { scriptDepth: depths.scriptDepth, shellDepth: depths.shellDepth + 1 },
     );
     if (denied) return denied;
   }
-  return shell ? inspectShell(text, context, depth + 1) : null;
+  return shell ? inspectShell(text, context, depths) : null;
 }
 
 function scriptArgument(argv: string[]): string[] {
@@ -589,11 +925,13 @@ function pathOperands(argv: string[], context: InspectionContext): string[] {
 function inspectFile(
   filename: string,
   context: InspectionContext,
-  depth: number,
+  depths: DepthState,
   shell: boolean,
   ownPath: boolean,
 ): string | null {
   if (context.scripts.has(filename)) throw new Error("recursive script reference");
+  const nextScriptDepth = depths.scriptDepth + 1;
+  if (nextScriptDepth > MAX_SCRIPT_DEPTH) throw new Error("script nesting limit");
   let source: string;
   try {
     const file = Deno.openSync(filename, { read: true });
@@ -618,7 +956,7 @@ function inspectFile(
   return inspectScript(
     source,
     { ...context, scripts: new Set(context.scripts).add(filename) },
-    depth + 1,
+    { scriptDepth: nextScriptDepth, shellDepth: depths.shellDepth },
     shell,
   );
 }
@@ -707,22 +1045,139 @@ function expandWildcardWord(rawWord: string, context: InspectionContext): string
   return prefixes.map((p) => (trailingSlash && !p.endsWith("/") ? `${p}/` : p)).sort();
 }
 
+interface BalancedLoopMatch {
+  index: number;
+  length: number;
+  varName: string;
+  wordList: string;
+  body: string;
+}
+
+function findFirstBalancedForLoop(text: string): BalancedLoopMatch | null {
+  let quote = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "\\" && quote !== "'") {
+      i++;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === "#" && startsShellComment(text, i)) {
+      const end = text.indexOf("\n", i);
+      if (end < 0) return null;
+      i = end;
+      continue;
+    }
+    if (i > 0 && !/[\s;|&({]/.test(text[i - 1])) continue;
+    const header = /^for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+/.exec(text.slice(i));
+    if (!header) continue;
+
+    const listStart = i + header[0].length;
+    let headerQuote = "";
+    let j = listStart;
+    let listEnd = -1;
+    let bodyStart = -1;
+    for (; j < text.length; j++) {
+      const c = text[j];
+      if (c === "\\" && headerQuote !== "'") {
+        j++;
+        continue;
+      }
+      if (headerQuote) {
+        if (c === headerQuote) headerQuote = "";
+        continue;
+      }
+      if (c === "'" || c === '"') {
+        headerQuote = c;
+        continue;
+      }
+      if (c === "#" && startsShellComment(text, j)) break;
+      if (c === ";" || c === "\n") {
+        const afterSep = /^([ \t]*)do(?=$|[\s;|&)#])/.exec(text.slice(j + 1));
+        if (afterSep) {
+          listEnd = j;
+          bodyStart = j + 1 + afterSep[0].length;
+          break;
+        }
+        if (c === "\n") continue;
+        break;
+      }
+    }
+    if (listEnd < 0 || bodyStart < 0) continue;
+
+    let loopDepth = 1;
+    let bodyQuote = "";
+    let k = bodyStart;
+    for (; k < text.length; k++) {
+      const c = text[k];
+      if (c === "\\" && bodyQuote !== "'") {
+        k++;
+        continue;
+      }
+      if (bodyQuote) {
+        if (c === bodyQuote) bodyQuote = "";
+        continue;
+      }
+      if (c === "'" || c === '"') {
+        bodyQuote = c;
+        continue;
+      }
+      if (c === "#" && startsShellComment(text, k)) {
+        const end = text.indexOf("\n", k);
+        if (end < 0) break;
+        k = end;
+        continue;
+      }
+      if (c === ";" || c === "\n" || c === "&") {
+        const kwMatch = /^[ \t]*(do|done)(?=$|[\s;|&)#])/.exec(text.slice(k + 1));
+        if (kwMatch) {
+          if (kwMatch[1] === "do") {
+            loopDepth++;
+            k += kwMatch[0].length;
+            continue;
+          }
+          loopDepth--;
+          const doneEnd = k + 1 + kwMatch[0].length;
+          if (loopDepth === 0) {
+            return {
+              index: i,
+              length: doneEnd - i,
+              varName: header[1],
+              wordList: text.slice(listStart, listEnd),
+              body: text.slice(bodyStart, k),
+            };
+          }
+          k = doneEnd - 1;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function inspectLiteralLoop(
   text: string,
   context: InspectionContext,
-  depth: number,
+  depths: DepthState,
 ): { found: boolean; denied: string | null } {
-  const loop =
-    /\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([^;\n]+)[;\n]\s*do\b([\s\S]*?)[;\n]\s*done\b/.exec(
-      text,
-    );
+  const loop = findFirstBalancedForLoop(text);
   if (!loop) return { found: false, denied: null };
-  const prefix = inspectShell(text.slice(0, loop.index), context, depth);
+  const prefix = inspectShell(text.slice(0, loop.index), context, depths);
   if (prefix) return { found: true, denied: prefix };
 
-  const wordSubs = shellSubstitutions(loop[2]);
+  const wordSubs = shellSubstitutions(loop.wordList);
   for (const subCmd of wordSubs.commands) {
-    const denied = inspectShell(subCmd, { ...context }, depth + 1);
+    const denied = inspectShell(subCmd, { ...context }, {
+      scriptDepth: depths.scriptDepth,
+      shellDepth: depths.shellDepth + 1,
+    });
     if (denied) return { found: true, denied };
   }
   const normalizedList = protectSingleQuotedMetachars(wordSubs.text)
@@ -762,13 +1217,16 @@ function inspectLiteralLoop(
   }
 
   for (const word of words) {
-    const variables = new Map(context.variables).set(loop[1], word);
-    const denied = inspectShell(loop[3], { ...context, variables }, depth + 1);
+    const variables = new Map(context.variables).set(loop.varName, word);
+    const denied = inspectShell(loop.body, { ...context, variables }, {
+      scriptDepth: depths.scriptDepth,
+      shellDepth: depths.shellDepth + 1,
+    });
     if (denied) return { found: true, denied };
   }
   return {
     found: true,
-    denied: inspectShell(text.slice(loop.index + loop[0].length), context, depth),
+    denied: inspectShell(text.slice(loop.index + loop.length), context, depths),
   };
 }
 
@@ -1006,6 +1464,41 @@ function shellSyntax(text: string): { text: string; patterns: string[]; redirect
       i = end;
       continue;
     }
+    if (ch === "(" && /(?:^|[\s;|&])(?:[A-Za-z_][A-Za-z0-9_]*)\+?=$/.test(result)) {
+      const end = closingParenthesis(text, i);
+      const inner = text.slice(i + 1, end);
+      let flat = "";
+      let arrQuote = "";
+      for (let j = 0; j < inner.length; j++) {
+        const c = inner[j];
+        if (c === "\\" && arrQuote !== "'") {
+          flat += inner.slice(j, j + 2);
+          j++;
+          continue;
+        }
+        if (arrQuote) {
+          flat += c;
+          if (c === arrQuote) arrQuote = "";
+          continue;
+        }
+        if (c === "'" || c === '"') {
+          arrQuote = c;
+          flat += c;
+          continue;
+        }
+        if (c === "#" && startsShellComment(inner, j)) {
+          const nl = inner.indexOf("\n", j);
+          if (nl < 0) break;
+          flat += " ";
+          j = nl;
+          continue;
+        }
+        flat += c === "\n" ? " " : c;
+      }
+      result += `__WJT_ARRAY__ ${flat} `;
+      i = end;
+      continue;
+    }
     const redirect = /^(?:&>>?|<<<|<<-?|<>|>>|[<>]&|>\||[<>])/.exec(text.slice(i));
     if (redirect && text[i + redirect[0].length] !== "(") {
       // A numeric descriptor belongs to the operator, never to the command argv.
@@ -1068,25 +1561,27 @@ function parseReadVars(argv: string[]): string[] | null {
 function inspectShell(
   command: string,
   context: InspectionContext,
-  depth: number,
+  depths: DepthState,
 ): string | null {
-  if (depth > MAX_WRAPPER_RECURSION_DEPTH) throw new Error("script/wrapper nesting limit");
+  if (depths.shellDepth > MAX_SHELL_DEPTH) throw new Error("script/wrapper nesting limit");
   if (namedSocket(command)) return "Dropbox desktop socket";
-  const text = withoutWebAddresses(stripHeredocs(command.replace(/\\\r?\n/g, ""))).replace(
-    /\$\{([A-Za-z_][A-Za-z0-9_]*)\}(?![A-Za-z0-9_])/g,
-    (_, name) => `$${name}`,
-  );
-  const loop = inspectLiteralLoop(text, context, depth);
-  if (loop.found) return loop.denied;
-  // Data bodies have already been stripped. Retained bodies execute as scripts.
-  const lines = text.split("\n");
+  const cleaned = command.replace(/\\\r?\n/g, "");
+  const stripped = stripHeredocs(cleaned);
+  // Data bodies have already been stripped. Separate executable heredocs BEFORE
+  // inspectLiteralLoop so heredoc contents never match outer shell loop patterns,
+  // and pass quote state across lines so '<<EOF' inside multi-line quotes never opens one.
+  const lines = stripped.split("\n");
   const shellLines: string[] = [];
+  const heredocInspections: Array<{ body: string; shell: boolean }> = [];
+  let quote: Quote = null;
   for (let index = 0; index < lines.length; index++) {
     shellLines.push(lines[index]);
-    const marker = findHeredocMarker(lines[index]);
+    const scanned = scanHeredocLine(lines[index], quote);
+    quote = scanned.quote;
+    const marker = scanned.marker;
     if (!marker) continue;
     const header = lines[index];
-    const shell = !/(?:^|[\s/])(python3?|node|deno)(?=\s|$)/.test(lines[index]);
+    const shell = !/(?:^|[\s/])(python3?|node|deno)(?=\s|$)/.test(header);
     const body: string[] = [];
     while (++index < lines.length) {
       const line = marker[1] ? lines[index].replace(/^\t+/, "") : lines[index];
@@ -1096,12 +1591,27 @@ function inspectShell(
     if (index >= lines.length) throw new Error("unterminated heredoc");
     shellLines.push(lines[index]);
     const consumesHeredoc = shell || readInterpreterHeredocs(header).length > 0;
-    const denied = consumesHeredoc
-      ? inspectScript(body.join("\n"), { ...context }, depth + 1, shell)
-      : null;
+    if (consumesHeredoc) {
+      heredocInspections.push({ body: body.join("\n"), shell });
+    }
+  }
+  for (const heredoc of heredocInspections) {
+    const denied = inspectScript(
+      heredoc.body,
+      { ...context },
+      { scriptDepth: depths.scriptDepth, shellDepth: depths.shellDepth + 1 },
+      heredoc.shell,
+    );
     if (denied) return denied;
   }
-  const substitutions = shellSubstitutions(shellLines.join("\n"));
+
+  const text = withoutWebAddresses(shellLines.join("\n")).replace(
+    /\$\{([A-Za-z_][A-Za-z0-9_]*)\}(?![A-Za-z0-9_])/g,
+    (_, name) => `$${name}`,
+  );
+  const loop = inspectLiteralLoop(text, context, depths);
+  if (loop.found) return loop.denied;
+  const substitutions = shellSubstitutions(text);
   const syntax = shellSyntax(substitutions.text);
   for (const pattern of syntax.patterns) {
     const named = checkCommandForPrivateFolder(pattern, context.folders);
@@ -1145,7 +1655,10 @@ function inspectShell(
       ...(segment + " " + redirected.join(" ")).matchAll(/__WJT_SUBSTITUTION_(\d+)__/g),
     ];
     for (const index of new Set(expansions.map((match) => Number(match[1])))) {
-      const denied = inspectShell(substitutions.commands[index], { ...context }, depth + 1);
+      const denied = inspectShell(substitutions.commands[index], { ...context }, {
+        scriptDepth: depths.scriptDepth,
+        shellDepth: depths.shellDepth + 1,
+      });
       if (denied) return denied;
     }
     for (const token of rawTokens) {
@@ -1159,16 +1672,32 @@ function inspectShell(
     }
     let cmdStart = assignments;
     while (cmdStart < tokens.length && SHELL_KEYWORDS.has(tokens[cmdStart])) cmdStart++;
-    const patternCommand = ["grep", "sed"].includes(path.basename(tokens[cmdStart] ?? ""));
+    const cmdName = path.basename(tokens[cmdStart] ?? "");
+    const resolvedTokenCmd = resolveThroughWrappers(tokens.slice(cmdStart));
+    const effectiveCmdName = resolvedTokenCmd.kind === "argv" && resolvedTokenCmd.argv[0]
+      ? path.basename(resolvedTokenCmd.argv[0])
+      : cmdName;
+    const patternCommand = ["grep", "sed"].includes(cmdName);
+    const tokenContext = effectiveCmdName === "readlink"
+      ? { ...context, allowProcReadlink: true }
+      : context;
     for (
       const token of patternCommand ? pathOperands(tokens.slice(cmdStart), context) : tokens
     ) {
       for (const candidate of literalPaths(token)) {
-        const denied = privatePath(candidate, context);
+        const denied = privatePath(candidate, tokenContext);
         if (denied) return denied;
       }
     }
-    if (assignments === tokens.length) {
+    const isArrayAssignment = (() => {
+      let idx = 0;
+      if (["local", "declare", "typeset", "readonly", "export"].includes(tokens[idx] ?? "")) {
+        idx++;
+        while (idx < tokens.length && tokens[idx].startsWith("-")) idx++;
+      }
+      return /^([A-Za-z_][A-Za-z0-9_]*)\+?=__WJT_ARRAY__$/.test(tokens[idx] ?? "");
+    })();
+    if (assignments === tokens.length || isArrayAssignment) {
       parentContext.variables = context.variables;
       context = parentContext;
       continue;
@@ -1188,7 +1717,7 @@ function inspectShell(
       const denied = inspectShell(
         unprotectSingleQuotedMetachars(resolved.command),
         { ...context },
-        depth + 1,
+        { scriptDepth: depths.scriptDepth, shellDepth: depths.shellDepth + 1 },
       );
       if (denied) return denied;
       context = parentContext;
@@ -1214,7 +1743,7 @@ function inspectShell(
         const denied = inspectShell(
           unprotectSingleQuotedMetachars(argv[inline + 1]),
           { ...context },
-          depth + 1,
+          { scriptDepth: depths.scriptDepth, shellDepth: depths.shellDepth + 1 },
         );
         if (denied) return denied;
         context = parentContext;
@@ -1294,7 +1823,7 @@ function inspectShell(
       const denied = inspectFile(
         filename,
         context,
-        depth,
+        depths,
         ownPath || name === "bash" || name === "sh",
         ownPath,
       );
@@ -1302,7 +1831,10 @@ function inspectShell(
     }
     const scriptCall = readInterpreterScript(argv.map(unprotectSingleQuotedMetachars));
     if (scriptCall?.script?.kind === "inline") {
-      const denied = inspectScript(scriptCall.script.code, { ...context }, depth + 1);
+      const denied = inspectScript(scriptCall.script.code, { ...context }, {
+        scriptDepth: depths.scriptDepth,
+        shellDepth: depths.shellDepth + 1,
+      });
       if (denied) return denied;
     }
     context = parentContext;
@@ -1331,7 +1863,7 @@ export function checkPrivateFolderCommand(
     return inspectShell(
       command,
       { cwd, home, folders, variables: new Map(), scripts: new Set() },
-      0,
+      { scriptDepth: 0, shellDepth: 0 },
     );
   } catch (error) {
     if (error instanceof UnreadableScript) return error.message;

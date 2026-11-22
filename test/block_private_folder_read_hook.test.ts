@@ -1582,3 +1582,331 @@ for (const entry of REVISION_227_CASES) {
     }
   });
 }
+
+// --- Revision 1.1.0 (dropbox-guards-design.md) 20 new literal cases on all 3 surfaces (web-jam-tools#1894) ---
+
+interface Revision110Case {
+  name: string;
+  buildCommand: (dir: string) => string;
+  outcome: "allow" | "refuse-dropbox" | "cannot-tell";
+  expectedText?: string;
+}
+
+const REVISION_110_CASES: Revision110Case[] = [
+  {
+    name: "row 01 (D-124): nested script + loop + $(...) allowed within depth caps",
+    buildCommand: (dir) => {
+      const step = path.join(dir, "step.sh");
+      const runCases = path.join(dir, "run_cases.sh");
+      writeFixture(
+        step,
+        [
+          "#!/usr/bin/env bash",
+          "for x in one two; do",
+          "  v=$(echo $x)",
+          "  echo /tmp/$v",
+          "done",
+        ].join("\n"),
+      );
+      writeFixture(
+        runCases,
+        [
+          "#!/usr/bin/env bash",
+          "for f in a b; do",
+          '  bash -e "$STEP"',
+          `  bash -e ${step}`,
+          "done",
+        ].join("\n"),
+      );
+      return `bash ${runCases}`;
+    },
+    outcome: "allow",
+  },
+  {
+    name: "row 02 (D-124): nested helper script reading private Dropbox still refused",
+    buildCommand: (dir) => {
+      const bad = path.join(dir, "bad.sh");
+      const runCases = path.join(dir, "run_cases_bad.sh");
+      writeFixture(bad, "#!/usr/bin/env bash\ncat ~/Dropbox/financial/a.txt\n");
+      writeFixture(
+        runCases,
+        `#!/usr/bin/env bash\nfor f in a; do\n  bash -e ${bad}\ndone\n`,
+      );
+      return `bash ${runCases}`;
+    },
+    outcome: "refuse-dropbox",
+    expectedText: "financial",
+  },
+  {
+    name: "row 03 (D-124): mutual script cycle refuses as recursive script reference",
+    buildCommand: (dir) => {
+      const a = path.join(dir, "a.sh");
+      const b = path.join(dir, "b.sh");
+      writeFixture(a, `#!/usr/bin/env bash\nbash ${b}\n`);
+      writeFixture(b, `#!/usr/bin/env bash\nbash ${a}\n`);
+      return `bash ${a}`;
+    },
+    outcome: "cannot-tell",
+    expectedText: "recursive script reference",
+  },
+  {
+    name: "row 04 (D-122): bash parameter expansions ${p%:*} and ${p#*:} in loop",
+    buildCommand: () =>
+      'for p in AppersonAuto:264 CollegeLutheran:864; do r=${p%:*}; n=${p#*:}; grep -A3 "name: run all tests" /tmp/v1848/$r.yml; done',
+    outcome: "allow",
+  },
+  {
+    name: "row 05 (D-122): ${p%:*} resolving to financial under Dropbox still refused",
+    buildCommand: () =>
+      "for p in financial:1; do r=${p%:*}; cat /home/joshua/Dropbox/$r/a.txt; done",
+    outcome: "refuse-dropbox",
+    expectedText: "financial",
+  },
+  {
+    name: "row 06 (D-122): balanced nested for loops keep outer variable in scope",
+    buildCommand: () => "for r in a b; do for f in 1 2; do echo $r $f; done; cat /tmp/$r.txt; done",
+    outcome: "allow",
+  },
+  {
+    name: "row 07 (D-122): safe prefix /tmp/scratch/ with unresolved variable tail allowed",
+    buildCommand: () => 'ls "/tmp/scratch/$NOT_SET_ANYWHERE.yml"',
+    outcome: "allow",
+  },
+  {
+    name:
+      "row 08 (D-122): safe prefix /home/joshua/WebJamApps/web-jam-tools/ with unresolved tail allowed",
+    buildCommand: () => 'ls "/home/joshua/WebJamApps/web-jam-tools/$NOT_SET_ANYWHERE"',
+    outcome: "allow",
+  },
+  {
+    name: "row 09 (D-122): unresolved tail after literal .. still refused",
+    buildCommand: () => 'ls "/tmp/scratch/../$NOT_SET_ANYWHERE"',
+    outcome: "cannot-tell",
+  },
+  {
+    name: "row 10a (D-122): unresolved variable directly under ~ still refused",
+    buildCommand: () => 'ls "~/$NOT_SET_ANYWHERE"',
+    outcome: "cannot-tell",
+  },
+  {
+    name: "row 10b (D-122): unresolved variable directly under $HOME still refused",
+    buildCommand: () => 'ls "$HOME/$NOT_SET_ANYWHERE"',
+    outcome: "cannot-tell",
+  },
+  {
+    name: "row 11 (D-122): unresolved variable under ~/Dropbox/ still refused",
+    buildCommand: () => 'ls "~/Dropbox/$NOT_SET_ANYWHERE"',
+    outcome: "cannot-tell",
+  },
+  {
+    name: "row 12 (D-123): readlink on bare /proc/$p/cwd allowed",
+    buildCommand: () => "for p in 123 456; do readlink /proc/$p/cwd; done",
+    outcome: "allow",
+  },
+  {
+    name: "row 13 (D-123): readlink on bare /proc/self/exe allowed",
+    buildCommand: () => "readlink /proc/self/exe",
+    outcome: "allow",
+  },
+  {
+    name: "row 14a (D-123): non-traversal /proc/123/comm metadata allowed",
+    buildCommand: () => "cat /proc/123/comm",
+    outcome: "allow",
+  },
+  {
+    name: "row 14b (D-123): non-traversal /proc/meminfo metadata allowed",
+    buildCommand: () => "cat /proc/meminfo",
+    outcome: "allow",
+  },
+  {
+    name: "row 15a (D-123): ls /proc/self/cwd refused",
+    buildCommand: () => "ls /proc/self/cwd",
+    outcome: "cannot-tell",
+  },
+  {
+    name: "row 15b (D-123): cd /proc/self/cwd refused",
+    buildCommand: () => "cd /proc/self/cwd",
+    outcome: "cannot-tell",
+  },
+  {
+    name: "row 16a (D-123): cat /proc/123/fd/3 refused",
+    buildCommand: () => "cat /proc/123/fd/3",
+    outcome: "cannot-tell",
+  },
+  {
+    name: "row 16b (D-123): cat /proc/self/root/home/joshua/Dropbox/financial/a.txt refused",
+    buildCommand: () => "cat /proc/self/root/home/joshua/Dropbox/financial/a.txt",
+    outcome: "cannot-tell",
+  },
+  {
+    name: "row 17 (D-123): python script mentioning bare /proc/1234/cwd and /proc/$p/cwd allowed",
+    buildCommand: (dir) => {
+      const py = path.join(dir, "splice.py");
+      writeFixture(py, 's = "readlink /proc/1234/cwd and /proc/$p/cwd"\n');
+      return `python3 ${py}`;
+    },
+    outcome: "allow",
+  },
+  {
+    name: "row 18a (D-123): python script opening /proc/1234/cwd/secret.txt refused",
+    buildCommand: (dir) => {
+      const py = path.join(dir, "bad_cwd.py");
+      writeFixture(py, 'open("/proc/1234/cwd/secret.txt")\n');
+      return `python3 ${py}`;
+    },
+    outcome: "cannot-tell",
+  },
+  {
+    name: "row 18b (D-123): python script opening /proc/1234/fd/3 refused",
+    buildCommand: (dir) => {
+      const py = path.join(dir, "bad_fd.py");
+      writeFixture(py, 'open("/proc/1234/fd/3")\n');
+      return `python3 ${py}`;
+    },
+    outcome: "cannot-tell",
+  },
+  {
+    name:
+      "row 19 (D-124): python heredoc containing shell loop syntax followed by trailing command allowed",
+    buildCommand: () =>
+      "python3 - <<'EOF'\ns = \"for p in 1 2; do readlink /proc/$p/cwd; done\"\nEOF\necho after",
+    outcome: "allow",
+  },
+  {
+    name: "row 20 (D-124): <<EOF inside multi-line single quotes never opens a heredoc",
+    buildCommand: () => `deno eval 'const x = "a\n<<EOF\nb"; console.log(x)'`,
+    outcome: "allow",
+  },
+];
+
+for (const entry of REVISION_110_CASES) {
+  Deno.test(`private-folder revision 1.1.0 (${entry.outcome}): ${entry.name}`, async () => {
+    const tempDir = createFixtureDir({ prefix: "pfr-110-" });
+    try {
+      const command = entry.buildCommand(tempDir);
+      const cwd = path.resolve(new URL("..", import.meta.url).pathname);
+
+      for (const surface of ["claude", "agy", "codex"] as const) {
+        const payload = surface === "agy"
+          ? { toolCall: { name: "run_command", args: { CommandLine: command, Cwd: cwd } } }
+          : { tool_name: "Bash", cwd, tool_input: { command } };
+        const child = new Deno.Command("bash", {
+          args: surface === "agy"
+            ? [
+              new URL("../hooks/agy-hook-shim.sh", import.meta.url).pathname,
+              "PreToolUse",
+              btoa("Bash"),
+              SCRIPT_PATH,
+            ]
+            : [SCRIPT_PATH],
+          env: {
+            AGY_HOOK_RECORD_PATH: "off",
+            HOME: FIXTURE_DIR,
+            DENO_DIR: Deno.env.get("DENO_DIR") ??
+              path.join(Deno.env.get("HOME") || "/home/joshua", ".cache/deno"),
+            CLAUDE_SETTINGS_PATH: FIXTURE_SETTINGS_PATH,
+            WJT_SURFACE: surface,
+            NOT_SET_ANYWHERE: "",
+          },
+          stdin: "piped",
+          stdout: "piped",
+          stderr: "piped",
+        }).spawn();
+        const writer = child.stdin.getWriter();
+        await writer.write(new TextEncoder().encode(JSON.stringify(payload)));
+        await writer.close();
+        const output = await child.output();
+        const stderr = new TextDecoder().decode(output.stderr);
+        const stdout = new TextDecoder().decode(output.stdout);
+        const reason = surface === "agy" ? JSON.parse(stdout).reason ?? "" : stderr;
+        const expectedDeny = entry.outcome !== "allow";
+
+        assertEquals(
+          output.code,
+          surface === "agy" ? 0 : expectedDeny ? 2 : 0,
+          `${surface}: ${stderr}`,
+        );
+        if (surface === "agy") {
+          assertEquals(JSON.parse(stdout).decision, expectedDeny ? "deny" : "allow", reason);
+        } else {
+          assertEquals(stdout, "", surface);
+        }
+
+        if (entry.outcome === "cannot-tell") {
+          assertStringIncludes(reason, "nothing protected was found", surface);
+          if (entry.expectedText) assertStringIncludes(reason, entry.expectedText, surface);
+        } else if (entry.outcome === "refuse-dropbox") {
+          assertStringIncludes(reason, "Private Dropbox folders are protected", surface);
+          if (entry.expectedText) assertStringIncludes(reason, entry.expectedText, surface);
+        } else {
+          assertEquals(stderr, "", surface);
+        }
+      }
+    } finally {
+      removeFixture(tempDir, { recursive: true });
+    }
+  });
+}
+
+Deno.test("private-folder revision 1.1.0 unit checks: parameter expansions, depth limits, and /proc edge cases", () => {
+  const dir = createFixtureDir({ prefix: "pfr-110-unit-" });
+  try {
+    // Parameter expansions: %%, #, ##, :offset:len, :-, -
+    assertEquals(
+      checkPrivateFolderCommand(
+        "for p in a:b:c; do x=${p%%:*}; y=${p##*:}; z=${p:2:1}; d=${MISSING:-tmp}; ls /$d/$x/$y/$z; done",
+        EXPECTED_16_FOLDERS,
+      ),
+      null,
+    );
+    assert(
+      checkPrivateFolderCommand(
+        "for p in financial:extra; do d=${p%%:*}; cat /home/joshua/Dropbox/$d/a.txt; done",
+        EXPECTED_16_FOLDERS,
+      )?.includes("financial"),
+    );
+
+    // Script nesting depth cap 6 (6 scripts allowed, 7th refused)
+    const scripts: string[] = [];
+    for (let i = 6; i >= 1; i--) {
+      const f = path.join(dir, `s${i}.sh`);
+      scripts[i] = f;
+      writeFixture(
+        f,
+        i === 6
+          ? "#!/usr/bin/env bash\necho leaf\n"
+          : `#!/usr/bin/env bash\nbash ${scripts[i + 1]}\n`,
+      );
+    }
+    assertEquals(
+      checkPrivateFolderCommand(`bash ${scripts[1]}`, EXPECTED_16_FOLDERS),
+      null,
+    );
+    const s0 = path.join(dir, "s0.sh");
+    writeFixture(s0, `#!/usr/bin/env bash\nbash ${scripts[1]}\n`);
+    assertStringIncludes(
+      checkPrivateFolderCommand(`bash ${s0}`, EXPECTED_16_FOLDERS) ?? "",
+      "script nesting limit",
+    );
+
+    // /proc traversal subpaths via .., task, and env readlink
+    assertEquals(
+      checkPrivateFolderCommand("env readlink /proc/123/cwd", EXPECTED_16_FOLDERS),
+      null,
+    );
+    assert(
+      checkPrivateFolderCommand("readlink /proc/self/cwd/a.txt", EXPECTED_16_FOLDERS) !== null,
+    );
+    assert(
+      checkPrivateFolderCommand("cat /proc/self/cwd/..", EXPECTED_16_FOLDERS) !== null,
+    );
+    assert(
+      checkPrivateFolderCommand("cat /proc/self/task/1/fd/3", EXPECTED_16_FOLDERS) !== null,
+    );
+    assert(
+      checkPrivateFolderCommand("ls /proc", EXPECTED_16_FOLDERS) !== null,
+    );
+  } finally {
+    removeFixture(dir, { recursive: true });
+  }
+});
