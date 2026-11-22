@@ -1101,6 +1101,11 @@ for entry in "${PRE_TOOL_USE_HOOKS[@]}" "${AGY_ONLY_PRE_TOOL_USE_HOOKS[@]}"; do
   # (web-jam-tools#708), so agy's hooks.json never receives it.
   [ "$name" = "cap-concurrent-subagents.sh" ] && continue
   [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in PRE_TOOL_USE_HOOKS/AGY_ONLY_PRE_TOOL_USE_HOOKS)" >&2; exit 1; }
+  # The Dropbox guards also check every agy tool the shim does not translate, which reaches them as
+  # AgyUntranslated (web-jam-tools#1583). agy only: Claude Code and Codex keep the matcher above.
+  case "$name" in
+    block-private-folder-read.sh | block-production-media-change.sh) matcher="$matcher|AgyUntranslated" ;;
+  esac
   merge_agy_pre_tool_use_args+=("$(agy_shim_arg PreToolUse "$matcher" "$name")")
 done
 # agy-native: registered directly under matcher ".*" without agy-hook-shim.sh (web-jam-tools#1212).

@@ -10,7 +10,11 @@
  */
 
 import * as path from "node:path";
-import { buildFolderPattern, unreadableScriptMessage } from "./check_private_folder_read.ts";
+import {
+  buildFolderPattern,
+  collectWholeStringPaths,
+  unreadableScriptMessage,
+} from "./check_private_folder_read.ts";
 import {
   ASSIGN_RE,
   findHeredocMarker,
@@ -1125,33 +1129,6 @@ export function checkFileToolWrite(
   }
 
   return { allowed: true };
-}
-
-function collectWholeStringPaths(val: unknown, out: string[]): void {
-  if (typeof val === "string") {
-    if (
-      !/[\r\n]/.test(val) &&
-      (val.startsWith("/") ||
-        val.startsWith("~/") ||
-        val === "~" ||
-        val.startsWith("$HOME/") ||
-        val === "$HOME" ||
-        val.startsWith("${HOME}/") ||
-        val === "${HOME}")
-    ) {
-      out.push(val);
-    }
-    return;
-  }
-  if (Array.isArray(val)) {
-    for (const item of val) collectWholeStringPaths(item, out);
-    return;
-  }
-  if (val !== null && typeof val === "object") {
-    for (const v of Object.values(val as Record<string, unknown>)) {
-      collectWholeStringPaths(v, out);
-    }
-  }
 }
 
 export function checkAgyUntranslated(

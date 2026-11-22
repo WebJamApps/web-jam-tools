@@ -510,13 +510,15 @@ Deno.test("install-hooks.sh sandboxed run merges hook into Claude settings and a
     const agyPre = agyData.hooks?.PreToolUse || [];
     const agyHasHook = agyPre.some((e: { matcher: string; hooks: { command: string }[] }) =>
       e.hooks.some((h) =>
-        h.command.includes("agy-hook-shim.sh") &&
-        h.command.includes("block-private-folder-read.sh")
+        h.command ===
+          `$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${
+            btoa("Bash|AgyUntranslated")
+          } $HOME/.claude/hooks/block-private-folder-read.sh`
       )
     );
     assert(
       agyHasHook,
-      "Expected agy hooks.json to include block-private-folder-read.sh via agy-hook-shim.sh",
+      "Expected agy hooks.json to include block-private-folder-read.sh via agy-hook-shim.sh on Bash|AgyUntranslated",
     );
   } finally {
     await removeFixture(hooksDir, { recursive: true });
