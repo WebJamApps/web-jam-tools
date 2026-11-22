@@ -160,7 +160,7 @@ async function makeDirs() {
 const fakeExtract = (texts: Record<string, string>) => (p: string) =>
   Promise.resolve(texts[path.basename(p)] ?? "");
 
-Deno.test("runReturnFigures writes tax/<year>/return-figures.md in the books folder", async () => {
+Deno.test("runReturnFigures writes tax/2025/return-figures.md in the books folder", async () => {
   const d = await makeDirs();
   try {
     const { outputPath, results } = await runReturnFigures({
@@ -228,7 +228,7 @@ Deno.test("runReturnFigures refuses, writing nothing, when it cannot tell", asyn
       () =>
         refuses({ federalPdf: path.join(d.privateTaxDir, "2025", "absent.pdf") }, "cannot be read"),
     );
-    await t.step("a return saved outside tax/<year>", async () => {
+    await t.step("a return saved outside tax/2025", async () => {
       const outside = path.join(d.root, "federal-2025.pdf");
       await Deno.writeTextFile(outside, "federal");
       await refuses({ federalPdf: outside }, "must be saved in");
