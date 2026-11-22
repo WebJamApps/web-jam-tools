@@ -114,9 +114,9 @@ export interface PullRequestState {
 export type FixRun =
   | { kind: "none" }
   | { kind: "refused"; reason: string }
-  | { kind: "active"; pullRequest: PullRequestRef };
+  | { kind: "active"; pullRequest: PullRequestRef; headRefName: string };
 
-/** Bind the latest typed call to this open PR's repository and exact head branch. */
+/** Bind the latest typed call to this open PR's repository and head or throwaway fix branch. */
 export function checkFixRun(
   call: CodexSkillCall | null,
   checkoutRepo: string,
@@ -130,12 +130,22 @@ export function checkFixRun(
     return { kind: "refused", reason: "the typed fix-pr call names another repository" };
   }
   if (!pr) return { kind: "none" };
+  if (pr.headRefName === "dev" || pr.headRefName === "main") {
+    return {
+      kind: "refused",
+      reason: `the pull request targets protected branch '${pr.headRefName}'`,
+    };
+  }
+  if (!pr.headRefName || pr.headRefName.startsWith("+") || pr.headRefName.startsWith("-")) {
+    return { kind: "refused", reason: "the pull request targets an unsafe branch name" };
+  }
+  const isFixBranch = branch === pr.headRefName || branch === `fix-pr/${pr.number}`;
   if (
-    pr.number !== ref.number || pr.state !== "OPEN" || pr.headRefName !== branch ||
+    pr.number !== ref.number || pr.state !== "OPEN" || !isFixBranch ||
     pr.isCrossRepository !== false ||
     pr.headRepository?.nameWithOwner?.toLowerCase() !== checkoutRepo.toLowerCase()
   ) {
     return { kind: "refused", reason: "the typed fix-pr call does not name this open PR branch" };
   }
-  return { kind: "active", pullRequest: ref };
+  return { kind: "active", pullRequest: ref, headRefName: pr.headRefName };
 }
