@@ -246,23 +246,29 @@ Deno.test("runHealthReport prompts again on refusal and saves on subsequent vali
   const errLogs: string[] = [];
   const outLogs: string[] = [];
 
-  const code = await runHealthReport({
-    paths: { trackerFile, activitiesFile, progressSvgFile: svgFile },
-    isTerminal: () => true,
-    now: new Date(2026, 9, 31),
-    readLine: () => Promise.resolve(inputs[inputIdx++]),
-    printOut: (msg) => outLogs.push(msg),
-    printErr: (msg) => errLogs.push(msg),
-  });
+  const origSkipChrome = Deno.env.get("HEALTH_REPORT_SKIP_CHROME");
+  try {
+    Deno.env.set("HEALTH_REPORT_SKIP_CHROME", "1");
+    const code = await runHealthReport({
+      paths: { trackerFile, activitiesFile, progressSvgFile: svgFile },
+      isTerminal: () => true,
+      now: new Date(2026, 9, 31),
+      readLine: () => Promise.resolve(inputs[inputIdx++]),
+      printOut: (msg) => outLogs.push(msg),
+      printErr: (msg) => errLogs.push(msg),
+    });
 
-  assertEquals(code, 0);
-  assert(outLogs.some((l) => l.includes("Activities: cosmicspin")));
-  assert(errLogs.some((l) => l.includes("-5")));
-  const saved = JSON.parse(await Deno.readTextFile(trackerFile));
-  assertEquals(saved.length, 1);
-  assertEquals(saved[0].exercise, { cosmicspin: 25 });
-
-  await Deno.remove(tmpDir, { recursive: true });
+    assertEquals(code, 0);
+    assert(outLogs.some((l) => l.includes("Activities: cosmicspin")));
+    assert(errLogs.some((l) => l.includes("-5")));
+    const saved = JSON.parse(await Deno.readTextFile(trackerFile));
+    assertEquals(saved.length, 1);
+    assertEquals(saved[0].exercise, { cosmicspin: 25 });
+  } finally {
+    if (origSkipChrome !== undefined) Deno.env.set("HEALTH_REPORT_SKIP_CHROME", origSkipChrome);
+    else Deno.env.delete("HEALTH_REPORT_SKIP_CHROME");
+    await Deno.remove(tmpDir, { recursive: true });
+  }
 });
 
 Deno.test("runHealthReport skips cleanly on timeout", async () => {

@@ -1985,6 +1985,8 @@ Deno.test("epics case 20: the test files that reach the browser launcher record 
       "test/create_issue.test.ts",
       "test/design_issue_lint_doc_proved_date.test.ts",
       "test/design_issue_lint_runbook.test.ts",
+      "test/health_tracker_report_test.ts",
+      "test/health_tracker_open_chrome_test.ts",
     ];
     const prevLiveChrome = Deno.env.get("WJT_LIVE_CHROME");
     Deno.env.set("WJT_LIVE_CHROME", "1");
