@@ -154,66 +154,79 @@ export function getGate1RecordPath(docPath: string, stateDir?: string): string {
 }
 
 const RECORD_LOCK_WAIT_MS = 10_000;
-const RECORD_LOCK_STALE_MS = 60_000;
 const RECORD_LOCK_RETRY_MS = 25;
 
 /**
- * Runs `fn` while holding `<record>.lock`, a directory made with mkdir, so a presentation,
+ * Runs `fn` while holding an exclusive OS file lock (flock) on `<record>.lock`, so a presentation,
  * approval, adoption or sweep note never writes over another's read-then-write of the same record
- * (web-jam-tools#1412). A lock older than RECORD_LOCK_STALE_MS belongs to a command that died and
- * is removed; one held longer than RECORD_LOCK_WAIT_MS is refused.
+ * (web-jam-tools#1412). The kernel ties the lock to the open file and releases it only when the
+ * holder unlocks or exits, so a paused holder keeps it and a dead one never needs evicting. The
+ * lock file is never removed: removing it would let a waiter lock an unlinked file while another
+ * command locks a new one. Refuses when the lock is held past `waitMs` or cannot be taken at all.
  */
 export async function withGate1RecordLock<T>(
   recordPath: string,
   fn: () => Promise<T>,
+  waitMs = RECORD_LOCK_WAIT_MS,
 ): Promise<T> {
   const lockPath = `${recordPath}.lock`;
-  await Deno.mkdir(path.dirname(recordPath), { recursive: true });
-  const deadline = Date.now() + RECORD_LOCK_WAIT_MS;
-  for (;;) {
-    try {
-      await Deno.mkdir(lockPath);
-      break;
-    } catch (err) {
-      if (!(err instanceof Deno.errors.AlreadyExists)) {
-        throw new Gate1RecordError(
-          `Cannot lock Gate 1 record at ${recordPath}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      }
-      let age: number | null = null;
+  const cannotLock = (err: unknown) =>
+    new Gate1RecordError(
+      `Cannot lock Gate 1 record at ${recordPath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  let file: Deno.FsFile;
+  try {
+    await Deno.mkdir(path.dirname(recordPath), { recursive: true });
+    file = await Deno.open(lockPath, { create: true, write: true });
+  } catch (err) {
+    throw cannotLock(err);
+  }
+  try {
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      let locked: boolean;
       try {
-        const mtime = (await Deno.stat(lockPath)).mtime;
-        age = mtime ? Date.now() - mtime.getTime() : null;
-      } catch {
-        continue; // released between our mkdir and stat; try again
+        locked = await file.tryLock(true);
+      } catch (err) {
+        throw cannotLock(err);
       }
-      if (age !== null && age > RECORD_LOCK_STALE_MS) {
-        try {
-          await Deno.remove(lockPath);
-        } catch {
-          // another command removed it first; the next mkdir decides
-        }
-        continue;
-      }
-      if (Date.now() > deadline) {
+      if (locked) break;
+      if (Date.now() >= deadline) {
         throw new Gate1RecordError(
           `Gate 1 record at ${recordPath} is locked by another command (${lockPath}); try again.`,
         );
       }
       await new Promise((resolve) => setTimeout(resolve, RECORD_LOCK_RETRY_MS));
     }
-  }
-  try {
-    return await fn();
-  } finally {
     try {
-      await Deno.remove(lockPath);
-    } catch {
-      // already gone
+      return await fn();
+    } finally {
+      await file.unlock();
     }
+  } finally {
+    file.close();
   }
+}
+
+/** Refuses when the design document can no longer be read or no longer has `fingerprint`. */
+async function refuseIfDocChanged(
+  absDocPath: string,
+  fingerprint: string,
+  refusal: string,
+): Promise<void> {
+  let latest: string;
+  try {
+    latest = await Deno.readTextFile(absDocPath);
+  } catch (err) {
+    throw new Gate1RecordError(
+      `Cannot read design document at ${absDocPath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  if (computeFingerprint(latest) !== fingerprint) throw new Gate1RecordError(refusal);
 }
 
 export interface ParsedPremisesTable {
@@ -558,21 +571,11 @@ export async function approveGate1Record(
         `Gate 1 record for ${absDocPath} is not open (already approved at ${current.approvedAt}). Re-present the document with deno task design:gate1 to clear approval and re-open.`,
       );
     }
-    let latest: string;
-    try {
-      latest = await Deno.readTextFile(absDocPath);
-    } catch (err) {
-      throw new Gate1RecordError(
-        `Cannot read design document at ${absDocPath}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
-    if (computeFingerprint(latest) !== currentFingerprint) {
-      throw new Gate1RecordError(
-        `Document changed while the reply was being checked — refusing to approve Gate 1. Re-present the document with deno task design:gate1 first.`,
-      );
-    }
+    await refuseIfDocChanged(
+      absDocPath,
+      currentFingerprint,
+      `Document changed while the reply was being checked — refusing to approve Gate 1. Re-present the document with deno task design:gate1 first.`,
+    );
 
     current.approvedAt = new Date().toISOString();
     current.reply = reply;
@@ -712,6 +715,12 @@ export async function adoptGate1Record(
         `Gate 1 record for ${absDocPath} already holds ${latest.premiseRows.length} premise row(s) — adoption happens once per document; the stored rows now change only through Gate 1.`,
       );
     }
+    // The rows were read before the reply check; store them only if the document still holds them.
+    await refuseIfDocChanged(
+      absDocPath,
+      computeFingerprint(content),
+      `Document changed while the reply was being checked — refusing to adopt its premise rows. Run deno task design:gate1-adopt again on the current document.`,
+    );
     const record: Gate1Record = latest ?? {
       docPath: absDocPath,
       presentedFingerprint: "",

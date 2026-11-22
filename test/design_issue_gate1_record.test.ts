@@ -18,6 +18,7 @@ import {
   loadGate1Record,
   openGate1Record,
   recordSweepNote,
+  withGate1RecordLock,
 } from "../src/design-issue/gate1_record.ts";
 import { lintDesignDoc, toLocalIsoDate } from "../src/design-issue/lint_doc.ts";
 import {
@@ -1743,22 +1744,115 @@ Deno.test("a record update waits for the lock another command holds, then keeps 
     await Deno.writeTextFile(docPath, MINIMAL_DESIGN_DOC);
     const stateDir = path.join(tempDir, "state");
     const { recordPath } = await openGate1Record(docPath, MINIMAL_DESIGN_DOC, { stateDir });
-    await Deno.mkdir(`${recordPath}.lock`);
-    const noting = recordSweepNote(docPath, otherPath, "unaffected", { stateDir });
-    await new Promise((r) => setTimeout(r, 100));
-    // Still waiting: nothing written while the lock is held.
-    assertEquals((await loadGate1Record(docPath, { stateDir }))?.sweepNotes, undefined);
-    await Deno.remove(`${recordPath}.lock`);
-    await noting;
+    const holder = await Deno.open(`${recordPath}.lock`, { create: true, write: true });
+    try {
+      assertEquals(await holder.tryLock(true), true);
+      const noting = recordSweepNote(docPath, otherPath, "unaffected", { stateDir });
+      await new Promise((r) => setTimeout(r, 100));
+      // Still waiting: nothing written while the lock is held.
+      assertEquals((await loadGate1Record(docPath, { stateDir }))?.sweepNotes, undefined);
+      await holder.unlock();
+      await noting;
+    } finally {
+      holder.close();
+    }
     assertEquals((await loadGate1Record(docPath, { stateDir }))?.sweepNotes?.length, 1);
-    await Deno.stat(`${recordPath}.lock`).then(
-      () => {
-        throw new Error("lock left behind");
-      },
-      (err) => assertEquals(err instanceof Deno.errors.NotFound, true),
-    );
+    // The lock file stays; only the lock on it is released.
+    assertEquals((await Deno.stat(`${recordPath}.lock`)).isFile, true);
   } finally {
     await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("withGate1RecordLock refuses once the wait runs out, and refuses at once when it cannot lock", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-lock-refuse-" });
+  try {
+    const recordPath = path.join(tempDir, "record.json");
+    let ran = false;
+    const run = () => {
+      ran = true;
+      return Promise.resolve();
+    };
+    const holder = await Deno.open(`${recordPath}.lock`, { create: true, write: true });
+    try {
+      assertEquals(await holder.tryLock(true), true);
+      await assertRejects(
+        () => withGate1RecordLock(recordPath, run, 50),
+        Gate1RecordError,
+        "is locked by another command",
+      );
+    } finally {
+      holder.close();
+    }
+    assertEquals(ran, false);
+
+    const blocked = path.join(tempDir, "blocked.json");
+    await Deno.mkdir(`${blocked}.lock`);
+    const started = Date.now();
+    await assertRejects(
+      () => withGate1RecordLock(blocked, run, 5_000),
+      Gate1RecordError,
+      "Cannot lock Gate 1 record",
+    );
+    assertEquals(Date.now() - started < 1_000, true);
+    assertEquals(ran, false);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("a lock held by another process stays exclusive until that process exits", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-lock-proc-" });
+  try {
+    const recordPath = path.join(tempDir, "record.json");
+    const child = new Deno.Command(Deno.execPath(), {
+      args: [
+        "eval",
+        `const f = await Deno.open(${
+          JSON.stringify(`${recordPath}.lock`)
+        }, { create: true, write: true });
+         await f.lock(true);
+         console.log("locked");
+         await new Promise(() => setInterval(() => {}, 1000));`,
+      ],
+      stdout: "piped",
+      stderr: "null",
+    }).spawn();
+    const reader = child.stdout.getReader();
+    const { value } = await reader.read();
+    assertEquals(new TextDecoder().decode(value).trim(), "locked");
+    await assertRejects(
+      () => withGate1RecordLock(recordPath, () => Promise.resolve(), 200),
+      Gate1RecordError,
+      "is locked by another command",
+    );
+    child.kill("SIGKILL");
+    await child.status;
+    reader.releaseLock();
+    await child.stdout.cancel();
+    assertEquals(await withGate1RecordLock(recordPath, () => Promise.resolve("ran"), 2_000), "ran");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("adoption refuses, storing no rows, when the document changes during the reply check", async () => {
+  const f = await adoptFixture(premisesDoc(TWO_ROWS));
+  try {
+    await assertRejects(
+      () =>
+        adoptGate1Record(f.docPath, "adopt it", {
+          stateDir: f.stateDir,
+          verifyReply: async () => {
+            await Deno.writeTextFile(f.docPath, premisesDoc(TWO_ROWS) + "\nEdited meanwhile.\n");
+          },
+        }),
+      Gate1RecordError,
+      "Document changed while the reply was being checked",
+    );
+    assertEquals(await loadGate1Record(f.docPath, { stateDir: f.stateDir }), null);
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
   }
 });
 
