@@ -8,11 +8,37 @@ import {
   type GuardOutcome,
 } from "../test/comment_heredoc_guard_cases.ts";
 
+export type ProbeGuard = "irreversible" | "merge-deploy";
+
 export interface ProbeOptions {
   surface: "claude" | "agy" | "codex";
   home: string;
   repoDir: string;
+  /** Which installed safety guard to probe; defaults to the irreversible guard. */
+  guard?: ProbeGuard;
 }
+
+/** A literal case; the merge/deploy column exists on the canonical rows (web-jam-tools#1422). */
+export type ProbeCase = CommentHeredocCase & { mergeDeploy?: GuardOutcome };
+
+interface GuardSpec {
+  script: string;
+  expected: (row: ProbeCase) => GuardOutcome | undefined;
+  operationText: string;
+}
+
+const GUARDS: Record<ProbeGuard, GuardSpec> = {
+  irreversible: {
+    script: "block-irreversible-operations.sh",
+    expected: (row) => row.irreversible,
+    operationText: "This operation is irreversible and hard-blocked",
+  },
+  "merge-deploy": {
+    script: "block-dangerous-git-deploy.sh",
+    expected: (row) => row.mergeDeploy,
+    operationText: "This is Josh's action to perform",
+  },
+};
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -36,8 +62,9 @@ function registrations(config: unknown): { matcher: string; command: string }[] 
 
 async function installedInvocation(options: ProbeOptions): Promise<string[]> {
   const { surface, home, repoDir } = options;
-  const installed = join(home, ".claude/hooks/block-irreversible-operations.sh");
-  const expected = join(repoDir, "hooks/block-irreversible-operations.sh");
+  const script = GUARDS[options.guard ?? "irreversible"].script;
+  const installed = join(home, ".claude/hooks", script);
+  const expected = join(repoDir, "hooks", script);
   if (
     !(await Deno.lstat(installed)).isSymlink ||
     await Deno.realPath(installed) !== await Deno.realPath(expected)
@@ -79,19 +106,25 @@ async function installedInvocation(options: ProbeOptions): Promise<string[]> {
   return [installed];
 }
 
-function refusalOutcome(message: string): GuardOutcome {
+function refusalOutcome(message: string, spec: GuardSpec): GuardOutcome {
   if (
     message.includes("could not read the command") &&
     message.includes("no protected operation was identified")
   ) return "unreadable";
-  if (message.includes("This operation is irreversible and hard-blocked")) return "operation";
+  if (message.includes(spec.operationText)) return "operation";
   throw new Error(`unexpected refusal: ${message}`);
 }
 
 export async function probeInstalledGuard(
   options: ProbeOptions,
-  cases: readonly CommentHeredocCase[] = COMMENT_HEREDOC_GUARD_CASES,
+  cases: readonly ProbeCase[] = COMMENT_HEREDOC_GUARD_CASES,
 ): Promise<{ passed: number; total: number }> {
+  const spec = GUARDS[options.guard ?? "irreversible"];
+  for (const row of cases) {
+    if (spec.expected(row) === undefined) {
+      throw new Error(`literal case ${row.id} has no outcome for this guard`);
+    }
+  }
   // Never run a configuration string through a shell. Validate its known argv shape, then
   // launch only the guard/shim; the fixture string travels exclusively on JSON stdin.
   const args = await installedInvocation(options);
@@ -134,13 +167,14 @@ export async function probeInstalledGuard(
         if (output.code !== 0) throw new Error(`agy shim failed: ${stderr}`);
         const verdict = JSON.parse(stdout);
         if (verdict.decision === "allow") actual = "allow";
-        else if (verdict.decision === "deny") actual = refusalOutcome(verdict.reason ?? "");
+        else if (verdict.decision === "deny") actual = refusalOutcome(verdict.reason ?? "", spec);
         else throw new Error("unexpected agy decision");
       } else if (output.code === 0 && !stdout && !stderr) actual = "allow";
-      else if (output.code === 2) actual = refusalOutcome(stderr);
+      else if (output.code === 2) actual = refusalOutcome(stderr, spec);
       else throw new Error(`unexpected hook exit ${output.code}: ${stderr}`);
-      if (actual !== row.irreversible) {
-        throw new Error(`literal case ${row.id}: expected ${row.irreversible}, received ${actual}`);
+      const wanted = spec.expected(row);
+      if (actual !== wanted) {
+        throw new Error(`literal case ${row.id}: expected ${wanted}, received ${actual}`);
       }
     }
     return { passed: cases.length, total: cases.length };
@@ -150,10 +184,11 @@ export async function probeInstalledGuard(
 }
 
 const HELP =
-  `Usage: deno run --allow-read --allow-write=/tmp --allow-env=HOME --allow-run=bash scripts/probe-installed-command-guards.ts --guard irreversible --surface claude|agy|codex [--home PATH] [--repo-dir PATH]
+  `Usage: deno run --allow-read --allow-write=/tmp --allow-env=HOME --allow-run=bash scripts/probe-installed-command-guards.ts --guard irreversible|merge-deploy --surface claude|agy|codex [--home PATH] [--repo-dir PATH]
 
 Checks the existing symlink and registration, then supplies all 36 literal cases as JSON to
-the installed guard (through the existing shim on agy). No fixture command is executed.
+the installed guard (through the existing shim on agy) and compares each with that guard's
+column. No fixture command is executed.
 --home selects an isolated fixture home or defaults to HOME.
 --repo-dir selects the canonical clone or defaults to the parent of this script.
 No installer or registration change is performed. A mismatch exits 1; success exits 0.`;
@@ -175,19 +210,21 @@ export async function main(args: string[]): Promise<number> {
       flags.set(flag, value);
     }
     const surface = flags.get("--surface");
+    const guard = flags.get("--guard");
     if (
-      flags.get("--guard") !== "irreversible" ||
+      (guard !== "irreversible" && guard !== "merge-deploy") ||
       (surface !== "claude" && surface !== "agy" && surface !== "codex")
     ) throw new Error(HELP);
     const home = flags.get("--home") ?? Deno.env.get("HOME");
     if (!home) throw new Error("HOME is required unless --home is supplied");
     const result = await probeInstalledGuard({
       surface,
+      guard,
       home: resolve(home),
       repoDir: resolve(flags.get("--repo-dir") ?? new URL("..", import.meta.url).pathname),
     });
     console.log(
-      `${surface} irreversible: ${result.passed}/${result.total} literal cases passed; fixture commands were never executed.`,
+      `${surface} ${guard}: ${result.passed}/${result.total} literal cases passed; fixture commands were never executed.`,
     );
     return 0;
   } catch (error) {

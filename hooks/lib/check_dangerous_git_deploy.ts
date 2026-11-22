@@ -38,7 +38,10 @@
  *  4. Fails CLOSED: any parse exception, or an unterminated quote (an
  *     ambiguous parse), blocks rather than passing the command through —
  *     same contract as check_irreversible_operations.ts's
- *     "an unterminated quote fails CLOSED" behaviour.
+ *     "an unterminated quote fails CLOSED" behaviour. Such a refusal carries
+ *     reason "unreadable" (printed as UNREADABLE:), never "operation", so the
+ *     shell entry point answers with the could-not-read response instead of
+ *     claiming a merge or deploy was found (web-jam-tools#1422).
  *
  * The six rules and their exact user-facing message text are unchanged from
  * the original grep-based script — this is a false-positive fix only.
@@ -70,6 +73,11 @@ import { isGitPushDeletion } from "./check_irreversible_operations.ts";
 
 export interface CheckResult {
   blocked: boolean;
+  /**
+   * Why it refused (web-jam-tools#1422): "operation" when a protected operation was identified,
+   * "unreadable" when the command could not be read, so nothing was identified.
+   */
+  reason?: "operation" | "unreadable";
   description?: string;
 }
 
@@ -78,7 +86,12 @@ function ok(): CheckResult {
 }
 
 function block(description: string): CheckResult {
-  return { blocked: true, description };
+  return { blocked: true, reason: "operation", description };
+}
+
+/** A refusal because the command could not be read — never a claim that an operation was found. */
+function unreadable(description: string): CheckResult {
+  return { blocked: true, reason: "unreadable", description };
 }
 
 function hasToken(argv: string[], re: RegExp): boolean {
@@ -156,11 +169,11 @@ function checkSegment(argv: string[], depth: number): CheckResult {
 
   const resolved = resolveThroughWrappers(argv);
   if (resolved.kind === "cap-exceeded") {
-    return block("wrapper resolution exceeded iteration cap — failing closed");
+    return unreadable("wrapper resolution exceeded iteration cap — failing closed");
   }
   if (resolved.kind === "nested") {
     if (depth >= MAX_WRAPPER_RECURSION_DEPTH) {
-      return block("wrapper/interpreter nesting exceeded recursion cap — failing closed");
+      return unreadable("wrapper/interpreter nesting exceeded recursion cap — failing closed");
     }
     return checkDangerousGitDeploy(resolved.command, depth + 1);
   }
@@ -296,19 +309,19 @@ export function checkDangerousGitDeploy(rawCmd: string, depth = 0): CheckResult 
   if (!rawCmd) return ok();
 
   if (depth > MAX_WRAPPER_RECURSION_DEPTH) {
-    return block("wrapper/interpreter nesting exceeded recursion cap — failing closed");
+    return unreadable("wrapper/interpreter nesting exceeded recursion cap — failing closed");
   }
 
-  let stripped: string;
+  let parsed: ReturnType<typeof splitOnOperators>;
   try {
-    stripped = stripHeredocs(rawCmd);
+    parsed = splitOnOperators(stripHeredocs(rawCmd));
   } catch {
-    return block("unparseable command (heredoc parse failure) — failing closed");
+    return unreadable("unparseable command (heredoc parse failure) — failing closed");
   }
 
-  const { segments, unterminated } = splitOnOperators(stripped);
+  const { segments, unterminated } = parsed;
   if (unterminated) {
-    return block("unparseable command (unterminated quote) — failing closed");
+    return unreadable("unparseable command (unterminated quote or heredoc) — failing closed");
   }
 
   for (const seg of segments) {
@@ -316,7 +329,7 @@ export function checkDangerousGitDeploy(rawCmd: string, depth = 0): CheckResult 
     try {
       argv = splitShellTokens(seg);
     } catch {
-      return block("unparseable command (tokenizer failure) — failing closed");
+      return unreadable("unparseable command (tokenizer failure) — failing closed");
     }
     const result = checkSegment(argv, depth);
     if (result.blocked) return result;
@@ -329,7 +342,10 @@ if (import.meta.main) {
   const cmd = Deno.env.get("CMD_FOR_PY") || Deno.args[0] || "";
   const result = checkDangerousGitDeploy(cmd);
   if (result.blocked) {
-    console.log("BLOCK:" + (result.description ?? "dangerous git/deploy operation"));
+    console.log(
+      (result.reason === "unreadable" ? "UNREADABLE:" : "BLOCK:") +
+        (result.description ?? "dangerous git/deploy operation"),
+    );
   } else {
     console.log("OK");
   }
