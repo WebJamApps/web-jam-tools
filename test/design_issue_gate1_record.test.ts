@@ -3,7 +3,7 @@
 // Unit tests for Gate 1 disk record helper (gate1_record.ts) and CLI commands
 // (design:gate1-approve and design:gate1-status).
 
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertInstanceOf, assertRejects } from "@std/assert";
 import * as path from "@std/path";
 import {
   adoptGate1Record,
@@ -1819,17 +1819,24 @@ Deno.test("a lock held by another process stays exclusive until that process exi
       stderr: "null",
     }).spawn();
     const reader = child.stdout.getReader();
-    const { value } = await reader.read();
-    assertEquals(new TextDecoder().decode(value).trim(), "locked");
-    await assertRejects(
-      () => withGate1RecordLock(recordPath, () => Promise.resolve(), 200),
-      Gate1RecordError,
-      "is locked by another command",
-    );
-    child.kill("SIGKILL");
-    await child.status;
-    reader.releaseLock();
-    await child.stdout.cancel();
+    try {
+      const { value } = await reader.read();
+      assertEquals(new TextDecoder().decode(value).trim(), "locked");
+      await assertRejects(
+        () => withGate1RecordLock(recordPath, () => Promise.resolve(), 200),
+        Gate1RecordError,
+        "is locked by another command",
+      );
+    } finally {
+      try {
+        child.kill("SIGKILL");
+      } catch (error) {
+        assertInstanceOf(error, Deno.errors.NotFound);
+      }
+      await child.status;
+      reader.releaseLock();
+      await child.stdout.cancel();
+    }
     assertEquals(await withGate1RecordLock(recordPath, () => Promise.resolve("ran"), 2_000), "ran");
   } finally {
     await Deno.remove(tempDir, { recursive: true });
