@@ -1,0 +1,16 @@
+       1040 U.S. Individual Income Tax Return 2025
+                        8      Additional income from Schedule 1, line 10 . . . . . . . . . . . .                                           .    .   .   .      .           8
+                       9       Add lines 1z, 2b, 3b, 4b, 5b, 6b, 7a, and 8. This is your total income                 .     .     .     .   .    .   .   .      .        9
+                      10       Adjustments to income from Schedule 1, line 26        . . . . . .                      .     .     .     .   .    .   .   .      .        10
+                      11a      Subtract line 10 from line 9. This is your adjusted gross income       .               .     .     .     .   .    .   .   .      .       11a
+ Form 1040 (2025)                                                                                                                                                                           Page 2
+
+ Tax and              11b    Amount from line 11a (adjusted gross income) .               .       .    . . . . . . . . .                        .   .     .    .     11b
+  a box on line       21     Add lines 19 and 20 . . . . . . . . . .                              .    .     .   .   .   .   .   .     .    .   .   .     .    .      21
+  12a, 12b, 12c,      22     Subtract line 21 from line 18. If zero or less, enter -0-            .    .     .   .   .   .   .   .     .    .   .   .     .    .      22
+  or 12d, see inst.
+                      23     Other taxes, including self-employment tax, from Schedule 2, line 21                        .   .   .     .    .   .   .     .    .      23
+                      24     Add lines 22 and 23. This is your total tax . . . . . . . .                                 .   .   .     .    .   .   .     .    .      24
+ Payments             25     Federal income tax withheld from:
+ and                    a    Form(s) W-2 . . . . . .                  .   .   .   .   .   .       .    .     .   .   .   .       25a
+ Refundable             b    Form(s) 1099 . . . . . .                 .   .   .   .   .   .       .    .     .   .   .   .       25b
