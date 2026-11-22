@@ -153,6 +153,82 @@ export function getGate1RecordPath(docPath: string, stateDir?: string): string {
   return path.join(dir, `${hash}.json`);
 }
 
+const RECORD_LOCK_WAIT_MS = 10_000;
+const RECORD_LOCK_RETRY_MS = 25;
+
+/**
+ * Runs `fn` while holding an exclusive OS file lock (flock) on `<record>.lock`, so a presentation,
+ * approval, adoption or sweep note never writes over another's read-then-write of the same record
+ * (web-jam-tools#1412). The kernel ties the lock to the open file and releases it only when the
+ * holder unlocks or exits, so a paused holder keeps it and a dead one never needs evicting. The
+ * lock file is never removed: removing it would let a waiter lock an unlinked file while another
+ * command locks a new one. Refuses when the lock is held past `waitMs` or cannot be taken at all.
+ */
+export async function withGate1RecordLock<T>(
+  recordPath: string,
+  fn: () => Promise<T>,
+  waitMs = RECORD_LOCK_WAIT_MS,
+): Promise<T> {
+  const lockPath = `${recordPath}.lock`;
+  const cannotLock = (err: unknown) =>
+    new Gate1RecordError(
+      `Cannot lock Gate 1 record at ${recordPath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  let file: Deno.FsFile;
+  try {
+    await Deno.mkdir(path.dirname(recordPath), { recursive: true });
+    file = await Deno.open(lockPath, { create: true, write: true });
+  } catch (err) {
+    throw cannotLock(err);
+  }
+  try {
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      let locked: boolean;
+      try {
+        locked = await file.tryLock(true);
+      } catch (err) {
+        throw cannotLock(err);
+      }
+      if (locked) break;
+      if (Date.now() >= deadline) {
+        throw new Gate1RecordError(
+          `Gate 1 record at ${recordPath} is locked by another command (${lockPath}); try again.`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, RECORD_LOCK_RETRY_MS));
+    }
+    try {
+      return await fn();
+    } finally {
+      await file.unlock();
+    }
+  } finally {
+    file.close();
+  }
+}
+
+/** Refuses when the design document can no longer be read or no longer has `fingerprint`. */
+async function refuseIfDocChanged(
+  absDocPath: string,
+  fingerprint: string,
+  refusal: string,
+): Promise<void> {
+  let latest: string;
+  try {
+    latest = await Deno.readTextFile(absDocPath);
+  } catch (err) {
+    throw new Gate1RecordError(
+      `Cannot read design document at ${absDocPath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  if (computeFingerprint(latest) !== fingerprint) throw new Gate1RecordError(refusal);
+}
+
 export interface ParsedPremisesTable {
   headingFound: boolean;
   headerFound: boolean;
@@ -348,35 +424,34 @@ export async function openGate1Record(
   const absDocPath = path.resolve(expandHome(docPath.trim()));
   const dir = getGate1StateDir(options?.stateDir);
   const recordPath = getGate1RecordPath(absDocPath, dir);
+  return await withGate1RecordLock(recordPath, async () => {
+    const existing = await readExistingRecord(recordPath);
 
-  const existing = await readExistingRecord(recordPath);
+    const record: Gate1Record = {
+      docPath: absDocPath,
+      presentedFingerprint: computeFingerprint(content),
+      presentedAt: new Date().toISOString(),
+    };
+    if (existing?.premiseRows !== undefined) record.premiseRows = existing.premiseRows;
+    if (existing?.premiseRowsSource !== undefined) {
+      record.premiseRowsSource = existing.premiseRowsSource;
+    }
+    if (existing?.premiseRowsStoredAt !== undefined) {
+      record.premiseRowsStoredAt = existing.premiseRowsStoredAt;
+    }
+    if (existing?.premiseRowsAdoptionReply !== undefined) {
+      record.premiseRowsAdoptionReply = existing.premiseRowsAdoptionReply;
+    }
+    if (existing?.sweepNotes !== undefined && existing.sweepNotes.length > 0) {
+      record.sweepNotes = existing.sweepNotes;
+    }
+    if (options?.otherDesignSweep !== undefined) {
+      record.otherDesignSweep = options.otherDesignSweep;
+    }
 
-  await Deno.mkdir(dir, { recursive: true });
-
-  const record: Gate1Record = {
-    docPath: absDocPath,
-    presentedFingerprint: computeFingerprint(content),
-    presentedAt: new Date().toISOString(),
-  };
-  if (existing?.premiseRows !== undefined) record.premiseRows = existing.premiseRows;
-  if (existing?.premiseRowsSource !== undefined) {
-    record.premiseRowsSource = existing.premiseRowsSource;
-  }
-  if (existing?.premiseRowsStoredAt !== undefined) {
-    record.premiseRowsStoredAt = existing.premiseRowsStoredAt;
-  }
-  if (existing?.premiseRowsAdoptionReply !== undefined) {
-    record.premiseRowsAdoptionReply = existing.premiseRowsAdoptionReply;
-  }
-  if (existing?.sweepNotes !== undefined && existing.sweepNotes.length > 0) {
-    record.sweepNotes = existing.sweepNotes;
-  }
-  if (options?.otherDesignSweep !== undefined) {
-    record.otherDesignSweep = options.otherDesignSweep;
-  }
-
-  await Deno.writeTextFile(recordPath, JSON.stringify(record, null, 2) + "\n");
-  return { record, recordPath };
+    await Deno.writeTextFile(recordPath, JSON.stringify(record, null, 2) + "\n");
+    return { record, recordPath };
+  });
 }
 
 /**
@@ -393,7 +468,11 @@ export async function openGate1Record(
 export async function approveGate1Record(
   docPath: string,
   reply: string,
-  options?: { stateDir?: string },
+  options?: {
+    stateDir?: string;
+    /** Refuses (throws) unless Josh typed the reply after `presentedAt` (web-jam-tools#1412). */
+    verifyReply?: (presentedAt: string) => Promise<unknown>;
+  },
 ): Promise<{ record: Gate1Record; recordPath: string }> {
   const absDocPath = path.resolve(expandHome(docPath.trim()));
 
@@ -463,19 +542,55 @@ export async function approveGate1Record(
     );
   }
 
-  record.approvedAt = new Date().toISOString();
-  record.reply = reply;
-  record.approvedFingerprint = currentFingerprint;
-  record.premiseRows = premiseRowsForApproval(content);
-  record.premiseRowsSource = "approval";
-  record.premiseRowsStoredAt = record.approvedAt;
-  delete record.premiseRowsAdoptionReply;
-  // Clear active sweep notes after approval (the presented sweep snapshot stays in otherDesignSweep)
-  // so a later revision must re-verify or re-note any hits in other designs.
-  delete record.sweepNotes;
+  // The reply check needs a real presentation time: without one it would have no cutoff, and a
+  // reply to any earlier presentation would pass (web-jam-tools#1412).
+  if (typeof record.presentedAt !== "string" || Number.isNaN(Date.parse(record.presentedAt))) {
+    throw new Gate1RecordError(
+      `Gate 1 record for ${absDocPath} holds no usable presentation time (${
+        JSON.stringify(record.presentedAt)
+      }) — refusing to approve Gate 1. Present the document with deno task design:gate1 first.`,
+    );
+  }
 
-  await Deno.writeTextFile(recordPath, JSON.stringify(record, null, 2) + "\n");
-  return { record, recordPath };
+  if (options?.verifyReply) await options.verifyReply(record.presentedAt);
+
+  // The reply check can take a while; approve only the presentation it checked against, reading
+  // the record and document again under the lock so a newer presentation is never written over.
+  return await withGate1RecordLock(recordPath, async () => {
+    const current = await readExistingRecord(recordPath);
+    if (
+      !current || current.presentedAt !== record.presentedAt ||
+      current.presentedFingerprint !== record.presentedFingerprint
+    ) {
+      throw new Gate1RecordError(
+        `Gate 1 record for ${absDocPath} was presented again while the reply was being checked — refusing to approve the earlier presentation. Approve the current presentation instead.`,
+      );
+    }
+    if (current.approvedAt) {
+      throw new Gate1RecordError(
+        `Gate 1 record for ${absDocPath} is not open (already approved at ${current.approvedAt}). Re-present the document with deno task design:gate1 to clear approval and re-open.`,
+      );
+    }
+    await refuseIfDocChanged(
+      absDocPath,
+      currentFingerprint,
+      `Document changed while the reply was being checked — refusing to approve Gate 1. Re-present the document with deno task design:gate1 first.`,
+    );
+
+    current.approvedAt = new Date().toISOString();
+    current.reply = reply;
+    current.approvedFingerprint = currentFingerprint;
+    current.premiseRows = premiseRowsForApproval(content);
+    current.premiseRowsSource = "approval";
+    current.premiseRowsStoredAt = current.approvedAt;
+    delete current.premiseRowsAdoptionReply;
+    // Clear active sweep notes after approval (the presented sweep snapshot stays in
+    // otherDesignSweep) so a later revision must re-verify or re-note any hits in other designs.
+    delete current.sweepNotes;
+
+    await Deno.writeTextFile(recordPath, JSON.stringify(current, null, 2) + "\n");
+    return { record: current, recordPath };
+  });
 }
 
 /**
@@ -518,31 +633,32 @@ export async function recordSweepNote(
 
   const dir = getGate1StateDir(options?.stateDir);
   const recordPath = getGate1RecordPath(absDocPath, dir);
-  const existing = await readExistingRecord(recordPath);
-  const now = options?.nowImpl?.() ?? new Date();
-  const trimmedReason = reason.trim();
+  return await withGate1RecordLock(recordPath, async () => {
+    const existing = await readExistingRecord(recordPath);
+    const now = options?.nowImpl?.() ?? new Date();
+    const trimmedReason = reason.trim();
 
-  const record: Gate1Record = existing ?? {
-    docPath: absDocPath,
-    presentedFingerprint: "",
-    presentedAt: "",
-  };
+    const record: Gate1Record = existing ?? {
+      docPath: absDocPath,
+      presentedFingerprint: "",
+      presentedAt: "",
+    };
 
-  const realOther = resolveReal(absOtherPath);
-  const nextNotes = (record.sweepNotes ?? []).filter((n) => {
-    const absExisting = path.resolve(expandHome(n.otherPath));
-    return absExisting !== absOtherPath && resolveReal(absExisting) !== realOther;
+    const realOther = resolveReal(absOtherPath);
+    const nextNotes = (record.sweepNotes ?? []).filter((n) => {
+      const absExisting = path.resolve(expandHome(n.otherPath));
+      return absExisting !== absOtherPath && resolveReal(absExisting) !== realOther;
+    });
+    nextNotes.push({
+      otherPath: absOtherPath,
+      reason: trimmedReason,
+      recordedAt: now.toISOString(),
+    });
+    record.sweepNotes = nextNotes;
+
+    await Deno.writeTextFile(recordPath, JSON.stringify(record, null, 2) + "\n");
+    return { record, recordPath };
   });
-  nextNotes.push({
-    otherPath: absOtherPath,
-    reason: trimmedReason,
-    recordedAt: now.toISOString(),
-  });
-  record.sweepNotes = nextNotes;
-
-  await Deno.mkdir(dir, { recursive: true });
-  await Deno.writeTextFile(recordPath, JSON.stringify(record, null, 2) + "\n");
-  return { record, recordPath };
 }
 
 /**
@@ -555,7 +671,12 @@ export async function recordSweepNote(
 export async function adoptGate1Record(
   docPath: string,
   reply: string,
-  options?: { stateDir?: string; now?: Date },
+  options?: {
+    stateDir?: string;
+    now?: Date;
+    /** Refuses (throws) unless Josh typed the reply (web-jam-tools#1412). */
+    verifyReply?: () => Promise<unknown>;
+  },
 ): Promise<{ record: Gate1Record; recordPath: string }> {
   const absDocPath = path.resolve(expandHome(docPath.trim()));
   if (!reply || reply.trim() === "") {
@@ -583,20 +704,36 @@ export async function adoptGate1Record(
   }
   const now = options?.now ?? new Date();
   const rows = premiseRowsForAdoption(content, toLocalIsoDate(now));
+  if (options?.verifyReply) await options.verifyReply();
 
-  const record: Gate1Record = existing ?? {
-    docPath: absDocPath,
-    presentedFingerprint: "",
-    presentedAt: "",
-  };
-  record.premiseRows = rows;
-  record.premiseRowsSource = "adoption";
-  record.premiseRowsStoredAt = now.toISOString();
-  record.premiseRowsAdoptionReply = reply;
+  // Read the record again under the lock: the reply check can take a while, and a presentation
+  // or sweep note written meanwhile must be kept.
+  return await withGate1RecordLock(recordPath, async () => {
+    const latest = await readExistingRecord(recordPath);
+    if (latest?.premiseRows && latest.premiseRows.length > 0) {
+      throw new Gate1RecordError(
+        `Gate 1 record for ${absDocPath} already holds ${latest.premiseRows.length} premise row(s) — adoption happens once per document; the stored rows now change only through Gate 1.`,
+      );
+    }
+    // The rows were read before the reply check; store them only if the document still holds them.
+    await refuseIfDocChanged(
+      absDocPath,
+      computeFingerprint(content),
+      `Document changed while the reply was being checked — refusing to adopt its premise rows. Run deno task design:gate1-adopt again on the current document.`,
+    );
+    const record: Gate1Record = latest ?? {
+      docPath: absDocPath,
+      presentedFingerprint: "",
+      presentedAt: "",
+    };
+    record.premiseRows = rows;
+    record.premiseRowsSource = "adoption";
+    record.premiseRowsStoredAt = now.toISOString();
+    record.premiseRowsAdoptionReply = reply;
 
-  await Deno.mkdir(dir, { recursive: true });
-  await Deno.writeTextFile(recordPath, JSON.stringify(record, null, 2) + "\n");
-  return { record, recordPath };
+    await Deno.writeTextFile(recordPath, JSON.stringify(record, null, 2) + "\n");
+    return { record, recordPath };
+  });
 }
 
 /**

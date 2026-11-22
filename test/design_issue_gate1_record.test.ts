@@ -3,7 +3,7 @@
 // Unit tests for Gate 1 disk record helper (gate1_record.ts) and CLI commands
 // (design:gate1-approve and design:gate1-status).
 
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertInstanceOf, assertRejects } from "@std/assert";
 import * as path from "@std/path";
 import {
   adoptGate1Record,
@@ -18,6 +18,7 @@ import {
   loadGate1Record,
   openGate1Record,
   recordSweepNote,
+  withGate1RecordLock,
 } from "../src/design-issue/gate1_record.ts";
 import { lintDesignDoc, toLocalIsoDate } from "../src/design-issue/lint_doc.ts";
 import {
@@ -26,7 +27,21 @@ import {
   runGate1ApproveCli,
   runGate1StatusCli,
   runSweepNoteCli,
+  sessionIdFor,
 } from "../src/design-issue/cli.ts";
+import {
+  agyUserRequestText,
+  isCodexInjectedText,
+  verifyReplyTypedByJosh,
+} from "../src/design-issue/gate1_reply.ts";
+import {
+  agyFixture,
+  agySubagentEnv,
+  claudeCodeFixture,
+  codexFixture,
+  FIXTURES,
+  type FixtureTurn,
+} from "./gate1_reply_fixtures.ts";
 
 const MINIMAL_DESIGN_DOC = `# Test Design
 
@@ -334,12 +349,24 @@ Deno.test("runGate1ApproveCli approves with --reply flag and logs success", asyn
     const stateDir = path.join(tempDir, "state");
 
     await openGate1Record(docPath, MINIMAL_DESIGN_DOC, { stateDir });
+    const session = await claudeCodeFixture(path.join(tempDir, "home"), [
+      { kind: "josh", text: "Approved from CLI", at: new Date(Date.now() + 60_000) },
+    ]);
 
     const logs: string[] = [];
     const errors: string[] = [];
     const code = await runGate1ApproveCli(
-      [docPath, "--reply", "Approved from CLI", "--state-dir", stateDir],
+      [
+        docPath,
+        "--reply",
+        "Approved from CLI",
+        "--state-dir",
+        stateDir,
+        "--session-id",
+        session.sessionId,
+      ],
       {
+        env: session.env,
         log: (msg) => logs.push(msg),
         errorLog: (msg) => errors.push(msg),
       },
@@ -370,12 +397,24 @@ Deno.test("runGate1ApproveCli approves with --reply-file flag", async () => {
     await Deno.writeTextFile(replyFilePath, replyContent);
 
     await openGate1Record(docPath, MINIMAL_DESIGN_DOC, { stateDir });
+    const session = await claudeCodeFixture(path.join(tempDir, "home"), [
+      { kind: "josh", text: replyContent, at: new Date(Date.now() + 60_000) },
+    ]);
 
     const logs: string[] = [];
     const errors: string[] = [];
     const code = await runGate1ApproveCli(
-      [docPath, "--reply-file", replyFilePath, "--state-dir", stateDir],
+      [
+        docPath,
+        "--reply-file",
+        replyFilePath,
+        "--state-dir",
+        stateDir,
+        "--session-id",
+        session.sessionId,
+      ],
       {
+        env: session.env,
         log: (msg) => logs.push(msg),
         errorLog: (msg) => errors.push(msg),
       },
@@ -887,7 +926,15 @@ Deno.test("runGate1AdoptCli adopts from --reply, --reply-file, and refuses on ba
   const f = await adoptFixture(premisesDoc(TWO_ROWS));
   const out: string[] = [];
   const err: string[] = [];
-  const io = { log: (m: string) => out.push(m), errorLog: (m: string) => err.push(m) };
+  const session = await claudeCodeFixture(path.join(f.tempDir, "home"), [
+    { kind: "josh", text: "adopt it", at: new Date() },
+  ]);
+  const io = {
+    env: session.env,
+    log: (m: string) => out.push(m),
+    errorLog: (m: string) => err.push(m),
+  };
+  const sid = ["--session-id", session.sessionId];
   try {
     assertEquals(await runGate1AdoptCli(["--help"], io), 0);
     assertEquals(await runGate1AdoptCli(["--reply", "x"], io), 1); // no doc
@@ -906,13 +953,24 @@ Deno.test("runGate1AdoptCli adopts from --reply, --reply-file, and refuses on ba
     const replyFile = path.join(f.tempDir, "reply.txt");
     await Deno.writeTextFile(replyFile, "adopt it\n");
     assertEquals(
-      await runGate1AdoptCli([f.docPath, "--reply-file", replyFile, "--state-dir", f.stateDir], io),
+      await runGate1AdoptCli(
+        [f.docPath, "--reply-file", replyFile, "--state-dir", f.stateDir, ...sid],
+        io,
+      ),
       0,
     );
     assertEquals(out.some((l) => l.includes("Adopted 2 premise row(s)")), true);
+    // The reply file's trailing newline is trimmed once, so the text stored is the text verified.
+    assertEquals(
+      (await loadGate1Record(f.docPath, { stateDir: f.stateDir }))?.premiseRowsAdoptionReply,
+      "adopt it",
+    );
     // Case c through the CLI: the second run exits non-zero.
     assertEquals(
-      await runGate1AdoptCli([f.docPath, "--reply", "again", "--state-dir", f.stateDir], io),
+      await runGate1AdoptCli(
+        [f.docPath, "--reply", "adopt it", "--state-dir", f.stateDir, ...sid],
+        io,
+      ),
       1,
     );
     assertEquals(err.some((l) => l.includes("already holds")), true);
@@ -1273,6 +1331,594 @@ Deno.test("runSweepNoteCli and runCli route sweep-note and validate arguments", 
 
     assertEquals(await runCli(["sweep-note", "--help"]), 0);
     assertEquals(await runCli(["sweep_note", "--help"]), 0);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// web-jam-tools#1412 — a Gate 1 reply is text Josh typed. Appendix D "A Gate 1 reply is text Josh
+// typed": each case against a Claude Code, an agy and a Codex session fixture. In every fixture
+// design:gate1 presented the document once, and Josh's turn after it reads "i approve document 2".
+
+for (const fx of FIXTURES) {
+  const presentedSetup = async (extra: FixtureTurn[] = []) => {
+    const tempDir = await Deno.makeTempDir({ prefix: `gate1-reply-${fx.name.replace(" ", "")}-` });
+    const docPath = path.join(tempDir, "doc.md");
+    await Deno.writeTextFile(docPath, MINIMAL_DESIGN_DOC);
+    const stateDir = path.join(tempDir, "state");
+    const opened = await openGate1Record(docPath, MINIMAL_DESIGN_DOC, { stateDir });
+    const presented = Date.parse(opened.record.presentedAt);
+    const before = new Date(presented - 60_000);
+    const after = new Date(presented + 60_000);
+    const turns: FixtureTurn[] = [
+      { kind: "josh", text: "i approve document 1", at: before },
+      {
+        kind: "agent",
+        text: "Here is document 2 for your review.",
+        at: new Date(presented + 1_000),
+      },
+      { kind: "josh", text: "i approve document 2", at: after },
+      ...extra.map((t) => ({ ...t, at: t.at ?? after })),
+    ];
+    const session = await fx.build(path.join(tempDir, "home"), turns);
+    return { tempDir, docPath, stateDir, session };
+  };
+
+  const approve = (
+    s: Awaited<ReturnType<typeof presentedSetup>>,
+    reply: string,
+    sessionId = s.session.sessionId,
+    env = s.session.env,
+  ) => {
+    const out: string[] = [];
+    const err: string[] = [];
+    return runGate1ApproveCli(
+      [s.docPath, "--reply", reply, "--session-id", sessionId, "--state-dir", s.stateDir],
+      { env, log: (m) => out.push(m), errorLog: (m) => err.push(m) },
+    ).then((code) => ({ code, out, err: err.join("\n") }));
+  };
+
+  Deno.test(`${fx.name}: a reply Josh typed after the presentation is recorded and status prints it`, async () => {
+    const s = await presentedSetup();
+    try {
+      const r = await approve(s, "i approve document 2");
+      assertEquals(r.code, 0, r.err);
+      const status = await getGate1Status(s.docPath, { stateDir: s.stateDir });
+      assertEquals(status.status, "approved");
+      assertEquals(status.reply, "i approve document 2");
+      const lines: string[] = [];
+      assertEquals(
+        await runGate1StatusCli([s.docPath, "--state-dir", s.stateDir], {
+          log: (m) => lines.push(m),
+        }),
+        0,
+      );
+      assertEquals(lines.some((l) => l.includes("i approve document 2")), true);
+    } finally {
+      await Deno.remove(s.tempDir, { recursive: true });
+    }
+  });
+
+  Deno.test(`${fx.name}: a reply Josh never typed is refused and nothing is recorded`, async () => {
+    const s = await presentedSetup();
+    try {
+      const r = await approve(s, "Approved by Josh on 2026-10-14");
+      assertEquals(r.code, 1);
+      assertEquals(r.err.includes("does not appear word for word"), true, r.err);
+      assertEquals(r.err.includes(s.session.transcriptPath), true, r.err);
+      assertEquals((await getGate1Status(s.docPath, { stateDir: s.stateDir })).status, "open");
+    } finally {
+      await Deno.remove(s.tempDir, { recursive: true });
+    }
+  });
+
+  Deno.test(`${fx.name}: a Josh turn from before the presentation is refused`, async () => {
+    const s = await presentedSetup();
+    try {
+      const r = await approve(s, "i approve document 1");
+      assertEquals(r.code, 1);
+      assertEquals(r.err.includes("only before the document was last presented"), true, r.err);
+      assertEquals((await getGate1Status(s.docPath, { stateDir: s.stateDir })).status, "open");
+    } finally {
+      await Deno.remove(s.tempDir, { recursive: true });
+    }
+  });
+
+  for (const kind of ["agent", "subagent", "tool"] as const) {
+    Deno.test(`${fx.name}: a reply found only in ${kind === "agent" ? "an agent turn" : kind === "subagent" ? "a subagent's or sidechain's prompt" : "a tool result"} is refused`, async () => {
+      const text = "i approve document 3";
+      const s = await presentedSetup([{ kind, text, at: new Date(Date.now() + 120_000) }]);
+      try {
+        const r = await approve(s, text);
+        assertEquals(r.code, 1);
+        assertEquals(r.err.includes("does not appear word for word"), true, r.err);
+        assertEquals((await getGate1Status(s.docPath, { stateDir: s.stateDir })).status, "open");
+      } finally {
+        await Deno.remove(s.tempDir, { recursive: true });
+      }
+    });
+  }
+
+  Deno.test(`${fx.name}: a session id naming no transcript is refused, naming the path looked for`, async () => {
+    const s = await presentedSetup();
+    try {
+      const missing = "00000000-0000-4000-8000-000000000000";
+      const env = (name: string) =>
+        name === "CODEX_THREAD_ID" && s.session.env(name)
+          ? missing
+          : name === "AGY_CONVERSATION_ID" && s.session.env(name)
+          ? missing
+          : name === "AGY_TRANSCRIPT_PATH" && s.session.env(name)
+          ? s.session.env(name)!.replace(s.session.sessionId, missing)
+          : s.session.env(name);
+      const r = await approve(s, "i approve document 2", missing, env);
+      assertEquals(r.code, 1);
+      assertEquals(r.err.includes(missing), true, r.err);
+      assertEquals(/looked for|Cannot read the session transcript/.test(r.err), true, r.err);
+      assertEquals((await getGate1Status(s.docPath, { stateDir: s.stateDir })).status, "open");
+    } finally {
+      await Deno.remove(s.tempDir, { recursive: true });
+    }
+  });
+
+  Deno.test(`${fx.name}: a transcript that cannot be parsed is refused, naming its path`, async () => {
+    const s = await presentedSetup();
+    try {
+      await Deno.writeTextFile(s.session.transcriptPath, "{not json\n", { append: true });
+      const r = await approve(s, "i approve document 2");
+      assertEquals(r.code, 1);
+      assertEquals(
+        r.err.includes(`Cannot parse the session transcript at ${s.session.transcriptPath}`),
+        true,
+        r.err,
+      );
+      assertEquals((await getGate1Status(s.docPath, { stateDir: s.stateDir })).status, "open");
+    } finally {
+      await Deno.remove(s.tempDir, { recursive: true });
+    }
+  });
+
+  Deno.test(`${fx.name}: gate1-adopt stores rows only for a reply Josh typed`, async () => {
+    const f = await adoptFixture(premisesDoc(TWO_ROWS));
+    try {
+      const now = new Date();
+      const session = await fx.build(path.join(f.tempDir, "home"), [
+        { kind: "agent", text: "Shall I adopt document 2?", at: new Date(now.getTime() - 2_000) },
+        { kind: "josh", text: "adopt document 2", at: new Date(now.getTime() - 1_000) },
+      ]);
+      const err: string[] = [];
+      const io = { env: session.env, log: () => {}, errorLog: (m: string) => err.push(m) };
+      const args = (reply: string) => [
+        f.docPath,
+        "--reply",
+        reply,
+        "--session-id",
+        session.sessionId,
+        "--state-dir",
+        f.stateDir,
+      ];
+      assertEquals(await runGate1AdoptCli(args("adopt document 3"), io), 1);
+      assertEquals(err.join("\n").includes("does not appear word for word"), true, err.join("\n"));
+      assertEquals(await loadGate1Record(f.docPath, { stateDir: f.stateDir }), null);
+      assertEquals(await runGate1AdoptCli(args("adopt document 2"), io), 0, err.join("\n"));
+      const record = await loadGate1Record(f.docPath, { stateDir: f.stateDir });
+      assertEquals(record?.premiseRows?.length, 2);
+      assertEquals(record?.premiseRowsAdoptionReply, "adopt document 2");
+    } finally {
+      await Deno.remove(f.tempDir, { recursive: true });
+    }
+  });
+}
+
+Deno.test("agy: a subagent's own conversation is refused — its prompts were written by its parent", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-reply-agy-sub-" });
+  try {
+    const docPath = path.join(tempDir, "doc.md");
+    await Deno.writeTextFile(docPath, MINIMAL_DESIGN_DOC);
+    const stateDir = path.join(tempDir, "state");
+    const opened = await openGate1Record(docPath, MINIMAL_DESIGN_DOC, { stateDir });
+    const after = new Date(Date.parse(opened.record.presentedAt) + 60_000);
+    const home = path.join(tempDir, "home");
+    await agyFixture(home, [{ kind: "subagent", text: "i approve document 2", at: after }]);
+    const sub = agySubagentEnv(home);
+    const err: string[] = [];
+    const code = await runGate1ApproveCli(
+      [
+        docPath,
+        "--reply",
+        "i approve document 2",
+        "--session-id",
+        sub.sessionId,
+        "--state-dir",
+        stateDir,
+      ],
+      { env: sub.env, log: () => {}, errorLog: (m) => err.push(m) },
+    );
+    assertEquals(code, 1);
+    assertEquals(err.join("\n").includes("is a subagent's"), true, err.join("\n"));
+    assertEquals((await getGate1Status(docPath, { stateDir })).status, "open");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("Codex: a helper session Josh did not start is refused", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-reply-codex-sub-" });
+  try {
+    const docPath = path.join(tempDir, "doc.md");
+    await Deno.writeTextFile(docPath, MINIMAL_DESIGN_DOC);
+    const stateDir = path.join(tempDir, "state");
+    const opened = await openGate1Record(docPath, MINIMAL_DESIGN_DOC, { stateDir });
+    const after = new Date(Date.parse(opened.record.presentedAt) + 60_000);
+    const session = await codexFixture(
+      path.join(tempDir, "home"),
+      [{ kind: "josh", text: "i approve document 2", at: after }],
+      undefined,
+      { source: "cli", originator: "codex-tui", thread_source: "subagent" },
+    );
+    const err: string[] = [];
+    const code = await runGate1ApproveCli(
+      [
+        docPath,
+        "--reply",
+        "i approve document 2",
+        "--session-id",
+        session.sessionId,
+        "--state-dir",
+        stateDir,
+      ],
+      { env: session.env, log: () => {}, errorLog: (m) => err.push(m) },
+    );
+    assertEquals(code, 1);
+    assertEquals(err.join("\n").includes("is not one Josh started"), true, err.join("\n"));
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("gate1-approve refuses with no session id, and a session id that does not match this agy or Codex session", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-reply-ids-" });
+  try {
+    const docPath = path.join(tempDir, "doc.md");
+    await Deno.writeTextFile(docPath, MINIMAL_DESIGN_DOC);
+    const stateDir = path.join(tempDir, "state");
+    await openGate1Record(docPath, MINIMAL_DESIGN_DOC, { stateDir });
+    const run = async (extra: string[], env: (n: string) => string | undefined) => {
+      const err: string[] = [];
+      const code = await runGate1ApproveCli(
+        [docPath, "--reply", "ok", "--state-dir", stateDir, ...extra],
+        { env, log: () => {}, errorLog: (m) => err.push(m) },
+      );
+      return { code, err: err.join("\n") };
+    };
+    const none = await run([], () => undefined);
+    assertEquals(none.code, 1);
+    assertEquals(none.err.includes("No session id"), true, none.err);
+    const unsafe = await run(["--session-id", "../x"], () => undefined);
+    assertEquals(unsafe.err.includes("is not a session id"), true, unsafe.err);
+    const codex = await run(
+      ["--session-id", "other"],
+      (n) => n === "CODEX_THREAD_ID" ? "mine" : undefined,
+    );
+    assertEquals(codex.err.includes("is not this Codex session"), true, codex.err);
+    const agy = await run(
+      ["--session-id", "other"],
+      (n) => n === "AGY_CONVERSATION_ID" ? "mine" : undefined,
+    );
+    assertEquals(agy.err.includes("is not this agy conversation"), true, agy.err);
+    const agyNoPath = await run(
+      ["--session-id", "mine"],
+      (n) => n === "AGY_CONVERSATION_ID" ? "mine" : undefined,
+    );
+    assertEquals(agyNoPath.err.includes("AGY_TRANSCRIPT_PATH is unset"), true, agyNoPath.err);
+    assertEquals((await getGate1Status(docPath, { stateDir })).status, "open");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("sessionIdFor prefers --session-id, then the running tool's own session id", () => {
+  const env = (vars: Record<string, string>) => (n: string) => vars[n];
+  assertEquals(sessionIdFor(" given ", env({ CLAUDE_CODE_SESSION_ID: "c" })), "given");
+  assertEquals(
+    sessionIdFor(undefined, env({ CODEX_THREAD_ID: "x", CLAUDE_CODE_SESSION_ID: "c" })),
+    "x",
+  );
+  assertEquals(sessionIdFor("", env({ AGY_CONVERSATION_ID: "a" })), "a");
+  assertEquals(sessionIdFor(undefined, env({ CLAUDE_CODE_SESSION_ID: "c" })), "c");
+  assertEquals(sessionIdFor(undefined, env({})), "");
+});
+
+Deno.test("reply-check helpers: agy USER_REQUEST text and Codex injected blocks", () => {
+  assertEquals(
+    agyUserRequestText(
+      "<USER_REQUEST>\nyes go\n</USER_REQUEST>\n<ADDITIONAL_METADATA>i approve</ADDITIONAL_METADATA>",
+    ),
+    "yes go",
+  );
+  assertEquals(agyUserRequestText("no wrapper"), "");
+  assertEquals(isCodexInjectedText("# AGENTS.md instructions for /x"), true);
+  assertEquals(
+    isCodexInjectedText("<environment_context>\n<cwd>/x</cwd>\n</environment_context>"),
+    true,
+  );
+  assertEquals(isCodexInjectedText("<skill>\n<name>a</name>\n</skill>"), true);
+  assertEquals(isCodexInjectedText("i approve <b>this</b>"), false);
+  assertEquals(isCodexInjectedText("<b>yes</b> and more"), false);
+});
+
+Deno.test("approveGate1Record refuses a record with a missing or invalid presentation time, before checking the reply", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-presented-at-" });
+  try {
+    const docPath = path.join(tempDir, "doc.md");
+    await Deno.writeTextFile(docPath, MINIMAL_DESIGN_DOC);
+    const stateDir = path.join(tempDir, "state");
+    const { recordPath } = await openGate1Record(docPath, MINIMAL_DESIGN_DOC, { stateDir });
+    for (const presentedAt of [undefined, "", "not a date"]) {
+      const record = JSON.parse(await Deno.readTextFile(recordPath));
+      if (presentedAt === undefined) delete record.presentedAt;
+      else record.presentedAt = presentedAt;
+      await Deno.writeTextFile(recordPath, JSON.stringify(record));
+      let checked = false;
+      await assertRejects(
+        () =>
+          approveGate1Record(docPath, "yes", {
+            stateDir,
+            verifyReply: () => {
+              checked = true;
+              return Promise.resolve();
+            },
+          }),
+        Gate1RecordError,
+        "holds no usable presentation time",
+      );
+      assertEquals(checked, false);
+      assertEquals((await getGate1Status(docPath, { stateDir })).status, "open");
+    }
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("verifyReplyTypedByJosh refuses an approval cutoff that is missing or unparseable", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-cutoff-" });
+  try {
+    const session = await claudeCodeFixture(path.join(tempDir, "home"), [
+      { kind: "josh", text: "i approve", at: new Date() },
+    ]);
+    for (const after of [undefined, "", "not a date"]) {
+      await assertRejects(
+        () =>
+          verifyReplyTypedByJosh({
+            sessionId: session.sessionId,
+            reply: "i approve",
+            after,
+            env: session.env,
+          }),
+        Error,
+        "holds no usable presentation time",
+      );
+    }
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("approval refuses, and keeps the newer presentation, when the document is presented again during the reply check", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-represent-" });
+  try {
+    const docPath = path.join(tempDir, "doc.md");
+    await Deno.writeTextFile(docPath, MINIMAL_DESIGN_DOC);
+    const stateDir = path.join(tempDir, "state");
+    const first = await openGate1Record(docPath, MINIMAL_DESIGN_DOC, { stateDir });
+    let newer = "";
+    await assertRejects(
+      () =>
+        approveGate1Record(docPath, "yes", {
+          stateDir,
+          verifyReply: async () => {
+            await new Promise((r) => setTimeout(r, 5));
+            newer = (await openGate1Record(docPath, MINIMAL_DESIGN_DOC, { stateDir })).record
+              .presentedAt;
+          },
+        }),
+      Gate1RecordError,
+      "presented again while the reply was being checked",
+    );
+    const record = await loadGate1Record(docPath, { stateDir });
+    assertEquals(record?.presentedAt, newer);
+    assertEquals(record?.presentedAt !== first.record.presentedAt, true);
+    assertEquals(record?.approvedAt, undefined);
+    assertEquals((await getGate1Status(docPath, { stateDir })).status, "open");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("a record update waits for the lock another command holds, then keeps that command's write", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-lock-" });
+  try {
+    const docPath = path.join(tempDir, "doc.md");
+    const otherPath = path.join(tempDir, "other.md");
+    await Deno.writeTextFile(docPath, MINIMAL_DESIGN_DOC);
+    const stateDir = path.join(tempDir, "state");
+    const { recordPath } = await openGate1Record(docPath, MINIMAL_DESIGN_DOC, { stateDir });
+    const holder = await Deno.open(`${recordPath}.lock`, { create: true, write: true });
+    try {
+      assertEquals(await holder.tryLock(true), true);
+      const noting = recordSweepNote(docPath, otherPath, "unaffected", { stateDir });
+      await new Promise((r) => setTimeout(r, 100));
+      // Still waiting: nothing written while the lock is held.
+      assertEquals((await loadGate1Record(docPath, { stateDir }))?.sweepNotes, undefined);
+      await holder.unlock();
+      await noting;
+    } finally {
+      holder.close();
+    }
+    assertEquals((await loadGate1Record(docPath, { stateDir }))?.sweepNotes?.length, 1);
+    // The lock file stays; only the lock on it is released.
+    assertEquals((await Deno.stat(`${recordPath}.lock`)).isFile, true);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("withGate1RecordLock refuses once the wait runs out, and refuses at once when it cannot lock", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-lock-refuse-" });
+  try {
+    const recordPath = path.join(tempDir, "record.json");
+    let ran = false;
+    const run = () => {
+      ran = true;
+      return Promise.resolve();
+    };
+    const holder = await Deno.open(`${recordPath}.lock`, { create: true, write: true });
+    try {
+      assertEquals(await holder.tryLock(true), true);
+      await assertRejects(
+        () => withGate1RecordLock(recordPath, run, 50),
+        Gate1RecordError,
+        "is locked by another command",
+      );
+    } finally {
+      holder.close();
+    }
+    assertEquals(ran, false);
+
+    const blocked = path.join(tempDir, "blocked.json");
+    await Deno.mkdir(`${blocked}.lock`);
+    const started = Date.now();
+    await assertRejects(
+      () => withGate1RecordLock(blocked, run, 5_000),
+      Gate1RecordError,
+      "Cannot lock Gate 1 record",
+    );
+    assertEquals(Date.now() - started < 1_000, true);
+    assertEquals(ran, false);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("a lock held by another process stays exclusive until that process exits", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-lock-proc-" });
+  try {
+    const recordPath = path.join(tempDir, "record.json");
+    const child = new Deno.Command(Deno.execPath(), {
+      args: [
+        "eval",
+        `const f = await Deno.open(${
+          JSON.stringify(`${recordPath}.lock`)
+        }, { create: true, write: true });
+         await f.lock(true);
+         console.log("locked");
+         await new Promise(() => setInterval(() => {}, 1000));`,
+      ],
+      stdout: "piped",
+      stderr: "null",
+    }).spawn();
+    const reader = child.stdout.getReader();
+    try {
+      const { value } = await reader.read();
+      assertEquals(new TextDecoder().decode(value).trim(), "locked");
+      await assertRejects(
+        () => withGate1RecordLock(recordPath, () => Promise.resolve(), 200),
+        Gate1RecordError,
+        "is locked by another command",
+      );
+    } finally {
+      try {
+        child.kill("SIGKILL");
+      } catch (error) {
+        assertInstanceOf(error, Deno.errors.NotFound);
+      }
+      await child.status;
+      reader.releaseLock();
+      await child.stdout.cancel();
+    }
+    assertEquals(await withGate1RecordLock(recordPath, () => Promise.resolve("ran"), 2_000), "ran");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("adoption refuses, storing no rows, when the document changes during the reply check", async () => {
+  const f = await adoptFixture(premisesDoc(TWO_ROWS));
+  try {
+    await assertRejects(
+      () =>
+        adoptGate1Record(f.docPath, "adopt it", {
+          stateDir: f.stateDir,
+          verifyReply: async () => {
+            await Deno.writeTextFile(f.docPath, premisesDoc(TWO_ROWS) + "\nEdited meanwhile.\n");
+          },
+        }),
+      Gate1RecordError,
+      "Document changed while the reply was being checked",
+    );
+    assertEquals(await loadGate1Record(f.docPath, { stateDir: f.stateDir }), null);
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("agy: a reply in a turn the transcript attributes to another conversation is refused", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-reply-agy-other-" });
+  try {
+    const docPath = path.join(tempDir, "doc.md");
+    await Deno.writeTextFile(docPath, MINIMAL_DESIGN_DOC);
+    const stateDir = path.join(tempDir, "state");
+    const opened = await openGate1Record(docPath, MINIMAL_DESIGN_DOC, { stateDir });
+    const after = new Date(Date.parse(opened.record.presentedAt) + 60_000);
+    const session = await agyFixture(path.join(tempDir, "home"), [
+      { kind: "josh", text: "looks close", at: after },
+    ]);
+    const createdAt = after.toISOString().replace(/\.\d{3}Z$/, "Z");
+    await Deno.writeTextFile(
+      session.transcriptPath,
+      JSON.stringify({
+        step_index: 9,
+        source: "USER_EXPLICIT",
+        type: "USER_INPUT",
+        status: "DONE",
+        created_at: createdAt,
+        conversationId: "11111111-2222-4333-8444-555555555555",
+        content: "<USER_REQUEST>\ni approve document 2\n</USER_REQUEST>",
+      }) + "\n",
+      { append: true },
+    );
+    const err: string[] = [];
+    const code = await runGate1ApproveCli(
+      [
+        docPath,
+        "--reply",
+        "i approve document 2",
+        "--session-id",
+        session.sessionId,
+        "--state-dir",
+        stateDir,
+      ],
+      { env: session.env, log: () => {}, errorLog: (m) => err.push(m) },
+    );
+    assertEquals(code, 1);
+    assertEquals(err.join("\n").includes("does not appear word for word"), true, err.join("\n"));
+    assertEquals((await getGate1Status(docPath, { stateDir })).status, "open");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("verifyReplyTypedByJosh matches the reply exactly as it will be stored", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-exact-" });
+  try {
+    const session = await claudeCodeFixture(path.join(tempDir, "home"), [
+      { kind: "josh", text: "adopt it", at: new Date() },
+    ]);
+    const check = (reply: string) =>
+      verifyReplyTypedByJosh({ sessionId: session.sessionId, reply, env: session.env });
+    assertEquals((await check("adopt it")).transcriptPath, session.transcriptPath);
+    await assertRejects(() => check("adopt it\n"), Error, "does not appear word for word");
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }
