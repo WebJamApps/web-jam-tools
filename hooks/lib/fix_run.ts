@@ -114,7 +114,7 @@ export interface PullRequestState {
 export type FixRun =
   | { kind: "none" }
   | { kind: "refused"; reason: string }
-  | { kind: "active"; pullRequest: PullRequestRef; headRefName?: string };
+  | { kind: "active"; pullRequest: PullRequestRef; headRefName: string };
 
 /** Bind the latest typed call to this open PR's repository and head or throwaway fix branch. */
 export function checkFixRun(

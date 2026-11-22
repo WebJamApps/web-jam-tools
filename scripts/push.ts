@@ -165,7 +165,14 @@ export function evaluatePush(
     };
   }
   if (fixRun.kind === "active") {
-    const targetBranch = fixRun.headRefName ?? branch;
+    const targetBranch = fixRun.headRefName;
+    if (!targetBranch) {
+      return {
+        outcome: "refused",
+        rule: "fix-run-mismatch",
+        reason: "the active fix-pr run has no target branch",
+      };
+    }
     if (targetBranch.startsWith("+") || targetBranch.startsWith("-")) {
       return {
         outcome: "refused",
@@ -182,8 +189,7 @@ export function evaluatePush(
       };
     }
     if (
-      fixRun.headRefName !== undefined &&
-      branch !== fixRun.headRefName &&
+      branch !== targetBranch &&
       branch !== `fix-pr/${fixRun.pullRequest.number}`
     ) {
       return {
@@ -207,7 +213,7 @@ export function evaluatePush(
       reason: "--fix-comment requires a typed fix-pr run for this open PR branch",
     };
   }
-  const targetBranch = fixRun.kind === "active" ? (fixRun.headRefName ?? branch) : branch;
+  const targetBranch = fixRun.kind === "active" ? fixRun.headRefName : branch;
   return {
     outcome: "allowed",
     rule: forceWithLease ? "force-with-lease-push" : "plain-push",

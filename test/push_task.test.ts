@@ -1631,6 +1631,15 @@ Deno.test("web-jam-tools#1916: closed 13-row case list for fix-pr/<number> throw
     assertEquals(directProtected.rule, "protected-branch");
   }
 
+  // Synthetic active run with an empty target branch must not build an empty refspec destination
+  const emptyTarget = evaluatePush(["--fix-comment", "/tmp/c.md"], "fix-pr/1907", {
+    kind: "active",
+    pullRequest: { repo: targetRepo, number: 1907 },
+    headRefName: "",
+  });
+  assertEquals(emptyTarget.outcome, "refused");
+  assertEquals(emptyTarget.rule, "fix-run-mismatch");
+
   // Row 7: fix-pr/1907 + closed or cross-repository PR 1907 -> Refused (fix-run-mismatch)
   for (const badPr of [{ ...pr1907, state: "CLOSED" }, { ...pr1907, isCrossRepository: true }]) {
     const badFix = checkFixRun(pr1907Call, targetRepo, "fix-pr/1907", badPr);
