@@ -374,7 +374,10 @@ Deno.test("literal array reader rejects shell expansion, malformed entries and m
     assert(failed, replacement);
   }
   const start = HOOKS.slice(HOOKS.indexOf("SESSION_START_HOOKS=("));
-  assertEquals(readHookRegistrations(start, "/tmp/home").SessionStart.length, 5);
+  assertEquals(
+    readHookRegistrations(start, "/tmp/home").SessionStart,
+    readHookRegistrations(HOOKS, "/tmp/home").SessionStart,
+  );
   assertEquals(
     readHookRegistrations(
       HOOKS.replace("PRE_TOOL_USE_HOOKS=(", "PRE_TOOL_USE_HOOKS=(\n# comment"),
