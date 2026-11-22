@@ -371,6 +371,11 @@ const headerCases = [
   ["user agent", "curl " + shortHeaderFlag + ' "User-Agent: WebJamBot-HealthCheck"', false],
   ["request ID", "curl " + shortHeaderFlag + ' "X-Request-Id: req-2026-11-21-001"', false],
   ["authorization variable", "curl " + shortHeaderFlag + ' "Authorization: Bearer $TOKEN"', false],
+  [
+    "token wrapped in its own quotes",
+    "curl " + shortHeaderFlag + " 'Authorization: Bearer \"" + exampleHeaderValue + "\"'",
+    false,
+  ],
 ] as const;
 
 for (const [name, input, blocked] of headerCases) {
