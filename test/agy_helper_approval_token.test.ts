@@ -664,6 +664,16 @@ Deno.test("Antigravity helper refuses mismatched conversationId, malformed recor
       await Deno.chmod(brainRoot, 0o755);
     }
 
+    // Hook payload omitting transcript_path must fail closed even when AGY_TRANSCRIPT_PATH is in env
+    assertStringIncludes(
+      checkIssueApprovalTokenAuto(
+        hookIssueWrite(H, undefined),
+        Date.now(),
+        { env: envLookup(baseEnv) },
+      ),
+      "Missing or empty Antigravity transcript_path",
+    );
+
     assertEquals(typeof recordPath, "string");
   });
 });

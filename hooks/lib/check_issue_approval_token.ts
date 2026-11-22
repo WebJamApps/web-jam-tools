@@ -370,7 +370,7 @@ function checkTokenValidity(
     try {
       effectiveSessionId = resolveAntigravityTokenOwnerSync({
         conversationId: agyConversationId,
-        transcriptPath: options?.transcriptPath,
+        transcriptPath: options?.transcriptPath ?? "",
         env,
       });
     } catch (error) {
