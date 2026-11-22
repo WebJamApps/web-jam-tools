@@ -91,3 +91,48 @@ Deno.test("Codex Gmail hook inherits the fail-closed safety runner fallback", as
     await Deno.remove(bin, { recursive: true });
   }
 });
+
+Deno.test("Codex Gmail hook refuses with exit 2 when the shared runner cannot read stdin", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    // Reading a directory as stdin fails inside the runner, before its own safety fallback.
+    const { code, stdout, stderr } = await new Deno.Command("bash", {
+      args: ["-c", '"$0" < "$1"', hook, dir],
+      env: { WJT_SURFACE: "codex" },
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(code, 2);
+    assertEquals(new TextDecoder().decode(stdout), "");
+    assertStringIncludes(new TextDecoder().decode(stderr), "safety guard could not run");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("Codex Gmail hook refuses with exit 2 when the shared runner cannot start", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    // A copy of the entry script with no lib/run_hook.sh beside it.
+    const copy = `${dir}/block-codex-gmail-write.sh`;
+    await Deno.copyFile(hook, copy);
+    await Deno.chmod(copy, 0o755);
+    const child = new Deno.Command(copy, {
+      env: { WJT_SURFACE: "codex" },
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "piped",
+    }).spawn();
+    const input = child.stdin.getWriter();
+    await input.write(new TextEncoder().encode(preToolUse("list_labels", {})));
+    await input.close();
+    const { code, stdout, stderr } = await child.output();
+    assertEquals(code, 2);
+    assertEquals(new TextDecoder().decode(stdout), "");
+    const text = new TextDecoder().decode(stderr);
+    assertStringIncludes(text, "safety guard could not run");
+    assertStringIncludes(text, "the shared hook runner exited 127");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});

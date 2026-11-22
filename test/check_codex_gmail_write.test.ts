@@ -103,3 +103,12 @@ Deno.test("Codex Gmail classifier denies unreadable or unsupported safety input"
   assertEquals(checkCodexGmailWrite("mcp__gmail__send_email", {}), "unrelated");
   assertEquals(checkCodexGmailWrite("mcp__codex_apps__google_drive_list_files", {}), "unrelated");
 });
+
+Deno.test("Codex Gmail classifier ignores empty archive thread IDs as the connector does", () => {
+  const archive = prefix + "archive_emails";
+  assertEquals(checkCodexGmailWrite(archive, { thread_ids: ["", "fixture-thread"] }), "allow");
+  assertEquals(checkCodexGmailWrite(archive, { thread_ids: [""] }), "allow");
+  for (const thread_ids of [undefined, null, "fixture-thread", ["fixture-thread", 7], [null]]) {
+    assertEquals(checkCodexGmailWrite(archive, { thread_ids }), "deny");
+  }
+});

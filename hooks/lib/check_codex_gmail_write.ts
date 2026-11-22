@@ -74,9 +74,14 @@ export function checkCodexGmailWrite(tool: unknown, input: unknown): GmailWriteD
   switch (name) {
     case "archive_emails":
       if (Object.keys(input).some((key) => key !== "thread_ids")) return "deny";
-      // Archiving removes INBOX from the messages in the selected threads.
+      if (
+        !Array.isArray(input.thread_ids) ||
+        input.thread_ids.some((id) => typeof id !== "string")
+      ) return "deny";
+      // Archiving removes INBOX from the messages in the selected threads. The connector ignores
+      // empty thread IDs, so they are left out of the classification too.
       return checkGmailWrite("batch_modify_emails", {
-        messageIds: input.thread_ids,
+        messageIds: input.thread_ids.filter((id) => id !== ""),
         removeLabelIds: ["INBOX"],
       });
     case "delete_emails":
