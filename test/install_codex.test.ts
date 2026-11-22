@@ -379,8 +379,8 @@ Deno.test("literal array reader rejects shell expansion, malformed entries and m
     readHookRegistrations(
       HOOKS.replace("PRE_TOOL_USE_HOOKS=(", "PRE_TOOL_USE_HOOKS=(\n# comment"),
       "/tmp/home",
-    ).PreToolUse.length,
-    22,
+    ).PreToolUse,
+    readHookRegistrations(HOOKS, "/tmp/home").PreToolUse,
   );
 });
 
