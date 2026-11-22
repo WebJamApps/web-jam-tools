@@ -40,26 +40,33 @@ could_not_read() {
   exit 2
 }
 
+# A checker that ran but gave no verdict, or one this script does not
+# recognise, is a guard that could not run (command-reader design, "Checker
+# that could not run"): every command would meet the same failure, so the
+# agent stops and reports rather than restating the command.
+could_not_run() {
+  echo "BLOCKED (block-dangerous-git-deploy): safety guard could not run ($1). Refusing action (safety default: fail closed)." >&2
+  echo "Stop and report this refusal to Josh; do not retry the action through another route." >&2
+  exit 2
+}
+
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 stderr_file=$(mktemp)
 trap 'rm -f "$stderr_file"' EXIT
 
+# The shared runner refuses on its own when the checker crashes, times out or
+# Deno is missing; its refusal is passed through as it stands.
 if ! result=$(CMD_FOR_PY="$cmd" "$HOOK_DIR/lib/run_hook.sh" --group safety --name block-dangerous-git-deploy deno run --no-config --allow-env "$HOOK_DIR/lib/check_dangerous_git_deploy.ts" 2>"$stderr_file"); then
-  could_not_read "guard could not evaluate the command — failing closed: $(cat "$stderr_file")"
+  cat "$stderr_file" >&2
+  exit 2
 fi
 
-# Fails CLOSED: this is a destructive-operation guard. If the lib couldn't be
-# evaluated at all (deno missing/crashed, empty output), refuse rather than
-# let an unparseable command through.
-if [ -z "$result" ]; then
-  stderr_output=$(cat "$stderr_file" 2>/dev/null || true)
-  could_not_read "guard could not evaluate the command — failing closed: ${stderr_output:-(no error output available)}"
-fi
 case "$result" in
   OK) ;;
   UNREADABLE:*) could_not_read "${result#UNREADABLE:}" ;;
   BLOCK:*) block "${result#BLOCK:}" ;;
-  *) could_not_read "guard could not evaluate the command — unexpected checker response" ;;
+  "") could_not_run "checker gave no verdict" ;;
+  *) could_not_run "checker gave an unrecognised verdict: $(printf '%s' "$result" | head -n 1 | cut -c1-200)" ;;
 esac
 
 exit 0
