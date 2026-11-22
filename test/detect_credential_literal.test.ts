@@ -23,6 +23,71 @@ import {
 } from "../hooks/lib/detect_credential_literal.ts";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
 
+const shortHeaderFlag = "-H";
+const longHeaderFlag = "--header";
+const shortHeaderValue = variedFakeBody(4, 23);
+const bareHeaderValue = variedFakeBody(6, 26);
+const headerBoundaries = [
+  ["horizontal tabs", `${shortHeaderFlag}\t'X-Trace: dIgEsT\t${shortHeaderValue}'`, true],
+  ["minimum scheme value", `${shortHeaderFlag} "X-Trace: Secret ${shortHeaderValue}"`, true],
+  ["minimum bare value", `${longHeaderFlag} "Set-Cookie: ${bareHeaderValue}"`, true],
+  [
+    "bare credential value on a credential header",
+    `${shortHeaderFlag} "X-Signature: ${bareHeaderValue}"`,
+    true,
+  ],
+  ["underscore key compound", `${shortHeaderFlag} "x-access_key: ${bareHeaderValue}"`, true],
+  [
+    "key compound without a separator",
+    `${shortHeaderFlag} "X-ClientKey: ${bareHeaderValue}"`,
+    true,
+  ],
+  ["HTTP field name punctuation", `${shortHeaderFlag} "Trace.ID: Token ${shortHeaderValue}"`, true],
+  [
+    "three-character scheme value",
+    `${shortHeaderFlag} "Authorization: Digest ${shortHeaderValue.slice(1)}"`,
+    false,
+  ],
+  ["five-character bare value", `${shortHeaderFlag} "X-Token: ${bareHeaderValue.slice(1)}"`, false],
+  ["empty scheme value", `${shortHeaderFlag} "Authorization: Secret "`, false],
+  ["scheme before a variable", `${shortHeaderFlag} "Authorization: Digest $VALUE"`, false],
+  [
+    "scheme before a braced variable",
+    `${shortHeaderFlag} "Authorization: Digest \${VALUE}"`,
+    false,
+  ],
+  ["credential header boolean", `${shortHeaderFlag} "X-Auth: false"`, false],
+  ["boolean prefix in a longer value", `${shortHeaderFlag} "X-Auth: false-setting"`, true],
+  ["missing colon", `${shortHeaderFlag} "Authorization Digest ${shortHeaderValue}"`, false],
+  [
+    "uppercase long flag",
+    `${longHeaderFlag.toUpperCase()} "Authorization: Digest ${shortHeaderValue}"`,
+    false,
+  ],
+  [
+    "embedded long flag",
+    `custom${longHeaderFlag} "Authorization: Digest ${shortHeaderValue}"`,
+    false,
+  ],
+  ["newline after flag", `${shortHeaderFlag}\n"Authorization: Digest ${shortHeaderValue}"`, false],
+  [
+    "newline after header name",
+    `${shortHeaderFlag} "Authorization:\nDigest ${shortHeaderValue}"`,
+    false,
+  ],
+  [
+    "newline after scheme",
+    `${shortHeaderFlag} "Authorization: Digest\n${shortHeaderValue}"`,
+    false,
+  ],
+] as const;
+
+for (const [name, input, blocked] of headerBoundaries) {
+  Deno.test(`auth header boundary: ${name}`, () => {
+    assertEquals(findCredentialLiteral(input), blocked ? "Auth header flag" : null);
+  });
+}
+
 // Non-degenerate bodies (see test/support/varied_fake_value.ts for why
 // plain .repeat() is no longer safe to use here — the entropy heuristic
 // added below would auto-suppress it).

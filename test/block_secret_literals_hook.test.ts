@@ -206,3 +206,160 @@ Deno.test("a curl command carrying a placeholder query token (e.g. token=<token>
   const res3 = await runHook('curl "https://example.com/api?token=YOUR_TOKEN_HERE"');
   assertEquals(res3.code, 0, res3.stderr);
 });
+
+// Literal rows from "The output scanner's header pattern" in the secret-guards design.
+const shortHeaderFlag = "-H";
+const exampleHeaderValue = variedFakeBody(20, 41);
+const longHeaderFlag = "--header";
+const helpFlag = "-h";
+
+const headerCases = [
+  [
+    "authorization bearer",
+    "curl " + shortHeaderFlag + ' "Authorization: Bearer ' + exampleHeaderValue +
+    '" https://api.example.com/v1/items',
+    true,
+  ],
+  [
+    "API key",
+    "curl " + longHeaderFlag + ' "X-Api-Key: ' + exampleHeaderValue +
+    '" https://api.example.com/v1/items',
+    true,
+  ],
+  [
+    "lowercase API key",
+    "curl " + longHeaderFlag + ' "x-api-key: ' + exampleHeaderValue +
+    '" https://api.example.com/v1/items',
+    true,
+  ],
+  [
+    "proxy basic authorization",
+    "curl " + shortHeaderFlag + ' "Proxy-Authorization: Basic ' + exampleHeaderValue +
+    '" https://api.example.com/v1/items',
+    true,
+  ],
+  [
+    "custom API key scheme",
+    "curl " + shortHeaderFlag + ' "X-Custom-Header: ApiKey ' + exampleHeaderValue +
+    '" https://api.example.com/v1/items',
+    true,
+  ],
+  [
+    "GitHub authorization token",
+    "gh api " + shortHeaderFlag + ' "Authorization: token ' + exampleHeaderValue +
+    '" repos/WebJamApps/web-jam-tools',
+    true,
+  ],
+  [
+    "GitHub API version",
+    "gh api " + shortHeaderFlag +
+    ' "X-GitHub-Api-Version: 2026-03-10" repos/WebJamApps/web-jam-tools/issues/1702',
+    false,
+  ],
+  [
+    "piped GitHub API version request",
+    "gh api -i " + shortHeaderFlag +
+    " \"X-GitHub-Api-Version: 2026-03-10\" repos/WebJamApps/web-jam-tools/issues/1702 | grep -i '^HTTP'",
+    false,
+  ],
+  [
+    "GitHub Accept header",
+    "gh api " + shortHeaderFlag +
+    ' "Accept: application/vnd.github+json" repos/WebJamApps/web-jam-tools/issues',
+    false,
+  ],
+  [
+    "API version in a heredoc",
+    "cat >> notes.md <<'EOF'\n- refused: a gh api call with " + shortHeaderFlag +
+    ' "X-GitHub-Api-Version: 2026-03-10"\nEOF',
+    false,
+  ],
+  ["CLI help", "deno task create-issue " + helpFlag, false],
+  [
+    "grep filename flag",
+    "grep " + shortHeaderFlag + ' "permissions-allow-entries" notes.md',
+    false,
+  ],
+  ["header split across lines", "curl " + helpFlag + "\nAuthorization-header-explainer", false],
+  [
+    "CORS preflight with origin",
+    "curl -s -o /dev/null -D - -X OPTIONS https://www.web-jam.com/inquiry " + shortHeaderFlag +
+    ' "Origin: https://web-jam.com" ' + shortHeaderFlag + ' "Access-Control-Request-Method: POST"',
+    false,
+  ],
+  [
+    "CORS preflight method",
+    "curl -s -X OPTIONS https://www.web-jam.com/inquiry " + shortHeaderFlag +
+    ' "Access-Control-Request-Method: POST"',
+    false,
+  ],
+  [
+    "language preference",
+    "curl " + shortHeaderFlag + ' "Accept-Language: en-US" https://example.com',
+    false,
+  ],
+  [
+    "requested-with header",
+    "curl " + shortHeaderFlag + ' "X-Requested-With: XMLHttpRequest" https://example.com',
+    false,
+  ],
+  [
+    "user agent",
+    "curl " + shortHeaderFlag + ' "User-Agent: WebJamBot-HealthCheck" https://example.com',
+    false,
+  ],
+  [
+    "request ID",
+    "curl " + shortHeaderFlag + ' "X-Request-Id: req-2026-11-21-001" https://example.com',
+    false,
+  ],
+  [
+    "cache control",
+    "curl " + shortHeaderFlag + ' "Cache-Control: no-cache-must-revalidate" https://example.com',
+    false,
+  ],
+  [
+    "idempotency key",
+    "curl " + shortHeaderFlag +
+    ' "Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000" https://example.com',
+    false,
+  ],
+  [
+    "CORS credentials boolean",
+    "curl " + shortHeaderFlag + ' "Access-Control-Allow-Credentials: true" https://example.com',
+    false,
+  ],
+  [
+    "cache setting",
+    "curl " + shortHeaderFlag + ' "X-Bypass-Cache: enabled-always" https://example.com',
+    false,
+  ],
+  [
+    "authorization variable",
+    "curl " + shortHeaderFlag + ' "Authorization: Bearer $TOKEN" https://example.com',
+    false,
+  ],
+  [
+    "braced authorization variable",
+    "curl " + shortHeaderFlag + ' "Authorization: Bearer ${GH_TOKEN}" https://example.com',
+    false,
+  ],
+  [
+    "API key variable",
+    "curl " + shortHeaderFlag + ' "X-Api-Key: $API_KEY" https://example.com',
+    false,
+  ],
+  [
+    "authorization placeholder",
+    "curl " + shortHeaderFlag + ' "Authorization: Bearer <token>" https://example.com',
+    false,
+  ],
+] as const;
+
+for (const [name, input, blocked] of headerCases) {
+  Deno.test(`header pattern: ${name}`, async () => {
+    const result = await runHook(input);
+    assertEquals(result.code, blocked ? 2 : 0);
+    if (blocked) assertBlocked(result.stderr);
+  });
+}
