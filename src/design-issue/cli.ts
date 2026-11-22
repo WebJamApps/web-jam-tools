@@ -253,6 +253,8 @@ Options:
   try {
     const env = options?.env ?? ((name: string) => Deno.env.get(name));
     const sessionId = sessionIdFor(flags["session-id"], env);
+    // Trim once, so the text checked against the transcript is exactly the text stored.
+    reply = reply.trim();
     const result = await approveGate1Record(docPath, reply, {
       stateDir,
       verifyReply: (presentedAt) =>
@@ -344,6 +346,8 @@ Options:
   try {
     const env = options?.env ?? ((name: string) => Deno.env.get(name));
     const sessionId = sessionIdFor(flags["session-id"], env);
+    // Trim once, so the text checked against the transcript is exactly the text stored.
+    reply = reply.trim();
     const result = await adoptGate1Record(docPath, reply, {
       stateDir: flags["state-dir"] || options?.stateDir,
       verifyReply: () => verifyReplyTypedByJosh({ sessionId, reply, env }),

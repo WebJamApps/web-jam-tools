@@ -27,6 +27,7 @@ import {
   isHumanPrompt,
   isOwnSessionUserTurnBoundary,
   parseTranscriptJsonl,
+  tagAntigravityEntries,
   type TranscriptEntry,
 } from "../../hooks/lib/select_transcript_entry.ts";
 import { isHumanStartedCodexMeta } from "../../hooks/lib/codex_session_reader.ts";
@@ -51,7 +52,10 @@ export interface ReplyCheckOptions {
   sessionId: string;
   /** The reply to look for, as passed to --reply or --reply-file. */
   reply: string;
-  /** For an approval: only turns after this ISO time (the latest presentation) count. */
+  /**
+   * For an approval: only turns after this ISO time (the latest presentation) count. A missing or
+   * unparseable time is refused; omit the key only for adoption, which has no cutoff.
+   */
   after?: string;
   /** Environment lookup; defaults to Deno.env.get. Tests point HOME/CODEX_HOME/AGY_* at fixtures. */
   env?: (name: string) => string | undefined;
@@ -190,8 +194,9 @@ async function agySession(
       `No session transcript found for agy conversation ${sessionId}: AGY_TRANSCRIPT_PATH is unset`,
     );
   }
-  // Read it ourselves first so a missing or damaged file is refused naming its path.
-  const entries = parseStrict(await readText(transcriptPath), transcriptPath);
+  // Read it ourselves first so a missing or damaged file is refused naming its path; the turns
+  // themselves come from the strict resolver's own parse below.
+  parseStrict(await readText(transcriptPath), transcriptPath);
   const recordPath = env("AGY_HOOK_RECORD_PATH") || "/tmp/agy-hook-invocations.jsonl";
   const context = await resolveAntigravityWriteContext(true, {
     conversationId,
@@ -208,7 +213,9 @@ async function agySession(
       `agy conversation ${sessionId} is a subagent's (or cannot be shown not to be); its prompts were written by its parent, not typed by Josh: ${transcriptPath}`,
     );
   }
-  const tagged = entries.map((e) => ({ ...e, conversationId }));
+  // The shared tagging helper keeps an entry's own conversation id, so a turn the transcript
+  // attributes to another conversation stays excluded.
+  const tagged = tagAntigravityEntries(context.entries, { conversationId });
   return { surface: "agy", transcriptPath, turns: agyJoshTurns(tagged, conversationId) };
 }
 
@@ -333,14 +340,17 @@ export async function findSessionTurns(
 export async function verifyReplyTypedByJosh(
   options: ReplyCheckOptions,
 ): Promise<{ surface: ReplySurface; transcriptPath: string; turnAt: number | null }> {
-  const needle = options.reply.trim();
-  if (!needle) {
+  // Matched exactly as given: the caller stores this same text, so what is verified is what is
+  // recorded (callers trim the input once, before both).
+  const needle = options.reply;
+  if (!needle.trim()) {
     throw new Gate1ReplyRefusal("Reply is empty — there is nothing Josh typed to look for.");
   }
   const env = options.env ?? ((name: string) => Deno.env.get(name));
   const session = await findSessionTurns(options.sessionId, env);
-  const after = options.after !== undefined ? parseTime(options.after) : null;
-  if (options.after !== undefined && after === null) {
+  const hasCutoff = "after" in options;
+  const after = hasCutoff ? parseTime(options.after) : null;
+  if (hasCutoff && after === null) {
     throw new Gate1ReplyRefusal(
       `The Gate 1 record holds no usable presentation time (${
         JSON.stringify(options.after)
