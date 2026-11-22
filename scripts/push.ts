@@ -42,6 +42,7 @@ export interface PushDecision {
   rule: string;
   reason: string;
   branch?: string;
+  targetBranch?: string;
   forceWithLease?: boolean;
   fixComment?: string;
   fixRun?: FixRun;
@@ -155,6 +156,43 @@ export function evaluatePush(
   if (fixRun.kind === "refused") {
     return { outcome: "refused", rule: "fix-run-mismatch", reason: fixRun.reason };
   }
+  if (fixRun.kind !== "active" && branch.startsWith("fix-pr/")) {
+    return {
+      outcome: "refused",
+      rule: "fix-pr-branch-outside-run",
+      reason:
+        `branch '${branch}' is a throwaway fix-pr branch and cannot be pushed outside a matching typed fix-pr run`,
+    };
+  }
+  if (fixRun.kind === "active") {
+    const targetBranch = fixRun.headRefName ?? branch;
+    if (targetBranch.startsWith("+") || targetBranch.startsWith("-")) {
+      return {
+        outcome: "refused",
+        rule: "unsafe-branch-name",
+        reason:
+          "target branch name starts with '+' or '-', which git could read as a force marker or an option",
+      };
+    }
+    if (targetBranch === "dev" || targetBranch === "main") {
+      return {
+        outcome: "refused",
+        rule: forceWithLease ? "protected-branch-force-with-lease" : "protected-branch",
+        reason: `cannot push protected target branch '${targetBranch}'`,
+      };
+    }
+    if (
+      fixRun.headRefName !== undefined &&
+      branch !== fixRun.headRefName &&
+      branch !== `fix-pr/${fixRun.pullRequest.number}`
+    ) {
+      return {
+        outcome: "refused",
+        rule: "fix-run-mismatch",
+        reason: "current local branch does not match the active fix-pr pull request",
+      };
+    }
+  }
   if (fixRun.kind === "active" && !fixComment) {
     return {
       outcome: "refused",
@@ -169,11 +207,15 @@ export function evaluatePush(
       reason: "--fix-comment requires a typed fix-pr run for this open PR branch",
     };
   }
+  const targetBranch = fixRun.kind === "active" ? (fixRun.headRefName ?? branch) : branch;
   return {
     outcome: "allowed",
     rule: forceWithLease ? "force-with-lease-push" : "plain-push",
-    reason: `pushing feature branch '${branch}'`,
+    reason: targetBranch === branch
+      ? `pushing feature branch '${branch}'`
+      : `pushing fix branch '${branch}' to '${targetBranch}'`,
     branch,
+    targetBranch,
     forceWithLease,
     fixComment,
     fixRun,
@@ -390,8 +432,9 @@ export async function runPush(
   }
 
   // Explicit refspec: the branch name can never be read as an option or a force marker.
-  const refspec = `refs/heads/${decision.branch!}:refs/heads/${decision.branch!}`;
-  const gitArgs = ["push", "-u", "origin"];
+  const targetBranch = decision.targetBranch ?? decision.branch!;
+  const refspec = `refs/heads/${decision.branch!}:refs/heads/${targetBranch}`;
+  const gitArgs = targetBranch === decision.branch ? ["push", "-u", "origin"] : ["push", "origin"];
   if (decision.forceWithLease) {
     gitArgs.push("--force-with-lease");
   }

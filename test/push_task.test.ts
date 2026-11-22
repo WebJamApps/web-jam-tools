@@ -1031,7 +1031,11 @@ const fixCall = {
   arguments: "web-jam-tools#1318",
   text: "/fix-pr web-jam-tools#1318",
 };
-const activeFix = { kind: "active" as const, pullRequest: { repo: targetRepo, number: 1318 } };
+const activeFix = {
+  kind: "active" as const,
+  pullRequest: { repo: targetRepo, number: 1318 },
+  headRefName: "probe-branch",
+};
 
 Deno.test("fix run resolves supported PR names and GitHub push remotes", () => {
   for (
@@ -1490,3 +1494,277 @@ for (const surface of ["claude", "agy", "codex"] as const) {
     }
   });
 }
+
+Deno.test("web-jam-tools#1916: closed 13-row case list for fix-pr/<number> throwaway branch and outside-run refusal", async () => {
+  const pr1907Call = {
+    name: "fix-pr",
+    arguments: "web-jam-tools#1907",
+    text: "/fix-pr web-jam-tools#1907",
+  };
+  const pr1908Call = {
+    name: "fix-pr",
+    arguments: "web-jam-tools#1908",
+    text: "/fix-pr web-jam-tools#1908",
+  };
+  const pr1907: PullRequestState = {
+    number: 1907,
+    state: "OPEN",
+    headRefName: "agy/1894-fix",
+    headRepository: { nameWithOwner: targetRepo },
+    isCrossRepository: false,
+  };
+  const pr1908: PullRequestState = {
+    number: 1908,
+    state: "OPEN",
+    headRefName: "agy/1895-other",
+    headRepository: { nameWithOwner: targetRepo },
+    isCrossRepository: false,
+  };
+  const baseDeps = (
+    call: typeof pr1907Call | null,
+    pr: PullRequestState | null,
+  ) => ({
+    readSkillCall: () => Promise.resolve(call),
+    runGit: () => Promise.resolve({ code: 0, stdout: `https://github.com/${targetRepo}.git` }),
+    lookupPullRequest: () => Promise.resolve(pr),
+    prepareComment: () => Promise.resolve(),
+    postComment: () => Promise.resolve(0),
+    confirmForce: () => {
+      throw new Error("must not prompt");
+    },
+  });
+
+  // Row 1: fix-pr/1907 + active PR 1907 + --fix-comment + --force-with-lease -> pushes cross-branch refspec
+  let seenArgs: string[] = [];
+  assertEquals(
+    await runPush(["--fix-comment", "/tmp/c.md", "--force-with-lease"], undefined, {
+      ...baseDeps(pr1907Call, pr1907),
+      branch: "fix-pr/1907",
+      spawnPush: (args) => {
+        seenArgs = args;
+        return Promise.resolve(0);
+      },
+    }),
+    0,
+  );
+  assertEquals(seenArgs, [
+    "push",
+    "origin",
+    "--force-with-lease",
+    "refs/heads/fix-pr/1907:refs/heads/agy/1894-fix",
+  ]);
+
+  // Row 2: fix-pr/1907 + active PR 1907 + --fix-comment -> pushes cross-branch refspec without force-with-lease
+  seenArgs = [];
+  assertEquals(
+    await runPush(["--fix-comment", "/tmp/c.md"], undefined, {
+      ...baseDeps(pr1907Call, pr1907),
+      branch: "fix-pr/1907",
+      spawnPush: (args) => {
+        seenArgs = args;
+        return Promise.resolve(0);
+      },
+    }),
+    0,
+  );
+  assertEquals(seenArgs, [
+    "push",
+    "origin",
+    "refs/heads/fix-pr/1907:refs/heads/agy/1894-fix",
+  ]);
+
+  // Row 3: agy/1894-fix + active PR 1907 + --fix-comment + --force-with-lease -> pushes same-branch refspec
+  seenArgs = [];
+  assertEquals(
+    await runPush(["--fix-comment", "/tmp/c.md", "--force-with-lease"], undefined, {
+      ...baseDeps(pr1907Call, pr1907),
+      branch: "agy/1894-fix",
+      spawnPush: (args) => {
+        seenArgs = args;
+        return Promise.resolve(0);
+      },
+    }),
+    0,
+  );
+  assertEquals(seenArgs, [
+    "push",
+    "-u",
+    "origin",
+    "--force-with-lease",
+    "refs/heads/agy/1894-fix:refs/heads/agy/1894-fix",
+  ]);
+
+  // Row 4: fix-pr/1907 + active PR 1907 + (none) -> Refused (missing-fix-comment)
+  const fixRun1907 = checkFixRun(pr1907Call, targetRepo, "fix-pr/1907", pr1907);
+  assertEquals(fixRun1907, {
+    kind: "active",
+    pullRequest: { repo: targetRepo, number: 1907 },
+    headRefName: "agy/1894-fix",
+  });
+  assertEquals(evaluatePush([], "fix-pr/1907", fixRun1907).rule, "missing-fix-comment");
+
+  // Row 5: fix-pr/1907 + active PR 1908 -> Refused (fix-run-mismatch)
+  const fixRun1908Mismatch = checkFixRun(pr1908Call, targetRepo, "fix-pr/1907", pr1908);
+  assertEquals(fixRun1908Mismatch.kind, "refused");
+  assertEquals(
+    evaluatePush(["--fix-comment", "/tmp/c.md"], "fix-pr/1907", fixRun1908Mismatch).rule,
+    "fix-run-mismatch",
+  );
+
+  // Row 6: fix-pr/1907 + active PR 1907 whose headRefName is dev or main -> Refused
+  for (const protectedHead of ["dev", "main"]) {
+    const protectedFix = checkFixRun(pr1907Call, targetRepo, "fix-pr/1907", {
+      ...pr1907,
+      headRefName: protectedHead,
+    });
+    assertEquals(protectedFix.kind, "refused");
+    assertEquals(
+      evaluatePush(["--fix-comment", "/tmp/c.md"], "fix-pr/1907", protectedFix).rule,
+      "fix-run-mismatch",
+    );
+    const directProtected = evaluatePush(["--fix-comment", "/tmp/c.md"], "fix-pr/1907", {
+      kind: "active",
+      pullRequest: { repo: targetRepo, number: 1907 },
+      headRefName: protectedHead,
+    });
+    assertEquals(directProtected.outcome, "refused");
+    assertEquals(directProtected.rule, "protected-branch");
+  }
+
+  // Row 7: fix-pr/1907 + closed or cross-repository PR 1907 -> Refused (fix-run-mismatch)
+  for (const badPr of [{ ...pr1907, state: "CLOSED" }, { ...pr1907, isCrossRepository: true }]) {
+    const badFix = checkFixRun(pr1907Call, targetRepo, "fix-pr/1907", badPr);
+    assertEquals(badFix.kind, "refused");
+    assertEquals(
+      evaluatePush(["--fix-comment", "/tmp/c.md"], "fix-pr/1907", badFix).rule,
+      "fix-run-mismatch",
+    );
+  }
+
+  // Row 8: fix-pr/1907 + no active fix run (plain, unreadable session/PR, or other skill) -> Refused (fix-pr-branch-outside-run)
+  assertEquals(evaluatePush([], "fix-pr/1907", { kind: "none" }).rule, "fix-pr-branch-outside-run");
+  assertEquals(
+    await resolveFixRun("fix-pr/1907", undefined, {
+      readSkillCall: () => Promise.resolve(pr1907Call),
+      runGit: () => Promise.resolve({ code: 0, stdout: `https://github.com/${targetRepo}.git` }),
+      lookupPullRequest: () => Promise.resolve(null),
+    }),
+    { kind: "none" },
+  );
+  assertEquals(
+    await resolveFixRun("fix-pr/1907", undefined, {
+      readSkillCall: () =>
+        Promise.resolve({ name: "pr-review", arguments: "1907", text: "/pr-review 1907" }),
+      runGit: () => Promise.resolve({ code: 0, stdout: `https://github.com/${targetRepo}.git` }),
+      lookupPullRequest: () => Promise.resolve(pr1907),
+    }),
+    { kind: "none" },
+  );
+
+  // Row 9: fix-pr/1907 + no active fix run + --fix-comment /tmp/c.md -> Refused (fix-pr-branch-outside-run or fix-comment-outside-run)
+  const row9Rule =
+    evaluatePush(["--fix-comment", "/tmp/c.md"], "fix-pr/1907", { kind: "none" }).rule;
+  assertEquals(
+    row9Rule === "fix-pr-branch-outside-run" || row9Rule === "fix-comment-outside-run",
+    true,
+  );
+
+  // Row 10: fix-pr/arbitrary + no active fix run -> Refused (fix-pr-branch-outside-run)
+  assertEquals(
+    evaluatePush([], "fix-pr/arbitrary", { kind: "none" }).rule,
+    "fix-pr-branch-outside-run",
+  );
+
+  // Row 11: detached HEAD + active fix run -> Refused (cannot-determine-branch)
+  const row11 = evaluatePush(["--fix-comment", "/tmp/c.md"], null, { kind: "none" });
+  assertEquals(row11.outcome, "refused-fail-closed");
+  assertEquals(row11.rule, "cannot-determine-branch");
+
+  // Row 12: feat/other + active fix run for open PR 1907 -> Refused (fix-run-mismatch)
+  const row12Fix = checkFixRun(pr1907Call, targetRepo, "feat/other", pr1907);
+  assertEquals(row12Fix.kind, "refused");
+  assertEquals(
+    evaluatePush(["--fix-comment", "/tmp/c.md"], "feat/other", row12Fix).rule,
+    "fix-run-mismatch",
+  );
+
+  // Row 13: feat/other + no active fix run + (none) -> Allowed; pushes refs/heads/feat/other:refs/heads/feat/other
+  seenArgs = [];
+  assertEquals(
+    await runPush([], undefined, {
+      branch: "feat/other",
+      readSkillCall: () => Promise.resolve(null),
+      spawnPush: (args) => {
+        seenArgs = args;
+        return Promise.resolve(0);
+      },
+    }),
+    0,
+  );
+  assertEquals(seenArgs, ["push", "-u", "origin", "refs/heads/feat/other:refs/heads/feat/other"]);
+});
+
+Deno.test("web-jam-tools#1916: end-to-end throwaway fix-pr/<number> worktree pushes to pr.headRefName and leaves sibling worktree untouched", async () => {
+  const fixture = await createFixFixture("claude");
+  const wtDir = `${fixture.tempDir}/fix-pr-1318`;
+  try {
+    // Push original probe-branch and simulate a local pre-rebase commit on probe-branch
+    await fixture.git(["push", "-q", "-u", "origin", "probe-branch"]);
+    const remoteBefore = await fixture.git(["ls-remote", "origin", "refs/heads/probe-branch"]);
+    await Deno.writeTextFile(`${fixture.repoDir}/file.txt`, "local stale commit\n");
+    await fixture.git(["commit", "-qam", "local stale commit"]);
+    const siblingHeadBefore = await fixture.git(["rev-parse", "HEAD"]);
+
+    // Create /tmp/fix-pr-1318 on throwaway branch fix-pr/1318 off origin/probe-branch and rebase/amend it
+    await fixture.git([
+      "worktree",
+      "add",
+      "-B",
+      "fix-pr/1318",
+      wtDir,
+      "origin/probe-branch",
+    ]);
+    await Deno.writeTextFile(`${wtDir}/file.txt`, "rebased throwaway fix\n");
+    const runWtGit = async (args: string[]) => {
+      const out = await new Deno.Command("git", {
+        args,
+        cwd: wtDir,
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      if (out.code !== 0) throw new Error(new TextDecoder().decode(out.stderr));
+      return new TextDecoder().decode(out.stdout).trim();
+    };
+    await runWtGit(["commit", "--amend", "-am", "rebased throwaway fix"]);
+    const throwawayHead = await runWtGit(["rev-parse", "HEAD"]);
+
+    // Outside a fix run, pushing fix-pr/1318 must fail closed cleanly with fix-pr-branch-outside-run
+    await fixture.writeSession(["/pr-review web-jam-tools#1318"]);
+    const refusedOutside = await runDenoTaskPush([], wtDir, true, fixture.shellEnv);
+    assertEquals(refusedOutside.code, 1);
+    assertStringIncludes(refusedOutside.stderr, "Refused (fix-pr-branch-outside-run)");
+    assertEquals(
+      await fixture.git(["ls-remote", "origin", "refs/heads/probe-branch"]),
+      remoteBefore,
+    );
+
+    // Inside active fix-pr run, deno task push pushes fix-pr/1318 -> refs/heads/probe-branch with --force-with-lease
+    await fixture.writeSession([fixCall.text]);
+    await Deno.writeTextFile(`${wtDir}/c.md`, "Fixed.\n\n🤖 Fixed by Claude Code — Claude Opus\n");
+    const allowed = await runDenoTaskPush(
+      ["--force-with-lease", "--fix-comment", "c.md"],
+      wtDir,
+      true,
+      fixture.shellEnv,
+    );
+    assertEquals(allowed.code, 0, allowed.stderr);
+    const remoteAfter = await fixture.git(["ls-remote", "origin", "refs/heads/probe-branch"]);
+    assertEquals(remoteAfter.split(/\s+/)[0], throwawayHead);
+    // Remote must NOT gain a stray fix-pr/1318 branch
+    assertEquals(await fixture.git(["ls-remote", "origin", "refs/heads/fix-pr/1318"]), "");
+    // Sibling worktree holding probe-branch must stay untouched
+    assertEquals(await fixture.git(["rev-parse", "HEAD"]), siblingHeadBefore);
+  } finally {
+    await fixture.cleanup();
+  }
+});

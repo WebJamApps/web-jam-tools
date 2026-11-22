@@ -507,3 +507,53 @@ Deno.test("resolveAntigravityWriteContext(true): fails closed when damaged lines
     await harness.cleanup();
   }
 });
+
+Deno.test("web-jam-tools#1916: agy strict binding supports throwaway fix-pr/<number> worktree and leaves sibling worktree untouched", async () => {
+  const harness = await setupAgyHarness();
+  try {
+    const repo = await setupPushRepo(harness.root);
+    const convARow = JSON.stringify({
+      conversationId: "conv-a",
+      transcriptPath: harness.convATranscript,
+      modelName: "gemini-4-hydrogen-high",
+    });
+    await Deno.writeTextFile(harness.recordPath, `${convARow}\n`);
+
+    const siblingHead = await repo.git(["rev-parse", "HEAD"]);
+    const wtDir = join(harness.root, "fix-pr-1318");
+    await repo.git(["worktree", "add", "-B", "fix-pr/1318", wtDir, "origin/probe-branch"]);
+    await Deno.writeTextFile(join(wtDir, "file.txt"), "agy throwaway fix\n");
+    await repo.git(["commit", "--amend", "-am", "agy throwaway fix"], wtDir);
+    const throwawayHead = await repo.git(["rev-parse", "HEAD"], wtDir);
+    await Deno.writeTextFile(join(wtDir, "c.md"), "Fixed.\n\n🤖 Fixed by agy — Gemini Hydrogen\n");
+
+    const env = {
+      ...repo.shellEnvBase,
+      AGY_HOOK_RECORD_PATH: harness.recordPath,
+      AGY_CONVERSATION_ID: "conv-a",
+      AGY_TRANSCRIPT_PATH: harness.convATranscript,
+    };
+    const res = await runPushSubprocess(
+      wtDir,
+      ["--force-with-lease", "--fix-comment", "c.md"],
+      env,
+    );
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(
+      (await repo.git(["ls-remote", "origin", "refs/heads/probe-branch"])).split(/\s+/)[0],
+      throwawayHead,
+    );
+    assertEquals(await repo.git(["ls-remote", "origin", "refs/heads/fix-pr/1318"]), "");
+    assertEquals(await repo.git(["rev-parse", "HEAD"]), siblingHead);
+
+    // Without matching record row, fix-pr/1318 is refused with fix-pr-branch-outside-run.
+    const refused = await runPushSubprocess(wtDir, [], {
+      ...env,
+      AGY_CONVERSATION_ID: "",
+    });
+    assertEquals(refused.code, 1);
+    assertStringIncludes(refused.stderr, "Refused (fix-pr-branch-outside-run)");
+  } finally {
+    await harness.cleanup();
+  }
+});
