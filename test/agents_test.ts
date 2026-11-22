@@ -1711,6 +1711,9 @@ for (const value of ["on", "off"]) {
 
 Deno.test("agents.sh inside-session restart retains SSH and laptop clients and reloads all agent processes", async () => {
   await withThrowawayTmux(async (socketName, tmpDir) => {
+    const fixture = await setupFetchFixture(tmpDir, {
+      WebJamSocketCluster: "stalled",
+    });
     const config = `${tmpDir}/installed-config`;
     const updateLog = `${tmpDir}/updates`;
     const windowMarker = `${tmpDir}/unexpected-window`;
@@ -1788,7 +1791,7 @@ Deno.test("agents.sh inside-session restart retains SSH and laptop clients and r
           "send-keys",
           "-t",
           "agents:restart-control",
-          `bash '${AGENTS_SCRIPT}' -L '${socketName}' --restart`,
+          `AGENTS_FETCH_REPOS_CMD='' AGENTS_WEBJAMAPPS_DIR='${fixture.reposDir}' AGENTS_FETCH_TIMEOUT=1s AGENTS_FETCH_KILL_AFTER=1s GIT_SSH_COMMAND='${fixture.fakeSsh}' bash '${AGENTS_SCRIPT}' -L '${socketName}' --restart`,
           "Enter",
         ],
         env,
@@ -1796,7 +1799,29 @@ Deno.test("agents.sh inside-session restart retains SSH and laptop clients and r
       assertEquals(sent.code, 0, sent.stderr);
       let newWindows: string[] = [];
       let restoredClients = "";
-      for (let attempt = 0; attempt < 100; attempt++) {
+      let parkedPaneText = "";
+      for (let attempt = 0; attempt < 150; attempt++) {
+        if (!parkedPaneText.includes("Fetching dev for the session-load report...")) {
+          const allSessions = await run(
+            "tmux",
+            ["-L", socketName, "list-sessions", "-F", "#{session_name}"],
+            env,
+          );
+          const holdSession = allSessions.stdout
+            .trim()
+            .split("\n")
+            .find((s) => s.startsWith("agents-restart-"));
+          if (holdSession) {
+            const holdCap = await run(
+              "tmux",
+              ["-L", socketName, "capture-pane", "-J", "-t", holdSession, "-p"],
+              env,
+            );
+            if (holdCap.code === 0 && holdCap.stdout.trim()) {
+              parkedPaneText = holdCap.stdout;
+            }
+          }
+        }
         const windows = await run(
           "tmux",
           [
@@ -1849,6 +1874,31 @@ Deno.test("agents.sh inside-session restart retains SSH and laptop clients and r
       }
       assertEquals((await Deno.readTextFile(updateLog)).trim().split("\n"), ["updated", "updated"]);
       assert(!await exists(windowMarker), "restart must reuse existing terminals");
+      assert(
+        parkedPaneText.includes("Fetching dev for the session-load report..."),
+        `expected parked holding session pane to show fetch progress, got: ${parkedPaneText}`,
+      );
+      const tab1Pane = await run(
+        "tmux",
+        ["-L", socketName, "capture-pane", "-J", "-t", "agents:1", "-p"],
+        env,
+      );
+      assertEquals(tab1Pane.code, 0, tab1Pane.stderr);
+      assert(
+        tab1Pane.stdout.includes("Fetching dev for the session-load report..."),
+        `expected returning client pane (agents:1) to show fetch progress, got: ${tab1Pane.stdout}`,
+      );
+      assert(
+        tab1Pane.stdout.includes(
+          "warning: fetch dev timed out for WebJamSocketCluster after 1s; starting the agents anyway",
+        ),
+        `expected returning client pane (agents:1) to show stalled-fetch warning, got: ${tab1Pane.stdout}`,
+      );
+      assertEquals(
+        await fixture.localOriginDevSha("web-jam-tools"),
+        await fixture.remoteDevSha("web-jam-tools"),
+        "inside-session restart should advance origin/dev for healthy repositories",
+      );
       const sessions = await run("tmux", [
         "-L",
         socketName,

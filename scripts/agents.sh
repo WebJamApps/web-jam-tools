@@ -260,7 +260,12 @@ if has_session_err=$(tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>&1); the
       exit 1
     fi
     if [ "$inside_target_session" -eq 1 ]; then
-      exec </dev/null >/dev/null 2>&1
+      hold_tty=$(tmux "${TMUX_ARGS[@]}" list-panes -t "=$restart_hold" -F '#{pane_tty}' 2>/dev/null | head -n 1 || true)
+      if [ -n "$hold_tty" ] && [ -w "$hold_tty" ]; then
+        exec </dev/null >"$hold_tty" 2>&1
+      else
+        exec </dev/null >/dev/null 2>&1
+      fi
     fi
   else
     attach_and_exit
@@ -300,6 +305,16 @@ fi
 
 # Fetch dev concurrently for the eight clones before tab 1 opens (web-jam-tools#1738, web-jam-tools#1922).
 # Each fetch gets 10s before TERM with a 1s grace period before KILL; failures and timeouts warn and never block startup.
+FETCH_REPORT_LINES=()
+emit_fetch_info() {
+  echo "$1"
+  FETCH_REPORT_LINES+=("$1")
+}
+emit_fetch_warn() {
+  echo "$1" >&2
+  FETCH_REPORT_LINES+=("$1")
+}
+
 fetch_repos_dev() {
   local base_dir="${AGENTS_WEBJAMAPPS_DIR:-$HOME/WebJamApps}"
   local fetch_timeout="${AGENTS_FETCH_TIMEOUT:-10s}"
@@ -314,7 +329,7 @@ fetch_repos_dev() {
     "TimShermanMusic"
     "HenricksonForSalem"
   )
-  echo "Fetching dev for the session-load report..."
+  emit_fetch_info "Fetching dev for the session-load report..."
   local pids=()
   for repo in "${repos[@]}"; do
     local repo_dir="$base_dir/$repo"
@@ -327,9 +342,9 @@ fetch_repos_dev() {
     local status=0
     wait "${pids[$i]}" || status=$?
     if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
-      echo "warning: fetch dev timed out for $repo after $fetch_timeout; starting the agents anyway" >&2
+      emit_fetch_warn "warning: fetch dev timed out for $repo after $fetch_timeout; starting the agents anyway"
     elif [ "$status" -ne 0 ]; then
-      echo "warning: fetch dev failed for $repo (exit $status); starting the agents anyway" >&2
+      emit_fetch_warn "warning: fetch dev failed for $repo (exit $status); starting the agents anyway"
     fi
     i=$((i + 1))
   done
@@ -337,7 +352,7 @@ fetch_repos_dev() {
 
 if [ -n "$FETCH_REPOS_CMD" ]; then
   if ! bash -c "$FETCH_REPOS_CMD"; then
-    echo "warning: fetch dev failed; starting the agents anyway" >&2
+    emit_fetch_warn "warning: fetch dev failed; starting the agents anyway"
   fi
 else
   fetch_repos_dev
@@ -365,10 +380,16 @@ fi
 
 # Create session with tab 1: claude in Josh's home folder.
 # Drop to a plain shell prompt when the agent exits instead of closing the tab.
+# When restarting from inside the session, also replay fetch progress/warnings at the top of tab 1
+# so returning clients still see them after the temporary holding session closes.
 # Another `agents` run (laptop and tablet connecting at once) can create the
 # session between the check above and this line; when it did, attach to that
 # session instead of failing with "duplicate session".
-if ! new_session_err=$(tmux "${TMUX_ARGS[@]}" new-session -d -s "$SESSION" -n claude -c "$HOME" "$TAB_ENV $CLAUDE_CMD; exec $USER_SHELL" 2>&1); then
+TAB1_PREAMBLE=""
+if [ "$inside_target_session" -eq 1 ] && [ ${#FETCH_REPORT_LINES[@]} -gt 0 ]; then
+  printf -v TAB1_PREAMBLE 'printf "%%s\\n" %s; ' "$(printf '%q ' "${FETCH_REPORT_LINES[@]}")"
+fi
+if ! new_session_err=$(tmux "${TMUX_ARGS[@]}" new-session -d -s "$SESSION" -n claude -c "$HOME" "$TAB_ENV ${TAB1_PREAMBLE}$CLAUDE_CMD; exec $USER_SHELL" 2>&1); then
   if tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>/dev/null; then
     attach_and_exit
   fi
