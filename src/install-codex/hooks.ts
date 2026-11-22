@@ -51,7 +51,11 @@ const EXCLUDED_CODEX_HOOKS = new Set<string>([
 export function readHookRegistrations(source: string, home: string): Record<Event, Registration[]> {
   const arrays = ["SESSION_START_HOOKS", "PRE_TOOL_USE_HOOKS", "POST_TOOL_USE_HOOKS", "STOP_HOOKS"];
   return Object.fromEntries(EVENTS.map((event, index) => {
-    const registrations = arrayEntries(source, arrays[index])
+    const entries = arrayEntries(source, arrays[index]);
+    if (event === "PreToolUse") {
+      entries.push(...arrayEntries(source, "CODEX_ONLY_PRE_TOOL_USE_HOOKS"));
+    }
+    const registrations = entries
       .filter((entry) => {
         const paired = event === "PreToolUse" || event === "PostToolUse";
         const script = paired ? entry.split("::")[1] : entry;

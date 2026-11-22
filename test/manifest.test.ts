@@ -71,6 +71,8 @@ const EXPECTED_HOOK_SCRIPTS = [
   // Unconditional send/delete fence for Gmail on the agy surface
   // (web-jam-tools#432 scope item 3) — agy-only.
   "block-agy-gmail-send-delete.sh",
+  // Codex-only hosted Gmail safety adapter.
+  "block-codex-gmail-write.sh",
   "block-agy-non-flash-model.sh",
   // PreToolUse guard (web-jam-tools#1021) — prevents unauthorized HTTP mutations
   // against the production backend and enforces venue-mining skill boundaries.
@@ -262,6 +264,7 @@ Deno.test(
     // Codex's dedicated registration uses a stable path and WJT_SURFACE env
     // assignment, outside the Claude/agy arrays parsed by that helper.
     directHookScripts.add("codex-reaper-startup-check.sh");
+    directHookScripts.add("block-codex-gmail-write.sh");
     const trackedModes = await getGitTrackedModes(REPO_DIR);
 
     const nonExecutable: string[] = [];

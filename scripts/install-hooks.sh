@@ -248,6 +248,13 @@ PRE_TOOL_USE_HOOKS=(
   ".*::block-tool-after-question.sh"
 )
 
+# Codex-only PreToolUse pairs. The shared installer links the scripts and
+# install-codex reads these registrations for config.toml.
+# shellcheck disable=SC2034
+CODEX_ONLY_PRE_TOOL_USE_HOOKS=(
+  "mcp__codex_apps__gmail_.*::block-codex-gmail-write.sh"
+)
+
 # PostToolUse hooks, same "<matcher>::<script>" shape (web-jam-tools#272).
 # The PreToolUse guards are blocklists and can only stop leak shapes someone
 # enumerated in advance; three credentials leaked in two days in three shapes
