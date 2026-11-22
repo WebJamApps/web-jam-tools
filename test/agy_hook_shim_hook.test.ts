@@ -56,13 +56,27 @@ async function runShim(
 ): Promise<ShimResult> {
   const matcherB64 = btoa(matcher);
   const targetHookPath = `${HOOKS_DIR}${targetHookName}`;
+  const inheritedEnv = { ...Deno.env.toObject() };
+  for (
+    const key of [
+      "WJT_SURFACE",
+      "AGY_CONVERSATION_ID",
+      "AGY_TRANSCRIPT_PATH",
+      "AGY_MODEL_NAME",
+      "CODEX_THREAD_ID",
+      "CODEX_HOME",
+      "ISSUE_APPROVAL_TOKEN_PATH",
+    ]
+  ) {
+    delete inheritedEnv[key];
+  }
   const cmd = new Deno.Command("bash", {
     args: [SHIM_PATH, event, matcherB64, targetHookPath],
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
     env: {
-      ...Deno.env.toObject(),
+      ...inheritedEnv,
       AGY_HOOK_RECORD_PATH: "off",
       ...env,
     },
@@ -992,27 +1006,51 @@ Deno.test("replaying direct issue_write lacking model label denies under require
   );
 });
 
+async function withIsolatedAgyBrain(
+  conversationId: string,
+  fn: (home: string, transcriptPath: string) => Promise<void>,
+): Promise<void> {
+  const home = await Deno.makeTempDir();
+  const logsDir = `${home}/.gemini/antigravity-cli/brain/${conversationId}/.system_generated/logs`;
+  const transcriptPath = `${logsDir}/transcript.jsonl`;
+  await Deno.mkdir(logsDir, { recursive: true });
+  await Deno.writeTextFile(transcriptPath, "");
+  try {
+    await fn(home, transcriptPath);
+  } finally {
+    await Deno.remove(home, { recursive: true });
+  }
+}
+
 Deno.test("replaying call_mcp_tool issue_write lacking approval token denies under require-approval-token-on-issue-write.sh", async () => {
-  const res = await runShim(
-    "PreToolUse",
-    "Bash|mcp__.*__(issue_write|sub_issue_write)",
-    "require-approval-token-on-issue-write.sh",
-    agyCallMcpTool("github", "issue_write", {
-      method: "create",
-      owner: "WebJamApps",
-      repo: "web-jam-tools",
-      title: "Unapproved issue title",
-      type: "Task",
-      labels: ["Flash"],
-    }),
-  );
-  assertEquals(res.code, 0);
-  assertEquals(res.decision, "deny", res.stdout);
-  assert(
-    res.reason?.includes("plan") || res.reason?.includes("approval") ||
-      res.reason?.includes("token"),
-    `expected approval-token deny reason, got: ${res.reason}`,
-  );
+  await withIsolatedAgyBrain("conv-1", async (home, transcriptPath) => {
+    const res = await runShim(
+      "PreToolUse",
+      "Bash|mcp__.*__(issue_write|sub_issue_write)",
+      "require-approval-token-on-issue-write.sh",
+      agyCallMcpTool(
+        "github",
+        "issue_write",
+        {
+          method: "create",
+          owner: "WebJamApps",
+          repo: "web-jam-tools",
+          title: "Unapproved issue title",
+          type: "Task",
+          labels: ["Flash"],
+        },
+        { transcriptPath },
+      ),
+      { HOME: home },
+    );
+    assertEquals(res.code, 0);
+    assertEquals(res.decision, "deny", res.stdout);
+    assert(
+      res.reason?.includes("plan") || res.reason?.includes("approval") ||
+        res.reason?.includes("token"),
+      `expected approval-token deny reason, got: ${res.reason}`,
+    );
+  });
 });
 
 Deno.test("replaying direct issue_write lacking approval token denies under require-approval-token-on-issue-write.sh", async () => {
@@ -1039,20 +1077,33 @@ Deno.test("replaying direct issue_write lacking approval token denies under requ
 });
 
 Deno.test("replaying call_mcp_tool sub_issue_write lacking approval token denies under require-approval-token-on-issue-write.sh", async () => {
-  const res = await runShim(
-    "PreToolUse",
-    "Bash|mcp__.*__(issue_write|sub_issue_write)",
-    "require-approval-token-on-issue-write.sh",
-    agyCallMcpTool("github", "sub_issue_write", {
-      method: "add",
-      owner: "WebJamApps",
-      repo: "web-jam-tools",
-      issue_number: 1055,
-      sub_issue_id: 1057,
-    }),
-  );
-  assertEquals(res.code, 0);
-  assertEquals(res.decision, "deny", res.stdout);
+  await withIsolatedAgyBrain("conv-1", async (home, transcriptPath) => {
+    const res = await runShim(
+      "PreToolUse",
+      "Bash|mcp__.*__(issue_write|sub_issue_write)",
+      "require-approval-token-on-issue-write.sh",
+      agyCallMcpTool(
+        "github",
+        "sub_issue_write",
+        {
+          method: "add",
+          owner: "WebJamApps",
+          repo: "web-jam-tools",
+          issue_number: 1055,
+          sub_issue_id: 1057,
+        },
+        { transcriptPath },
+      ),
+      { HOME: home },
+    );
+    assertEquals(res.code, 0);
+    assertEquals(res.decision, "deny", res.stdout);
+    assert(
+      res.reason?.includes("plan") || res.reason?.includes("approval") ||
+        res.reason?.includes("token"),
+      `expected approval-token deny reason, got: ${res.reason}`,
+    );
+  });
 });
 
 Deno.test("replaying direct sub_issue_write lacking approval token denies under require-approval-token-on-issue-write.sh", async () => {
