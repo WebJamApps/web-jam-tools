@@ -38,10 +38,13 @@
 # warning and the agents start anyway; it never changes the exit code. Override the
 # command with AGENTS_UPDATE_SCRIPTS_CMD.
 #
-# Right after that, in the same situations, it fetches dev for all eight WebJamApps
-# clones so tab 1 measures their rules files from origin/dev (web-jam-tools#1738).
-# A failed fetch prints a warning and the agents start anyway. Override the
-# command with AGENTS_FETCH_REPOS_CMD.
+# Right after that, in the same situations, it fetches dev concurrently for all eight
+# WebJamApps clones so tab 1 measures their rules files from origin/dev
+# (web-jam-tools#1738, web-jam-tools#1922). Each fetch has a 10-second timeout
+# followed by a 1-second grace period before KILL (overridable in tests via
+# AGENTS_FETCH_TIMEOUT and AGENTS_FETCH_KILL_AFTER). A failed or timed-out fetch
+# prints a warning naming the repository and outcome and never stops startup.
+# Override the whole stage with AGENTS_FETCH_REPOS_CMD.
 #
 # When `agents` is typed over SSH (SSH_CONNECTION is set) and no laptop-screen
 # window is showing the session, it also opens a gnome-terminal window on the laptop
@@ -257,7 +260,12 @@ if has_session_err=$(tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>&1); the
       exit 1
     fi
     if [ "$inside_target_session" -eq 1 ]; then
-      exec </dev/null >/dev/null 2>&1
+      hold_tty=$(tmux "${TMUX_ARGS[@]}" list-panes -t "=$restart_hold" -F '#{pane_tty}' 2>/dev/null | head -n 1 || true)
+      if [ -n "$hold_tty" ] && [ -w "$hold_tty" ]; then
+        exec </dev/null >"$hold_tty" 2>&1
+      else
+        exec </dev/null >/dev/null 2>&1
+      fi
     fi
   else
     attach_and_exit
@@ -295,10 +303,22 @@ if ! bash -c "$UPDATE_SCRIPTS_CMD"; then
   echo "warning: update-scripts failed; starting the agents with the hooks already installed" >&2
 fi
 
-# Fetch dev for the eight clones before tab 1 opens (web-jam-tools#1738).
-# A failed fetch prints a warning and never stops the agents from starting.
+# Fetch dev concurrently for the eight clones before tab 1 opens (web-jam-tools#1738, web-jam-tools#1922).
+# Each fetch gets 10s before TERM with a 1s grace period before KILL; failures and timeouts warn and never block startup.
+FETCH_REPORT_LINES=()
+emit_fetch_info() {
+  echo "$1"
+  FETCH_REPORT_LINES+=("$1")
+}
+emit_fetch_warn() {
+  echo "$1" >&2
+  FETCH_REPORT_LINES+=("$1")
+}
+
 fetch_repos_dev() {
   local base_dir="${AGENTS_WEBJAMAPPS_DIR:-$HOME/WebJamApps}"
+  local fetch_timeout="${AGENTS_FETCH_TIMEOUT:-10s}"
+  local fetch_kill_after="${AGENTS_FETCH_KILL_AFTER:-1s}"
   local repos=(
     "web-jam-tools"
     "JaMmusic"
@@ -309,17 +329,30 @@ fetch_repos_dev() {
     "TimShermanMusic"
     "HenricksonForSalem"
   )
+  emit_fetch_info "Fetching dev for the session-load report..."
+  local pids=()
   for repo in "${repos[@]}"; do
     local repo_dir="$base_dir/$repo"
-    if ! git -C "$repo_dir" fetch origin dev 2>/dev/null; then
-      echo "warning: fetch dev failed for $repo; starting the agents anyway" >&2
+    timeout --kill-after="$fetch_kill_after" "$fetch_timeout" \
+      git -C "$repo_dir" fetch origin dev </dev/null >/dev/null 2>&1 &
+    pids+=("$!")
+  done
+  local i=0
+  for repo in "${repos[@]}"; do
+    local status=0
+    wait "${pids[$i]}" || status=$?
+    if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+      emit_fetch_warn "warning: fetch dev timed out for $repo after $fetch_timeout; starting the agents anyway"
+    elif [ "$status" -ne 0 ]; then
+      emit_fetch_warn "warning: fetch dev failed for $repo (exit $status); starting the agents anyway"
     fi
+    i=$((i + 1))
   done
 }
 
 if [ -n "$FETCH_REPOS_CMD" ]; then
   if ! bash -c "$FETCH_REPOS_CMD"; then
-    echo "warning: fetch dev failed; starting the agents anyway" >&2
+    emit_fetch_warn "warning: fetch dev failed; starting the agents anyway"
   fi
 else
   fetch_repos_dev
@@ -347,10 +380,16 @@ fi
 
 # Create session with tab 1: claude in Josh's home folder.
 # Drop to a plain shell prompt when the agent exits instead of closing the tab.
+# When restarting from inside the session, also replay fetch progress/warnings at the top of tab 1
+# so returning clients still see them after the temporary holding session closes.
 # Another `agents` run (laptop and tablet connecting at once) can create the
 # session between the check above and this line; when it did, attach to that
 # session instead of failing with "duplicate session".
-if ! new_session_err=$(tmux "${TMUX_ARGS[@]}" new-session -d -s "$SESSION" -n claude -c "$HOME" "$TAB_ENV $CLAUDE_CMD; exec $USER_SHELL" 2>&1); then
+TAB1_PREAMBLE=""
+if [ "$inside_target_session" -eq 1 ] && [ ${#FETCH_REPORT_LINES[@]} -gt 0 ]; then
+  printf -v TAB1_PREAMBLE 'printf "%%s\\n" %s; ' "$(printf '%q ' "${FETCH_REPORT_LINES[@]}")"
+fi
+if ! new_session_err=$(tmux "${TMUX_ARGS[@]}" new-session -d -s "$SESSION" -n claude -c "$HOME" "$TAB_ENV ${TAB1_PREAMBLE}$CLAUDE_CMD; exec $USER_SHELL" 2>&1); then
   if tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>/dev/null; then
     attach_and_exit
   fi

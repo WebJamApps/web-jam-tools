@@ -10,6 +10,7 @@
 // 7. CLI flags (-L, -S, --no-attach, --help, unknown args) behave correctly.
 
 import { assert, assertEquals } from "@std/assert";
+import { ACTIVE_REPOS } from "../src/shared/repos.ts";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const AGENTS_SCRIPT = `${REPO_ROOT}scripts/agents.sh`;
@@ -1710,6 +1711,9 @@ for (const value of ["on", "off"]) {
 
 Deno.test("agents.sh inside-session restart retains SSH and laptop clients and reloads all agent processes", async () => {
   await withThrowawayTmux(async (socketName, tmpDir) => {
+    const fixture = await setupFetchFixture(tmpDir, {
+      WebJamSocketCluster: "stalled",
+    });
     const config = `${tmpDir}/installed-config`;
     const updateLog = `${tmpDir}/updates`;
     const windowMarker = `${tmpDir}/unexpected-window`;
@@ -1787,7 +1791,7 @@ Deno.test("agents.sh inside-session restart retains SSH and laptop clients and r
           "send-keys",
           "-t",
           "agents:restart-control",
-          `bash '${AGENTS_SCRIPT}' -L '${socketName}' --restart`,
+          `AGENTS_FETCH_REPOS_CMD='' AGENTS_WEBJAMAPPS_DIR='${fixture.reposDir}' AGENTS_FETCH_TIMEOUT=1s AGENTS_FETCH_KILL_AFTER=1s GIT_SSH_COMMAND='${fixture.fakeSsh}' bash '${AGENTS_SCRIPT}' -L '${socketName}' --restart`,
           "Enter",
         ],
         env,
@@ -1795,7 +1799,29 @@ Deno.test("agents.sh inside-session restart retains SSH and laptop clients and r
       assertEquals(sent.code, 0, sent.stderr);
       let newWindows: string[] = [];
       let restoredClients = "";
-      for (let attempt = 0; attempt < 100; attempt++) {
+      let parkedPaneText = "";
+      for (let attempt = 0; attempt < 150; attempt++) {
+        if (!parkedPaneText.includes("Fetching dev for the session-load report...")) {
+          const allSessions = await run(
+            "tmux",
+            ["-L", socketName, "list-sessions", "-F", "#{session_name}"],
+            env,
+          );
+          const holdSession = allSessions.stdout
+            .trim()
+            .split("\n")
+            .find((s) => s.startsWith("agents-restart-"));
+          if (holdSession) {
+            const holdCap = await run(
+              "tmux",
+              ["-L", socketName, "capture-pane", "-J", "-t", holdSession, "-p"],
+              env,
+            );
+            if (holdCap.code === 0 && holdCap.stdout.trim()) {
+              parkedPaneText = holdCap.stdout;
+            }
+          }
+        }
         const windows = await run(
           "tmux",
           [
@@ -1848,6 +1874,31 @@ Deno.test("agents.sh inside-session restart retains SSH and laptop clients and r
       }
       assertEquals((await Deno.readTextFile(updateLog)).trim().split("\n"), ["updated", "updated"]);
       assert(!await exists(windowMarker), "restart must reuse existing terminals");
+      assert(
+        parkedPaneText.includes("Fetching dev for the session-load report..."),
+        `expected parked holding session pane to show fetch progress, got: ${parkedPaneText}`,
+      );
+      const tab1Pane = await run(
+        "tmux",
+        ["-L", socketName, "capture-pane", "-J", "-t", "agents:1", "-p"],
+        env,
+      );
+      assertEquals(tab1Pane.code, 0, tab1Pane.stderr);
+      assert(
+        tab1Pane.stdout.includes("Fetching dev for the session-load report..."),
+        `expected returning client pane (agents:1) to show fetch progress, got: ${tab1Pane.stdout}`,
+      );
+      assert(
+        tab1Pane.stdout.includes(
+          "warning: fetch dev timed out for WebJamSocketCluster after 1s; starting the agents anyway",
+        ),
+        `expected returning client pane (agents:1) to show stalled-fetch warning, got: ${tab1Pane.stdout}`,
+      );
+      assertEquals(
+        await fixture.localOriginDevSha("web-jam-tools"),
+        await fixture.remoteDevSha("web-jam-tools"),
+        "inside-session restart should advance origin/dev for healthy repositories",
+      );
       const sessions = await run("tmux", [
         "-L",
         socketName,
@@ -1867,3 +1918,274 @@ Deno.test("agents.sh inside-session restart retains SSH and laptop clients and r
     }
   });
 });
+
+// ---- Bounded concurrent dev fetch (web-jam-tools#1922) ----
+
+type FetchFixtureMode = "healthy" | "stalled" | "failing";
+
+async function runGit(args: string[], cwd?: string): Promise<string> {
+  const res = await new Deno.Command("git", {
+    args,
+    cwd,
+    env: {
+      ...Deno.env.toObject(),
+      GIT_CONFIG_GLOBAL: "/dev/null",
+    },
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  const stdout = new TextDecoder().decode(res.stdout).trim();
+  const stderr = new TextDecoder().decode(res.stderr).trim();
+  if (res.code !== 0) {
+    throw new Error(`git ${args.join(" ")} failed (${res.code}): ${stderr}`);
+  }
+  return stdout;
+}
+
+async function setupFetchFixture(
+  tmpDir: string,
+  modes: Partial<Record<(typeof ACTIVE_REPOS)[number], FetchFixtureMode>>,
+) {
+  const reposDir = `${tmpDir}/WebJamApps`;
+  const remotesDir = `${tmpDir}/remotes`;
+  const seedDir = `${tmpDir}/seed`;
+  await Deno.mkdir(reposDir, { recursive: true });
+  await Deno.mkdir(remotesDir, { recursive: true });
+  await Deno.mkdir(seedDir, { recursive: true });
+
+  const fakeSsh = `${tmpDir}/fake-ssh.sh`;
+  await Deno.writeTextFile(fakeSsh, "#!/usr/bin/env bash\nexec sleep 30\n");
+  await Deno.chmod(fakeSsh, 0o755);
+
+  const initialShas: Record<string, string> = {};
+
+  await Promise.all(ACTIVE_REPOS.map(async (repo) => {
+    const mode = modes[repo] ?? "healthy";
+    const remotePath = `${remotesDir}/${repo}.git`;
+    const workPath = `${seedDir}/${repo}`;
+    const clonePath = `${reposDir}/${repo}`;
+
+    await runGit(["init", "--bare", "-b", "dev", remotePath]);
+    await runGit(["init", "-b", "dev", workPath]);
+    await runGit(["config", "user.name", "Test User"], workPath);
+    await runGit(["config", "user.email", "test@example.com"], workPath);
+    await Deno.writeTextFile(`${workPath}/AGENTS.md`, `initial ${repo}\n`);
+    await runGit(["add", "AGENTS.md"], workPath);
+    await runGit(["commit", "-m", "initial"], workPath);
+    await runGit(["remote", "add", "origin", remotePath], workPath);
+    await runGit(["push", "origin", "dev"], workPath);
+    initialShas[repo] = await runGit(["rev-parse", "HEAD"], workPath);
+
+    await runGit(["clone", "--branch", "dev", remotePath, clonePath]);
+
+    if (mode === "healthy") {
+      await Deno.writeTextFile(`${workPath}/AGENTS.md`, `updated ${repo}\n`);
+      await runGit(["commit", "-am", "update"], workPath);
+      await runGit(["push", "origin", "dev"], workPath);
+    } else if (mode === "stalled") {
+      await runGit(["remote", "set-url", "origin", `ssh://stalled.invalid/${repo}.git`], clonePath);
+    } else if (mode === "failing") {
+      await runGit(
+        ["remote", "set-url", "origin", `${remotesDir}/missing-${repo}.git`],
+        clonePath,
+      );
+    }
+  }));
+
+  return {
+    reposDir,
+    fakeSsh,
+    initialShas,
+    async pushNewCommit(repo: (typeof ACTIVE_REPOS)[number], content: string): Promise<string> {
+      const workPath = `${seedDir}/${repo}`;
+      await Deno.writeTextFile(`${workPath}/AGENTS.md`, content);
+      await runGit(["commit", "-am", "advance dev"], workPath);
+      await runGit(["push", "origin", "dev"], workPath);
+      return await runGit(["rev-parse", "HEAD"], workPath);
+    },
+    async remoteDevSha(repo: (typeof ACTIVE_REPOS)[number]): Promise<string> {
+      return await runGit(["rev-parse", "dev"], `${remotesDir}/${repo}.git`);
+    },
+    async localOriginDevSha(repo: (typeof ACTIVE_REPOS)[number]): Promise<string> {
+      return await runGit(["rev-parse", "origin/dev"], `${reposDir}/${repo}`);
+    },
+  };
+}
+
+Deno.test(
+  "agents.sh bounds stalled SSH fetches and reports per-repo timeout/failure outcomes on initial startup while healthy fetches succeed (web-jam-tools#1922)",
+  async () => {
+    await withThrowawayTmux(async (socketName, tmpDir) => {
+      const fixture = await setupFetchFixture(tmpDir, {
+        WebJamSocketCluster: "stalled",
+        AppersonAuto: "failing",
+      });
+      const res = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+        ...stubEnv(tmpDir, "true"),
+        AGENTS_FETCH_REPOS_CMD: "",
+        AGENTS_WEBJAMAPPS_DIR: fixture.reposDir,
+        AGENTS_FETCH_TIMEOUT: "1s",
+        AGENTS_FETCH_KILL_AFTER: "1s",
+        GIT_SSH_COMMAND: fixture.fakeSsh,
+      });
+      assertEquals(res.code, 0, res.stderr);
+      assert(
+        res.stdout.includes("Fetching dev for the session-load report..."),
+        `expected fetch announcement in stdout: ${res.stdout}`,
+      );
+      assert(
+        res.stderr.includes(
+          "warning: fetch dev timed out for WebJamSocketCluster after 1s; starting the agents anyway",
+        ),
+        `expected timeout warning for WebJamSocketCluster in stderr: ${res.stderr}`,
+      );
+      assert(
+        res.stderr.includes(
+          "warning: fetch dev failed for AppersonAuto (exit 128); starting the agents anyway",
+        ),
+        `expected failure warning for AppersonAuto in stderr: ${res.stderr}`,
+      );
+      for (const repo of ACTIVE_REPOS) {
+        if (repo === "WebJamSocketCluster" || repo === "AppersonAuto") continue;
+        assert(
+          !res.stderr.includes(repo),
+          `unexpected warning for healthy repo ${repo}: ${res.stderr}`,
+        );
+        assertEquals(
+          await fixture.localOriginDevSha(repo),
+          await fixture.remoteDevSha(repo),
+          `healthy repo ${repo} should have updated origin/dev`,
+        );
+      }
+      assertEquals(
+        await fixture.localOriginDevSha("WebJamSocketCluster"),
+        fixture.initialShas["WebJamSocketCluster"],
+        "stalled repo should keep its last available origin/dev",
+      );
+      const windows = await run(
+        "tmux",
+        ["-L", socketName, "list-windows", "-t", "agents", "-F", "#{window_index}:#{window_name}"],
+        { TMUX_TMPDIR: tmpDir },
+      );
+      assertEquals(windows.code, 0);
+      assertEquals(windows.stdout.trim().split("\n"), ["1:claude", "2:codex", "3:agy"]);
+    });
+  },
+);
+
+Deno.test(
+  "agents.sh bounds stalled SSH fetches during --restart while healthy fetches advance (web-jam-tools#1922)",
+  async () => {
+    await withThrowawayTmux(async (socketName, tmpDir) => {
+      const fixture = await setupFetchFixture(tmpDir, {
+        WebJamSocketCluster: "stalled",
+      });
+      const initial = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+        ...stubEnv(tmpDir, "true"),
+      });
+      assertEquals(initial.code, 0, initial.stderr);
+
+      const newSha = await fixture.pushNewCommit("web-jam-tools", "restarted dev\n");
+
+      const restarted = await run(
+        "bash",
+        [AGENTS_SCRIPT, "-L", socketName, "--no-attach", "--restart"],
+        {
+          ...stubEnv(tmpDir, "true"),
+          AGENTS_FETCH_REPOS_CMD: "",
+          AGENTS_WEBJAMAPPS_DIR: fixture.reposDir,
+          AGENTS_FETCH_TIMEOUT: "1s",
+          AGENTS_FETCH_KILL_AFTER: "1s",
+          GIT_SSH_COMMAND: fixture.fakeSsh,
+        },
+      );
+      assertEquals(restarted.code, 0, restarted.stderr);
+      assert(restarted.stdout.includes("Restarting 'agents' tmux session..."));
+      assert(restarted.stdout.includes("Fetching dev for the session-load report..."));
+      assert(
+        restarted.stderr.includes(
+          "warning: fetch dev timed out for WebJamSocketCluster after 1s; starting the agents anyway",
+        ),
+        `expected timeout warning on restart: ${restarted.stderr}`,
+      );
+      assertEquals(await fixture.localOriginDevSha("web-jam-tools"), newSha);
+    });
+  },
+);
+
+Deno.test(
+  "agents.sh runs all eight repository fetches concurrently when multiple stalls occur at once (web-jam-tools#1922)",
+  async () => {
+    await withThrowawayTmux(async (socketName, tmpDir) => {
+      const allStalled = Object.fromEntries(
+        ACTIVE_REPOS.map((repo) => [repo, "stalled" as const]),
+      );
+      const fixture = await setupFetchFixture(tmpDir, allStalled);
+      const startMs = performance.now();
+      const res = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+        ...stubEnv(tmpDir, "true"),
+        AGENTS_FETCH_REPOS_CMD: "",
+        AGENTS_WEBJAMAPPS_DIR: fixture.reposDir,
+        AGENTS_FETCH_TIMEOUT: "1s",
+        AGENTS_FETCH_KILL_AFTER: "1s",
+        GIT_SSH_COMMAND: fixture.fakeSsh,
+      });
+      const elapsedMs = performance.now() - startMs;
+      assertEquals(res.code, 0, res.stderr);
+      assert(
+        elapsedMs < 5000,
+        `expected concurrent 1s timeouts across 8 repos to finish in <5000ms, took ${
+          Math.round(elapsedMs)
+        }ms`,
+      );
+      for (const repo of ACTIVE_REPOS) {
+        assert(
+          res.stderr.includes(
+            `warning: fetch dev timed out for ${repo} after 1s; starting the agents anyway`,
+          ),
+          `missing timeout warning for ${repo} in stderr: ${res.stderr}`,
+        );
+      }
+      const has = await run("tmux", ["-L", socketName, "has-session", "-t", "agents"], {
+        TMUX_TMPDIR: tmpDir,
+      });
+      assertEquals(has.code, 0);
+    });
+  },
+);
+
+Deno.test(
+  "agents.sh skips repository fetches when attaching to an existing session (web-jam-tools#1922)",
+  async () => {
+    await withThrowawayTmux(async (socketName, tmpDir) => {
+      const fixture = await setupFetchFixture(tmpDir, {
+        WebJamSocketCluster: "stalled",
+      });
+      const initial = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+        ...stubEnv(tmpDir, "true"),
+      });
+      assertEquals(initial.code, 0, initial.stderr);
+
+      const newSha = await fixture.pushNewCommit("web-jam-tools", "unfetched on attach\n");
+
+      const attach = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+        ...stubEnv(tmpDir, "true"),
+        AGENTS_FETCH_REPOS_CMD: "",
+        AGENTS_WEBJAMAPPS_DIR: fixture.reposDir,
+        AGENTS_FETCH_TIMEOUT: "1s",
+        AGENTS_FETCH_KILL_AFTER: "1s",
+        GIT_SSH_COMMAND: fixture.fakeSsh,
+      });
+      assertEquals(attach.code, 0, attach.stderr);
+      assert(
+        !attach.stdout.includes("Fetching dev for the session-load report..."),
+        `attach should not run fetches: ${attach.stdout}`,
+      );
+      assertEquals(attach.stderr, "");
+      assert(
+        (await fixture.localOriginDevSha("web-jam-tools")) !== newSha,
+        "attach must not fetch remote commits",
+      );
+    });
+  },
+);
