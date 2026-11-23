@@ -50,21 +50,47 @@ could_not_run() {
   exit 2
 }
 
-HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-stderr_file=$(mktemp)
+if ! HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd); then
+  could_not_run "could not find the guard's own directory"
+fi
+if ! stderr_file=$(mktemp 2>/dev/null) || [ -z "$stderr_file" ]; then
+  could_not_run "could not create a file to capture the checker's errors"
+fi
 trap 'rm -f "$stderr_file"' EXIT
 
 # The shared runner refuses on its own when the checker crashes, times out or
-# Deno is missing; its refusal is passed through as it stands.
-if ! result=$(CMD_FOR_PY="$cmd" "$HOOK_DIR/lib/run_hook.sh" --group safety --name block-dangerous-git-deploy deno run --no-config --allow-env "$HOOK_DIR/lib/check_dangerous_git_deploy.ts" 2>"$stderr_file"); then
-  cat "$stderr_file" >&2
-  exit 2
+# Deno is missing; that standard refusal is passed through as it stands. A
+# runner that fails without it gets the same guard-failure response here, so
+# a failure never ends with an empty or partial message.
+runner_status=0
+result=$(CMD_FOR_PY="$cmd" "$HOOK_DIR/lib/run_hook.sh" --group safety --name block-dangerous-git-deploy deno run --no-config --allow-env "$HOOK_DIR/lib/check_dangerous_git_deploy.ts" 2>"$stderr_file") || runner_status=$?
+if [ "$runner_status" -ne 0 ]; then
+  if grep -q '^BLOCKED (block-dangerous-git-deploy): safety guard could not run (' "$stderr_file" 2>/dev/null; then
+    cat "$stderr_file" >&2
+    exit 2
+  fi
+  could_not_run "the shared runner failed with exit code $runner_status and gave no refusal"
 fi
+
+# A refusal verdict names what the checker found on one line. A refusal marker
+# with no description, or one spread over several lines, is not a verdict.
+has_description() {
+  case "$1" in
+    *$'\n'*) return 1 ;;
+  esac
+  [[ "$1" =~ [^[:space:]] ]]
+}
 
 case "$result" in
   OK) ;;
-  UNREADABLE:*) could_not_read "${result#UNREADABLE:}" ;;
-  BLOCK:*) block "${result#BLOCK:}" ;;
+  UNREADABLE:*)
+    has_description "${result#UNREADABLE:}" || could_not_run "checker gave an UNREADABLE verdict without a description"
+    could_not_read "${result#UNREADABLE:}"
+    ;;
+  BLOCK:*)
+    has_description "${result#BLOCK:}" || could_not_run "checker gave a BLOCK verdict without a description"
+    block "${result#BLOCK:}"
+    ;;
   "") could_not_run "checker gave no verdict" ;;
   *) could_not_run "checker gave an unrecognised verdict: $(printf '%s' "$result" | head -n 1 | cut -c1-200)" ;;
 esac

@@ -491,6 +491,10 @@ const CHECKER_COULD_NOT_RUN_CASES: {
   id: string;
   checker: string;
   noDeno?: boolean;
+  /** A stand-in for the shared runner, in place of the real one. */
+  runner?: string;
+  /** Extra environment for the guard, such as an unusable TMPDIR. */
+  env?: Record<string, string>;
   expect: string[];
 }[] = [
   {
@@ -528,6 +532,70 @@ const CHECKER_COULD_NOT_RUN_CASES: {
     checker: 'console.log("MAYBE");\n',
     expect: ["safety guard could not run", "MAYBE", "Stop and report this refusal to Josh"],
   },
+  // A refusal marker with no description, or a description over several lines, is not a verdict.
+  ...[
+    ["R6", 'console.log("BLOCK:");\n', "BLOCK verdict without a description"],
+    ["R7", 'console.log("BLOCK:   ");\n', "BLOCK verdict without a description"],
+    [
+      "R8",
+      'console.log("BLOCK:first line\\nsecond line");\n',
+      "BLOCK verdict without a description",
+    ],
+    ["R9", 'console.log("UNREADABLE:");\n', "UNREADABLE verdict without a description"],
+    ["R10", 'console.log("UNREADABLE: \\t ");\n', "UNREADABLE verdict without a description"],
+    [
+      "R11",
+      'console.log("UNREADABLE:first line\\nsecond line");\n',
+      "UNREADABLE verdict without a description",
+    ],
+  ].map(([id, checker, reason]) => ({
+    id,
+    checker,
+    expect: [
+      `BLOCKED (block-dangerous-git-deploy): safety guard could not run (checker gave ${
+        reason.startsWith("BLOCK") ? "a" : "an"
+      } ${reason}). Refusing action (safety default: fail closed).`,
+      "Stop and report this refusal to Josh; do not retry the action through another route.",
+    ],
+  })),
+  {
+    id: "R12",
+    checker: 'console.log("OK");\n',
+    runner: "#!/usr/bin/env bash\ncat >/dev/null\nexit 2\n",
+    expect: [
+      "BLOCKED (block-dangerous-git-deploy): safety guard could not run (the shared runner failed with exit code 2 and gave no refusal). Refusing action (safety default: fail closed).",
+      "Stop and report this refusal to Josh; do not retry the action through another route.",
+    ],
+  },
+  {
+    id: "R13",
+    checker: 'console.log("OK");\n',
+    runner: "#!/usr/bin/env bash\ncat >/dev/null\necho 'some unrelated error' >&2\nexit 1\n",
+    expect: [
+      "safety guard could not run (the shared runner failed with exit code 1 and gave no refusal)",
+      "Stop and report this refusal to Josh",
+    ],
+  },
+  {
+    id: "R14",
+    checker: 'console.log("OK");\n',
+    runner: "#!/usr/bin/env bash\ncat >/dev/null\n" +
+      "echo 'BLOCKED (block-dangerous-git-deploy): safety guard could not run (made-up runner reason). Refusing action (safety default: fail closed).' >&2\n" +
+      "echo 'Stop and report this refusal to Josh; do not retry the action through another route.' >&2\nexit 2\n",
+    expect: [
+      "BLOCKED (block-dangerous-git-deploy): safety guard could not run (made-up runner reason). Refusing action (safety default: fail closed).\n" +
+      "Stop and report this refusal to Josh; do not retry the action through another route.\n",
+    ],
+  },
+  {
+    id: "R15",
+    checker: 'console.log("OK");\n',
+    env: { TMPDIR: "/nonexistent-merge-deploy-guard-tmp" },
+    expect: [
+      "BLOCKED (block-dangerous-git-deploy): safety guard could not run (could not create a file to capture the checker's errors). Refusing action (safety default: fail closed).",
+      "Stop and report this refusal to Josh; do not retry the action through another route.",
+    ],
+  },
 ];
 
 for (const row of CHECKER_COULD_NOT_RUN_CASES) {
@@ -536,12 +604,17 @@ for (const row of CHECKER_COULD_NOT_RUN_CASES) {
     try {
       await Deno.mkdir(`${dir}/hooks/lib`, { recursive: true });
       await Deno.copyFile(SCRIPT_PATH, `${dir}/hooks/block-dangerous-git-deploy.sh`);
-      const runner = new URL("../hooks/lib/run_hook.sh", import.meta.url).pathname;
-      await Deno.copyFile(runner, `${dir}/hooks/lib/run_hook.sh`);
+      if (row.runner) {
+        await Deno.writeTextFile(`${dir}/hooks/lib/run_hook.sh`, row.runner);
+      } else {
+        const runner = new URL("../hooks/lib/run_hook.sh", import.meta.url).pathname;
+        await Deno.copyFile(runner, `${dir}/hooks/lib/run_hook.sh`);
+      }
       await Deno.chmod(`${dir}/hooks/lib/run_hook.sh`, 0o755);
       await Deno.writeTextFile(`${dir}/hooks/lib/check_dangerous_git_deploy.ts`, row.checker);
       const env: Record<string, string> = { BASH_ENV: "", AGY_HOOK_RECORD_PATH: "off" };
       if (row.noDeno) env.PATH = pathWithoutDeno();
+      Object.assign(env, row.env ?? {});
       const child = new Deno.Command("bash", {
         args: [`${dir}/hooks/block-dangerous-git-deploy.sh`],
         stdin: "piped",
