@@ -12,7 +12,7 @@
 import * as path from "node:path";
 import {
   buildFolderPattern,
-  collectWholeStringPaths,
+  collectUntranslatedArgumentPaths,
   unreadableScriptMessage,
 } from "./check_private_folder_read.ts";
 import {
@@ -1131,6 +1131,38 @@ export function checkFileToolWrite(
   return { allowed: true };
 }
 
+/**
+ * The real filesystem destination of an absolute path: the real path of its nearest existing
+ * ancestor, symlinks resolved, with the not-yet-existing rest appended. A path with no existing
+ * part is returned as given. Throws when an existing part cannot be read (a symlink loop or a
+ * permission error), so the caller refuses rather than guess.
+ */
+export function realDestination(resolved: string): string {
+  const rest: string[] = [];
+  let current = resolved;
+  while (true) {
+    try {
+      return path.join(Deno.realPathSync(current), ...rest);
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+      const parent = path.dirname(current);
+      if (parent === current) return resolved;
+      rest.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function unresolvableDestination(rawPath: string, error: unknown): CheckDecision {
+  return {
+    allowed: false,
+    check: 6,
+    reason: `the real destination of '${rawPath}' cannot be resolved (${
+      error instanceof Error ? error.name : String(error)
+    })`,
+  };
+}
+
 export function checkAgyUntranslated(
   toolInput: unknown,
   cwd: string,
@@ -1144,21 +1176,49 @@ export function checkAgyUntranslated(
     };
   }
 
-  const paths: string[] = [];
-  collectWholeStringPaths(toolInput, paths);
+  let paths: string[];
+  try {
+    paths = collectUntranslatedArgumentPaths(toolInput as Record<string, unknown>);
+  } catch (error) {
+    return {
+      allowed: false,
+      check: 6,
+      reason: `untranslated agy tool call arguments cannot be read (${
+        error instanceof Error ? error.message : String(error)
+      })`,
+    };
+  }
   const targetRoot = getTargetRoot(home);
+  let roots: string[];
+  try {
+    roots = [...new Set([targetRoot, realDestination(targetRoot)])];
+  } catch (error) {
+    return unresolvableDestination(targetRoot, error);
+  }
 
   for (const rawPath of paths) {
     const resolved = resolveTargetPath(rawPath, cwd, home);
-    if (!resolved || !isUnderTargetRoot(resolved, targetRoot)) continue;
-    const base = path.basename(resolved);
+    if (!resolved) continue;
+    // Judge the real filesystem destination as well as the path as written, so a path that
+    // reaches a protected file through a symlink is caught.
+    let destinations: string[];
+    try {
+      destinations = [...new Set([resolved, realDestination(resolved)])];
+    } catch (error) {
+      return unresolvableDestination(rawPath, error);
+    }
     const glob = hasWildcard(rawPath);
-    if (isMediaFileName(base) && (glob || fileExistsUnderTarget(resolved, targetRoot))) {
-      return {
-        allowed: false,
-        check: 5,
-        reason: `untranslated agy tool names existing production media file '${rawPath}'`,
-      };
+    for (const destination of destinations) {
+      const root = roots.find((candidate) => isUnderTargetRoot(destination, candidate));
+      if (!root) continue;
+      const base = path.basename(destination);
+      if (isMediaFileName(base) && (glob || fileExistsUnderTarget(destination, root))) {
+        return {
+          allowed: false,
+          check: 5,
+          reason: `untranslated agy tool names existing production media file '${rawPath}'`,
+        };
+      }
     }
   }
 

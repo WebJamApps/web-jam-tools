@@ -1871,6 +1871,32 @@ export function collectWholeStringPaths(val: unknown, out: string[]): void {
 }
 
 /**
+ * Every whole-string path in an untranslated agy call's arguments. The shim supports two forms of
+ * a structured `Arguments` value (`buildToolInput` in agy_hook_shim.ts): an object, which the
+ * collector already descends into, and JSON text, which is decoded here so its paths are inspected
+ * too. The arguments themselves are never changed. Throws when `Arguments` is text that does not
+ * decode to a JSON object, so each guard refuses what it cannot read.
+ */
+export function collectUntranslatedArgumentPaths(toolInput: Record<string, unknown>): string[] {
+  const paths: string[] = [];
+  collectWholeStringPaths(toolInput, paths);
+  const structured = toolInput.Arguments;
+  if (typeof structured === "string") {
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(structured);
+    } catch {
+      throw new Error("the structured Arguments value is not valid JSON");
+    }
+    if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) {
+      throw new Error("the structured Arguments value does not decode to a JSON object");
+    }
+    collectWholeStringPaths(decoded, paths);
+  }
+  return paths;
+}
+
+/**
  * An agy tool the shim does not translate reaches this guard as `AgyUntranslated` with its
  * arguments unchanged (dropbox-guards-design.md, "agy tools the shim does not translate").
  * Returns what it protects, or `null` to allow. Each whole-string path argument is resolved as a
@@ -1885,8 +1911,13 @@ export function checkUntranslatedAgyCall(
   if (toolInput === null || typeof toolInput !== "object" || Array.isArray(toolInput)) {
     return `${COULD_NOT_READ_REFUSAL} (untranslated agy tool call arguments cannot be read)`;
   }
-  const paths: string[] = [];
-  collectWholeStringPaths(toolInput, paths);
+  let paths: string[];
+  try {
+    paths = collectUntranslatedArgumentPaths(toolInput as Record<string, unknown>);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return `${COULD_NOT_READ_REFUSAL} (${msg})`;
+  }
   const context: InspectionContext = {
     cwd,
     home,
