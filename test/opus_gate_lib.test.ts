@@ -11,7 +11,7 @@ import {
   asksForOpusSubagent,
   asksOpusToDoTheWork,
   createLabelLookup,
-  decide,
+  decide as decideWithSwitch,
   decideMainThreadEdit,
   decideSubagentEdit,
   findSpawningHumanPrompt,
@@ -34,6 +34,19 @@ import {
   workIssueArgs,
 } from "../hooks/lib/opus_gate.ts";
 import { extractEntryText, type TranscriptEntry } from "../hooks/lib/select_transcript_entry.ts";
+
+/**
+ * `decide` with no workflow switch released unless a test passes its own checker. The default
+ * checker reads and logs the laptop's live ~/.claude/state/workflow-switch.json, so a release Josh
+ * set would flip these tests to "allow" on the laptop (CI has no switch) and the run would append
+ * to his real switch log.
+ */
+const decide = (
+  payload: Parameters<typeof decideWithSwitch>[0],
+  read: Parameters<typeof decideWithSwitch>[1],
+  lookupLabels?: Parameters<typeof decideWithSwitch>[2],
+  switchChecker: Parameters<typeof decideWithSwitch>[3] = () => ({ released: false }),
+) => decideWithSwitch(payload, read, lookupLabels, switchChecker);
 
 const MAIN = "/p/sess.jsonl";
 const SUBAGENTS = "/p/sess/subagents";

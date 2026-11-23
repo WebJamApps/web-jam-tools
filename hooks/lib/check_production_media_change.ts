@@ -10,7 +10,11 @@
  */
 
 import * as path from "node:path";
-import { buildFolderPattern, unreadableScriptMessage } from "./check_private_folder_read.ts";
+import {
+  buildFolderPattern,
+  collectUntranslatedArgumentPaths,
+  unreadableScriptMessage,
+} from "./check_private_folder_read.ts";
 import {
   ASSIGN_RE,
   findHeredocMarker,
@@ -205,11 +209,15 @@ function expandVariables(
   return s;
 }
 
-export function resolveTargetPath(
+/**
+ * The absolute path as written, before `path.resolve` collapses `..` against the text. The
+ * real-destination check needs it uncollapsed so a symlink is followed before a later `..`.
+ */
+function joinedTargetPath(
   raw: string,
   cwd: string,
   home: string,
-  vars: Map<string, string> = new Map(),
+  vars: Map<string, string>,
 ): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
@@ -219,8 +227,17 @@ export function resolveTargetPath(
   const expanded = expandVariables(trimmed, home, vars);
   if (!expanded || /[$`]/.test(expanded)) return null;
 
-  const joined = expanded.startsWith("/") ? expanded : `${cwd.replace(/\/+$/, "")}/${expanded}`;
-  return path.resolve(joined);
+  return expanded.startsWith("/") ? expanded : `${cwd.replace(/\/+$/, "")}/${expanded}`;
+}
+
+export function resolveTargetPath(
+  raw: string,
+  cwd: string,
+  home: string,
+  vars: Map<string, string> = new Map(),
+): string | null {
+  const joined = joinedTargetPath(raw, cwd, home, vars);
+  return joined === null ? null : path.resolve(joined);
 }
 
 export function fileExistsUnderTarget(resolved: string, targetRoot: string): boolean {
@@ -1127,37 +1144,59 @@ export function checkFileToolWrite(
   return { allowed: true };
 }
 
-function collectWholeStringPaths(val: unknown, out: string[]): void {
-  if (typeof val === "string") {
-    if (
-      !/[\r\n]/.test(val) &&
-      (val.startsWith("/") ||
-        val.startsWith("~/") ||
-        val === "~" ||
-        val.startsWith("$HOME/") ||
-        val === "$HOME" ||
-        val.startsWith("${HOME}/") ||
-        val === "${HOME}")
-    ) {
-      out.push(val);
+/**
+ * The real filesystem destination of an absolute path, resolved one component at a time as the
+ * operating system does: each existing component's symlinks are followed before a later `..` is
+ * applied, so `link/../file` lands beside the link's target, not beside the link. This mirrors
+ * `resolvedPath` in check_private_folder_read.ts. Components that do not exist yet are appended
+ * as written. Throws on a dangling symlink, a symlink loop or a permission error, so the caller
+ * refuses rather than guess.
+ */
+export function realDestination(absolutePath: string): string {
+  const root = path.parse(absolutePath).root;
+  if (!root) throw new Error("unresolved path root");
+  let current = root;
+  for (const part of absolutePath.slice(root.length).split(path.sep)) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      current = path.dirname(current);
+      continue;
     }
-    return;
-  }
-  if (Array.isArray(val)) {
-    for (const item of val) collectWholeStringPaths(item, out);
-    return;
-  }
-  if (val !== null && typeof val === "object") {
-    for (const v of Object.values(val as Record<string, unknown>)) {
-      collectWholeStringPaths(v, out);
+    const candidate = path.join(current, part);
+    try {
+      current = Deno.realPathSync(candidate);
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+      let dangling = true;
+      try {
+        // An existing symlink whose target is missing is indeterminate, not a new output path.
+        Deno.lstatSync(candidate);
+      } catch (statError) {
+        if (!(statError instanceof Deno.errors.NotFound)) throw statError;
+        dangling = false;
+      }
+      if (dangling) throw new Error("unresolved symbolic link");
+      current = candidate;
     }
   }
+  return current;
+}
+
+function unresolvableDestination(rawPath: string, error: unknown): CheckDecision {
+  return {
+    allowed: false,
+    check: 6,
+    reason: `the real destination of '${rawPath}' cannot be resolved (${
+      error instanceof Error ? error.name : String(error)
+    })`,
+  };
 }
 
 export function checkAgyUntranslated(
   toolInput: unknown,
   cwd: string,
   home: string,
+  sourceTool?: unknown,
 ): CheckDecision {
   if (toolInput === null || typeof toolInput !== "object" || Array.isArray(toolInput)) {
     return {
@@ -1167,21 +1206,51 @@ export function checkAgyUntranslated(
     };
   }
 
-  const paths: string[] = [];
-  collectWholeStringPaths(toolInput, paths);
+  let paths: string[];
+  try {
+    paths = collectUntranslatedArgumentPaths(toolInput as Record<string, unknown>, sourceTool);
+  } catch (error) {
+    return {
+      allowed: false,
+      check: 6,
+      reason: `untranslated agy tool call arguments cannot be read (${
+        error instanceof Error ? error.message : String(error)
+      })`,
+    };
+  }
   const targetRoot = getTargetRoot(home);
+  let roots: string[];
+  try {
+    roots = [...new Set([targetRoot, realDestination(targetRoot)])];
+  } catch (error) {
+    return unresolvableDestination(targetRoot, error);
+  }
 
   for (const rawPath of paths) {
-    const resolved = resolveTargetPath(rawPath, cwd, home);
-    if (!resolved || !isUnderTargetRoot(resolved, targetRoot)) continue;
-    const base = path.basename(resolved);
+    const joined = joinedTargetPath(rawPath, cwd, home, new Map());
+    if (!joined) continue;
+    const resolved = path.resolve(joined);
+    // Judge the real filesystem destination as well as the path as written, so a path that
+    // reaches a protected file through a symlink is caught. The destination is resolved from
+    // the uncollapsed path, so a symlink is followed before any `..` after it.
+    let destinations: string[];
+    try {
+      destinations = [...new Set([resolved, realDestination(joined)])];
+    } catch (error) {
+      return unresolvableDestination(rawPath, error);
+    }
     const glob = hasWildcard(rawPath);
-    if (isMediaFileName(base) && (glob || fileExistsUnderTarget(resolved, targetRoot))) {
-      return {
-        allowed: false,
-        check: 5,
-        reason: `untranslated agy tool names existing production media file '${rawPath}'`,
-      };
+    for (const destination of destinations) {
+      const root = roots.find((candidate) => isUnderTargetRoot(destination, candidate));
+      if (!root) continue;
+      const base = path.basename(destination);
+      if (isMediaFileName(base) && (glob || fileExistsUnderTarget(destination, root))) {
+        return {
+          allowed: false,
+          check: 5,
+          reason: `untranslated agy tool names existing production media file '${rawPath}'`,
+        };
+      }
     }
   }
 
@@ -1299,7 +1368,7 @@ export function evaluatePayload(
     return { allowed: true };
   }
 
-  return checkAgyUntranslated(toolInputRaw, resolvedCwd, home);
+  return checkAgyUntranslated(toolInputRaw, resolvedCwd, home, record.agy_tool_name);
 }
 
 async function readStdin(): Promise<string> {

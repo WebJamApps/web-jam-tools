@@ -3023,7 +3023,7 @@ Deno.test(
 
       const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
       const agyPreToolGroups = agyHooks?.hooks?.PreToolUse ?? [];
-      const expectedB64 = btoa("Bash|Edit|Write|NotebookEdit");
+      const expectedB64 = btoa("Bash|Edit|Write|NotebookEdit|AgyUntranslated");
       const expectedAgyCmd =
         `$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${expectedB64} $HOME/.claude/hooks/block-production-media-change.sh`;
       const hasAgyHook = agyPreToolGroups.some(

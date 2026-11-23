@@ -181,12 +181,49 @@ const TOOL_NAME_MAP: Record<string, string> = {
 };
 
 export function mapAgyToolName(name: string, args?: Record<string, unknown>): string {
+  // Own-property checks only: an inherited name such as `toString` is not a
+  // translation, so such a tool stays untranslated and reaches both guards.
   if (name === "call_mcp_tool" && args && typeof args.ToolName === "string") {
-    if (args.ToolName in TOOL_NAME_MAP) {
+    if (Object.hasOwn(TOOL_NAME_MAP, args.ToolName)) {
       return TOOL_NAME_MAP[args.ToolName];
     }
   }
-  return TOOL_NAME_MAP[name] ?? name;
+  return Object.hasOwn(TOOL_NAME_MAP, name) ? TOOL_NAME_MAP[name] : name;
+}
+
+/**
+ * The name an agy tool the shim does not translate reaches a guard under, when
+ * that guard's matcher names `AgyUntranslated` rather than the tool's own name
+ * (dropbox-guards-design.md, "agy tools the shim does not translate"). A guard
+ * whose matcher already names the tool's own agy name (the Gmail fence, the
+ * personal-numbers read guard on `view_file|read_file`) keeps receiving that
+ * name, so those registrations are unaffected.
+ */
+export const AGY_UNTRANSLATED = "AgyUntranslated";
+
+/** True when the shim has no Claude Code name for this agy tool call. */
+export function isUntranslatedAgyTool(name: unknown, args?: Record<string, unknown>): boolean {
+  if (typeof name !== "string") return true;
+  return mapAgyToolName(name, args) === name;
+}
+
+/**
+ * The tool name a call reaches the target hook under, or `undefined` when the
+ * matcher does not select it. The translated (or own) name wins; an
+ * untranslated tool falls back to `AgyUntranslated`.
+ */
+export function selectToolName(
+  matcher: string,
+  rawName: unknown,
+  args?: Record<string, unknown>,
+): string | undefined {
+  const name = typeof rawName === "string" ? rawName : "";
+  const toolName = mapAgyToolName(name, args);
+  if (typeof rawName === "string" && matcherMatches(matcher, toolName)) return toolName;
+  if (isUntranslatedAgyTool(rawName, args) && matcherMatches(matcher, AGY_UNTRANSLATED)) {
+    return AGY_UNTRANSLATED;
+  }
+  return undefined;
 }
 
 /**
@@ -303,6 +340,10 @@ export interface NormalizedPayload {
   session_id?: string;
   artifactDirectoryPath?: string;
   workspacePaths?: string[];
+  // An untranslated tool's own agy name, carried beside its unchanged
+  // arguments so a guard applies the MCP `Arguments` contract only to
+  // `call_mcp_tool`.
+  agy_tool_name?: string;
 }
 
 /**
@@ -359,10 +400,12 @@ export function normalize(
   payload: AgyPayload,
   event: "PreToolUse" | "PostToolUse",
   transcriptText?: string,
+  selectedName?: string,
 ): { toolName: string; normalized: NormalizedPayload } {
   const rawName = payload.toolCall?.name ?? "";
   const args = payload.toolCall?.args ?? {};
-  const toolName = mapAgyToolName(rawName, args);
+  const untranslated = selectedName === AGY_UNTRANSLATED;
+  const toolName = untranslated ? AGY_UNTRANSLATED : mapAgyToolName(rawName, args);
   const toolInput = buildToolInput(args);
   const resolvedCwd = resolveCwd(payload, toolInput);
   if (resolvedCwd && toolInput.cwd === undefined) {
@@ -370,7 +413,10 @@ export function normalize(
   }
   const normalized: NormalizedPayload = {
     tool_name: toolName,
-    tool_input: toolInput,
+    // An untranslated tool's arguments pass unchanged: no copied Claude Code
+    // fields and no injected cwd, since the guards read every whole-string
+    // path argument and an injected cwd would read as one.
+    tool_input: untranslated ? payload.toolCall?.args as Record<string, unknown> : toolInput,
     cwd: resolvedCwd,
     transcript_path: payload.transcriptPath,
     modelName: payload.modelName,
@@ -380,6 +426,7 @@ export function normalize(
     artifactDirectoryPath: payload.artifactDirectoryPath,
     workspacePaths: payload.workspacePaths,
   };
+  if (untranslated) normalized.agy_tool_name = rawName;
   if (event === "PostToolUse") {
     normalized.tool_response = {
       stdout: recoverPostToolOutput(transcriptText ?? "", payload.stepIdx),
@@ -567,8 +614,8 @@ export async function runShim(
   if (gmailFence && (typeof rawName !== "string" || !rawName)) {
     return { decision: "deny", reason: "Gmail safety fence could not identify the tool." };
   }
-  const toolName = mapAgyToolName(rawName, rawArgs);
-  if (!matcherMatches(matcher, toolName)) {
+  const toolName = selectToolName(matcher, rawName, rawArgs);
+  if (toolName === undefined) {
     return { decision: "allow" };
   }
   if (gmailFence) {
@@ -595,7 +642,7 @@ export async function runShim(
     }
   }
 
-  const { normalized } = normalize(payload, event, transcriptText);
+  const { normalized } = normalize(payload, event, transcriptText, toolName);
 
   return await invokeTargetHook(targetHookPath, normalized);
 }

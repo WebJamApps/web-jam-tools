@@ -1842,6 +1842,126 @@ function inspectShell(
   return null;
 }
 
+/** Every argument, at any depth, whose whole string value is a path (dropbox-guards-design.md). */
+export function collectWholeStringPaths(val: unknown, out: string[]): void {
+  if (typeof val === "string") {
+    if (
+      !/[\r\n]/.test(val) &&
+      (val.startsWith("/") ||
+        val.startsWith("~/") ||
+        val === "~" ||
+        val.startsWith("$HOME/") ||
+        val === "$HOME" ||
+        val.startsWith("${HOME}/") ||
+        val === "${HOME}")
+    ) {
+      out.push(val);
+    }
+    return;
+  }
+  if (Array.isArray(val)) {
+    for (const item of val) collectWholeStringPaths(item, out);
+    return;
+  }
+  if (val !== null && typeof val === "object") {
+    for (const v of Object.values(val as Record<string, unknown>)) {
+      collectWholeStringPaths(v, out);
+    }
+  }
+}
+
+/**
+ * Every whole-string path in an untranslated agy call's arguments. The shim supports two forms of
+ * a structured `Arguments` value (`buildToolInput` in agy_hook_shim.ts): an object, which the
+ * collector already descends into, and JSON text, which is decoded here so its paths are inspected
+ * too. The arguments themselves are never changed. That contract belongs to the MCP envelope
+ * alone: it applies only when `sourceTool` (the payload's `agy_tool_name`) is `call_mcp_tool`, or
+ * when no source tool name was carried. Any other tool's `Arguments` is an ordinary argument,
+ * already inspected as a whole-string path. For the MCP envelope, a present `Arguments` must be a
+ * JSON object in either encoding; anything else (bad JSON text, or a list, null or scalar, native or
+ * encoded) throws, so each guard refuses what it cannot read. An absent `Arguments` is allowed.
+ */
+export function collectUntranslatedArgumentPaths(
+  toolInput: Record<string, unknown>,
+  sourceTool?: unknown,
+): string[] {
+  const paths: string[] = [];
+  collectWholeStringPaths(toolInput, paths);
+  const raw = toolInput.Arguments;
+  const mcpEnvelope = typeof sourceTool !== "string" || sourceTool === "call_mcp_tool";
+  if (!mcpEnvelope || raw === undefined) return paths;
+  // Decode the text form once, then hold both encodings to one shape: the shim recognises only
+  // a set of named values, so a native list, null or scalar is as unreadable as bad JSON text.
+  let structured: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      structured = JSON.parse(raw);
+    } catch {
+      throw new Error("the structured Arguments value is not valid JSON");
+    }
+  }
+  if (structured === null || typeof structured !== "object" || Array.isArray(structured)) {
+    throw new Error("the structured Arguments value is not a JSON object");
+  }
+  // The object form was already collected with the rest of the arguments.
+  if (typeof raw === "string") collectWholeStringPaths(structured, paths);
+  return paths;
+}
+
+/**
+ * An agy tool the shim does not translate reaches this guard as `AgyUntranslated` with its
+ * arguments unchanged (dropbox-guards-design.md, "agy tools the shim does not translate").
+ * Returns what it protects, or `null` to allow. Each whole-string path argument is resolved as a
+ * shell path is; a path under `~/Dropbox` outside the allowed folders, bare `~/Dropbox`, or the
+ * home folder itself refuses, and arguments or a path that cannot be read refuse.
+ */
+export function checkUntranslatedAgyCall(
+  toolInput: unknown,
+  cwd: string,
+  home: string,
+  sourceTool?: unknown,
+): string | null {
+  if (toolInput === null || typeof toolInput !== "object" || Array.isArray(toolInput)) {
+    return `${COULD_NOT_READ_REFUSAL} (untranslated agy tool call arguments cannot be read)`;
+  }
+  let paths: string[];
+  try {
+    paths = collectUntranslatedArgumentPaths(toolInput as Record<string, unknown>, sourceTool);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return `${COULD_NOT_READ_REFUSAL} (${msg})`;
+  }
+  const context: InspectionContext = {
+    cwd,
+    home,
+    folders: [],
+    variables: new Map(),
+    scripts: new Set(),
+  };
+  const homes = new Set<string>();
+  for (const candidate of [home, "/home/joshua"]) {
+    homes.add(path.resolve(candidate));
+    try {
+      homes.add(Deno.realPathSync(candidate));
+    } catch {
+      // A home folder that does not exist on this machine has no real path to add.
+    }
+  }
+  for (const value of paths) {
+    try {
+      const folder = privatePath(value, context);
+      if (folder) return folder;
+      for (const target of [expandedPath(value, context), resolvedPath(value, context)]) {
+        if (homes.has(path.resolve(target))) return "the home folder";
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return `${COULD_NOT_READ_REFUSAL} (${msg})`;
+    }
+  }
+  return null;
+}
+
 function writeCouldNotReadRefusal(detail: string): never {
   console.error(
     `BLOCKED (private-folder read guard): could not read the command (${detail}); nothing protected was found.`,
@@ -1899,6 +2019,7 @@ export async function main(): Promise<void> {
   let toolName = "";
   let cwd = Deno.cwd();
   let invalidInput = false;
+  let untranslated: Record<string, unknown> | undefined;
 
   if (!command && Deno.args.length > 0) {
     command = Deno.args.join(" ");
@@ -1908,7 +2029,9 @@ export async function main(): Promise<void> {
   if (rawInput.trim()) {
     try {
       const data = JSON.parse(rawInput);
-      if (typeof data === "object" && data !== null) {
+      if (typeof data === "object" && data !== null && data.tool_name === "AgyUntranslated") {
+        untranslated = data;
+      } else if (typeof data === "object" && data !== null) {
         if (typeof data.tool_name === "string") {
           toolName = data.tool_name;
         }
@@ -1935,6 +2058,20 @@ export async function main(): Promise<void> {
         command = rawInput.trim();
       }
     }
+  }
+
+  if (untranslated) {
+    const callCwd = typeof untranslated.cwd === "string" && path.isAbsolute(untranslated.cwd)
+      ? untranslated.cwd
+      : Deno.cwd();
+    const found = checkUntranslatedAgyCall(
+      untranslated.tool_input,
+      callCwd,
+      Deno.env.get("HOME") || "/home/joshua",
+      untranslated.agy_tool_name,
+    );
+    if (found) refuseMatch(found);
+    Deno.exit(0);
   }
 
   // If tool name is explicitly provided and is not Bash, allow (exit 0)
@@ -1965,25 +2102,27 @@ export async function main(): Promise<void> {
   }
 
   const matchedFolder = checkPrivateFolderCommand(command, folderResult.folders, cwd);
-  if (matchedFolder) {
-    if (matchedFolder.startsWith("Cannot read the script ")) {
-      console.error(`BLOCKED (private-folder read guard): ${matchedFolder}`);
-      Deno.exit(2);
-    }
-    if (matchedFolder.startsWith(COULD_NOT_READ_REFUSAL)) {
-      writeCouldNotReadRefusal(matchedFolder);
-    }
-    console.error(
-      `BLOCKED (private-folder read guard): protected Dropbox location or operation '${matchedFolder}'.`,
-    );
-    console.error(
-      "Private Dropbox folders are protected from shell inspection across Claude Code, agy, and Codex.",
-    );
-    console.error("(rule: web-jam-tools#1141 — shared private-folder read guard)");
-    Deno.exit(2);
-  }
+  if (matchedFolder) refuseMatch(matchedFolder);
 
   Deno.exit(0);
+}
+
+function refuseMatch(matchedFolder: string): never {
+  if (matchedFolder.startsWith("Cannot read the script ")) {
+    console.error(`BLOCKED (private-folder read guard): ${matchedFolder}`);
+    Deno.exit(2);
+  }
+  if (matchedFolder.startsWith(COULD_NOT_READ_REFUSAL)) {
+    writeCouldNotReadRefusal(matchedFolder);
+  }
+  console.error(
+    `BLOCKED (private-folder read guard): protected Dropbox location or operation '${matchedFolder}'.`,
+  );
+  console.error(
+    "Private Dropbox folders are protected from shell inspection across Claude Code, agy, and Codex.",
+  );
+  console.error("(rule: web-jam-tools#1141 — shared private-folder read guard)");
+  Deno.exit(2);
 }
 
 if (import.meta.main) {
