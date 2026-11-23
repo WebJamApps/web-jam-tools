@@ -59,30 +59,45 @@ export function normalizeDate(raw: string): string | null {
   return null;
 }
 
+/** The date when it is a real calendar date, February 30 and a year 0000 refused; null otherwise. */
 function validDate(y: string, mo: string, d: string): string | null {
+  const year = Number(y);
   const month = Number(mo);
   const day = Number(d);
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  if (year < 1 || month < 1 || month > 12 || day < 1) return null;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  if (day > daysInMonth) return null;
   return `${y}-${mo}-${d}`;
 }
 
-/** A signed amount with two decimals from `22.86`, `-22.86`, `$1,022.86` or `(22.86)`; null otherwise. */
+/**
+ * A signed amount with two decimals from `22.86`, `-22.86`, `$1,022.86`, `$-22.86` or `(22.86)`;
+ * null otherwise. The syntax is checked before anything is normalised: a comma must separate
+ * groups of three digits, so `12,34` is refused rather than read as 1234; digits past the cents
+ * must be zeros, so nothing is rounded; and a sign inside parentheses, two signs, or spaces inside
+ * the number are refused.
+ */
 export function normalizeAmount(raw: string): string | null {
-  let s = raw.trim().replace(/[$,\s]/g, "");
+  let s = raw.trim();
   let negative = false;
   const paren = s.match(/^\((.*)\)$/);
   if (paren) {
     negative = true;
-    s = paren[1];
+    s = paren[1].trim();
   }
-  if (s.startsWith("-")) {
-    negative = !negative;
-    s = s.slice(1);
-  } else if (s.startsWith("+")) {
-    s = s.slice(1);
-  }
-  if (!/^\d+(\.\d+)?$|^\.\d+$/.test(s)) return null;
-  const cents = Math.round(Number(s) * 100);
+  const m = s.match(/^([+-]?)\$?([+-]?)(\d{1,3}(?:,\d{3})+|\d+)?(?:\.(\d+))?$/);
+  if (!m) return null;
+  const [, before, after, whole, fraction] = m;
+  if (before && after) return null;
+  if (whole === undefined && fraction === undefined) return null;
+  const sign = before || after;
+  if (paren && sign) return null;
+  if (fraction !== undefined && /[^0]/.test(fraction.slice(2))) return null;
+  if (sign === "-") negative = true;
+  const cents = Number((whole ?? "0").replace(/,/g, "")) * 100 +
+    Number((fraction ?? "").slice(0, 2).padEnd(2, "0"));
+  if (!Number.isSafeInteger(cents)) return null;
   return formatCents(negative ? -cents : cents);
 }
 
@@ -111,13 +126,82 @@ function decodeEntities(value: string): string {
     .replace(/&amp;/gi, "&");
 }
 
-function ofxValue(block: string, tag: string): string | undefined {
-  const m = block.match(new RegExp(`<${tag}>([^<\\r\\n]*)`, "i"));
+/** One fixed pattern per OFX value the cleaner reads, so no pattern is built at run time. */
+const OFX_VALUE_PATTERNS = {
+  DTPOSTED: /<DTPOSTED>([^<\r\n]*)/i,
+  TRNAMT: /<TRNAMT>([^<\r\n]*)/i,
+  FITID: /<FITID>([^<\r\n]*)/i,
+  NAME: /<NAME>([^<\r\n]*)/i,
+  MEMO: /<MEMO>([^<\r\n]*)/i,
+} as const;
+
+function ofxValue(block: string, tag: keyof typeof OFX_VALUE_PATTERNS): string | undefined {
+  const m = block.match(OFX_VALUE_PATTERNS[tag]);
   return m ? decodeEntities(m[1]).trim() : undefined;
+}
+
+/**
+ * Refuses an OFX download whose statement or transactions are incomplete, such as a file cut off
+ * inside a transaction. In both the legacy SGML form and the XML form, an aggregate such as
+ * `<BANKTRANLIST>` or `<STMTTRN>` always has its closing tag; only single values may go unclosed
+ * in SGML. So every transaction must open inside a transaction list and close before the next
+ * one opens, every list must close, and the file must end with `</OFX>` after the last list.
+ */
+function assertCompleteOfx(text: string): void {
+  if (!/<OFX>/i.test(text)) throw new CleanRefusal("the OFX file has no <OFX> statement");
+  let inList = false;
+  let inTransaction = false;
+  let lists = 0;
+  let transactions = 0;
+  let lastListClose = -1;
+  for (const tag of text.matchAll(/<(\/?)(STMTTRN|BANKTRANLIST)>/gi)) {
+    const closing = tag[1] === "/";
+    if (tag[2].toUpperCase() === "BANKTRANLIST") {
+      if (closing ? !inList || inTransaction : inList) {
+        throw new CleanRefusal(
+          inTransaction
+            ? `transaction ${transactions} is cut off before it closes`
+            : "the OFX file's transaction list is opened or closed out of place",
+        );
+      }
+      inList = !closing;
+      if (closing) lastListClose = tag.index!;
+      else lists++;
+    } else if (!closing) {
+      if (!inList) {
+        throw new CleanRefusal(
+          `transaction ${transactions + 1} is outside the OFX file's transaction list`,
+        );
+      }
+      if (inTransaction) {
+        throw new CleanRefusal(`transaction ${transactions} is cut off before it closes`);
+      }
+      inTransaction = true;
+      transactions++;
+    } else {
+      if (!inTransaction) {
+        throw new CleanRefusal(`the OFX file closes a transaction it never opened`);
+      }
+      inTransaction = false;
+    }
+  }
+  if (inTransaction) {
+    throw new CleanRefusal(
+      `transaction ${transactions} is cut off: the file ends before it closes`,
+    );
+  }
+  if (lists === 0 || inList) {
+    throw new CleanRefusal("the OFX file's transaction list is missing or never closes");
+  }
+  const end = text.search(/<\/OFX>\s*$/i);
+  if (end === -1 || end < lastListClose) {
+    throw new CleanRefusal("the OFX file is cut off: it does not end with </OFX>");
+  }
 }
 
 /** The lines of an OFX download: only the four kept fields leave this function. */
 export function parseOfxLines(text: string): CleanLine[] {
+  assertCompleteOfx(text);
   const lines: CleanLine[] = [];
   const blocks = text.split(/<STMTTRN>/i).slice(1);
   blocks.forEach((raw, index) => {
@@ -129,21 +213,29 @@ export function parseOfxLines(text: string): CleanLine[] {
     if (amount === null) {
       throw new CleanRefusal(`transaction ${n} has an amount the cleaner cannot read`);
     }
+    const id = ofxValue(block, "FITID") ?? "";
+    if (!id) throw new CleanRefusal(`transaction ${n} has no transaction id (FITID)`);
     const name = ofxValue(block, "NAME") ?? "";
     const memo = ofxValue(block, "MEMO") ?? "";
     const description = name && memo && memo !== name ? `${name} ${memo}` : name || memo;
-    lines.push({ date, description, amount, id: ofxValue(block, "FITID") ?? "" });
+    lines.push({ date, description, amount, id });
   });
   return lines;
 }
 
-/** Rows of a CSV text, honouring quoted fields with commas, quotes and line breaks. */
+/**
+ * Rows of a CSV text, honouring quoted fields with commas, quotes and line breaks. A quote may
+ * only open a field and, once closed, may only be followed by spaces and then a comma or the end
+ * of the row; anything else is refused rather than silently joined to the field.
+ */
 export function parseCsvRows(text: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
   let quoted = false;
+  let closedQuote = false;
   const src = text.replace(/^﻿/, "");
+  const lineNumber = () => rows.length + 1;
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
     if (quoted) {
@@ -153,21 +245,32 @@ export function parseCsvRows(text: string): string[][] {
           i++;
         } else {
           quoted = false;
+          closedQuote = true;
         }
       } else {
         field += c;
       }
-    } else if (c === '"') {
-      quoted = true;
     } else if (c === ",") {
       row.push(field);
       field = "";
+      closedQuote = false;
     } else if (c === "\n" || c === "\r") {
       if (c === "\r" && src[i + 1] === "\n") i++;
       row.push(field);
       rows.push(row);
       row = [];
       field = "";
+      closedQuote = false;
+    } else if (closedQuote) {
+      if (c !== " " && c !== "\t") {
+        throw new CleanRefusal(`line ${lineNumber()} has text after a closing quote`);
+      }
+    } else if (c === '"') {
+      if (field.trim() !== "") {
+        throw new CleanRefusal(`line ${lineNumber()} has a quote inside an unquoted field`);
+      }
+      field = "";
+      quoted = true;
     } else {
       field += c;
     }
@@ -259,8 +362,19 @@ export function parseCsvLines(text: string): CleanLine[] {
     body = rows;
   }
   const firstLine = body === rows ? 1 : 2;
+  // Every row has as many fields as the header, or as the first row when there is no header. A
+  // row with more or fewer, such as an amount whose unquoted comma split it in two, is refused
+  // rather than read with its fields shifted.
+  const width = rows[0].length;
   return body.map((row, index) => {
     const n = index + firstLine;
+    if (row.length !== width) {
+      throw new CleanRefusal(
+        `line ${n} has ${row.length} fields where ${
+          body === rows ? "the first line" : "the header"
+        } has ${width}`,
+      );
+    }
     const date = normalizeDate(row[columns.date] ?? "");
     if (!date) throw new CleanRefusal(`line ${n} has a date the cleaner cannot read`);
     let amount: string | null;
@@ -343,15 +457,34 @@ export async function cleanDownload(options: CleanOptions): Promise<CleanResult>
     );
   }
   const outputPath = outputPathFor(options, lines);
+  // createNew claims the name only when no file holds it, so an existing record is never
+  // replaced. If writing the contents then fails, the file this run created is removed, so a
+  // failed attempt leaves no file and the name stays free. Every step needs write access only,
+  // which is all the task has on the books folder.
+  let file: Deno.FsFile;
   try {
     await Deno.mkdir(path.dirname(outputPath), { recursive: true });
-    await Deno.writeTextFile(outputPath, csv, { createNew: true });
+    file = await Deno.open(outputPath, { write: true, createNew: true });
   } catch (error) {
     if (error instanceof Deno.errors.AlreadyExists) {
       throw new CleanRefusal(
         `${outputPath} already exists, and the cleaner never overwrites a record`,
       );
     }
+    throw new CleanRefusal(`could not write ${outputPath} (${(error as Error).name})`);
+  }
+  try {
+    const bytes = new TextEncoder().encode(csv);
+    let written = 0;
+    while (written < bytes.length) written += await file.write(bytes.subarray(written));
+    file.close();
+  } catch (error) {
+    try {
+      file.close();
+    } catch {
+      // already closed
+    }
+    await Deno.remove(outputPath).catch(() => {});
     throw new CleanRefusal(`could not write ${outputPath} (${(error as Error).name})`);
   }
   return { count: lines.length, outputPath };

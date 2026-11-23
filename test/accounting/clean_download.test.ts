@@ -11,6 +11,7 @@ import {
   normalizeAmount,
   normalizeDate,
   parseCsvLines,
+  parseOfxLines,
 } from "../../src/accounting/clean_download.ts";
 
 const REPO_ROOT = path.fromFileUrl(new URL("../../", import.meta.url));
@@ -378,6 +379,192 @@ Deno.test({
       assertEquals(await filesUnder(books), [path.join("statements", "2026", "march.csv")]);
     } finally {
       await Deno.remove(home, { recursive: true });
+    }
+  },
+});
+
+// ---- Review fixes: malformed rows, incomplete OFX, invalid dates and amounts, failed writes ----
+
+Deno.test("a CSV row whose fields do not line up with the header is refused, never shifted", () => {
+  const header = "Date,Description,Amount,Transaction ID";
+  // An unquoted comma in the amount splits it, which would push the id out of its column.
+  assertThrowsRefusal(
+    () => parseCsvLines(`${header}\n2026-03-14,PENN STATION,1,022.86,T-1\n`),
+    "line 2 has 5 fields where the header has 4",
+  );
+  assertThrowsRefusal(
+    () => parseCsvLines(`${header}\n2026-03-14,PENN STATION,22.86\n`),
+    "line 2 has 3 fields where the header has 4",
+  );
+  // With no header, every row must match the first row's width.
+  assertThrowsRefusal(
+    () => parseCsvLines("2026-03-14,PENN STATION,22.86,1\n2026-03-15,GIG,1,250.00,2\n"),
+    "line 2 has 5 fields where the first line has 4",
+  );
+});
+
+Deno.test("a CSV quote that is not a whole field is refused, never joined to the field", () => {
+  assertThrowsRefusal(
+    () => parseCsvLines('Date,Description,Amount\n2026-03-14,"PENN" STATION,22.86\n'),
+    "line 2 has text after a closing quote",
+  );
+  assertThrowsRefusal(
+    () => parseCsvLines('Date,Description,Amount\n2026-03-14,PENN "STATION",22.86\n'),
+    "line 2 has a quote inside an unquoted field",
+  );
+  // A properly quoted field, with spaces after its closing quote, still reads.
+  assertEquals(
+    parseCsvLines('Date,Description,Amount\n2026-03-14,"PENN, STATION" ,"1,022.86"\n'),
+    [{ date: "2026-03-14", description: "PENN, STATION", amount: "1022.86", id: "" }],
+  );
+});
+
+function assertThrowsRefusal(fn: () => unknown, message: string) {
+  try {
+    fn();
+  } catch (error) {
+    if (!(error instanceof CleanRefusal)) throw error;
+    assertStringIncludes(error.message, message);
+    return;
+  }
+  throw new Error(`expected a refusal naming "${message}"`);
+}
+
+Deno.test("an OFX file cut off or missing its structure is refused, in SGML and XML alike", () => {
+  const trn = "<STMTTRN><DTPOSTED>20260314<TRNAMT>-22.86<FITID>1<NAME>PENN STATION</STMTTRN>";
+  // Cut off inside a transaction.
+  assertThrowsRefusal(
+    () => parseOfxLines(ofx([trn]).replace("</STMTTRN>\n</BANKTRANLIST>", "\n")),
+    "transaction 1 is cut off",
+  );
+  assertThrowsRefusal(
+    () => parseOfxLines(ofx([trn]).slice(0, ofx([trn]).indexOf("<NAME>"))),
+    "transaction 1 is cut off",
+  );
+  // The list or the statement never closes.
+  assertThrowsRefusal(
+    () => parseOfxLines(ofx([trn]).replace("</BANKTRANLIST>", "")),
+    "transaction list is missing or never closes",
+  );
+  assertThrowsRefusal(
+    () => parseOfxLines(ofx([trn]).replace("</OFX>", "")),
+    "does not end with </OFX>",
+  );
+  // A transaction with no id.
+  assertThrowsRefusal(
+    () =>
+      parseOfxLines(
+        ofx(["<STMTTRN><DTPOSTED>20260314<TRNAMT>-22.86<NAME>PENN STATION</STMTTRN>"]),
+      ),
+    "transaction 1 has no transaction id",
+  );
+  // The XML form, where every value has its closing tag, still reads.
+  const xml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<?OFX OFXHEADER="200" VERSION="220"?>',
+    "<OFX><CREDITCARDMSGSRSV1><CCSTMTTRNRS><CCSTMTRS><BANKTRANLIST>",
+    "<STMTTRN><TRNTYPE>DEBIT</TRNTYPE><DTPOSTED>20260314</DTPOSTED><TRNAMT>-22.86</TRNAMT>",
+    "<FITID>X-1</FITID><NAME>PENN STATION</NAME></STMTTRN>",
+    "</BANKTRANLIST></CCSTMTRS></CCSTMTTRNRS></CREDITCARDMSGSRSV1></OFX>",
+  ].join("\n");
+  assertEquals(parseOfxLines(xml), [
+    { date: "2026-03-14", description: "PENN STATION", amount: "-22.86", id: "X-1" },
+  ]);
+});
+
+Deno.test("dates that are not on the calendar and ambiguous amounts are refused", () => {
+  for (const bad of ["2026-02-30", "2/30/2026", "20260230", "2026-04-31", "0000-01-01"]) {
+    assertEquals(normalizeDate(bad), null, bad);
+  }
+  assertEquals(normalizeDate("2024-02-29"), "2024-02-29");
+  assertEquals(normalizeDate("2026-02-29"), null);
+  for (const bad of ["12,34", "1,2345.00", "22.865", "(-5.00)", "--5", "-$-5", "1 022.86", "$"]) {
+    assertEquals(normalizeAmount(bad), null, bad);
+  }
+  assertEquals(normalizeAmount("1,022.86"), "1022.86");
+  assertEquals(normalizeAmount("$-22.86"), "-22.86");
+  assertEquals(normalizeAmount("-$22.86"), "-22.86");
+  assertEquals(normalizeAmount("22.8600"), "22.86");
+});
+
+Deno.test("a download holding an invalid date or an ambiguous amount writes nothing", async () => {
+  for (
+    const [content, message] of [
+      ["Date,Description,Amount\n2026-02-30,PENN STATION,22.86\n", "line 2 has a date"],
+      ['Date,Description,Amount\n2026-03-14,PENN STATION,"12,34"\n', "line 2 has an amount"],
+    ]
+  ) {
+    const f = await fixture("march.csv", content);
+    try {
+      await assertRejects(
+        () => cleanDownload({ input: f.input, booksDir: f.booksDir }),
+        CleanRefusal,
+        message,
+      );
+      assertEquals(await exists(f.booksDir), false);
+    } finally {
+      await f.cleanup();
+    }
+  }
+});
+
+Deno.test({
+  name: "a write that fails leaves no file, so the next run writes it, and keeps an existing one",
+  ignore: !canRun,
+  fn: async () => {
+    const f = await fixture("march.csv", "2026-03-14,PENN STATION,22.86,1\n");
+    try {
+      const out = path.join(f.booksDir, "statements", "2026", "march.csv");
+      // The cleaner runs in a child process whose file-size limit is 0 bytes, with the limit's
+      // signal ignored, so writing the file fails with an error the way a full disk would.
+      const module = new URL("../../src/accounting/clean_download.ts", import.meta.url).href;
+      const script = path.join(f.root, "clean-under-limit.ts");
+      await Deno.writeTextFile(
+        script,
+        `import { main } from ${JSON.stringify(module)};\n` +
+          "Deno.exit(await main(Deno.args));\n",
+      );
+      const underLimit = async () => {
+        const r = await new Deno.Command("sh", {
+          args: [
+            "-c",
+            `trap '' XFSZ; ulimit -f 0 && exec "$@"`,
+            "sh",
+            Deno.execPath(),
+            "run",
+            "--config",
+            path.join(REPO_ROOT, "deno.json"),
+            `--allow-read=${f.root}`,
+            `--allow-write=${f.booksDir}`,
+            "--allow-env=HOME",
+            script,
+            f.input,
+            "--books-dir",
+            f.booksDir,
+          ],
+          stdout: "piped",
+          stderr: "piped",
+        }).output();
+        return { code: r.code, stderr: new TextDecoder().decode(r.stderr) };
+      };
+
+      const failed = await underLimit();
+      assertEquals(failed.code, 1, failed.stderr);
+      assertStringIncludes(failed.stderr, "could not write");
+      assertStringIncludes(failed.stderr, "Nothing was written.");
+      assertEquals(await exists(out), false, "a failed write left a file at the output path");
+
+      const retried = await cleanDownload({ input: f.input, booksDir: f.booksDir });
+      assertEquals(retried.outputPath, out);
+      assertEquals(await Deno.readTextFile(out), `${HEADER}\n2026-03-14,PENN STATION,22.86,1\n`);
+
+      await Deno.writeTextFile(out, "kept\n");
+      const again = await underLimit();
+      assertEquals(again.code, 1, again.stderr);
+      assertStringIncludes(again.stderr, "never overwrites a record");
+      assertEquals(await Deno.readTextFile(out), "kept\n");
+    } finally {
+      await f.cleanup();
     }
   },
 });
