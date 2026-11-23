@@ -209,14 +209,41 @@ export interface ReturnFiguresResult {
   results: FigureResult[];
 }
 
-async function resolveInside(file: string, dir: string, label: string): Promise<string> {
-  let real: string;
-  let realDir: string;
+/**
+ * The requested year's folder as it really is on disk. The folder must resolve to the <year>
+ * folder of the tax folder itself: a 2025 folder that is a link to 2024, or to anywhere else, is
+ * refused before any return is read, so one year's returns are never written up as another's.
+ */
+async function resolveYearDir(privateTaxDir: string, year: string): Promise<string> {
+  let realTaxDir: string;
   try {
-    realDir = await Deno.realPath(dir);
+    realTaxDir = await Deno.realPath(privateTaxDir);
   } catch {
-    throw new ReturnFiguresRefusal(`The folder ${dir} cannot be read.`);
+    throw new ReturnFiguresRefusal(`The folder ${privateTaxDir} cannot be read.`);
   }
+  const yearDir = path.join(privateTaxDir, year);
+  let realYearDir: string;
+  try {
+    realYearDir = await Deno.realPath(yearDir);
+  } catch {
+    throw new ReturnFiguresRefusal(`The folder ${yearDir} cannot be read.`);
+  }
+  if (realYearDir !== path.join(realTaxDir, year)) {
+    throw new ReturnFiguresRefusal(
+      `The folder ${yearDir} leads somewhere other than the ${year} folder of ${privateTaxDir}; the returns must be saved in that year's own folder.`,
+    );
+  }
+  return realYearDir;
+}
+
+/** `realDir` is a folder already resolved by resolveYearDir. */
+async function resolveInside(
+  file: string,
+  realDir: string,
+  dir: string,
+  label: string,
+): Promise<string> {
+  let real: string;
   try {
     real = await Deno.realPath(file);
   } catch {
@@ -242,8 +269,9 @@ export async function runReturnFigures(opts: ReturnFiguresOptions): Promise<Retu
     throw new ReturnFiguresRefusal("--year must be a four-digit year, such as 2025.");
   }
   const yearDir = path.join(opts.privateTaxDir, opts.year);
-  const federal = await resolveInside(opts.federalPdf, yearDir, "federal");
-  const virginia = await resolveInside(opts.virginiaPdf, yearDir, "Virginia");
+  const realYearDir = await resolveYearDir(opts.privateTaxDir, opts.year);
+  const federal = await resolveInside(opts.federalPdf, realYearDir, yearDir, "federal");
+  const virginia = await resolveInside(opts.virginiaPdf, realYearDir, yearDir, "Virginia");
 
   const extract = opts.extractText ?? ((p: string) => extractPdfText(p));
   const federalText = await extract(federal);
@@ -268,16 +296,24 @@ export async function runReturnFigures(opts: ReturnFiguresOptions): Promise<Retu
   const outDir = path.join(opts.booksDir, "tax", opts.year);
   const outputPath = path.join(outDir, "return-figures.md");
   await Deno.mkdir(outDir, { recursive: true });
+  // The record is written in full to a temporary file beside it, then linked into place. Linking
+  // never replaces an existing file, so an existing record is kept, and a write that fails leaves
+  // the record's name free for the next run. The temporary file is removed either way.
+  const temp = path.join(outDir, `.return-figures.${crypto.randomUUID()}.tmp`);
   try {
-    // createNew: the skill never deletes a record, so an existing file is never replaced.
-    await Deno.writeTextFile(outputPath, markdown, { createNew: true });
-  } catch (err) {
-    if (err instanceof Deno.errors.AlreadyExists) {
-      throw new ReturnFiguresRefusal(
-        `${outputPath} already exists; rename it first if the figures are to be found again.`,
-      );
+    await Deno.writeTextFile(temp, markdown, { createNew: true });
+    try {
+      await Deno.link(temp, outputPath);
+    } catch (err) {
+      if (err instanceof Deno.errors.AlreadyExists) {
+        throw new ReturnFiguresRefusal(
+          `${outputPath} already exists; rename it first if the figures are to be found again.`,
+        );
+      }
+      throw err;
     }
-    throw err;
+  } finally {
+    await Deno.remove(temp).catch(() => {});
   }
   return { outputPath, results };
 }

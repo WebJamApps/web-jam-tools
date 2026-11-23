@@ -266,6 +266,178 @@ Deno.test("runReturnFigures refuses, writing nothing, when it cannot tell", asyn
   }
 });
 
+Deno.test("a year folder that leads to another folder is refused before any return is read", async (t) => {
+  const d = await makeDirs();
+  const texts = { "federal-2025.pdf": filled1040(), "virginia-2025.pdf": filled760() };
+  const read: string[] = [];
+  const recordingExtract = (p: string) => {
+    read.push(p);
+    return fakeExtract(texts)(p);
+  };
+  try {
+    // The made-up 2024 returns sit in the real 2024 folder; tax/2025 is replaced by a link to it.
+    const year2024 = path.join(d.privateTaxDir, "2024");
+    await Deno.mkdir(year2024);
+    await Deno.writeTextFile(path.join(year2024, "federal-2025.pdf"), "federal");
+    await Deno.writeTextFile(path.join(year2024, "virginia-2025.pdf"), "virginia");
+    const year2025 = path.join(d.privateTaxDir, "2025");
+    await Deno.remove(year2025, { recursive: true });
+
+    const out = path.join(d.booksDir, "tax", "2025", "return-figures.md");
+    for (
+      const [name, target] of [
+        ["to the 2024 folder", year2024],
+        ["to a folder outside the tax folder", d.root],
+      ]
+    ) {
+      await t.step(`2025 linked ${name}`, async () => {
+        if (target === d.root) {
+          await Deno.writeTextFile(path.join(d.root, "federal-2025.pdf"), "federal");
+          await Deno.writeTextFile(path.join(d.root, "virginia-2025.pdf"), "virginia");
+        }
+        await Deno.remove(year2025).catch(() => {});
+        await Deno.symlink(target, year2025);
+        await assertRejects(
+          () =>
+            runReturnFigures({
+              ...d,
+              year: "2025",
+              extractText: recordingExtract,
+            }),
+          ReturnFiguresRefusal,
+          "leads somewhere other than the 2025 folder",
+        );
+        assertEquals(read, [], "a return was read before the year folder was checked");
+        await assertRejects(() => Deno.stat(out), Deno.errors.NotFound);
+      });
+    }
+
+    await t.step(
+      "a tax folder reached through a link still finds its own 2025 folder",
+      async () => {
+        await Deno.remove(year2025);
+        await Deno.mkdir(year2025);
+        await Deno.writeTextFile(path.join(year2025, "federal-2025.pdf"), "federal");
+        await Deno.writeTextFile(path.join(year2025, "virginia-2025.pdf"), "virginia");
+        const linkedTaxDir = path.join(d.root, "tax-link");
+        await Deno.symlink(d.privateTaxDir, linkedTaxDir);
+        const { results } = await runReturnFigures({
+          ...d,
+          privateTaxDir: linkedTaxDir,
+          federalPdf: path.join(linkedTaxDir, "2025", "federal-2025.pdf"),
+          virginiaPdf: path.join(linkedTaxDir, "2025", "virginia-2025.pdf"),
+          year: "2025",
+          extractText: fakeExtract(texts),
+        });
+        assertEquals(results.filter((r) => r.found).length, 3);
+      },
+    );
+  } finally {
+    await Deno.remove(d.root, { recursive: true });
+  }
+});
+
+const RETURN_FIGURES_MODULE = new URL("../../src/accounting/return_figures.ts", import.meta.url)
+  .href;
+
+Deno.test("a write that fails leaves no record and the name free, and keeps an existing record", async () => {
+  const d = await makeDirs();
+  try {
+    const outDir = path.join(d.booksDir, "tax", "2025");
+    const out = path.join(outDir, "return-figures.md");
+    const texts = { "federal-2025.pdf": filled1040(), "virginia-2025.pdf": filled760() };
+    // The finder runs in a child process whose file-size limit is 0 bytes, with the limit's
+    // signal ignored, so writing the record fails with an error the way a full disk would.
+    const config = path.join(d.root, "config.json");
+    await Deno.writeTextFile(
+      config,
+      JSON.stringify({
+        privateTaxDir: d.privateTaxDir,
+        booksDir: d.booksDir,
+        federalPdf: d.federalPdf,
+        virginiaPdf: d.virginiaPdf,
+        texts,
+      }),
+    );
+    const script = path.join(d.root, "write-under-limit.ts");
+    await Deno.writeTextFile(
+      script,
+      `import { runReturnFigures } from ${JSON.stringify(RETURN_FIGURES_MODULE)};
+const c = JSON.parse(await Deno.readTextFile(Deno.args[0]));
+try {
+  await runReturnFigures({
+    privateTaxDir: c.privateTaxDir,
+    booksDir: c.booksDir,
+    federalPdf: c.federalPdf,
+    virginiaPdf: c.virginiaPdf,
+    year: "2025",
+    extractText: (p) => Promise.resolve(c.texts[p.split("/").pop()] ?? ""),
+  });
+  console.log("written");
+} catch (err) {
+  console.log("failed: " + (err instanceof Error ? err.constructor.name : String(err)));
+  Deno.exit(3);
+}
+`,
+    );
+    const writeUnderLimit = async () => {
+      const result = await new Deno.Command("sh", {
+        args: [
+          "-c",
+          `trap '' XFSZ; ulimit -f 0 && exec "$@"`,
+          "sh",
+          Deno.execPath(),
+          "run",
+          "--config",
+          path.join(REPO_ROOT, "deno.json"),
+          `--allow-read=${d.root}`,
+          `--allow-write=${d.booksDir}`,
+          script,
+          config,
+        ],
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      return {
+        code: result.code,
+        stdout: new TextDecoder().decode(result.stdout),
+        stderr: new TextDecoder().decode(result.stderr),
+      };
+    };
+    const leftovers = async () => {
+      const names: string[] = [];
+      for await (const e of Deno.readDir(outDir)) {
+        if (e.name.endsWith(".tmp")) names.push(e.name);
+      }
+      return names;
+    };
+
+    const failed = await writeUnderLimit();
+    assertEquals(failed.code, 3, failed.stdout + failed.stderr);
+    assertStringIncludes(failed.stdout, "failed:");
+    await assertRejects(() => Deno.stat(out), Deno.errors.NotFound);
+    assertEquals(await leftovers(), [], "a temporary file was left beside the record");
+
+    // The name is free, so the next run writes the record.
+    const { results } = await runReturnFigures({
+      ...d,
+      year: "2025",
+      extractText: fakeExtract(texts),
+    });
+    assertEquals(await Deno.readTextFile(out), renderFiguresMarkdown("2025", results));
+
+    // A failed write never touches a record that is already there.
+    await Deno.remove(out);
+    await Deno.writeTextFile(out, "kept\n");
+    const againFailed = await writeUnderLimit();
+    assertEquals(againFailed.code, 3, againFailed.stdout + againFailed.stderr);
+    assertEquals(await Deno.readTextFile(out), "kept\n");
+    assertEquals(await leftovers(), [], "a temporary file was left beside the record");
+  } finally {
+    await Deno.remove(d.root, { recursive: true });
+  }
+});
+
 Deno.test("extractPdfText refuses when pdftotext is not installed", async () => {
   await assertRejects(
     () => extractPdfText("/nonexistent.pdf", "no-such-pdftotext-binary"),
