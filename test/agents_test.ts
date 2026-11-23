@@ -44,6 +44,10 @@ async function run(
       AGENTS_HEALTH_REPORT_CMD: "true",
       AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
       AGENTS_FETCH_REPOS_CMD: "true",
+      // Unstubbed, these ran the real update-all.sh (claude/agy/codex updates) and update-scripts.sh,
+      // which pulls dev into the canonical clone and reinstalls the machine's hooks from it.
+      AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       ...(env ?? {}),
     },
   });

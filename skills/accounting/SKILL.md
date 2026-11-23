@@ -1,14 +1,19 @@
 ---
 name: accounting
-description: Keep Web Jam LLC's books in hledger under ~/Dropbox/web-jam-llms/financial/books/. Record plain-text entries, file receipt scans, convert Quicken/QuickBooks bank files to CSV, import statements, and run the month-end close. No personal lines or amounts go to GitHub.
+description: Keep Web Jam LLC's books in rustledger under ~/Dropbox/web-jam-llms/financial/books/. Record plain-text entries, file receipt scans, check the books with rledger, convert Quicken/QuickBooks bank files to CSV, import statements, and run the month-end close. No personal lines or amounts go to GitHub.
 ---
 
-# /accounting — Web Jam LLC Double-Entry Bookkeeping in hledger
+# /accounting — Web Jam LLC Double-Entry Bookkeeping in rustledger
 
-This skill manages Web Jam LLC's books using `hledger` plain-text accounting. It runs across
-Claude Code, Antigravity (agy), and Codex. Josh or Maria communicates transactions in plain
-language at the laptop (e.g. "penn station, 22.86"), and the agent writes the corresponding
-journal entries, files receipts, converts bank files, or runs the month-end close.
+This skill manages Web Jam LLC's books in rustledger, which reads Beancount's plain-text format
+through its `rledger` command. It runs across Claude Code, Antigravity (agy), and Codex. Josh or
+Maria communicates transactions in plain language at the laptop (e.g. "penn station, 22.86"), and
+the agent writes the corresponding entries, files receipts, checks the books, converts bank
+files, or runs the month-end close.
+
+Entries, receipts and the check use the year's Beancount books (`<year>.beancount`). Statement
+import and the month-end close still use the year's `<year>.journal` file until they move to the
+Beancount books; each refuses the other format's file and writes nothing.
 
 No bookkeeping is performed on a phone.
 
@@ -29,7 +34,8 @@ to GitHub or include them in issue descriptions, commit messages, or PR bodies.
 
 All accounting files reside in `~/Dropbox/web-jam-llms/financial/books/`:
 
-- `<year>.journal` — the active year's books (e.g. `2026.journal`)
+- `<year>.beancount` — the year's books, which entries and the check use (e.g. `2026.beancount`)
+- `<year>.journal` — the journal file statement import and the month-end close still use (e.g. `2026.journal`)
 - `rules/` — account import mapping rules (e.g. `truist-checking.rules`, `credit-card.rules`)
 - `inbox/` — scanned receipts waiting to be filed
 - `receipts/<year>/` — filed receipt PDFs organized by year (e.g. `receipts/2026/2026-11-10-penn-station.pdf`)
@@ -51,18 +57,52 @@ Only two business accounts are imported:
 
 Personal bank or credit card accounts are **never** imported into the books.
 
-## Journal Entry Conventions
+## Entry Conventions
 
-Every journal entry records:
+Record an entry with `deno task accounting:entry`, which appends it to `<year>.beancount` (or the
+file named with `--books`, which must end in `.beancount`):
+
+```sh
+deno task accounting:entry --date 2026-11-10 --desc "Penn Station" --amount 22.86 \
+  --category Expenses:Meals --from Liabilities:CreditCard --purpose "Lunch meeting" \
+  --attendees "Josh, Maria" --receipt receipts/2026/2026-11-10-penn-station.pdf
+```
+
+Every entry records:
 - Date (`YYYY-MM-DD`)
 - Payee / Place / Payer
-- Amount
+- Amount, in `USD`
 - Category account (e.g. `Expenses:Meals`, `Expenses:Software`, `Income:Performance`)
 - Payment source account (e.g. `Liabilities:CreditCard`, `Assets:Checking:Truist`)
-- Business purpose tag (`; purpose: ...`)
-- Receipt link tag when a receipt exists (`; receipt: receipts/<year>/...`)
-- Meal attendees tag when recording dining expenses (`; attendees: ...`)
-- Owner tag when paid or received personally (`; owner: Josh` or `; owner: Maria`)
+- Business purpose metadata (`purpose: "..."`)
+- Receipt metadata when a receipt exists (`receipt: "receipts/<year>/..."`)
+- Meal attendees metadata when recording dining expenses (`attendees: "..."`)
+- Owner metadata when paid or received personally (`owner: "Josh"` or `owner: "Maria"`)
+
+In the books an entry reads:
+
+```
+2026-11-10 * "Penn Station"
+  purpose: "Lunch meeting"
+  attendees: "Josh, Maria"
+  receipt: "receipts/2026/2026-11-10-penn-station.pdf"
+  Expenses:Meals                           22.86 USD
+  Liabilities:CreditCard                  -22.86 USD
+```
+
+Account names follow Beancount's rule: they start with `Assets`, `Liabilities`, `Equity`, `Income`
+or `Expenses`, and each part after a `:` starts with a capital letter or digit, with no spaces.
+The entry command opens, on January 1 of the entry's year, any account the books do not open yet.
+
+## Checking the Books
+
+Check the year's books with `deno task accounting:verify`, which runs `rledger check` on
+`<year>.beancount` (or the file named with `--books`). `rledger` must be on PATH.
+
+- The books are valid: it prints PASS and exits 0.
+- `rledger check` reports an error: it prints FAILED with rustledger's diagnostic and exits 1.
+- It cannot tell — `rledger` is not installed or cannot be run, or the books cannot be read: it
+  prints REFUSED with the reason and exits 2. It never reports the books valid.
 
 ### Money Crossing Between Personal and Business
 
@@ -86,12 +126,16 @@ Every journal entry records:
 1. Scanned receipts land in `inbox/` as PDFs from the Dropbox mobile scanner or printer.
 2. The agent moves the receipt from `inbox/` to `receipts/<year>/<date>-<place-slug>.pdf`
    using `deno task accounting:receipt`.
-3. The relative receipt path is tied to the journal entry tag `; receipt: receipts/<year>/<filename>`.
+3. The relative receipt path is tied to the entry by passing it to `accounting:entry` as
+   `--receipt receipts/<year>/<filename>`, which writes the metadata line
+   `receipt: "receipts/<year>/<filename>"`.
 4. Where no receipt exists, the entry itself (with date, place, amount, and purpose) serves as the record.
 
 ## Monthly Routine: Bank Import & Close
 
-Each month, downloaded statements are processed and closed:
+Each month, downloaded statements are processed and closed. These steps still work on the year's
+`<year>.journal` file, their default; naming a `.beancount` file with `--journal` is refused
+before anything is written.
 
 1. **Download Statements**: Place checking and credit card statement files in `statements/<year>/`.
 2. **Convert Quicken / QuickBooks Format**: If downloaded in QFX, OFX, QBO, or QIF format, convert
@@ -123,12 +167,12 @@ Each month, downloaded statements are processed and closed:
 
 All accounting operations run via registered `deno task` commands in `deno.json`:
 
-- `deno task accounting:entry` — Format and record a new transaction in the journal.
+- `deno task accounting:entry` — Record a new entry in the year's Beancount books.
 - `deno task accounting:receipt` — File a receipt PDF from `inbox/` to `receipts/<year>/`.
 - `deno task accounting:convert` — Convert QFX, OFX, QBO, or QIF bank statements to CSV.
 - `deno task accounting:import` — Import and reconcile statement transactions into the journal.
 - `deno task accounting:close-month` — Assert statement balances, snapshot the journal, and produce close reports.
-- `deno task accounting:verify` — Verify journal balances and assertions.
+- `deno task accounting:verify` — Check the year's Beancount books with `rledger check`.
 - `deno task accounting:cli init-books` — Create the books directory structure.
 
 The tasks can read and write within the repository and the default books folder. Place statements

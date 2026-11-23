@@ -254,6 +254,17 @@ async function stepOutput(
 }
 
 /**
+ * Whether a build's full commit id is the requested head. The head may be the full id or an
+ * abbreviated one of at least seven hexadecimal digits, as `git log --oneline` prints it; an
+ * abbreviation matches only as a prefix of the full id.
+ */
+export function buildsHead(revision: unknown, head: string): boolean {
+  if (typeof revision !== "string" || !/^[0-9a-f]{40}$/i.test(revision)) return false;
+  if (!/^[0-9a-f]{7,40}$/i.test(head)) return false;
+  return revision.toLowerCase().startsWith(head.toLowerCase());
+}
+
+/**
  * Read CI for a pull request's head commit. The newest build on the branch is used only when it
  * built that commit; anything else is reported as unknown, never as passing.
  */
@@ -277,7 +288,7 @@ export async function ciFailureReport(
   if (!newest || typeof newest.build_num !== "number") {
     return { kind: "unknown", reason: `CircleCI lists no build on ${branch}` };
   }
-  if (newest.vcs_revision !== head) {
+  if (!buildsHead(newest.vcs_revision, head)) {
     return {
       kind: "unknown",
       reason: `the newest build on ${branch} (${newest.build_num}) is for ${

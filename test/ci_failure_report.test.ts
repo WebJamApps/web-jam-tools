@@ -6,6 +6,7 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import {
   assertSafeReportText,
+  buildsHead,
   ciFailureReport,
   type FetchJson,
   formatReport,
@@ -514,6 +515,29 @@ Deno.test("a build for another commit, no build, or a failed lookup is CI unknow
     assertEquals(report.kind, "unknown", name);
     assertStringIncludes(formatReport(report), "Do not treat this as a passing build", name);
   }
+});
+
+Deno.test("an abbreviated head commit, as git log --oneline prints it, finds its build", async () => {
+  for (const head of [HEAD.slice(0, 8), HEAD.slice(0, 7), HEAD.slice(0, 12).toUpperCase()]) {
+    const report = await ciFailureReport(REPO, BRANCH, head, fakeCircle("x"));
+    assert(report.kind !== "unknown", `${head}: ${formatReport(report)}`);
+  }
+  const other = await ciFailureReport(REPO, BRANCH, "c99c1fd2", fakeCircle("x"));
+  assertEquals(other.kind, "unknown");
+  assertStringIncludes(formatReport(other), "not the head commit c99c1fd2");
+});
+
+Deno.test("buildsHead matches a full id or a prefix of seven or more hex digits, and nothing else", () => {
+  assert(buildsHead(HEAD, HEAD));
+  assert(buildsHead(HEAD, HEAD.slice(0, 7)));
+  assert(buildsHead(HEAD.toUpperCase(), HEAD.slice(0, 10)));
+  assert(!buildsHead(HEAD, HEAD.slice(0, 6)), "six digits is too short to name a commit");
+  assert(!buildsHead(HEAD, ""));
+  assert(!buildsHead(HEAD, `${HEAD}0`), "longer than a full id");
+  assert(!buildsHead(HEAD, "70fc9e0z"), "not hexadecimal");
+  assert(!buildsHead(HEAD, HEAD.slice(1, 9)), "must be a prefix");
+  assert(!buildsHead(undefined, HEAD.slice(0, 8)));
+  assert(!buildsHead(HEAD.slice(0, 8), HEAD.slice(0, 8)), "the build's own id must be full");
 });
 
 Deno.test("a missing output_url records no output without failing", async () => {

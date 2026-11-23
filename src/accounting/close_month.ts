@@ -3,7 +3,7 @@
 
 import * as path from "@std/path";
 import { expandHome } from "../design-issue/gate1.ts";
-import { formatTransaction } from "./entry.ts";
+import { assertJournalTarget, formatTransaction } from "./entry.ts";
 import { CloseMonthOptions, MonthCloseResult, Posting, Transaction } from "./types.ts";
 import { computeAccountBalances, verifyJournalBalances } from "./verify.ts";
 
@@ -95,6 +95,7 @@ export function generateIncomeStatementText(
 
 export async function closeMonth(options: CloseMonthOptions): Promise<MonthCloseResult> {
   const journalPath = path.resolve(expandHome(options.journalPath));
+  assertJournalTarget(journalPath, "accounting:close-month");
   const booksDir = options.booksDir
     ? path.resolve(expandHome(options.booksDir))
     : path.dirname(journalPath);

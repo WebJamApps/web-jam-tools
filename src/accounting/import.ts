@@ -2,7 +2,7 @@
 // Reconcile and import statement transactions into the journal with duplicate prevention (web-jam-tools#1764).
 
 import * as path from "@std/path";
-import { parseJournal } from "./entry.ts";
+import { assertJournalTarget, parseJournal } from "./entry.ts";
 import { AccountRule, BankTransaction, ImportOptions, ImportResult, Transaction } from "./types.ts";
 
 export function parseCsvRows(csvContent: string): string[][] {
@@ -190,6 +190,7 @@ export function categorizeTransaction(
 }
 
 export async function importStatement(options: ImportOptions): Promise<ImportResult> {
+  assertJournalTarget(options.journalPath, "accounting:import");
   const statementContent = await Deno.readTextFile(options.statementPath);
   const bankTxs = parseStatementCsv(statementContent);
 

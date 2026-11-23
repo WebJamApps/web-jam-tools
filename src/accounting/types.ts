@@ -1,5 +1,7 @@
 // src/accounting/types.ts
-// Data structures and interfaces for Web Jam LLC double-entry accounting in hledger (web-jam-tools#1764).
+// Data structures for Web Jam LLC's books (web-jam-tools#1764). Entries, receipts and the check
+// use rustledger's Beancount books; import and month close still read and write the journal
+// format until web-jam-tools#1866 moves them (web-jam-tools#1865).
 
 export interface Posting {
   account: string;
@@ -76,6 +78,16 @@ export interface MonthCloseResult {
   balances: Record<string, number>;
   snapshotPath: string;
   reportPaths: string[];
+}
+
+/**
+ * What `rledger check` decided about the books: `pass` when it finds them valid, `fail` when it
+ * reports an error (the diagnostic is in `message`), and `refuse` when the check could not run —
+ * `rledger` missing or not runnable, or the books unreadable. A refusal never reports the books valid.
+ */
+export interface BooksCheckResult {
+  outcome: "pass" | "fail" | "refuse";
+  message: string;
 }
 
 export interface VerificationResult {

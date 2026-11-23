@@ -1,8 +1,15 @@
 // src/accounting/receipt.ts
-// Manage receipt scanning, inbox filing, and linking (web-jam-tools#1764).
+// File receipt scans from inbox/ and give the Beancount metadata line that ties one to its entry
+// (web-jam-tools#1764, web-jam-tools#1865).
 
 import * as path from "@std/path";
 import { expandHome } from "../design-issue/gate1.ts";
+import { quoteBeancount } from "./entry.ts";
+
+/** The metadata line an entry carries for its receipt file, as the entry writer writes it. */
+export function receiptMetadataLine(relativePath: string): string {
+  return `receipt: ${quoteBeancount(relativePath)}`;
+}
 
 export function slugify(text: string): string {
   return text
@@ -109,6 +116,9 @@ export async function fileReceipt(options: FileReceiptOptions): Promise<FileRece
     filed: true,
     filedPath: destPath,
     relativePath: relPath,
-    message: `Receipt filed to ${relPath}`,
+    message:
+      `Receipt filed to ${relPath}; tie it to the entry with --receipt ${relPath}, which writes ${
+        receiptMetadataLine(relPath)
+      }`,
   };
 }
