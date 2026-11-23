@@ -173,10 +173,6 @@ skill.
   to its head branch. It never authorizes deleting that branch, and the deletion patterns stay in
   `permissions.deny` with no prompt and no exception.
 
-- **MULTI-REPO ISSUES STAY OPEN UNTIL ALL REPOS ARE COMPLETE:** When an issue explicitly covers
-  multiple repositories (e.g. "all 8 active github repos"), no single PR in one repository may pass
-  `--closes` or claim the issue is completed. PRs in individual repos must use `--part-of` so the
-  tracking issue remains OPEN until the final repository's PR is merged.
 - **POST-MERGE MANUAL STEPS BECOME THEIR OWN `Josh` ISSUE:** Replaced by the canonical design
   document `/home/joshua/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md`
   (revision 2.14.0) in the sections "Manual Steps & Runbooks" and "How a pull request names its issue".
@@ -249,54 +245,6 @@ skill.
      be skipped, and where it still cannot be made airtight, **state the gap plainly rather than
      letting the guard be mistaken for complete coverage. An inert guard believed to be live is
      worse than a known gap.**
-
-- **A PR FOR A HOOK ISSUE NEVER CLOSES THE ISSUE.** Replaced by the canonical design document
-  `/home/joshua/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md`
-  (revision 2.14.0) in the sections "Manual Steps & Runbooks" and "How a pull request names its issue".
-  Hooks, skills and scripts are links into the canonical clone and close on merge once dev is pulled,
-  unless an installer write or laptop step is required, in which case the PR passes `--local-step`
-  (`Part of #N (local step after merge)`).
-
-## FE/BE COUPLING (web-jam-tools#240 "dispatching to sub-agents  -  part two improvements")
-
-### Backward-compat / expand-contract rule
-
-A back-end change to a shared contract (a required field, a validation rule, a request/response
-shape that a front-end consumes) MUST be additive/non-breaking until the front-end ships — enforce
-the breaking part in a LATER change.
-
-Right order for the venue example:
-
-1. BE accepts venues without an address (unchanged/additive).
-2. FE is updated to collect/require the address.
-3. THEN BE enforces the address as required.
-
-Enforcing the new required field before the FE sends it is exactly what broke prod — never skip
-straight to step 3.
-
-### Coupling record convention
-
-When work has coupled BE + FE halves, cross-reference them with a `FE-couples: <repo>#NNN` line in
-the issue/PR bodies — bidirectional, each half names the other (the FE issue/PR gets a matching
-pointer back to the BE one).
-
-### Coupling-override convention
-
-A coupled BE PR that is genuinely safe to ship alone (backward-compatible per the expand-contract
-rule above, or behind a flag) carries a `Coupling-override: <reason>` line in the PR body to pass
-the merge gate. Example:
-
-```
-Coupling-override: additive only — address stays optional until JaMmusic#NNN ships
-```
-
-### Merge gate (summary)
-
-A coupled BE change must reach `main` via a `dev→main` PR; a required status check verifies the FE
-half is merged to the FE repo's `main` (≈ deployed, given auto-deploy fan-out) OR a valid
-`Coupling-override:` line is present. Direct CLI pushes to `main` stay fine for UNcoupled changes.
-The enforcement Action itself lives in the web-jam-back repo (a separate build, out of scope here) —
-this section is the canonical rule text and conventions that Action enforces.
 
 ## MEMORY HYGIENE (standing rules for any AI on the team)
 
