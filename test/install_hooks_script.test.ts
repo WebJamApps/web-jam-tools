@@ -345,6 +345,22 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
       } $HOME/.claude/hooks/block-tool-after-question.sh`],
     );
 
+    const claudePreToolUseCommands: string[] = settings.hooks.PreToolUse.flatMap(
+      (entry: { hooks: Array<{ command: string }> }) => entry.hooks.map((h) => h.command),
+    );
+    const codexGmailFence = "block-codex-gmail-write.sh";
+    assertEquals(
+      claudePreToolUseCommands.some((command) => command.includes(codexGmailFence)),
+      false,
+    );
+    assertEquals(allAgyPreToolUseCmds.some((command) => command.includes(codexGmailFence)), false);
+    assertEquals(
+      allAgyPreToolUseCmds.filter((command) => command.endsWith("/block-agy-gmail-send-delete.sh"))
+        .length,
+      1,
+    );
+    assert(Deno.lstatSync(`${hooksDir}/${codexGmailFence}`).isSymlink);
+
     // web-jam-tools#1236: regenerate-memory-index.sh registered in PostToolUse
     const postToolEntries = settings.hooks.PostToolUse.flatMap(
       (entry: { matcher?: string; hooks?: Array<{ command?: string }> }) =>

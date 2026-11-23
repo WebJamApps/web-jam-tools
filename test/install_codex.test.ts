@@ -95,7 +95,7 @@ function capture(run: () => number): { code: number; output: string } {
   }
 }
 
-Deno.test("fresh home: exact 28 nested registrations, matcher fidelity, sandbox and regular rules", () => {
+Deno.test("fresh home: exact nested registrations, matcher fidelity, sandbox and regular rules", () => {
   fixture((home, repo) => {
     assertEquals(installCodex({ home, repo }), 0);
     const text = Deno.readTextFileSync(join(home, ".codex/config.toml"));
@@ -137,6 +137,7 @@ Deno.test("fresh home: exact 28 nested registrations, matcher fidelity, sandbox 
           "check-issue-citation-on-write.sh",
         ],
         [".*", "block-tool-after-question.sh"],
+        ["mcp__codex_apps__gmail_.*", "block-codex-gmail-write.sh"],
       ],
       PostToolUse: [
         ["Bash", "scan-output-for-secrets.sh"],
