@@ -7,56 +7,69 @@ export interface CommentHeredocCase {
   irreversible: GuardOutcome;
 }
 
-const rows: ReadonlyArray<readonly [string, GuardOutcome]> = [
-  ["echo hi # don't", "allow"],
-  ["python3 - x.md <<'EOF'\n# the Epic's row\nprint(1)\nEOF", "allow"],
-  ["python3 - x.md <<'EOF'\nprint(1)  # the Epic's row\nEOF", "allow"],
-  ["python3 - <<'EOF'\n# the Epic's row\nprint(1)\nEOF", "allow"],
-  ["python3 - x.md <<'EOF'\n# the Epic row\nprint(1)\nEOF", "allow"],
-  ["python3 - x.md <<'EOF'\nx = \"the Epic's row\"\nprint(1)\nEOF", "allow"],
-  ["cat > /tmp/x.md <<'EOF'\n# the Epic's row\nEOF", "allow"],
-  ["cat <<'EOF'\n# don't\nEOF", "allow"],
+/** A canonical row: both safety guards' outcomes, from "Literal regression cases". */
+export interface CanonicalGuardCase extends CommentHeredocCase {
+  mergeDeploy: GuardOutcome;
+}
+
+const rows: ReadonlyArray<readonly [string, GuardOutcome, GuardOutcome]> = [
+  ["echo hi # don't", "allow", "allow"],
+  ["python3 - x.md <<'EOF'\n# the Epic's row\nprint(1)\nEOF", "allow", "allow"],
+  ["python3 - x.md <<'EOF'\nprint(1)  # the Epic's row\nEOF", "allow", "allow"],
+  ["python3 - <<'EOF'\n# the Epic's row\nprint(1)\nEOF", "allow", "allow"],
+  ["python3 - x.md <<'EOF'\n# the Epic row\nprint(1)\nEOF", "allow", "allow"],
+  ["python3 - x.md <<'EOF'\nx = \"the Epic's row\"\nprint(1)\nEOF", "allow", "allow"],
+  ["cat > /tmp/x.md <<'EOF'\n# the Epic's row\nEOF", "allow", "allow"],
+  ["cat <<'EOF'\n# don't\nEOF", "allow", "allow"],
   [
     "node --input-type=module <<'JS'\n// Match ensureAuthenticated's existing token extraction and JWT verification.\nconsole.log(1);\nJS",
     "allow",
+    "allow",
   ],
-  ["node --input-type=module <<'JS'\nconsole.log(1); // don't\nJS", "allow"],
-  ["node --input-type=module <<'JS'\n/* don't */\nconsole.log(1);\nJS", "allow"],
+  ["node --input-type=module <<'JS'\nconsole.log(1); // don't\nJS", "allow", "allow"],
+  ["node --input-type=module <<'JS'\n/* don't */\nconsole.log(1);\nJS", "allow", "allow"],
   [
     "node --input-type=module <<'JS'\n// Match the existing token extraction and JWT verification.\nconsole.log(1);\nJS",
     "allow",
+    "allow",
   ],
-  ["deno run - <<'TS'\n// the Epic's row\nconsole.log(1);\nTS", "allow"],
-  ["deno run - <<'TS'\nconsole.log(1); // don't\nTS", "allow"],
-  ["deno run - <<'TS'\n/* don't */\nconsole.log(1);\nTS", "allow"],
-  ["node <<'JS'\nconsole.log(\"// don't\");\nJS", "allow"],
-  ['echo "# don\'t"', "allow"],
-  ["echo hello#world", "allow"],
-  ["echo \\#hello", "allow"],
-  ["echo hi # don't <<'FAKE'\necho done", "allow"],
-  ["echo hi # don't; gh repo delete WebJamApps/example --yes", "allow"],
-  ["echo hi # don't; git push origin dev", "allow"],
-  ["echo hi # don't\ngh pr merge 123 --squash", "operation"],
-  ["gh repo delete WebJamApps/example --yes # don't", "operation"],
-  ["git push origin dev # don't", "allow"],
-  ["gh pr merge 123 --squash # don't", "operation"],
-  ["bash <<'EOF'\n# don't\ngh repo delete WebJamApps/example --yes\nEOF", "operation"],
-  ["sh <<'EOF'\n# don't\ngit push origin dev\nEOF", "allow"],
+  ["deno run - <<'TS'\n// the Epic's row\nconsole.log(1);\nTS", "allow", "allow"],
+  ["deno run - <<'TS'\nconsole.log(1); // don't\nTS", "allow", "allow"],
+  ["deno run - <<'TS'\n/* don't */\nconsole.log(1);\nTS", "allow", "allow"],
+  ["node <<'JS'\nconsole.log(\"// don't\");\nJS", "allow", "allow"],
+  ['echo "# don\'t"', "allow", "allow"],
+  ["echo hello#world", "allow", "allow"],
+  ["echo \\#hello", "allow", "allow"],
+  ["echo hi # don't <<'FAKE'\necho done", "allow", "allow"],
+  ["echo hi # don't; gh repo delete WebJamApps/example --yes", "allow", "allow"],
+  ["echo hi # don't; git push origin dev", "allow", "allow"],
+  ["echo hi # don't\ngh pr merge 123 --squash", "operation", "operation"],
+  ["gh repo delete WebJamApps/example --yes # don't", "operation", "allow"],
+  ["git push origin dev # don't", "allow", "operation"],
+  ["gh pr merge 123 --squash # don't", "operation", "operation"],
+  ["bash <<'EOF'\n# don't\ngh repo delete WebJamApps/example --yes\nEOF", "operation", "allow"],
+  ["sh <<'EOF'\n# don't\ngit push origin dev\nEOF", "allow", "operation"],
   [
     "node <<'JS'\n// don't\nconsole.log(1);\nJS\ngh repo delete WebJamApps/example --yes",
     "operation",
+    "allow",
   ],
-  ["node <<'JS'\n// don't\nconsole.log(1);\nJS\ngit push origin dev", "allow"],
-  ['echo "unclosed', "unreadable"],
-  ["echo 'unclosed", "unreadable"],
-  ["bash <<'EOF'\necho \"unclosed\nEOF", "unreadable"],
-  ["node <<'JS'\nconsole.log(1);", "unreadable"],
-  ["/usr/bin/python3 - <<'PY'\n# don't\nprint(1)\nPY", "allow"],
-  ["cat <<'JS' | node\n// don't\nconsole.log(1);\nJS", "allow"],
+  ["node <<'JS'\n// don't\nconsole.log(1);\nJS\ngit push origin dev", "allow", "operation"],
+  ['echo "unclosed', "unreadable", "unreadable"],
+  ["echo 'unclosed", "unreadable", "unreadable"],
+  ["bash <<'EOF'\necho \"unclosed\nEOF", "unreadable", "unreadable"],
+  ["node <<'JS'\nconsole.log(1);", "unreadable", "unreadable"],
+  ["/usr/bin/python3 - <<'PY'\n# don't\nprint(1)\nPY", "allow", "allow"],
+  ["cat <<'JS' | node\n// don't\nconsole.log(1);\nJS", "allow", "allow"],
 ];
 
-export const COMMENT_HEREDOC_GUARD_CASES: readonly CommentHeredocCase[] = rows.map(
-  ([command, irreversible], index) => ({ id: index + 1, command, irreversible }),
+export const COMMENT_HEREDOC_GUARD_CASES: readonly CanonicalGuardCase[] = rows.map(
+  ([command, irreversible, mergeDeploy], index) => ({
+    id: index + 1,
+    command,
+    irreversible,
+    mergeDeploy,
+  }),
 );
 
 /** Supplemental review regressions; the canonical 36-row design matrix above stays unchanged. */

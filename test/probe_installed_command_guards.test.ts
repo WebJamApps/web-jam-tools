@@ -3,6 +3,7 @@ import { join } from "@std/path";
 import { readHookRegistrations } from "../src/install-codex/hooks.ts";
 import { updateConfig } from "../src/install-codex/config.ts";
 import {
+  type ProbeGuard,
   probeInstalledGuard,
   type ProbeOptions,
 } from "../scripts/probe-installed-command-guards.ts";
@@ -10,16 +11,31 @@ import {
 const ROOT = new URL("..", import.meta.url).pathname;
 const SCRIPT = join(ROOT, "scripts/probe-installed-command-guards.ts");
 
-async function fixture(run: (options: ProbeOptions) => Promise<void>): Promise<void> {
+const GUARD_SCRIPTS: Record<ProbeGuard, string> = {
+  irreversible: "block-irreversible-operations.sh",
+  "merge-deploy": "block-dangerous-git-deploy.sh",
+};
+
+async function fixture(
+  run: (options: ProbeOptions) => Promise<void>,
+  guard: ProbeGuard = "irreversible",
+): Promise<void> {
   const dir = await Deno.makeTempDir({ prefix: "apostrophe-installed-" });
   const home = join(dir, "home");
   const repoDir = join(dir, "canonical-clone");
+  const script = GUARD_SCRIPTS[guard];
   try {
     for (const path of [".claude/hooks", ".gemini/config", ".codex"]) {
       await Deno.mkdir(join(home, path), { recursive: true });
     }
     await Deno.mkdir(join(repoDir, "hooks/lib"), { recursive: true });
-    for (const name of ["block-irreversible-operations.sh", "agy-hook-shim.sh"]) {
+    for (
+      const name of [
+        "block-irreversible-operations.sh",
+        "block-dangerous-git-deploy.sh",
+        "agy-hook-shim.sh",
+      ]
+    ) {
       await Deno.copyFile(join(ROOT, "hooks", name), join(repoDir, "hooks", name));
       await Deno.symlink(join(repoDir, "hooks", name), join(home, ".claude/hooks", name));
     }
@@ -27,6 +43,7 @@ async function fixture(run: (options: ProbeOptions) => Promise<void>): Promise<v
       const name of [
         "normalize_command.ts",
         "check_irreversible_operations.ts",
+        "check_dangerous_git_deploy.ts",
         "agy_hook_shim.ts",
         "detect_credential_literal.ts",
         "run_hook.sh",
@@ -43,10 +60,10 @@ async function fixture(run: (options: ProbeOptions) => Promise<void>): Promise<v
       home,
     );
     const registration = wanted.PreToolUse.find((entry) =>
-      entry.hooks[0].command.includes("block-irreversible-operations.sh")
+      entry.hooks[0].command.includes(script)
     )!;
     const matcher = registration.matcher!;
-    const target = join(home, ".claude/hooks/block-irreversible-operations.sh");
+    const target = join(home, ".claude/hooks", script);
     const config = (command: string, match = matcher) =>
       JSON.stringify({
         hooks: { PreToolUse: [{ matcher: match, hooks: [{ type: "command", command }] }] },
@@ -57,12 +74,12 @@ async function fixture(run: (options: ProbeOptions) => Promise<void>): Promise<v
       config(
         `$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${
           btoa(matcher)
-        } $HOME/.claude/hooks/block-irreversible-operations.sh`,
+        } $HOME/.claude/hooks/${script}`,
         ".*",
       ),
     );
     await Deno.writeTextFile(join(home, ".codex/config.toml"), updateConfig("", wanted, home).text);
-    await run({ surface: "claude", home, repoDir });
+    await run({ surface: "claude", home, repoDir, guard });
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -165,4 +182,94 @@ Deno.test("apostrophe probe refuses a broken symlink, missing registration and w
       "expected surface",
     );
   });
+});
+
+// web-jam-tools#1422: the same probe, extended to the merge/deploy guard, proves its existing
+// registration on each tool (Claude Code symlink, agy shim, Codex with WJT_SURFACE=codex) and its
+// column of all 36 literal cases, without changing any configuration.
+for (const surface of ["claude", "agy", "codex"] as const) {
+  Deno.test(`apostrophe installed merge-deploy ${surface}: CLI verifies existing registration and all 36 cases without changing config`, async () => {
+    await fixture(async (options) => {
+      const configs = [".claude/settings.json", ".gemini/config/hooks.json", ".codex/config.toml"];
+      const before = await Promise.all(
+        configs.map((path) => Deno.readTextFile(join(options.home, path))),
+      );
+      const result = await new Deno.Command("deno", {
+        args: [
+          "run",
+          "--config",
+          join(ROOT, "deno.json"),
+          "--allow-read",
+          "--allow-write=/tmp",
+          "--allow-env=HOME",
+          "--allow-run=bash",
+          SCRIPT,
+          "--guard",
+          "merge-deploy",
+          "--surface",
+          surface,
+          "--home",
+          options.home,
+          "--repo-dir",
+          options.repoDir,
+        ],
+        env: { HOME: options.home },
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      assertEquals(result.code, 0, new TextDecoder().decode(result.stderr));
+      assertStringIncludes(
+        new TextDecoder().decode(result.stdout),
+        `${surface} merge-deploy: 36/36 literal cases passed`,
+      );
+      assertEquals(
+        await Promise.all(configs.map((path) => Deno.readTextFile(join(options.home, path)))),
+        before,
+      );
+    }, "merge-deploy");
+  });
+}
+
+Deno.test("apostrophe merge-deploy probe reports a mismatched outcome and a case with no column", async () => {
+  await fixture(async (options) => {
+    await assertRejects(
+      () =>
+        probeInstalledGuard(options, [{
+          id: 25,
+          command: "git push origin dev # don't",
+          irreversible: "allow",
+          mergeDeploy: "allow",
+        }]),
+      Error,
+      "literal case 25: expected allow, received operation",
+    );
+    await assertRejects(
+      () => probeInstalledGuard(options, [{ id: 99, command: "echo hi", irreversible: "allow" }]),
+      Error,
+      "has no outcome for this guard",
+    );
+  }, "merge-deploy");
+});
+
+Deno.test("apostrophe probe CLI refuses an unknown guard name", async () => {
+  const result = await new Deno.Command("deno", {
+    args: [
+      "run",
+      "--config",
+      join(ROOT, "deno.json"),
+      "-A",
+      SCRIPT,
+      "--guard",
+      "other",
+      "--surface",
+      "claude",
+    ],
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  assertEquals(result.code, 1);
+  assertStringIncludes(
+    new TextDecoder().decode(result.stderr),
+    "--guard irreversible|merge-deploy",
+  );
 });

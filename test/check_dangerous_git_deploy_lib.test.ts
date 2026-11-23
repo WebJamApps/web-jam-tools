@@ -8,6 +8,7 @@
 
 import { assertEquals } from "@std/assert";
 import { checkDangerousGitDeploy } from "../hooks/lib/check_dangerous_git_deploy.ts";
+import { COMMENT_HEREDOC_GUARD_CASES } from "./comment_heredoc_guard_cases.ts";
 
 // --- the reported false positive: heredoc body merely mentioning the phrase ---
 
@@ -369,4 +370,33 @@ Deno.test("#1223 an alias definition is blocked whichever way it is handed to gi
     assertEquals(r.blocked, true, cmd);
     assertEquals(r.description?.includes("defining a git alias"), true, cmd);
   }
+});
+
+// --- web-jam-tools#1422: the merge/deploy column of the canonical literal matrix ---
+// command-reader-design.md, "Literal regression cases". Each row is checked at the checker level
+// here and through the shell entry point in test/block_dangerous_git_deploy_hook.test.ts.
+
+for (const row of COMMENT_HEREDOC_GUARD_CASES) {
+  Deno.test(`apostrophe merge/deploy literal case ${row.id}: ${row.mergeDeploy}`, () => {
+    const result = checkDangerousGitDeploy(row.command);
+    if (row.mergeDeploy === "allow") {
+      assertEquals(result, { blocked: false });
+    } else {
+      assertEquals(result.blocked, true);
+      assertEquals(result.reason, row.mergeDeploy, result.description);
+    }
+  });
+}
+
+Deno.test("apostrophe controls: every outcome in the merge/deploy column is exercised", () => {
+  const seen = new Set(COMMENT_HEREDOC_GUARD_CASES.map((row) => row.mergeDeploy));
+  assertEquals([...seen].sort(), ["allow", "operation", "unreadable"]);
+  assertEquals(COMMENT_HEREDOC_GUARD_CASES.length, 36);
+});
+
+Deno.test("apostrophe: an identified operation is never reported as unreadable, and the reverse", () => {
+  assertEquals(checkDangerousGitDeploy("gh pr merge 123 --squash").reason, "operation");
+  assertEquals(checkDangerousGitDeploy("git push origin dev").reason, "operation");
+  assertEquals(checkDangerousGitDeploy(`echo "unclosed`).reason, "unreadable");
+  assertEquals(checkDangerousGitDeploy("node <<'JS'\nconsole.log(1);").reason, "unreadable");
 });

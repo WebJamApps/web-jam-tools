@@ -10,6 +10,7 @@
 // body, or a test fixture asserting `deno deploy --prod` is blocked — tripped
 // this guard while identical text passed the other. That is the inconsistency.
 import { assertEquals } from "@std/assert";
+import { COMMENT_HEREDOC_GUARD_CASES } from "./comment_heredoc_guard_cases.ts";
 
 const SCRIPT_PATH = new URL(
   "../hooks/block-dangerous-git-deploy.sh",
@@ -413,3 +414,233 @@ PLAIN_REGRESSION_CASES_1223.forEach((row) => {
     assertEquals(await exitCodeFor1223(row[0]), row[1]);
   });
 });
+
+// --- web-jam-tools#1422: the merge/deploy column through the shell entry point ---
+// Command strings travel as JSON on stdin; none of them is executed.
+
+for (const row of COMMENT_HEREDOC_GUARD_CASES) {
+  Deno.test(`apostrophe merge/deploy shell literal case ${row.id}: ${row.mergeDeploy}`, async () => {
+    const res = await runHook(row.command);
+    assertEquals(res.code, row.mergeDeploy === "allow" ? 0 : 2, res.stderr);
+    if (row.mergeDeploy === "allow") {
+      assertEquals(res.stderr, "");
+    } else if (row.mergeDeploy === "operation") {
+      assertOperationRefusal(res.stderr);
+    } else {
+      assertCouldNotRead(res.stderr);
+    }
+  });
+}
+
+function assertOperationRefusal(stderr: string) {
+  assertBlocked(stderr);
+  assertEquals(stderr.includes("This is Josh's action to perform"), true, stderr);
+  assertEquals(stderr.includes("could not read the command"), false, stderr);
+}
+
+function assertCouldNotRead(stderr: string) {
+  assertEquals(
+    stderr.includes(
+      "BLOCKED (merge/deploy guard): could not read the command; no protected operation was identified.",
+    ),
+    true,
+    stderr,
+  );
+  assertEquals(stderr.includes("restate the same action"), true, stderr);
+  assertEquals(stderr.includes("checked by this same guard"), true, stderr);
+  assertEquals(stderr.includes("Do not change what the command does"), true, stderr);
+  assertEquals(stderr.includes("end of the turn"), true, stderr);
+  // D-51: never claims an operation was found and never hands the command to Josh.
+  assertEquals(stderr.includes("Josh's action"), false, stderr);
+  assertEquals(stderr.includes("Josh"), false, stderr);
+  assertEquals(stderr.includes("STOP"), false, stderr);
+}
+
+Deno.test("apostrophe outcome 1: parsed and unmatched proceeds with exit 0 and no output", async () => {
+  const res = await runHook("echo hi # don't");
+  assertEquals(res, { code: 0, stderr: "" });
+});
+
+Deno.test("apostrophe outcome 2: parsed and matched refuses with exit 2 and the operation response", async () => {
+  const res = await runHook("git push origin dev # don't");
+  assertEquals(res.code, 2);
+  assertOperationRefusal(res.stderr);
+  assertEquals(res.stderr.includes("'git push' to a protected branch"), true, res.stderr);
+});
+
+Deno.test("apostrophe outcome 3: unreadable refuses with exit 2 and the could-not-read response", async () => {
+  const res = await runHook(`echo "unclosed`);
+  assertEquals(res.code, 2);
+  assertCouldNotRead(res.stderr);
+});
+
+// Command-reader design, "Checker that could not run": a broken guard is reported as a guard
+// that could not run, never as an unreadable command and never as a merge or deploy found.
+function pathWithoutDeno(): string {
+  return (Deno.env.get("PATH") ?? "").split(":").filter((dir) => {
+    try {
+      Deno.statSync(`${dir}/deno`);
+      return false;
+    } catch {
+      return true;
+    }
+  }).join(":");
+}
+
+const CHECKER_COULD_NOT_RUN_CASES: {
+  id: string;
+  checker: string;
+  noDeno?: boolean;
+  /** A stand-in for the shared runner, in place of the real one. */
+  runner?: string;
+  /** Extra environment for the guard, such as an unusable TMPDIR. */
+  env?: Record<string, string>;
+  expect: string[];
+}[] = [
+  {
+    id: "R1",
+    checker: "this is not (\n",
+    expect: [
+      "BLOCKED (block-dangerous-git-deploy): safety guard could not run (checker failed with exit code 1). Refusing action (safety default: fail closed).",
+      "Stop and report this refusal to Josh; do not retry the action through another route.",
+    ],
+  },
+  {
+    id: "R2",
+    checker: "await new Promise((r) => setTimeout(r, 60000));\n",
+    expect: [
+      "safety guard could not run (checker timed out after 15s)",
+      "Stop and report this refusal to Josh",
+    ],
+  },
+  {
+    id: "R3",
+    checker: 'console.log("OK");\n',
+    noDeno: true,
+    expect: [
+      "safety guard could not run (Deno is unavailable on PATH)",
+      "Stop and report this refusal to Josh",
+    ],
+  },
+  {
+    id: "R4",
+    checker: 'console.log("");\n',
+    expect: ["safety guard could not run", "no verdict", "Stop and report this refusal to Josh"],
+  },
+  {
+    id: "R5",
+    checker: 'console.log("MAYBE");\n',
+    expect: ["safety guard could not run", "MAYBE", "Stop and report this refusal to Josh"],
+  },
+  // A refusal marker with no description, or a description over several lines, is not a verdict.
+  ...[
+    ["R6", 'console.log("BLOCK:");\n', "BLOCK verdict without a description"],
+    ["R7", 'console.log("BLOCK:   ");\n', "BLOCK verdict without a description"],
+    [
+      "R8",
+      'console.log("BLOCK:first line\\nsecond line");\n',
+      "BLOCK verdict without a description",
+    ],
+    ["R9", 'console.log("UNREADABLE:");\n', "UNREADABLE verdict without a description"],
+    ["R10", 'console.log("UNREADABLE: \\t ");\n', "UNREADABLE verdict without a description"],
+    [
+      "R11",
+      'console.log("UNREADABLE:first line\\nsecond line");\n',
+      "UNREADABLE verdict without a description",
+    ],
+  ].map(([id, checker, reason]) => ({
+    id,
+    checker,
+    expect: [
+      `BLOCKED (block-dangerous-git-deploy): safety guard could not run (checker gave ${
+        reason.startsWith("BLOCK") ? "a" : "an"
+      } ${reason}). Refusing action (safety default: fail closed).`,
+      "Stop and report this refusal to Josh; do not retry the action through another route.",
+    ],
+  })),
+  {
+    id: "R12",
+    checker: 'console.log("OK");\n',
+    runner: "#!/usr/bin/env bash\ncat >/dev/null\nexit 2\n",
+    expect: [
+      "BLOCKED (block-dangerous-git-deploy): safety guard could not run (the shared runner failed with exit code 2 and gave no refusal). Refusing action (safety default: fail closed).",
+      "Stop and report this refusal to Josh; do not retry the action through another route.",
+    ],
+  },
+  {
+    id: "R13",
+    checker: 'console.log("OK");\n',
+    runner: "#!/usr/bin/env bash\ncat >/dev/null\necho 'some unrelated error' >&2\nexit 1\n",
+    expect: [
+      "safety guard could not run (the shared runner failed with exit code 1 and gave no refusal)",
+      "Stop and report this refusal to Josh",
+    ],
+  },
+  {
+    id: "R14",
+    checker: 'console.log("OK");\n',
+    runner: "#!/usr/bin/env bash\ncat >/dev/null\n" +
+      "echo 'BLOCKED (block-dangerous-git-deploy): safety guard could not run (made-up runner reason). Refusing action (safety default: fail closed).' >&2\n" +
+      "echo 'Stop and report this refusal to Josh; do not retry the action through another route.' >&2\nexit 2\n",
+    expect: [
+      "BLOCKED (block-dangerous-git-deploy): safety guard could not run (made-up runner reason). Refusing action (safety default: fail closed).\n" +
+      "Stop and report this refusal to Josh; do not retry the action through another route.\n",
+    ],
+  },
+  {
+    id: "R15",
+    checker: 'console.log("OK");\n',
+    env: { TMPDIR: "/nonexistent-merge-deploy-guard-tmp" },
+    expect: [
+      "BLOCKED (block-dangerous-git-deploy): safety guard could not run (could not create a file to capture the checker's errors). Refusing action (safety default: fail closed).",
+      "Stop and report this refusal to Josh; do not retry the action through another route.",
+    ],
+  },
+];
+
+for (const row of CHECKER_COULD_NOT_RUN_CASES) {
+  Deno.test(`checker that could not run ${row.id}: refuses as a guard that could not run`, async () => {
+    const dir = await Deno.makeTempDir({ prefix: "merge-deploy-broken-" });
+    try {
+      await Deno.mkdir(`${dir}/hooks/lib`, { recursive: true });
+      await Deno.copyFile(SCRIPT_PATH, `${dir}/hooks/block-dangerous-git-deploy.sh`);
+      if (row.runner) {
+        await Deno.writeTextFile(`${dir}/hooks/lib/run_hook.sh`, row.runner);
+      } else {
+        const runner = new URL("../hooks/lib/run_hook.sh", import.meta.url).pathname;
+        await Deno.copyFile(runner, `${dir}/hooks/lib/run_hook.sh`);
+      }
+      await Deno.chmod(`${dir}/hooks/lib/run_hook.sh`, 0o755);
+      await Deno.writeTextFile(`${dir}/hooks/lib/check_dangerous_git_deploy.ts`, row.checker);
+      const env: Record<string, string> = { BASH_ENV: "", AGY_HOOK_RECORD_PATH: "off" };
+      if (row.noDeno) env.PATH = pathWithoutDeno();
+      Object.assign(env, row.env ?? {});
+      const child = new Deno.Command("bash", {
+        args: [`${dir}/hooks/block-dangerous-git-deploy.sh`],
+        stdin: "piped",
+        stdout: "piped",
+        stderr: "piped",
+        env,
+      }).spawn();
+      const writer = child.stdin.getWriter();
+      await writer.write(
+        new TextEncoder().encode(
+          JSON.stringify({ tool_name: "Bash", tool_input: { command: "git status" } }),
+        ),
+      );
+      await writer.close();
+      const out = await child.output();
+      const stderr = new TextDecoder().decode(out.stderr);
+      assertEquals(out.code, 2, stderr);
+      for (const text of row.expect) {
+        assertEquals(stderr.includes(text), true, `${text} in ${stderr}`);
+      }
+      assertEquals(stderr.includes("could not read the command"), false, stderr);
+      assertEquals(stderr.includes("restate the same action"), false, stderr);
+      assertEquals(stderr.includes("This is Josh's action to perform"), false, stderr);
+      assertEquals(stderr.includes("never-merge-or-deploy-without-permission"), false, stderr);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+}
