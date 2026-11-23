@@ -7,7 +7,7 @@
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { join } from "@std/path";
-import { readTypedSkillCall } from "../hooks/lib/fix_run.ts";
+import { checkFixRun, readTypedSkillCall } from "../hooks/lib/fix_run.ts";
 import { runPush } from "../scripts/push.ts";
 import { resolveAntigravityWriteContext } from "../scripts/write_issue_approval_token.ts";
 
@@ -168,7 +168,7 @@ async function setupPushRepo(root: string): Promise<{
   await Deno.writeTextFile(
     join(binDir, "gh"),
     '#!/bin/sh\nif [ "$1" = pr ] && [ "$2" = comment ]; then exit 0; fi\n' +
-      'printf "%s\\n" \'{"number":1318,"state":"OPEN","headRefName":"probe-branch","headRepository":{"nameWithOwner":"WebJamApps/web-jam-tools"},"isCrossRepository":false}\'\n',
+      'printf \'{"number":1318,"state":"%s","headRefName":"probe-branch","headRepository":{"nameWithOwner":"WebJamApps/web-jam-tools"},"isCrossRepository":false}\\n\' "${PUSH_TEST_PR_STATE:-OPEN}"\n',
   );
   await Deno.chmod(join(binDir, "git"), 0o755);
   await Deno.chmod(join(binDir, "gh"), 0o755);
@@ -546,6 +546,17 @@ Deno.test("web-jam-tools#1916: agy strict binding supports throwaway fix-pr/<num
     assertEquals(await repo.git(["ls-remote", "origin", "refs/heads/fix-pr/1318"]), "");
     assertEquals(await repo.git(["rev-parse", "HEAD"]), siblingHead);
 
+    // A terminal PR leaves the throwaway branch under ordinary push rules.
+    for (const state of ["MERGED", "CLOSED"]) {
+      const ended = await runPushSubprocess(wtDir, ["--fix-comment", "c.md"], {
+        ...env,
+        PUSH_TEST_PR_STATE: state,
+      });
+      assertEquals(ended.code, 1);
+      assertStringIncludes(ended.stderr, "Refused (fix-pr-branch-outside-run)");
+      assertEquals(await repo.git(["ls-remote", "origin", "refs/heads/fix-pr/1318"]), "");
+    }
+
     // Without matching record row, fix-pr/1318 is refused with fix-pr-branch-outside-run.
     const refused = await runPushSubprocess(wtDir, [], {
       ...env,
@@ -555,5 +566,31 @@ Deno.test("web-jam-tools#1916: agy strict binding supports throwaway fix-pr/<num
     assertStringIncludes(refused.stderr, "Refused (fix-pr-branch-outside-run)");
   } finally {
     await harness.cleanup();
+  }
+});
+
+Deno.test("checkFixRun ends a terminal PR only when its number matches the typed target", () => {
+  const call = {
+    name: "fix-pr",
+    arguments: "web-jam-tools#1318",
+    text: "/fix-pr web-jam-tools#1318",
+  };
+  const pr = {
+    number: 1318,
+    headRefName: "main",
+    headRepository: null,
+    isCrossRepository: true,
+  };
+  for (const checkoutRepo of ["WebJamApps/web-jam-tools", "WebJamApps/JaMmusic"]) {
+    for (const state of ["MERGED", "CLOSED"]) {
+      assertEquals(checkFixRun(call, checkoutRepo, "feat/other", { ...pr, state }), {
+        kind: "none",
+      });
+      assertEquals(
+        checkFixRun(call, checkoutRepo, "feat/other", { ...pr, state, number: 9999 }).kind,
+        "refused",
+      );
+    }
+    assertEquals(checkFixRun(call, checkoutRepo, "feat/other", null), { kind: "none" });
   }
 });

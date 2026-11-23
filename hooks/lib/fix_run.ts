@@ -116,7 +116,7 @@ export type FixRun =
   | { kind: "refused"; reason: string }
   | { kind: "active"; pullRequest: PullRequestRef; headRefName: string };
 
-/** Bind the latest typed call to this open PR's repository and head or throwaway fix branch. */
+/** End terminal runs, or bind an open run to its repository and head or throwaway fix branch. */
 export function checkFixRun(
   call: CodexSkillCall | null,
   checkoutRepo: string,
@@ -126,10 +126,20 @@ export function checkFixRun(
   if (call?.name.split(":").at(-1) !== "fix-pr") return { kind: "none" };
   const ref = parseFixPrReference(call.arguments, checkoutRepo);
   if (!ref) return { kind: "refused", reason: "the typed fix-pr call names no pull request" };
+  if (!pr) return { kind: "none" };
+  if (pr.number !== ref.number) {
+    return {
+      kind: "refused",
+      reason: "GitHub returned a different pull request than the typed call",
+    };
+  }
+  if (pr.state === "MERGED" || pr.state === "CLOSED") return { kind: "none" };
+  if (pr.state !== "OPEN") {
+    return { kind: "refused", reason: "GitHub returned an unexpected pull request state" };
+  }
   if (ref.repo.toLowerCase() !== checkoutRepo.toLowerCase()) {
     return { kind: "refused", reason: "the typed fix-pr call names another repository" };
   }
-  if (!pr) return { kind: "none" };
   if (pr.headRefName === "dev" || pr.headRefName === "main") {
     return {
       kind: "refused",
@@ -141,7 +151,7 @@ export function checkFixRun(
   }
   const isFixBranch = branch === pr.headRefName || branch === `fix-pr/${pr.number}`;
   if (
-    pr.number !== ref.number || pr.state !== "OPEN" || !isFixBranch ||
+    !isFixBranch ||
     pr.isCrossRepository !== false ||
     pr.headRepository?.nameWithOwner?.toLowerCase() !== checkoutRepo.toLowerCase()
   ) {
