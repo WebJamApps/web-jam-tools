@@ -18,8 +18,6 @@
 set -euo pipefail
 
 input=$(cat)
-cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .toolCall.args.CommandLine // empty' 2>/dev/null || true)
-[ -z "$cmd" ] && exit 0
 
 block() {
   echo "BLOCKED (merge/deploy guard): $1" >&2
@@ -49,6 +47,15 @@ could_not_run() {
   echo "Stop and report this refusal to Josh; do not retry the action through another route." >&2
   exit 2
 }
+
+# Reading the hook input is part of the guard: if jq is missing or cannot
+# parse the input, the guard could not run, and the action is refused rather
+# than let through with no command seen. Input that parses but names no
+# command, such as another tool's call, has nothing for this guard to check.
+if ! cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .toolCall.args.CommandLine // empty' 2>/dev/null); then
+  could_not_run "could not read the hook input"
+fi
+[ -z "$cmd" ] && exit 0
 
 if ! HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd); then
   could_not_run "could not find the guard's own directory"
