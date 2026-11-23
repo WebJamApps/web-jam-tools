@@ -92,6 +92,23 @@ Deno.test("Codex Gmail hook inherits the fail-closed safety runner fallback", as
   }
 });
 
+Deno.test("Codex Gmail hook refuses with exit 2 when its own script path cannot be resolved", async () => {
+  const bin = await Deno.makeTempDir();
+  try {
+    // A failing readlink must refuse at once, never fall back to a runner in the working directory.
+    await Deno.writeTextFile(`${bin}/readlink`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    const failure = await invokeHook(
+      preToolUse("list_labels", {}),
+      `${bin}:${Deno.env.get("PATH")}`,
+    );
+    assertEquals(failure.code, 2);
+    assertEquals(failure.stdout, "");
+    assertStringIncludes(failure.stderr, "the hook script path could not be resolved");
+  } finally {
+    await Deno.remove(bin, { recursive: true });
+  }
+});
+
 Deno.test("Codex Gmail hook refuses with exit 2 when the shared runner cannot read stdin", async () => {
   const dir = await Deno.makeTempDir();
   try {

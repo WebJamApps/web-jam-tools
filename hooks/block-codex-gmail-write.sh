@@ -15,7 +15,11 @@ refuse() {
   exit 2
 }
 
-HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)" ||
+# Resolve the script path on its own: inside a nested substitution a failed readlink leaves
+# dirname an empty string, which becomes "." and would run a runner from the working directory.
+HOOK_PATH="$(readlink -f "${BASH_SOURCE[0]}")" && [ -n "$HOOK_PATH" ] ||
+  refuse "the hook script path could not be resolved"
+HOOK_DIR="$(cd "$(dirname "$HOOK_PATH")" && pwd)" ||
   refuse "the hook directory could not be resolved"
 
 status=0
