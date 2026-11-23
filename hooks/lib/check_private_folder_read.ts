@@ -1874,14 +1874,22 @@ export function collectWholeStringPaths(val: unknown, out: string[]): void {
  * Every whole-string path in an untranslated agy call's arguments. The shim supports two forms of
  * a structured `Arguments` value (`buildToolInput` in agy_hook_shim.ts): an object, which the
  * collector already descends into, and JSON text, which is decoded here so its paths are inspected
- * too. The arguments themselves are never changed. Throws when `Arguments` is text that does not
- * decode to a JSON object, so each guard refuses what it cannot read.
+ * too. The arguments themselves are never changed. That contract belongs to the MCP envelope
+ * alone: the JSON-text form is decoded only when `sourceTool` (the payload's `agy_tool_name`) is
+ * `call_mcp_tool`, or when no source tool name was carried. Any other tool's `Arguments` text is an
+ * ordinary argument, already inspected as a whole-string path. Throws when the MCP envelope's
+ * `Arguments` is text that does not decode to a JSON object, so each guard refuses what it cannot
+ * read.
  */
-export function collectUntranslatedArgumentPaths(toolInput: Record<string, unknown>): string[] {
+export function collectUntranslatedArgumentPaths(
+  toolInput: Record<string, unknown>,
+  sourceTool?: unknown,
+): string[] {
   const paths: string[] = [];
   collectWholeStringPaths(toolInput, paths);
   const structured = toolInput.Arguments;
-  if (typeof structured === "string") {
+  const mcpEnvelope = typeof sourceTool !== "string" || sourceTool === "call_mcp_tool";
+  if (mcpEnvelope && typeof structured === "string") {
     let decoded: unknown;
     try {
       decoded = JSON.parse(structured);
@@ -1907,13 +1915,14 @@ export function checkUntranslatedAgyCall(
   toolInput: unknown,
   cwd: string,
   home: string,
+  sourceTool?: unknown,
 ): string | null {
   if (toolInput === null || typeof toolInput !== "object" || Array.isArray(toolInput)) {
     return `${COULD_NOT_READ_REFUSAL} (untranslated agy tool call arguments cannot be read)`;
   }
   let paths: string[];
   try {
-    paths = collectUntranslatedArgumentPaths(toolInput as Record<string, unknown>);
+    paths = collectUntranslatedArgumentPaths(toolInput as Record<string, unknown>, sourceTool);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     return `${COULD_NOT_READ_REFUSAL} (${msg})`;
@@ -2055,6 +2064,7 @@ export async function main(): Promise<void> {
       untranslated.tool_input,
       callCwd,
       Deno.env.get("HOME") || "/home/joshua",
+      untranslated.agy_tool_name,
     );
     if (found) refuseMatch(found);
     Deno.exit(0);

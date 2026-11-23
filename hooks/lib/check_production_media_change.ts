@@ -209,11 +209,15 @@ function expandVariables(
   return s;
 }
 
-export function resolveTargetPath(
+/**
+ * The absolute path as written, before `path.resolve` collapses `..` against the text. The
+ * real-destination check needs it uncollapsed so a symlink is followed before a later `..`.
+ */
+function joinedTargetPath(
   raw: string,
   cwd: string,
   home: string,
-  vars: Map<string, string> = new Map(),
+  vars: Map<string, string>,
 ): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
@@ -223,8 +227,17 @@ export function resolveTargetPath(
   const expanded = expandVariables(trimmed, home, vars);
   if (!expanded || /[$`]/.test(expanded)) return null;
 
-  const joined = expanded.startsWith("/") ? expanded : `${cwd.replace(/\/+$/, "")}/${expanded}`;
-  return path.resolve(joined);
+  return expanded.startsWith("/") ? expanded : `${cwd.replace(/\/+$/, "")}/${expanded}`;
+}
+
+export function resolveTargetPath(
+  raw: string,
+  cwd: string,
+  home: string,
+  vars: Map<string, string> = new Map(),
+): string | null {
+  const joined = joinedTargetPath(raw, cwd, home, vars);
+  return joined === null ? null : path.resolve(joined);
 }
 
 export function fileExistsUnderTarget(resolved: string, targetRoot: string): boolean {
@@ -1132,25 +1145,41 @@ export function checkFileToolWrite(
 }
 
 /**
- * The real filesystem destination of an absolute path: the real path of its nearest existing
- * ancestor, symlinks resolved, with the not-yet-existing rest appended. A path with no existing
- * part is returned as given. Throws when an existing part cannot be read (a symlink loop or a
- * permission error), so the caller refuses rather than guess.
+ * The real filesystem destination of an absolute path, resolved one component at a time as the
+ * operating system does: each existing component's symlinks are followed before a later `..` is
+ * applied, so `link/../file` lands beside the link's target, not beside the link. This mirrors
+ * `resolvedPath` in check_private_folder_read.ts. Components that do not exist yet are appended
+ * as written. Throws on a dangling symlink, a symlink loop or a permission error, so the caller
+ * refuses rather than guess.
  */
-export function realDestination(resolved: string): string {
-  const rest: string[] = [];
-  let current = resolved;
-  while (true) {
+export function realDestination(absolutePath: string): string {
+  const root = path.parse(absolutePath).root;
+  if (!root) throw new Error("unresolved path root");
+  let current = root;
+  for (const part of absolutePath.slice(root.length).split(path.sep)) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      current = path.dirname(current);
+      continue;
+    }
+    const candidate = path.join(current, part);
     try {
-      return path.join(Deno.realPathSync(current), ...rest);
+      current = Deno.realPathSync(candidate);
     } catch (error) {
       if (!(error instanceof Deno.errors.NotFound)) throw error;
-      const parent = path.dirname(current);
-      if (parent === current) return resolved;
-      rest.unshift(path.basename(current));
-      current = parent;
+      let dangling = true;
+      try {
+        // An existing symlink whose target is missing is indeterminate, not a new output path.
+        Deno.lstatSync(candidate);
+      } catch (statError) {
+        if (!(statError instanceof Deno.errors.NotFound)) throw statError;
+        dangling = false;
+      }
+      if (dangling) throw new Error("unresolved symbolic link");
+      current = candidate;
     }
   }
+  return current;
 }
 
 function unresolvableDestination(rawPath: string, error: unknown): CheckDecision {
@@ -1167,6 +1196,7 @@ export function checkAgyUntranslated(
   toolInput: unknown,
   cwd: string,
   home: string,
+  sourceTool?: unknown,
 ): CheckDecision {
   if (toolInput === null || typeof toolInput !== "object" || Array.isArray(toolInput)) {
     return {
@@ -1178,7 +1208,7 @@ export function checkAgyUntranslated(
 
   let paths: string[];
   try {
-    paths = collectUntranslatedArgumentPaths(toolInput as Record<string, unknown>);
+    paths = collectUntranslatedArgumentPaths(toolInput as Record<string, unknown>, sourceTool);
   } catch (error) {
     return {
       allowed: false,
@@ -1197,13 +1227,15 @@ export function checkAgyUntranslated(
   }
 
   for (const rawPath of paths) {
-    const resolved = resolveTargetPath(rawPath, cwd, home);
-    if (!resolved) continue;
+    const joined = joinedTargetPath(rawPath, cwd, home, new Map());
+    if (!joined) continue;
+    const resolved = path.resolve(joined);
     // Judge the real filesystem destination as well as the path as written, so a path that
-    // reaches a protected file through a symlink is caught.
+    // reaches a protected file through a symlink is caught. The destination is resolved from
+    // the uncollapsed path, so a symlink is followed before any `..` after it.
     let destinations: string[];
     try {
-      destinations = [...new Set([resolved, realDestination(resolved)])];
+      destinations = [...new Set([resolved, realDestination(joined)])];
     } catch (error) {
       return unresolvableDestination(rawPath, error);
     }
@@ -1336,7 +1368,7 @@ export function evaluatePayload(
     return { allowed: true };
   }
 
-  return checkAgyUntranslated(toolInputRaw, resolvedCwd, home);
+  return checkAgyUntranslated(toolInputRaw, resolvedCwd, home, record.agy_tool_name);
 }
 
 async function readStdin(): Promise<string> {

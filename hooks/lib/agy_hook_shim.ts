@@ -181,12 +181,14 @@ const TOOL_NAME_MAP: Record<string, string> = {
 };
 
 export function mapAgyToolName(name: string, args?: Record<string, unknown>): string {
+  // Own-property checks only: an inherited name such as `toString` is not a
+  // translation, so such a tool stays untranslated and reaches both guards.
   if (name === "call_mcp_tool" && args && typeof args.ToolName === "string") {
-    if (args.ToolName in TOOL_NAME_MAP) {
+    if (Object.hasOwn(TOOL_NAME_MAP, args.ToolName)) {
       return TOOL_NAME_MAP[args.ToolName];
     }
   }
-  return TOOL_NAME_MAP[name] ?? name;
+  return Object.hasOwn(TOOL_NAME_MAP, name) ? TOOL_NAME_MAP[name] : name;
 }
 
 /**
@@ -338,6 +340,10 @@ export interface NormalizedPayload {
   session_id?: string;
   artifactDirectoryPath?: string;
   workspacePaths?: string[];
+  // An untranslated tool's own agy name, carried beside its unchanged
+  // arguments so a guard applies the MCP `Arguments` contract only to
+  // `call_mcp_tool`.
+  agy_tool_name?: string;
 }
 
 /**
@@ -420,6 +426,7 @@ export function normalize(
     artifactDirectoryPath: payload.artifactDirectoryPath,
     workspacePaths: payload.workspacePaths,
   };
+  if (untranslated) normalized.agy_tool_name = rawName;
   if (event === "PostToolUse") {
     normalized.tool_response = {
       stdout: recoverPostToolOutput(transcriptText ?? "", payload.stepIdx),

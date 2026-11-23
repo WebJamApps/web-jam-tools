@@ -1732,6 +1732,31 @@ Deno.test("normalize passes an untranslated tool's arguments unchanged, with no 
   assertEquals(toolName, AGY_UNTRANSLATED);
   assertEquals(normalized.tool_name, AGY_UNTRANSLATED);
   assertEquals(normalized.tool_input, args);
+  // The source tool's own name rides beside the arguments, never inside them.
+  assertEquals(normalized.agy_tool_name, "view_file");
+  const translated = normalize(
+    { toolCall: { name: "run_command", args: { CommandLine: "ls" } } } as never,
+    "PreToolUse",
+  );
+  assertEquals(translated.normalized.agy_tool_name, undefined);
+});
+
+Deno.test("a tool name inherited from Object.prototype is never a translation", () => {
+  for (const inherited of ["toString", "constructor", "__proto__", "hasOwnProperty"]) {
+    assertEquals(mapAgyToolName(inherited, {}), inherited);
+    assertEquals(
+      selectToolName(PRIVATE_FOLDER_AGY_MATCHER, inherited, { Path: "/r/a.ts" }),
+      AGY_UNTRANSLATED,
+      inherited,
+    );
+    const mcp = { ServerName: "x", ToolName: inherited, Arguments: { Path: "/r/a.ts" } };
+    assertEquals(mapAgyToolName("call_mcp_tool", mcp), "call_mcp_tool");
+    assertEquals(
+      selectToolName(PRODUCTION_MEDIA_AGY_MATCHER, "call_mcp_tool", mcp),
+      AGY_UNTRANSLATED,
+      inherited,
+    );
+  }
 });
 
 // --- Structured Arguments and real destinations (review Must Fix items on web-jam-tools#1583) ---
@@ -1869,5 +1894,92 @@ Deno.test("production-media guard judges an untranslated tool's real destination
       );
       assertEquals(result.decision, "allow", `${target}: ${result.reason}`);
     }
+  });
+});
+
+Deno.test("production-media guard follows a symlink before a later '..' in an untranslated tool's path", async () => {
+  await withMediaHome(async (home) => {
+    const originals = `${home}/Dropbox/joshandmariamusic/originals`;
+    await Deno.mkdir(`${originals}/takes`);
+    const scratch = `${home}/scratch`;
+    await Deno.mkdir(scratch);
+    await Deno.symlink(`${originals}/takes`, `${scratch}/takes`);
+    // Collapsed as text this is scratch/Narthex.mp3, which does not exist; the filesystem
+    // resolves it to originals/Narthex.mp3, an existing protected file.
+    const target = `${scratch}/takes/../Narthex.mp3`;
+    for (
+      const toolCall of [
+        { name: "view_file", args: { AbsolutePath: target } },
+        mcpCall("json", { path: target }),
+      ]
+    ) {
+      const result = await runUntranslatedThroughShim(
+        PRODUCTION_MEDIA_AGY_MATCHER,
+        PRODUCTION_MEDIA_GUARD,
+        toolCall,
+        home,
+      );
+      assertEquals(result.decision, "deny", `${toolCall.name}: ${result.reason}`);
+      assert(result.reason.includes("Narthex.mp3"), result.reason);
+    }
+    // A name that does not exist on the far side of the symlink is still allowed.
+    const fresh = await runUntranslatedThroughShim(
+      PRODUCTION_MEDIA_AGY_MATCHER,
+      PRODUCTION_MEDIA_GUARD,
+      { name: "view_file", args: { AbsolutePath: `${scratch}/takes/../new-take.mp3` } },
+      home,
+    );
+    assertEquals(fresh.decision, "allow", fresh.reason);
+    // A dangling symlink cannot be resolved, so the guard refuses rather than guess.
+    await Deno.symlink(`${home}/missing-folder`, `${scratch}/dangling`);
+    const dangling = await runUntranslatedThroughShim(
+      PRODUCTION_MEDIA_AGY_MATCHER,
+      PRODUCTION_MEDIA_GUARD,
+      { name: "view_file", args: { AbsolutePath: `${scratch}/dangling/../Narthex.mp3` } },
+      home,
+    );
+    assertEquals(dangling.decision, "deny", dangling.reason);
+  });
+});
+
+Deno.test("an Arguments field on a tool other than call_mcp_tool follows the whole-string path rule", async () => {
+  await withMediaHome(async (home) => {
+    // Plain text in a non-MCP tool's Arguments field is an ordinary argument, not a JSON envelope.
+    const plain = {
+      name: "apply_text",
+      args: { Path: `${home}/WebJamApps/a.ts`, Arguments: "--verbose --dry-run" },
+    };
+    for (
+      const [matcher, guard] of [
+        [PRIVATE_FOLDER_AGY_MATCHER, PRIVATE_FOLDER_GUARD],
+        [PRODUCTION_MEDIA_AGY_MATCHER, PRODUCTION_MEDIA_GUARD],
+      ]
+    ) {
+      const result = await runUntranslatedThroughShim(matcher, guard, plain, home);
+      assertEquals(result.decision, "allow", `${guard}: ${result.reason}`);
+    }
+    // A whole-string path in that field is still inspected.
+    const privatePath = {
+      name: "apply_text",
+      args: { Path: `${home}/WebJamApps/a.ts`, Arguments: `${home}/Dropbox/ShermanHome/notes.txt` },
+    };
+    const privateResult = await runUntranslatedThroughShim(
+      PRIVATE_FOLDER_AGY_MATCHER,
+      PRIVATE_FOLDER_GUARD,
+      privatePath,
+      home,
+    );
+    assertEquals(privateResult.decision, "deny", privateResult.reason);
+    const mediaPath = {
+      name: "apply_text",
+      args: { Arguments: `${home}/Dropbox/joshandmariamusic/originals/Narthex.mp3` },
+    };
+    const mediaResult = await runUntranslatedThroughShim(
+      PRODUCTION_MEDIA_AGY_MATCHER,
+      PRODUCTION_MEDIA_GUARD,
+      mediaPath,
+      home,
+    );
+    assertEquals(mediaResult.decision, "deny", mediaResult.reason);
   });
 });
