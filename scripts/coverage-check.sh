@@ -10,6 +10,15 @@ set -euo pipefail
 
 THRESHOLD="${COVERAGE_THRESHOLD:-90}"
 
+# Switch off machine-wide git hooks for the test run. On the laptop
+# `git config --global core.hooksPath` points at the canonical clone's
+# git-hooks, so every commit or push a test made in a scratch repository ran
+# the canonical clone's code: a worktree's tests exercised dev's hooks, and the
+# report counted the canonical clone's files at near-zero coverage. CircleCI
+# has no global hooks; this matches it. An explicit `git -c core.hooksPath=...`
+# in a test still wins over these variables.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null
+
 rm -rf cov_profile
 # web-jam-tools#275: do NOT redirect test output. This line used to end in
 # `>/dev/null`, which sent every test name and every failure detail to the

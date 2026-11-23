@@ -29,6 +29,9 @@ async function runGit(
       ...Deno.env.toObject(),
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_CONFIG_SYSTEM: "/dev/null",
+      // These tests install hooks per repository on purpose; drop the test
+      // task's hooks-off override so the repository's core.hooksPath applies.
+      GIT_CONFIG_COUNT: "0",
       ...env,
     },
   });
