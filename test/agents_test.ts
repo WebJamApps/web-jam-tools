@@ -33,6 +33,11 @@ async function run(
     // Default the laptop-window step, agy-config check, token-expiry, snap-update, health-report and fetch-repos checks to stubs so tests stay isolated.
     env: {
       ...Deno.env.toObject(),
+      // Never inherit the tmux session the test runner happens to run in: its pane id (e.g. %0)
+      // also names a pane on the throwaway server, so agents.sh would think it runs inside the
+      // target session and send its output to the restart hold pane. agents.sh treats empty as unset.
+      TMUX: "",
+      TMUX_PANE: "",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
       AGENTS_CHECK_TOKEN_EXPIRY_CMD: "true",
       AGENTS_CHECK_SNAP_UPDATES_CMD: "true",
