@@ -1,29 +1,34 @@
 /**
- * Opus delegation gate decisions (web-jam-tools#965).
+ * Delegation gate decisions (web-jam-tools#965, web-jam-tools#1781).
  *
- * Requirements: ~/Dropbox/web-jam-llms/AI_Misbehaves/hooks-design-2026-09-15.md,
- * "How a hook decides" and "The delegation gate's Bash writes"; typed fix-pr authorization is
- * also specified in ~/Dropbox/web-jam-llms/Token_Savings/fix-pr-design-2026-10-10.md.
+ * Requirements: ~/Dropbox/web-jam-llms/AI_Misbehaves/delegation-gate-design.md (revision 1.3.0),
+ * "Opus coding and Josh’s choice of Fable" and "The delegation gate's Bash writes"; typed fix-pr
+ * authorization is also specified in ~/Dropbox/web-jam-llms/Token_Savings/fix-pr-design-2026-10-10.md.
  *
  * hooks/opus-delegation-gate.sh makes the cheap exits itself (a subagent call outside auto mode, no
  * target path, a path outside any git working tree) and pipes every remaining PreToolUse payload to
  * this module, which prints one JSON decision.
  *
- * Main-thread call — allowed when:
- *   - the session model is not Opus, or
- *   - Josh has approved Opus edits anywhere earlier in the SESSION — a human prompt containing
- *     "opus edit ok" or asking Opus to do the work — and has not since withdrawn it with
- *     "opus edit off". His approval is not discarded by whatever he happens to type next, or
- *   - the most recent slash command in the transcript is a `/work-issue` Josh typed, naming an issue
- *     whose model label is Opus (D-7). Any other label, no issue named, or a failed label lookup gives
- *     no approval — the skill then has to delegate to the labeled tier, or
- *   - the newest skill Josh typed is `/fix-pr` naming a pull request. Later plain messages keep
- *     this approval; another typed skill ends it.
+ * The gate reads the recorded model before looking for any grant:
  *
- * Subagent call in auto mode (D-6) — allowed when the subagent's own model is not Opus, or when it is
- * Opus and the human prompt that spawned it contains "opus edit ok", asks for an Opus subagent, or
- * asks Opus to do the work. During a fix-pr call, only its explicit Opus helper request approves
- * the helper. An undeterminable model or spawning prompt allows with a note.
+ * Main-thread call —
+ *   - Opus, or any model other than Fable: allowed directly, with no edit grant.
+ *   - Fable: allowed only on Josh's own choice of Fable for the task —
+ *       - a human prompt containing "fable edit ok" or asking Fable to do the work, anywhere earlier
+ *         in the SESSION, not since withdrawn with "fable edit off", or
+ *       - the most recent slash command is a `/work-issue` Josh typed naming an issue he labeled
+ *         Fable. An Opus or Sol label, no issue named, or a failed lookup gives no approval, or
+ *       - the newest skill Josh typed is `/fix-pr` naming a pull request. Later plain messages keep
+ *         this approval; another typed skill ends it.
+ *     An Opus label or an Opus edit grant ("opus edit ok") never authorizes a Fable edit.
+ *
+ * Subagent call in auto mode — allowed when the subagent's own model is not Fable (an Opus coding
+ * helper edits directly). A Fable subagent is allowed only when the human prompt that spawned it
+ * contains "fable edit ok", asks for a Fable subagent, or asks Fable to do the work; during a fix-pr
+ * call, only that call's explicit Fable helper request approves it. An undeterminable model or
+ * spawning prompt allows with a note. Whether a helper may be launched at all — the two-slot cap and
+ * the refusal of an agent-selected or inherited Fable launch — belongs to the subagent cap,
+ * hooks/lib/check_agent_concurrency.ts (web-jam-tools#708).
  *
  * Only prompts a person actually sent count (isHumanPrompt), on every path: a task notification or
  * an isMeta injection can neither grant approval nor displace Josh's last real prompt.
@@ -52,10 +57,11 @@ import { analyzeBashWrites } from "./bash_write_targets.ts";
 import { parseApplyPatchFilePaths } from "./parse_apply_patch.ts";
 import { checkAndConsumeWorkflowSwitch, type SwitchCheckResult } from "./workflow_switch.ts";
 
-export const ESCAPE_PHRASE = "opus edit ok";
+/** Grants a Fable session edits for the rest of the session: Josh's choice of Fable. */
+export const FABLE_EDIT_PHRASE = "fable edit ok";
 
-/** Withdraws a session-scoped approval granted by {@link ESCAPE_PHRASE}. */
-export const REVOKE_PHRASE = "opus edit off";
+/** Withdraws a session-scoped approval granted by {@link FABLE_EDIT_PHRASE}. */
+export const FABLE_REVOKE_PHRASE = "fable edit off";
 
 /** A parent chain longer than this is treated as broken rather than walked forever. */
 export const MAX_SPAWN_DEPTH = 32;
@@ -64,10 +70,10 @@ export const MAX_SPAWN_DEPTH = 32;
 export const DEFAULT_OWNER = "WebJamApps";
 
 /**
- * Labels that put an issue in the Opus lane. "Fable" is the retired name for the same lane (global
- * rules: "Any existing `Fable` label now means Opus").
+ * The label Josh adds himself when he chooses Fable for an issue (tier-order design, "Fable is kept
+ * for work Josh names"). `Opus` and `Sol` name the top coding lane and never authorize Fable.
  */
-export const OPUS_LANE_LABELS = ["opus", "fable"];
+export const FABLE_TASK_LABEL = "fable";
 
 /** How long a looked-up label set is reused before `gh` is asked again. */
 export const LABEL_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -386,46 +392,59 @@ export function isOpusModel(model: string): boolean {
   return /opus/i.test(model);
 }
 
-/** True when the text asks for an Opus subagent, e.g. "dispatch to an Opus subagent". */
-export function asksForOpusSubagent(text: string): boolean {
-  return /\bopus\s+sub-?agents?\b/i.test(text);
+/** True for a Fable model id, e.g. `claude-fable-5-2`. */
+export function isFableModel(model: string): boolean {
+  return /fable/i.test(model);
+}
+
+/** The top-tier model a spoken instruction names. */
+export type InstructedModel = "opus" | "fable";
+
+/** True when the text asks for a Fable subagent, e.g. "dispatch to a Fable subagent". */
+export function asksForFableSubagent(text: string): boolean {
+  return /\bfable\s+sub-?agents?\b/i.test(text);
 }
 
 /**
  * Where an instruction may start: the text, a line, or a clause (after punctuation, "please", "and" or
  * "then"). A bare affirmation (yes/yeah/yep/ok/okay/sure) may sit between the start of the text, line
- * or clause and the verb: "yes dispatch the fix to Opus" was refused before, because only "yes," with a
- * comma opened a clause. The affirmation must itself open the text, line or clause, so "you said yes
- * send it to Opus" still refuses.
+ * or clause and the verb: "yes dispatch the fix to Fable" was refused before, because only "yes," with
+ * a comma opened a clause. The affirmation must itself open the text, line or clause, so "you said yes
+ * send it to Fable" still refuses.
  */
 const CLAUSE_OPENER = String
   .raw`(?:(?:^\s*|[.!?,;:]\s*)(?:(?:yes|yeah|yep|ok|okay|sure)\s+)?|\b(?:please|and|then)\s+)`;
 
-const USE_HAVE_LET_MAKE_GET_ASK_OPUS = new RegExp(
-  String.raw`${CLAUSE_OPENER}(?:use|have|let|make|get|ask)\s+(?:(?:a|an|the)\s+)?opus\b`,
-  "im",
-);
+/** "use/have/let/make/get/ask (a|an|the)? <model>" opening a clause. */
+function useHaveLetMakeGetAsk(model: InstructedModel): RegExp {
+  return new RegExp(
+    String.raw`${CLAUSE_OPENER}(?:use|have|let|make|get|ask)\s+(?:(?:a|an|the)\s+)?${model}\b`,
+    "im",
+  );
+}
 
-/** "send/dispatch/give/hand/assign/route <object>? to (the|a|an)? opus"; group 1 is the object. */
-const ROUTES_TO_OPUS = new RegExp(
-  String
-    .raw`${CLAUSE_OPENER}(?:send|dispatch|give|hand|assign|route)\s+(?:([^.!?,;:\n]*?)\s+)?to\s+(?:(?:the|a|an)\s+)?opus\b`,
-  "gim",
-);
+/** "send/dispatch/give/hand/assign/route <object>? to (the|a|an)? <model>"; group 1 is the object. */
+function routesTo(model: InstructedModel): RegExp {
+  return new RegExp(
+    String
+      .raw`${CLAUSE_OPENER}(?:send|dispatch|give|hand|assign|route)\s+(?:([^.!?,;:\n]*?)\s+)?to\s+(?:(?:the|a|an)\s+)?${model}\b`,
+    "gim",
+  );
+}
 
 const NEGATION =
   /\b(?:not|no|never|stop|nothing|none|cannot|\w+n['’]t|dont|didnt|doesnt|wont|cant|shouldnt|wouldnt)\b/i;
 
 /**
- * True when a routing verb opening a clause sends work to Opus, with no negation earlier in that
- * clause or in the object ("don't take this and send it to Opus", "send nothing to Opus"), and the
- * clause not a question: "?" must not be the first clause-ending punctuation after the match
- * ("send it to Opus?"). A "?" in a later clause does not count.
+ * True when a routing verb opening a clause sends work to the model, with no negation earlier in
+ * that clause or in the object ("don't take this and send it to Fable", "send nothing to Fable"), and
+ * the clause not a question: "?" must not be the first clause-ending punctuation after the match
+ * ("send it to Fable?"). A "?" in a later clause does not count.
  */
-function routesWorkToOpus(text: string): boolean {
-  ROUTES_TO_OPUS.lastIndex = 0;
+function routesWorkTo(text: string, model: InstructedModel): boolean {
+  const pattern = routesTo(model);
   let match: RegExpExecArray | null;
-  while ((match = ROUTES_TO_OPUS.exec(text))) {
+  while ((match = pattern.exec(text))) {
     const verbStart = match.index + match[0].search(/(?:send|dispatch|give|hand|assign|route)\b/i);
     const clauseStart = Math.max(
       ...[".", "!", "?", ",", ";", ":", "\n"].map((c) => text.lastIndexOf(c, verbStart - 1)),
@@ -442,22 +461,29 @@ function routesWorkToOpus(text: string): boolean {
 }
 
 /**
- * True when the text instructs Opus to do the work (D-8): "please use OPUS to fix this", "have Opus
- * fix it", "dispatch this to Opus", "send the fix to OPUS". Only an instruction counts: the verb
- * (use/have/let/make/get/ask before "opus", or send/dispatch/give/hand/assign/route before "to opus")
- * must open the text, a line or a clause. A complaint or question ("why did you send this to Opus",
- * "should we send this to Opus", "you shouldn't send it to Opus"), a statement about Opus ("Opus
- * should only be used for design") or a bare mention ("the problem with Opus") does not match, so
- * anything that is not plainly a request fails closed — including an instruction reported
- * second-hand ("I asked you earlier to dispatch to Opus"), which has the same shape as a complaint.
+ * True when the text instructs the named model to do the work (D-8): "please use FABLE to fix this",
+ * "have Fable fix it", "dispatch this to Fable", "send the fix to FABLE". Only an instruction counts:
+ * the verb (use/have/let/make/get/ask before the model, or send/dispatch/give/hand/assign/route
+ * before "to <model>") must open the text, a line or a clause. A complaint or question ("why did you
+ * send this to Fable", "should we send this to Fable", "you shouldn't send it to Fable"), a statement
+ * about the model ("Fable should only be used for design") or a bare mention ("the problem with
+ * Fable") does not match, so anything that is not plainly a request fails closed — including an
+ * instruction reported second-hand ("I asked you earlier to dispatch to Fable"), which has the same
+ * shape as a complaint.
  */
-export function asksOpusToDoTheWork(text: string): boolean {
-  return USE_HAVE_LET_MAKE_GET_ASK_OPUS.test(text) || routesWorkToOpus(text);
+export function asksModelToDoTheWork(text: string, model: InstructedModel): boolean {
+  return useHaveLetMakeGetAsk(model).test(text) || routesWorkTo(text, model);
 }
 
-export function approvesOpusSubagent(text: string): boolean {
-  return text.toLowerCase().includes(ESCAPE_PHRASE) || asksForOpusSubagent(text) ||
-    asksOpusToDoTheWork(text);
+/** Josh's instruction choosing Fable for the work. */
+export function asksFableToDoTheWork(text: string): boolean {
+  return asksModelToDoTheWork(text, "fable");
+}
+
+/** A spawning prompt that chooses a Fable subagent: the grant phrase, or asking for Fable. */
+export function approvesFableSubagent(text: string): boolean {
+  return text.toLowerCase().includes(FABLE_EDIT_PHRASE) || asksForFableSubagent(text) ||
+    asksFableToDoTheWork(text);
 }
 
 export interface SessionFiles {
@@ -513,7 +539,7 @@ function readSubagentMeta(
  */
 export function resolveSubagentModel(files: SessionFiles, agentId: string, read: ReadText): string {
   const meta = readSubagentMeta(files, agentId, read);
-  if (typeof meta?.model === "string" && /opus|sonnet|haiku|claude/i.test(meta.model)) {
+  if (typeof meta?.model === "string" && /opus|fable|sonnet|haiku|claude/i.test(meta.model)) {
     return meta.model;
   }
   const raw = read(`${files.subagentsDir}/agent-${bareAgentId(agentId)}.jsonl`);
@@ -631,9 +657,9 @@ function activeFixPrCall(entries: readonly TranscriptEntry[]):
   return { ...call, instructions: call.args.slice(target.length).trim() };
 }
 
-function asksForFixPrOpusHelper(instructions: string): boolean {
-  return /\bopus\s+(?:helpers?|sub-?agents?)\b/i.test(instructions) &&
-    asksOpusToDoTheWork(instructions);
+function asksForFixPrFableHelper(instructions: string): boolean {
+  return /\bfable\s+(?:helpers?|sub-?agents?)\b/i.test(instructions) &&
+    asksFableToDoTheWork(instructions);
 }
 
 /**
@@ -749,14 +775,15 @@ export function defaultLabelLookup(): LabelLookup {
 }
 
 /**
- * D-7: true when the most recent slash command in the transcript is a `/work-issue` Josh typed that
- * names an issue labeled for the Opus lane.
+ * D-7, as revision 1.3.0 narrows it: true when the most recent slash command in the transcript is a
+ * `/work-issue` Josh typed that names an issue he labeled Fable. An `Opus` or `Sol` label names the
+ * top coding lane and never authorizes Fable.
  *
  * Josh's later plain messages do not end the approval; any other slash command does — the same
  * scope-ending rule hooks/lib/check_token_write_authorization.ts applies to the issue-approval token.
  * Local-command echoes (e.g. `/model`, which carry no origin) still count as that other command, so
- * the scope only ever ends early, never extends. A `/work-issue` naming no issue, an issue with any
- * other label, or a failed lookup gives no approval.
+ * the scope only ever ends early, never extends. A `/work-issue` naming no issue, an issue without the
+ * Fable label, or a failed lookup gives no approval.
  */
 export function workIssueApprovalActive(
   entries: readonly TranscriptEntry[],
@@ -773,27 +800,22 @@ export function workIssueApprovalActive(
     if (!ref) return false;
     const labels = lookupLabels(ref);
     return labels !== null &&
-      labels.some((label) => OPUS_LANE_LABELS.includes(label.toLowerCase()));
+      labels.some((label) => label.toLowerCase() === FABLE_TASK_LABEL);
   }
   return false;
 }
 
 /**
- * Whether Josh's approval for Opus edits is active, scoped to the SESSION rather than to the one
- * turn he typed it in.
- *
- * The gate previously read only his latest prompt, so an approval was discarded the moment he sent
- * any other message — a correction, a "try again", even an expression of annoyance — and he had to
- * retype the phrase before every single edit. That made the guard police him rather than the agent,
- * which is not what it is for: it exists to stop Opus editing without his say-so, and once he has
- * said so that answer holds until he withdraws it.
+ * Whether Josh's choice of Fable for edits is active, scoped to the SESSION rather than to the one
+ * turn he typed it in: once he has said so, that answer holds until he withdraws it with
+ * "fable edit off", so a correction or a "try again" does not silently withdraw it.
  *
  * Walks human turns newest-first and returns on the first decisive one, so a later revocation beats
- * an earlier approval. Mirrors {@link workIssueApprovalActive}, which already scopes this way. Only
- * prompts Josh actually sent count (`isHumanPrompt`, not `isMeta`), so a task notification or an
- * injected reminder can neither grant approval nor cancel it.
+ * an earlier approval. Only prompts Josh actually sent count (`isHumanPrompt`, not `isMeta`), so a
+ * task notification or an injected reminder can neither grant approval nor cancel it. An Opus grant
+ * ("opus edit ok", or asking Opus to do the work) is not a choice of Fable and counts for nothing.
  */
-export function opusEditApprovalActive(entries: readonly TranscriptEntry[]): boolean {
+export function fableEditApprovalActive(entries: readonly TranscriptEntry[]): boolean {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
     if (!isUserTurnBoundary(entry) || entry.isMeta === true) continue;
@@ -801,8 +823,8 @@ export function opusEditApprovalActive(entries: readonly TranscriptEntry[]): boo
     const text = extractEntryText(entry).toLowerCase();
     // A fix-pr helper request is scoped to that call, never a permanent session grant.
     if (slashCommandOf(text) === "fix-pr") continue;
-    if (text.includes(REVOKE_PHRASE)) return false;
-    if (text.includes(ESCAPE_PHRASE) || asksOpusToDoTheWork(text)) return true;
+    if (text.includes(FABLE_REVOKE_PHRASE)) return false;
+    if (text.includes(FABLE_EDIT_PHRASE) || asksFableToDoTheWork(text)) return true;
   }
   return false;
 }
@@ -824,9 +846,10 @@ export function decideMainThreadEdit(
   if (!info.model) {
     return allow("main", "The session model could not be determined from the transcript.");
   }
-  if (!isOpusModel(info.model)) return allow("main");
+  // Revision 1.3.0: Opus, and every model other than Fable, edits directly with no grant.
+  if (!isFableModel(info.model)) return allow("main");
   if (
-    opusEditApprovalActive(entries) ||
+    fableEditApprovalActive(entries) ||
     workIssueApprovalActive(entries, lookupLabels) ||
     activeFixPrCall(entries) !== null
   ) {
@@ -851,12 +874,14 @@ export function decideSubagentEdit(
       "The subagent's model could not be determined: no meta file or transcript names it.",
     );
   }
-  if (!isOpusModel(model)) return allow("subagent");
+  // An Opus coding helper, like any helper not on Fable, edits directly; launch limits belong to the
+  // subagent cap (web-jam-tools#708).
+  if (!isFableModel(model)) return allow("subagent");
   const context = findSpawningContext(files, agentId, read);
   if (!context) {
     return allow(
       "subagent",
-      "The message Josh typed that spawned this Opus subagent could not be found.",
+      "The message Josh typed that spawned this Fable subagent could not be found.",
     );
   }
   const spawningCall = newestTypedSkillCall(context.preceding);
@@ -864,15 +889,15 @@ export function decideSubagentEdit(
     const activeCall = activeFixPrCall(context.entries);
     if (
       activeCall?.entry === spawningCall.entry &&
-      asksForFixPrOpusHelper(activeCall.instructions)
+      asksForFixPrFableHelper(activeCall.instructions)
     ) return allow("subagent");
-    return deny("subagent", "The active typed fix-pr call does not ask for this Opus helper.");
+    return deny("subagent", "The active typed fix-pr call does not ask for this Fable helper.");
   }
-  if (approvesOpusSubagent(extractEntryText(context.prompt))) return allow("subagent");
+  if (approvesFableSubagent(extractEntryText(context.prompt))) return allow("subagent");
   return deny(
     "subagent",
-    'This is an Opus subagent, and the message that spawned it neither contains "opus edit ok", ' +
-      "asks for an Opus subagent, nor asks Opus to do the work.",
+    'This is a Fable subagent, and the message that spawned it neither contains "fable edit ok", ' +
+      "asks for a Fable subagent, nor asks Fable to do the work.",
   );
 }
 

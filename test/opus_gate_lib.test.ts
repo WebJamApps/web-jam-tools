@@ -7,20 +7,21 @@
 
 import { assert, assertEquals } from "@std/assert";
 import {
-  approvesOpusSubagent,
-  asksForOpusSubagent,
-  asksOpusToDoTheWork,
+  approvesFableSubagent,
+  asksFableToDoTheWork,
+  asksForFableSubagent,
   createLabelLookup,
   decide as decideWithSwitch,
   decideMainThreadEdit,
   decideSubagentEdit,
+  fableEditApprovalActive,
   findSpawningHumanPrompt,
+  isFableModel,
   isOpusModel,
   isReadOnlyQuotedWrite,
   type IssueRef,
   LABEL_CACHE_TTL_MS,
   type LabelLookup,
-  opusEditApprovalActive,
   parseIssueRef,
   parseLabelsJson,
   type ReadText,
@@ -83,41 +84,45 @@ function metaEntry(text: string): TranscriptEntry {
   return { type: "user", isMeta: true, message: { role: "user", content: text } };
 }
 
-Deno.test("opusEditApprovalActive: approval is session-scoped, not per-turn", () => {
+Deno.test("fableEditApprovalActive: approval is session-scoped, not per-turn", () => {
   // The defect this replaces: approval was read from the latest prompt alone, so any following
   // message at all silently withdrew permission Josh had already given.
-  assert(opusEditApprovalActive([human("opus edit ok")]));
+  assert(fableEditApprovalActive([human("fable edit ok")]));
   assert(
-    opusEditApprovalActive([human("opus edit ok"), human("api error try again")]),
+    fableEditApprovalActive([human("fable edit ok"), human("api error try again")]),
     "an unrelated later message must not withdraw approval",
   );
   assert(
-    opusEditApprovalActive([human("opus edit ok"), human("bullshit gate"), human("damnit")]),
+    fableEditApprovalActive([human("fable edit ok"), human("bullshit gate"), human("damnit")]),
     "several unrelated later messages must not withdraw approval",
   );
 
   // Nothing approving anywhere in the session.
-  assertEquals(opusEditApprovalActive([human("fix the gate")]), false);
-  assertEquals(opusEditApprovalActive([]), false);
+  assertEquals(fableEditApprovalActive([human("fix the gate")]), false);
+  assertEquals(fableEditApprovalActive([]), false);
 
   // Explicit withdrawal wins over an earlier approval, and a later approval revives it.
-  assertEquals(opusEditApprovalActive([human("opus edit ok"), human("opus edit off")]), false);
+  assertEquals(fableEditApprovalActive([human("fable edit ok"), human("fable edit off")]), false);
   assert(
-    opusEditApprovalActive([human("opus edit ok"), human("opus edit off"), human("opus edit ok")]),
+    fableEditApprovalActive([
+      human("fable edit ok"),
+      human("fable edit off"),
+      human("fable edit ok"),
+    ]),
   );
 
-  // Asking Opus to do the work approves the same way (D-8), and still persists.
-  assert(opusEditApprovalActive([human("have opus fix it"), human("thanks")]));
+  // Asking Fable to do the work approves the same way (D-8), and still persists.
+  assert(fableEditApprovalActive([human("have fable fix it"), human("thanks")]));
 
   // Only prompts Josh actually sent count: injected turns neither grant nor cancel approval.
-  assertEquals(opusEditApprovalActive([notification("opus edit ok")]), false);
-  assertEquals(opusEditApprovalActive([metaEntry("opus edit ok")]), false);
+  assertEquals(fableEditApprovalActive([notification("fable edit ok")]), false);
+  assertEquals(fableEditApprovalActive([metaEntry("fable edit ok")]), false);
   assert(
-    opusEditApprovalActive([human("opus edit ok"), notification("opus edit off")]),
+    fableEditApprovalActive([human("fable edit ok"), notification("fable edit off")]),
     "an injected revocation must not cancel Josh's approval",
   );
   assert(
-    opusEditApprovalActive([human("opus edit ok"), metaEntry("opus edit off")]),
+    fableEditApprovalActive([human("fable edit ok"), metaEntry("fable edit off")]),
     "an isMeta revocation must not cancel Josh's approval",
   );
 });
@@ -135,7 +140,7 @@ function spawn(toolUseId: string): TranscriptEntry {
     type: "assistant",
     message: {
       role: "assistant",
-      model: "claude-opus-5",
+      model: "claude-fable-5-2",
       content: [{ type: "tool_use", id: toolUseId, name: "Agent", input: {} }],
     },
   };
@@ -155,151 +160,159 @@ function meta(id: string, fields: Record<string, unknown>): Record<string, strin
 
 // --- small predicates ---
 
-Deno.test("isOpusModel / asksForOpusSubagent / approvesOpusSubagent", () => {
-  assert(isOpusModel("claude-opus-5"));
+Deno.test("isOpusModel / isFableModel / asksForFableSubagent / approvesFableSubagent", () => {
+  assert(isOpusModel("claude-opus-5-5"));
   assert(isOpusModel("opus"));
   assert(!isOpusModel("sonnet"));
+  assert(!isOpusModel("claude-fable-5-2"));
+  assert(isFableModel("claude-fable-5-2"));
+  assert(isFableModel("fable"));
+  assert(!isFableModel("claude-opus-5-5"));
 
-  assert(asksForOpusSubagent("dispatch to an Opus subagent"));
-  assert(asksForOpusSubagent("use opus sub-agents for this"));
-  assert(!asksForOpusSubagent("opus is fine here"));
-  assert(!asksForOpusSubagent("dispatch to a Sonnet subagent"));
+  assert(asksForFableSubagent("dispatch to a Fable subagent"));
+  assert(asksForFableSubagent("use fable sub-agents for this"));
+  assert(!asksForFableSubagent("fable is fine here"));
+  assert(!asksForFableSubagent("dispatch to a Sonnet subagent"));
 
-  assert(approvesOpusSubagent("OK, opus edit ok, go"));
-  assert(approvesOpusSubagent("spawn an Opus subagent"));
-  assert(!approvesOpusSubagent("please fix it"));
+  assert(approvesFableSubagent("OK, fable edit ok, go"));
+  assert(approvesFableSubagent("spawn a Fable subagent"));
+  assert(!approvesFableSubagent("please fix it"));
+  // An Opus grant or request is not a choice of Fable.
+  assert(!approvesFableSubagent("opus edit ok"));
+  assert(!approvesFableSubagent("dispatch to an Opus subagent"));
+  assert(!approvesFableSubagent("use Opus to fix it"));
 });
 
 // --- D-8 ---
 
-Deno.test("asksOpusToDoTheWork: only an instruction naming Opus approves; complaints and bare mentions fail closed", () => {
+Deno.test("asksFableToDoTheWork: only an instruction naming Fable approves; complaints and bare mentions fail closed", () => {
   const approves = [
-    "please use OPUS to fix https://github.com/WebJamApps/web-jam-tools/pull/968 and also post a comment on it from OPUS when done",
-    "use Opus to fix it",
-    "have Opus fix it",
-    "let an Opus agent do it",
-    "Please, use Opus",
-    "fix it now. use Opus",
-    "don't use Sonnet, use Opus",
-    "ok and have Opus do it",
+    "please use FABLE to fix https://github.com/WebJamApps/web-jam-tools/pull/968 and also post a comment on it from FABLE when done",
+    "use Fable to fix it",
+    "have Fable fix it",
+    "let a Fable agent do it",
+    "Please, use Fable",
+    "fix it now. use Fable",
+    "don't use Sonnet, use Fable",
+    "ok and have Fable do it",
   ];
-  for (const text of approves) assert(asksOpusToDoTheWork(text), text);
+  for (const text of approves) assert(asksFableToDoTheWork(text), text);
 
   const refuses = [
-    "don't use Opus",
-    "don’t use Opus",
-    "don't  use Opus",
-    "do not use opus",
-    "please don't use opus",
-    "never have Opus edit",
-    "I told you not to use Opus",
-    "no need to use Opus here",
-    "why did you use Opus for this? delegate to Sonnet",
-    "you shouldn't use Opus for mechanical work",
-    "stop using Opus",
-    "the problem with Opus is cost",
-    "fix it with Opus",
-    "using opus for this",
-    "Opus ate my tokens, did not delegate to Sonnet",
-    "use Sonnet not Opus",
-    "opus is fine here",
-    "for OPUS please https://github.com/WebJamApps/web-jam-tools/pull/972",
+    "don't use Fable",
+    "don’t use Fable",
+    "don't  use Fable",
+    "do not use fable",
+    "please don't use fable",
+    "never have Fable edit",
+    "I told you not to use Fable",
+    "no need to use Fable here",
+    "why did you use Fable for this? delegate to Sonnet",
+    "you shouldn't use Fable for mechanical work",
+    "stop using Fable",
+    "the problem with Fable is cost",
+    "fix it with Fable",
+    "using fable for this",
+    "Fable ate my tokens, did not delegate to Sonnet",
+    "use Sonnet not Fable",
+    "fable is fine here",
+    "for FABLE please https://github.com/WebJamApps/web-jam-tools/pull/972",
   ];
-  for (const text of refuses) assert(!asksOpusToDoTheWork(text), text);
+  for (const text of refuses) assert(!asksFableToDoTheWork(text), text);
 
-  assert(approvesOpusSubagent("please use OPUS to fix it"));
+  assert(approvesFableSubagent("please use FABLE to fix it"));
 });
 
-Deno.test("asksOpusToDoTheWork: a routing instruction to Opus that opens a clause approves; a complaint, question, negation or statement refuses", () => {
+Deno.test("asksFableToDoTheWork: a routing instruction to Fable that opens a clause approves; a complaint, question, negation or statement refuses", () => {
   const approves = [
     // Josh's real message that was wrongly refused (web-jam-tools PR 1000 follow-up):
-    "send the PR 1000 fix to OPUS !  this is the THIRD time I have said this what is going on !!!!!!!?",
-    "dispatch this to Opus",
-    "dispatch to Opus",
-    "send it to opus",
-    "please send it to Opus",
-    "yes, give this to Opus",
-    "hand the fix to Opus",
-    "assign it to opus",
-    "route this to Opus",
-    "ok and send it to the Opus agent",
-    "please use OPUS to fix this",
-    "let Opus do it",
+    "send the PR 1000 fix to FABLE !  this is the THIRD time I have said this what is going on !!!!!!!?",
+    "dispatch this to Fable",
+    "dispatch to Fable",
+    "send it to fable",
+    "please send it to Fable",
+    "yes, give this to Fable",
+    "hand the fix to Fable",
+    "assign it to fable",
+    "route this to Fable",
+    "ok and send it to the Fable agent",
+    "please use FABLE to fix this",
+    "let Fable do it",
   ];
-  for (const text of approves) assert(asksOpusToDoTheWork(text), text);
+  for (const text of approves) assert(asksFableToDoTheWork(text), text);
 
   const refuses = [
     // An instruction reported second-hand has the same shape as a complaint, so it fails closed:
-    "hi i asked you earlier to dispatch to Opus to fix this and you seem to have ignored me !?  https://github.com/WebJamApps/web-jam-tools/pull/1000",
+    "hi i asked you earlier to dispatch to Fable to fix this and you seem to have ignored me !?  https://github.com/WebJamApps/web-jam-tools/pull/1000",
     // Complaints and questions, with or without a "?":
-    "why did you use Opus",
-    "why did you send this to Opus",
-    "who told you to dispatch this to Opus",
-    "should we send this to Opus",
-    "did you dispatch it to Opus and why",
-    "did you send it to Opus?",
-    "should we send this to Opus?",
-    "send it to Opus?",
+    "why did you use Fable",
+    "why did you send this to Fable",
+    "who told you to dispatch this to Fable",
+    "should we send this to Fable",
+    "did you dispatch it to Fable and why",
+    "did you send it to Fable?",
+    "should we send this to Fable?",
+    "send it to Fable?",
     // Negations, including contractions and a negated object:
-    "don't send this to Opus",
-    "do not dispatch to opus",
-    "please don't send it to Opus",
-    "you shouldn't send this to Opus",
-    "I didn't send it to Opus",
-    "you won't send it to opus",
-    "don't take this and send it to Opus",
-    "stop, send nothing to Opus",
-    "stop send it to Opus",
-    "give nothing to Opus",
-    "never give Opus this work",
-    "stop sending everything to Opus",
-    // Statements about Opus:
-    "Opus should fix this",
-    "Opus should not be doing this",
-    "I don't think Opus should do this",
-    "Opus should only be used for design",
-    "can we avoid Opus? Opus should be the last resort",
-    "the problem with Opus is cost",
-    // Misdirected or not the word "opus":
-    "Sonnet, not Opus",
-    "send the report to Josh, not Opus",
-    "send it to Opusly",
-    "send it to opuses",
+    "don't send this to Fable",
+    "do not dispatch to fable",
+    "please don't send it to Fable",
+    "you shouldn't send this to Fable",
+    "I didn't send it to Fable",
+    "you won't send it to fable",
+    "don't take this and send it to Fable",
+    "stop, send nothing to Fable",
+    "stop send it to Fable",
+    "give nothing to Fable",
+    "never give Fable this work",
+    "stop sending everything to Fable",
+    // Statements about Fable:
+    "Fable should fix this",
+    "Fable should not be doing this",
+    "I don't think Fable should do this",
+    "Fable should only be used for design",
+    "can we avoid Fable? Fable should be the last resort",
+    "the problem with Fable is cost",
+    // Misdirected or not the word "fable":
+    "Sonnet, not Fable",
+    "send the report to Josh, not Fable",
+    "send it to Fablely",
+    "send it to fablees",
     "",
   ];
-  for (const text of refuses) assert(!asksOpusToDoTheWork(text), text);
+  for (const text of refuses) assert(!asksFableToDoTheWork(text), text);
 
-  assert(approvesOpusSubagent("/pr-review web-jam-tools#1000 dispatch to Opus subagent"));
+  assert(approvesFableSubagent("/pr-review web-jam-tools#1000 dispatch to Fable subagent"));
 });
 
-Deno.test("asksOpusToDoTheWork: a bare affirmation before the routing verb still opens the instruction", () => {
+Deno.test("asksFableToDoTheWork: a bare affirmation before the routing verb still opens the instruction", () => {
   const approves = [
     // Josh's real message, refused before because a bare "yes" (no comma) did not open a clause:
-    "yes dispatch the fix for that hook right now to Opus please",
-    "yeah send it to Opus",
-    "ok dispatch this to opus",
-    "okay, fine. sure give it to Opus",
-    "yes use Opus",
+    "yes dispatch the fix for that hook right now to Fable please",
+    "yeah send it to Fable",
+    "ok dispatch this to fable",
+    "okay, fine. sure give it to Fable",
+    "yes use Fable",
   ];
-  for (const text of approves) assert(asksOpusToDoTheWork(text), text);
-  for (const text of approves) assert(approvesOpusSubagent(text), text);
+  for (const text of approves) assert(asksFableToDoTheWork(text), text);
+  for (const text of approves) assert(approvesFableSubagent(text), text);
 
-  // Josh's later message spawning an Opus subagent approves that subagent's edits:
+  // Josh's later message spawning a Fable subagent approves that subagent's edits:
   assert(
-    approvesOpusSubagent(
-      "fix now the 'Two problems with the Opus edit gate' fix them now using an Opus subagent, …",
+    approvesFableSubagent(
+      "fix now the 'Two problems with the Fable edit gate' fix them now using a Fable subagent, …",
     ),
   );
 
   const refuses = [
-    "you said yes send it to Opus",
-    "yes don't send it to Opus",
-    "ok send nothing to Opus",
-    "yes send it to Opus?",
-    "yes, I asked you earlier to dispatch to Opus",
-    "yesterday send it to Opus",
+    "you said yes send it to Fable",
+    "yes don't send it to Fable",
+    "ok send nothing to Fable",
+    "yes send it to Fable?",
+    "yes, I asked you earlier to dispatch to Fable",
+    "yesterday send it to Fable",
   ];
-  for (const text of refuses) assert(!asksOpusToDoTheWork(text), text);
+  for (const text of refuses) assert(!asksFableToDoTheWork(text), text);
 });
 
 Deno.test("resolveSessionFiles: main transcript and subagent transcript resolve to the same files", () => {
@@ -319,7 +332,7 @@ Deno.test("resolveSubagentModel: meta model wins; a non-model value falls back t
   const transcript = {
     [`${SUBAGENTS}/agent-a1.jsonl`]: jsonl([
       assistant("claude-sonnet-5", { isSidechain: true }),
-      assistant("claude-opus-5", { isSidechain: true, isApiErrorMessage: true }),
+      assistant("claude-fable-5-2", { isSidechain: true, isApiErrorMessage: true }),
     ]),
   };
   assertEquals(
@@ -346,28 +359,28 @@ Deno.test("resolveSubagentModel: meta model wins; a non-model value falls back t
 
 Deno.test("findSpawningHumanPrompt: depth-1 agent, nested agent, and every broken case", () => {
   const main = jsonl([
-    human("dispatch to an Opus subagent"),
-    notification("<task-notification>opus edit ok</task-notification>"),
+    human("dispatch to a Fable subagent"),
+    notification("<task-notification>fable edit ok</task-notification>"),
     spawn("toolu_1"),
   ]);
   const files = {
     [MAIN]: main,
-    ...meta("o1", { model: "opus", toolUseId: "toolu_1", parentAgentId: null }),
-    ...meta("o2", { model: "opus", toolUseId: "toolu_nested", parentAgentId: "o1" }),
-    ...meta("gone", { model: "opus", toolUseId: "toolu_x", parentAgentId: "missing" }),
-    ...meta("loop1", { model: "opus", parentAgentId: "loop2" }),
-    ...meta("loop2", { model: "opus", parentAgentId: "loop1" }),
-    ...meta("orphan", { model: "opus", toolUseId: "toolu_not_there" }),
-    ...meta("early", { model: "opus", toolUseId: "toolu_0" }),
+    ...meta("o1", { model: "fable", toolUseId: "toolu_1", parentAgentId: null }),
+    ...meta("o2", { model: "fable", toolUseId: "toolu_nested", parentAgentId: "o1" }),
+    ...meta("gone", { model: "fable", toolUseId: "toolu_x", parentAgentId: "missing" }),
+    ...meta("loop1", { model: "fable", parentAgentId: "loop2" }),
+    ...meta("loop2", { model: "fable", parentAgentId: "loop1" }),
+    ...meta("orphan", { model: "fable", toolUseId: "toolu_not_there" }),
+    ...meta("early", { model: "fable", toolUseId: "toolu_0" }),
   };
 
   assertEquals(
     extractEntryText(findSpawningHumanPrompt(FILES, "o1", reader(files))),
-    "dispatch to an Opus subagent",
+    "dispatch to a Fable subagent",
   );
   assertEquals(
     extractEntryText(findSpawningHumanPrompt(FILES, "o2", reader(files))),
-    "dispatch to an Opus subagent",
+    "dispatch to a Fable subagent",
   );
   assertEquals(findSpawningHumanPrompt(FILES, "gone", reader(files)), null);
   assertEquals(findSpawningHumanPrompt(FILES, "loop1", reader(files)), null);
@@ -412,14 +425,17 @@ Deno.test("parseIssueRef: URL, Owner/Repo#N, Repo#N, and prose with no issue", (
     repo: "WebJamApps/web-jam-back",
     number: 1086,
   });
-  assertEquals(parseIssueRef("when the label is Opus = Opus can edit"), null);
+  assertEquals(parseIssueRef("when the label is Fable = Fable can edit"), null);
   assertEquals(parseIssueRef(""), null);
 });
 
 // --- labels: gh output, cache, live gh ---
 
 Deno.test("parseLabelsJson: gh --json labels output, and anything else", () => {
-  assertEquals(parseLabelsJson('{"labels":[{"name":"Opus"},{"name":"Bug"},{}]}'), ["Opus", "Bug"]);
+  assertEquals(parseLabelsJson('{"labels":[{"name":"Fable"},{"name":"Bug"},{}]}'), [
+    "Fable",
+    "Bug",
+  ]);
   assertEquals(parseLabelsJson('{"labels":null}'), null);
   assertEquals(parseLabelsJson("not json"), null);
 });
@@ -428,7 +444,7 @@ Deno.test("createLabelLookup: reuses a fresh result, refetches a stale or unread
   const store: Record<string, string> = {};
   let clock = 1_000;
   const calls: IssueRef[] = [];
-  let answer: string[] | null = ["Opus"];
+  let answer: string[] | null = ["Fable"];
   const lookup = createLabelLookup({
     cacheDir: "/cache",
     now: () => clock,
@@ -443,9 +459,9 @@ Deno.test("createLabelLookup: reuses a fresh result, refetches a stale or unread
   });
   const ref = { repo: "WebJamApps/web-jam-tools", number: 965 };
 
-  assertEquals(lookup(ref), ["Opus"]);
+  assertEquals(lookup(ref), ["Fable"]);
   assertEquals(Object.keys(store), ["/cache/WebJamApps__web-jam-tools__965.json"]);
-  assertEquals(lookup(ref), ["Opus"]);
+  assertEquals(lookup(ref), ["Fable"]);
   assertEquals(calls.length, 1);
 
   clock += LABEL_CACHE_TTL_MS;
@@ -462,13 +478,13 @@ Deno.test("createLabelLookup: reuses a fresh result, refetches a stale or unread
   const throwingWrite = createLabelLookup({
     cacheDir: "/cache",
     now: () => clock,
-    run: () => ["Opus"],
+    run: () => ["Fable"],
     read: () => null,
     write: () => {
       throw new Error("read-only");
     },
   });
-  assertEquals(throwingWrite(ref), ["Opus"]);
+  assertEquals(throwingWrite(ref), ["Fable"]);
 });
 
 Deno.test("runGhLabels: reads labels from gh, and returns null when gh fails", async () => {
@@ -477,11 +493,11 @@ Deno.test("runGhLabels: reads labels from gh, and returns null when gh fails", a
   try {
     await Deno.writeTextFile(
       `${bin}/gh`,
-      '#!/usr/bin/env bash\nif [ "$3" = "1" ]; then echo \'{"labels":[{"name":"Opus"}]}\'; else exit 1; fi\n',
+      '#!/usr/bin/env bash\nif [ "$3" = "1" ]; then echo \'{"labels":[{"name":"Fable"}]}\'; else exit 1; fi\n',
     );
     await Deno.chmod(`${bin}/gh`, 0o755);
     Deno.env.set("PATH", `${bin}:${originalPath}`);
-    assertEquals(runGhLabels({ repo: "WebJamApps/web-jam-tools", number: 1 }), ["Opus"]);
+    assertEquals(runGhLabels({ repo: "WebJamApps/web-jam-tools", number: 1 }), ["Fable"]);
     assertEquals(runGhLabels({ repo: "WebJamApps/web-jam-tools", number: 2 }), null);
   } finally {
     Deno.env.set("PATH", originalPath);
@@ -491,31 +507,36 @@ Deno.test("runGhLabels: reads labels from gh, and returns null when gh fails", a
 
 // --- D-7 ---
 
-Deno.test("workIssueApprovalActive: only a human /work-issue on an Opus- or Fable-labeled issue approves, until another slash command", () => {
+Deno.test("workIssueApprovalActive: only a human /work-issue on an issue Josh labeled Fable approves, until another slash command", () => {
+  const FABLE_ISSUE = workIssue("web-jam-tools#3");
   assert(
     workIssueApprovalActive([
-      human(OPUS_ISSUE),
+      human(FABLE_ISSUE),
       metaEntry("Base directory for this skill"),
       human("why?"),
     ], labels),
   );
-  assert(workIssueApprovalActive([human(workIssue("web-jam-tools#3"))], labels));
+  // Revision 1.3.0: an Opus label names the top coding lane and never chooses Fable.
+  assert(!workIssueApprovalActive([human(OPUS_ISSUE)], labels));
   assert(!workIssueApprovalActive([human(SONNET_ISSUE)], labels));
   assert(!workIssueApprovalActive([human(workIssue("web-jam-tools#99"))], labels));
   assert(
-    !workIssueApprovalActive([human(workIssue("when the label is Opus = Opus can edit"))], labels),
+    !workIssueApprovalActive(
+      [human(workIssue("when the label is Fable = Fable can edit"))],
+      labels,
+    ),
   );
-  assert(!workIssueApprovalActive([human(OPUS_ISSUE), human(PR_REVIEW)], labels));
+  assert(!workIssueApprovalActive([human(FABLE_ISSUE), human(PR_REVIEW)], labels));
   assert(
     !workIssueApprovalActive(
-      [human(OPUS_ISSUE), {
+      [human(FABLE_ISSUE), {
         type: "user",
         message: { role: "user", content: "<command-name>/model</command-name>" },
       }],
       labels,
     ),
   );
-  assert(!workIssueApprovalActive([metaEntry(OPUS_ISSUE)], labels));
+  assert(!workIssueApprovalActive([metaEntry(FABLE_ISSUE)], labels));
   assert(
     !workIssueApprovalActive([
       notification("<task-notification>done</task-notification>"),
@@ -536,11 +557,11 @@ Deno.test("fix-pr: the newest human typed call approves the session until anothe
     [[human(call)], "allow"],
     [[human(call), human("go ahead")], "allow"],
     [[human(call), human(PR_REVIEW)], "deny"],
-    [[human(call + " use an Opus helper"), human(PR_REVIEW)], "deny"],
+    [[human(call + " use a Fable helper"), human(PR_REVIEW)], "deny"],
     [[
       human("fix it"),
-      assistant("claude-opus-5", {
-        message: { role: "assistant", model: "claude-opus-5", content: call },
+      assistant("claude-fable-5-2", {
+        message: { role: "assistant", model: "claude-fable-5-2", content: call },
       }),
     ], "deny"],
     [[notification(call)], "deny"],
@@ -551,7 +572,7 @@ Deno.test("fix-pr: the newest human typed call approves the session until anothe
     [[human(call), { type: "user", message: { role: "user", content: "/pr-review" } }], "allow"],
   ];
   for (const [entries, expected] of cases) {
-    const read = reader({ [MAIN]: jsonl([...entries, assistant("claude-opus-5")]) });
+    const read = reader({ [MAIN]: jsonl([...entries, assistant("claude-fable-5-2")]) });
     assertEquals(decideMainThreadEdit(MAIN, read, noLookup).decision, expected, jsonl(entries));
   }
 });
@@ -571,7 +592,7 @@ Deno.test("fix-pr: only a named PR in a typed skill call approves, including wra
   ];
   const refuses = [
     "/fix-pr",
-    "/fix-pr use an Opus helper",
+    "/fix-pr use a Fable helper",
     "/fix-pr https://github.com/WebJamApps/web-jam-tools/issues/1318",
     "/fix-pr web-jam-tools#0",
     "/fix-pr -1318",
@@ -581,38 +602,38 @@ Deno.test("fix-pr: only a named PR in a typed skill call approves, including wra
   ];
   for (const [calls, expected] of [[approves, "allow"], [refuses, "deny"]] as const) {
     for (const call of calls) {
-      const read = reader({ [MAIN]: jsonl([human(call), assistant("claude-opus-5")]) });
+      const read = reader({ [MAIN]: jsonl([human(call), assistant("claude-fable-5-2")]) });
       assertEquals(decideMainThreadEdit(MAIN, read, labels).decision, expected, call);
     }
   }
 });
 
-Deno.test("fix-pr: an Opus helper needs the same active call to ask for it, through later plain messages", () => {
+Deno.test("fix-pr: a Fable helper needs the same active call to ask for it, through later plain messages", () => {
   const call = "/fix-pr web-jam-tools#1318";
   const cases: [string, TranscriptEntry[], "allow" | "deny"][] = [
-    [call + " use an Opus helper", [], "allow"],
-    [call + " use an Opus helper", [human("go ahead")], "allow"],
-    [call + " dispatch to an Opus subagent", [], "allow"],
+    [call + " use a Fable helper", [], "allow"],
+    [call + " use a Fable helper", [human("go ahead")], "allow"],
+    [call + " dispatch to a Fable subagent", [], "allow"],
     [call, [], "deny"],
-    [call + " use Opus", [], "deny"],
-    [call + " do not use an Opus helper", [], "deny"],
+    [call + " use Fable", [], "deny"],
+    [call + " do not use a Fable helper", [], "deny"],
     [call + " use a Sonnet helper", [], "deny"],
   ];
   for (const [text, later, expected] of cases) {
     const entries = [human(text), ...later, spawn("toolu_fix")];
     const read = reader({
       [MAIN]: jsonl(entries),
-      ...meta("fix", { model: "opus", toolUseId: "toolu_fix" }),
-      ...meta("nested", { model: "opus", parentAgentId: "fix" }),
+      ...meta("fix", { model: "fable", toolUseId: "toolu_fix" }),
+      ...meta("nested", { model: "fable", parentAgentId: "fix" }),
     });
     for (const id of ["fix", "nested"]) {
       assertEquals(decideSubagentEdit(id, MAIN, read).decision, expected, text);
     }
   }
-  for (const later of [human(PR_REVIEW), human(call), human(call + " use an Opus helper")]) {
+  for (const later of [human(PR_REVIEW), human(call), human(call + " use a Fable helper")]) {
     const read = reader({
-      [MAIN]: jsonl([human(call + " use an Opus helper"), spawn("toolu_fix"), later]),
-      ...meta("fix", { model: "opus", toolUseId: "toolu_fix" }),
+      [MAIN]: jsonl([human(call + " use a Fable helper"), spawn("toolu_fix"), later]),
+      ...meta("fix", { model: "fable", toolUseId: "toolu_fix" }),
     });
     assertEquals(decideSubagentEdit("fix", MAIN, read).decision, "deny");
   }
@@ -639,27 +660,52 @@ Deno.test("decideMainThreadEdit: every outcome", () => {
   assertEquals(
     decideMainThreadEdit(
       MAIN,
-      at([human(OPUS_ISSUE), human("opus edit ok"), assistant("claude-opus-5")]),
+      at([human(OPUS_ISSUE), human("fable edit ok"), assistant("claude-fable-5-2")]),
       noLookup,
     )
       .decision,
     "allow",
   );
+  // A /work-issue on an issue Josh labeled Fable chooses Fable; an Opus label does not.
   assertEquals(
-    decideMainThreadEdit(MAIN, at([human(OPUS_ISSUE), assistant("claude-opus-5")]), labels)
-      .decision,
+    decideMainThreadEdit(
+      MAIN,
+      at([human(workIssue("web-jam-tools#3")), assistant("claude-fable-5-2")]),
+      labels,
+    ).decision,
     "allow",
   );
   assertEquals(
-    decideMainThreadEdit(MAIN, at([human(SONNET_ISSUE), assistant("claude-opus-5")]), labels),
+    decideMainThreadEdit(MAIN, at([human(OPUS_ISSUE), assistant("claude-fable-5-2")]), labels),
+    { decision: "deny", kind: "main", why: "" },
+  );
+  assertEquals(
+    decideMainThreadEdit(MAIN, at([human(SONNET_ISSUE), assistant("claude-fable-5-2")]), labels),
+    { decision: "deny", kind: "main", why: "" },
+  );
+  // An old Opus edit grant, or asking Opus to do the work, never authorizes a Fable edit.
+  for (const grant of ["opus edit ok", "use Opus to fix it", "dispatch to an Opus subagent"]) {
+    assertEquals(
+      decideMainThreadEdit(MAIN, at([human(grant), assistant("claude-fable-5-2")]), labels),
+      { decision: "deny", kind: "main", why: "" },
+      grant,
+    );
+  }
+  // Josh's withdrawal ends his choice of Fable.
+  assertEquals(
+    decideMainThreadEdit(
+      MAIN,
+      at([human("fable edit ok"), human("fable edit off"), assistant("claude-fable-5-2")]),
+      noLookup,
+    ),
     { decision: "deny", kind: "main", why: "" },
   );
   assertEquals(
     decideMainThreadEdit(
       MAIN,
       at([
-        human("opus edit ok"),
-        assistant("claude-opus-5"),
+        human("fable edit ok"),
+        assistant("claude-fable-5-2"),
         notification("<task-notification>x</task-notification>"),
       ]),
       noLookup,
@@ -668,16 +714,16 @@ Deno.test("decideMainThreadEdit: every outcome", () => {
   );
   const plain = decideMainThreadEdit(
     MAIN,
-    at([human("fix it"), assistant("claude-opus-5"), notification("opus edit ok")]),
+    at([human("fix it"), assistant("claude-fable-5-2"), notification("fable edit ok")]),
     labels,
   );
   assertEquals(plain, { decision: "deny", kind: "main", why: "" });
 
-  // D-8: a message asking Opus to do the work approves like "opus edit ok" does.
+  // D-8: a message asking Fable to do the work approves like "fable edit ok" does.
   assertEquals(
     decideMainThreadEdit(
       MAIN,
-      at([human("please use OPUS to fix PR 968"), assistant("claude-opus-5")]),
+      at([human("please use FABLE to fix PR 968"), assistant("claude-fable-5-2")]),
       noLookup,
     ).decision,
     "allow",
@@ -685,7 +731,7 @@ Deno.test("decideMainThreadEdit: every outcome", () => {
   assertEquals(
     decideMainThreadEdit(
       MAIN,
-      at([human("don't use Opus, fix it"), assistant("claude-opus-5")]),
+      at([human("don't use Fable, fix it"), assistant("claude-fable-5-2")]),
       noLookup,
     ),
     { decision: "deny", kind: "main", why: "" },
@@ -695,8 +741,8 @@ Deno.test("decideMainThreadEdit: every outcome", () => {
       MAIN,
       at([
         human("fix it"),
-        assistant("claude-opus-5"),
-        notification("<task-notification>use Opus</task-notification>"),
+        assistant("claude-fable-5-2"),
+        notification("<task-notification>use Fable</task-notification>"),
       ]),
       noLookup,
     ),
@@ -704,22 +750,46 @@ Deno.test("decideMainThreadEdit: every outcome", () => {
   );
 });
 
+Deno.test("decideMainThreadEdit: an Opus session edits directly, with no grant and no label lookup", () => {
+  const at = (entries: TranscriptEntry[]) => reader({ [MAIN]: jsonl(entries) });
+  const noLookup: LabelLookup = () => {
+    throw new Error("an Opus decision must not look up issue labels");
+  };
+  const sessions: TranscriptEntry[][] = [
+    [human("fix it"), assistant("claude-opus-5-5")],
+    [human(SONNET_ISSUE), assistant("claude-opus-5-5")],
+    [human(PR_REVIEW), assistant("claude-opus-5-5")],
+    // An Opus grant withdrawn in an earlier turn no longer matters.
+    [human("opus edit ok"), human("opus edit off"), assistant("claude-opus-5-5")],
+    [human("don't use Opus, fix it"), assistant("claude-opus-5-5")],
+  ];
+  for (const entries of sessions) {
+    assertEquals(
+      decideMainThreadEdit(MAIN, at(entries), noLookup),
+      { decision: "allow", kind: "main", why: "" },
+      jsonl(entries),
+    );
+  }
+});
+
 Deno.test("decideSubagentEdit: every outcome", () => {
   const main = jsonl([
     human("please fix it"),
     spawn("toolu_plain"),
-    human("dispatch to an Opus subagent"),
+    human("dispatch to a Fable subagent"),
     spawn("toolu_ok"),
-    human("use Opus to fix it"),
+    human("use Fable to fix it"),
     spawn("toolu_ask"),
   ]);
   const files = {
     [MAIN]: main,
     ...meta("s1", { model: "sonnet", toolUseId: "toolu_plain" }),
-    ...meta("plain", { model: "opus", toolUseId: "toolu_plain" }),
-    ...meta("ok", { model: "opus", toolUseId: "toolu_ok" }),
-    ...meta("ask", { model: "opus", toolUseId: "toolu_ask" }),
-    ...meta("orphan", { model: "opus", toolUseId: "toolu_missing" }),
+    ...meta("plain", { model: "fable", toolUseId: "toolu_plain" }),
+    ...meta("ok", { model: "fable", toolUseId: "toolu_ok" }),
+    ...meta("ask", { model: "fable", toolUseId: "toolu_ask" }),
+    ...meta("orphan", { model: "fable", toolUseId: "toolu_missing" }),
+    ...meta("opus-helper", { model: "opus", toolUseId: "toolu_plain" }),
+    ...meta("opus-orphan", { model: "claude-opus-5-5", toolUseId: "toolu_missing" }),
   };
   const read = reader(files);
 
@@ -728,14 +798,21 @@ Deno.test("decideSubagentEdit: every outcome", () => {
   assertEquals(decideSubagentEdit("s1", MAIN, read).decision, "allow");
   assertEquals(decideSubagentEdit("ok", MAIN, read).decision, "allow");
   assertEquals(decideSubagentEdit("ok", `${SUBAGENTS}/agent-ok.jsonl`, read).decision, "allow");
-  // D-8: an Opus subagent spawned by "use Opus to fix it" proceeds.
+  // D-8: a Fable subagent spawned by "use Fable to fix it" proceeds.
   assertEquals(decideSubagentEdit("ask", MAIN, read).decision, "allow");
   assert(decideSubagentEdit("plain", MAIN, read).why.includes("neither contains"));
   assert(decideSubagentEdit("orphan", MAIN, read).why.includes("could not be found"));
+  // An Opus coding helper edits directly, even when Josh's spawning message never named Opus.
+  assertEquals(decideSubagentEdit("opus-helper", MAIN, read), {
+    decision: "allow",
+    kind: "subagent",
+    why: "",
+  });
+  assertEquals(decideSubagentEdit("opus-orphan", MAIN, read).why, "");
 });
 
 Deno.test("decide: routes auto-mode subagent calls, exempts other subagent calls, and decides main-thread calls", () => {
-  const read = reader({ [MAIN]: jsonl([human(OPUS_ISSUE), assistant("claude-opus-5")]) });
+  const read = reader({ [MAIN]: jsonl([human(OPUS_ISSUE), assistant("claude-opus-5-5")]) });
   assertEquals(
     decide({ agent_id: "x", permission_mode: "auto", transcript_path: MAIN }, read, labels).kind,
     "subagent",
@@ -757,6 +834,12 @@ Deno.test("decide: routes auto-mode subagent calls, exempts other subagent calls
   assert(decide({}, read, labels).why.includes("could not be read"));
 });
 
+/**
+ * Refusal tests pass this instead of the live workflow switch, so they do not depend on whether Josh
+ * has the switch on for this gate on the machine running them.
+ */
+const noSwitch = (_guard: string) => ({ released: false });
+
 // --- Four literal cases named in 'What this builds' (allow and say so) ---
 
 Deno.test("Case 1: an unreadable transcript allows with note", () => {
@@ -767,7 +850,7 @@ Deno.test("Case 1: an unreadable transcript allows with note", () => {
 });
 
 Deno.test("Case 2: missing subagent metadata allows with note", () => {
-  const read = reader({ [MAIN]: jsonl([human("opus edit ok"), spawn("toolu_sub")]) });
+  const read = reader({ [MAIN]: jsonl([human("fable edit ok"), spawn("toolu_sub")]) });
   const res = decide(
     { agent_id: "missing-meta", permission_mode: "auto", transcript_path: MAIN },
     read,
@@ -778,8 +861,8 @@ Deno.test("Case 2: missing subagent metadata allows with note", () => {
   assert(res.why.includes("model could not be determined"));
 });
 
-Deno.test("a single-assignment pathlib variable now names the repository file for the Opus decision", () => {
-  const read = reader({ [MAIN]: jsonl([human("fix this"), assistant("claude-opus-5")]) });
+Deno.test("a single-assignment pathlib variable now names the repository file for the Fable decision", () => {
+  const read = reader({ [MAIN]: jsonl([human("fix this"), assistant("claude-fable-5-2")]) });
   const res = decide(
     {
       tool_name: "Bash",
@@ -791,12 +874,13 @@ Deno.test("a single-assignment pathlib variable now names the repository file fo
     },
     read,
     labels,
+    noSwitch,
   );
   assertEquals(res.decision, "deny");
 });
 
 Deno.test("Case 4: a read-only command whose quoted text merely contains a write allows with note", () => {
-  const read = reader({ [MAIN]: jsonl([human("fix this"), assistant("claude-opus-5")]) });
+  const read = reader({ [MAIN]: jsonl([human("fix this"), assistant("claude-fable-5-2")]) });
   const res = decide(
     {
       tool_name: "Bash",
@@ -814,7 +898,7 @@ Deno.test("Case 4: a read-only command whose quoted text merely contains a write
 // --- Reproduction check: 2026-09-17 finding ---
 
 Deno.test("Reproduction 2026-09-17: deno eval with Python heredoc writing via pathlib allows with note", () => {
-  const read = reader({ [MAIN]: jsonl([human("fix this"), assistant("claude-opus-5")]) });
+  const read = reader({ [MAIN]: jsonl([human("fix this"), assistant("claude-fable-5-2")]) });
   const cmd = `deno eval '
 const script = \`
 cd /home/joshua/WebJamApps/web-jam-tools
@@ -900,7 +984,7 @@ Deno.test("singleSimpleCommandTokens: one simple command tokenizes, anything els
 });
 
 Deno.test("decide: a write chained onto a read-only invocation is still refused", () => {
-  const read = reader({ [MAIN]: jsonl([human("fix this"), assistant("claude-opus-5")]) });
+  const read = reader({ [MAIN]: jsonl([human("fix this"), assistant("claude-fable-5-2")]) });
   const bypasses = [
     `deno eval 'console.log(1)' && echo x > /home/joshua/WebJamApps/web-jam-tools/src/a.ts`,
     `python3 -c 'print(1)'; echo x > /home/joshua/WebJamApps/web-jam-tools/src/a.ts`,
@@ -917,6 +1001,7 @@ Deno.test("decide: a write chained onto a read-only invocation is still refused"
       },
       read,
       labels,
+      noSwitch,
     );
     assertEquals(res.decision, "deny", command);
   }
@@ -966,7 +1051,7 @@ Deno.test("CLI: prints a decision for a payload and allows by workflow default o
     const transcript = `${dir}/sess.jsonl`;
     await Deno.writeTextFile(
       transcript,
-      jsonl([human("opus edit ok"), assistant("claude-opus-5")]),
+      jsonl([human("fable edit ok"), assistant("claude-fable-5-2")]),
     );
     assertEquals((await runCli(JSON.stringify({ transcript_path: transcript }))).decision, "allow");
     const unreadable = await runCli("not json");
@@ -981,7 +1066,7 @@ Deno.test("CLI: prints a decision for a payload and allows by workflow default o
 
 Deno.test("decide: switchChecker releasing allows an otherwise-denied edit", () => {
   const read: ReadText = (p) =>
-    p === "sess.jsonl" ? jsonl([human("no phrase"), assistant("claude-opus-5")]) : null;
+    p === "sess.jsonl" ? jsonl([human("no phrase"), assistant("claude-fable-5-2")]) : null;
 
   const releasedChecker = (guard: string) => ({
     released: guard === "opus-delegation-gate",
@@ -1015,7 +1100,7 @@ Deno.test("CLI: unexpired switch releases otherwise-denied payload and logs rele
     const logPath = `${dir}/switch.log`;
     await Deno.writeTextFile(
       transcript,
-      jsonl([human("no approval"), assistant("claude-opus-5")]),
+      jsonl([human("no approval"), assistant("claude-fable-5-2")]),
     );
     await Deno.writeTextFile(
       switchPath,

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# opus-delegation-gate.sh — web-jam-tools#641, web-jam-tools#965
+# opus-delegation-gate.sh — web-jam-tools#641, web-jam-tools#965, web-jam-tools#1781
 #
-# HARD PreToolUse gate on Edit, Write, NotebookEdit, and file-writing Bash commands:
-# Refuses repository code modifications made on Opus without Josh's approval, forcing
-# implementation work down to a cheaper model tier (Sonnet, Haiku, or Flash).
+# HARD PreToolUse gate on Edit, Write, NotebookEdit, and file-writing Bash commands. The historical
+# filename is kept for installed links. Since revision 1.3.0 of the design it refuses only a Fable
+# session's (or Fable helper's) repository edits that Josh has not chosen Fable for; Opus sessions and
+# Opus coding helpers edit directly, with no edit grant.
 #
 # Bash: a command that writes files (a redirect, tee, sed -i, cp/mv, inline python/node/deno code
 # that writes, ...) is judged exactly like an Edit/Write to each file it writes — same exemptions,
@@ -11,32 +12,34 @@
 # closes the accidental path (an Opus session refused Edit rewrote repo files with a python script),
 # not a determined bypass. Commands that write nothing (git, gh, deno task test, grep, ls) pass.
 #
-# Design: ~/Dropbox/web-jam-llms/AI_Misbehaves/hooks-design-2026-09-15.md
+# Design: ~/Dropbox/web-jam-llms/AI_Misbehaves/delegation-gate-design.md, "Opus coding and Josh’s
+# choice of Fable" and "The delegation gate's Bash writes".
 # Typed fix-pr approval: ~/Dropbox/web-jam-llms/Token_Savings/fix-pr-design-2026-10-10.md.
 #
 # Allow/Refuse Sequence:
 #   Step 1: Subagent call (agent_id present) AND permission_mode != "auto" -> allow (exit 0)
 #   Step 2: No target path in tool input -> allow (exit 0)
 #   Step 3: Not inside a git working tree -> allow (exit 0)
-#   Step 4: hooks/lib/opus_gate.ts decides everything else from the payload:
-#     - Subagent call in auto mode (D-6): allow when the subagent's own model is not Opus, or it is
-#       Opus and the human prompt that spawned it contains "opus edit ok", asks for an Opus
-#       subagent, or asks Opus to do the work (D-8, e.g. "use Opus to fix it"). An undeterminable
-#       model or spawning prompt allows with a note. An active typed fix-pr call approves a helper
-#       only when that same call asks for an Opus helper.
-#     - Main-thread call: allow when the session model is not Opus, when Josh has approved Opus
-#       edits anywhere earlier in the SESSION — a human prompt containing "opus edit ok" or asking
-#       Opus to do the work (D-8) — and has not since withdrawn it with "opus edit off", or when the
-#       most recent slash command he typed is /work-issue on an issue labeled Opus (D-7; the label is
-#       read with gh and reused for ten minutes). Any other label, no issue named, or a failed lookup
-#       gives no approval, so Opus must delegate. A typed /fix-pr naming a pull request also
-#       approves the session while that call is in force; another typed skill ends it. His
-#       separate phrase approval is session-scoped rather than
-#       per-turn: it is not discarded by whatever he happens to type next.
+#   Step 4: hooks/lib/opus_gate.ts decides everything else from the payload, reading the recorded
+#   model before any grant:
+#     - Subagent call in auto mode (D-6): allow when the subagent's own model is not Fable — an Opus
+#       coding helper edits directly. A Fable subagent is allowed only when the human prompt that
+#       spawned it contains "fable edit ok", asks for a Fable subagent, or asks Fable to do the work
+#       (D-8, e.g. "use Fable to fix it"); during a typed fix-pr call, only that call's explicit
+#       Fable helper request approves it. An undeterminable model or spawning prompt allows with a
+#       note. Launch limits (the two-slot cap, an agent-selected or inherited Fable launch) belong to
+#       the subagent cap, web-jam-tools#708, not to this gate.
+#     - Main-thread call: allow when the session model is not Fable (Opus included). A Fable session
+#       is allowed only on Josh's choice of Fable for the task: a human prompt containing
+#       "fable edit ok" or asking Fable to do the work, anywhere earlier in the SESSION and not since
+#       withdrawn with "fable edit off"; the most recent slash command he typed being /work-issue on
+#       an issue he labeled Fable (the label is read with gh and reused for ten minutes); or a typed
+#       /fix-pr naming a pull request while that call is in force. An Opus or Sol label, or an Opus
+#       edit grant ("opus edit ok"), never authorizes a Fable edit.
 #     Only prompts Josh actually sent (origin.kind "human", not isMeta) count, so a task
 #     notification neither grants approval nor cancels it.
 #   Step 5: Otherwise refuse (deny) with JSON naming the target file and the reason. A main-thread
-#           refusal also carries the delegation commands and the escape phrase.
+#           refusal also names what counts as Josh's choice of Fable and the cheaper tiers to use.
 #
 # Workflow default: a missing or unreadable transcript, an unknown model, or no usable decision
 # from the module allows, with additional context telling the agent what could not be determined.
@@ -53,7 +56,7 @@
 # believed unrecoverable, web-jam-tools#675 withdrew the exemption in auto mode, which refused every
 # subagent edit, Sonnet and Haiku included. That premise no longer holds: each subagent's model is
 # recorded in <session>/subagents/agent-<id>.meta.json and in its own transcript. D-6 now decides by
-# that real model, and still refuses an Opus subagent that Opus started without Josh asking.
+# that real model; since revision 1.3.0 it refuses only a Fable subagent Josh did not ask for.
 #
 # agy/Antigravity reaches this script through agy-hook-shim.sh. Its payload carries modelName
 # and cannot run Fable, while Opus coding proceeds directly on agy (model-tier-order-design-2026-10-02.md,
@@ -142,7 +145,7 @@ if [ "$tool_name" = "Bash" ]; then
   done < <(printf '%s' "$write_analysis" | jq -r '.targets[], .unknownFiles[]')
   if [ -z "$target_path" ]; then
     if [ "$(printf '%s' "$write_analysis" | jq -r '.unknownDirectory')" = "true" ]; then
-      jq -cn '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:"Opus delegation gate: the working directory of a Bash write could not be determined; proceeding. If this is an unapproved Opus repository edit, delegate it or ask Josh for approval."}}'
+      jq -cn '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:"Opus delegation gate: the working directory of a Bash write could not be determined; proceeding. If this is a Fable session editing work Josh has not chosen Fable for, hand it to Opus or a cheaper model."}}'
     fi
     exit 0
   fi
@@ -157,7 +160,7 @@ elif [ "$tool_name" = "apply_patch" ]; then
   done <<< "$parsed_output"
 
   if [ -n "$parse_error" ] || [ ${#patch_paths[@]} -eq 0 ]; then
-    gate_json="$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name opus-delegation-gate --allow-with-note "The Opus delegation gate checker returned no usable decision; proceeding by workflow default. If this is an unapproved Opus repository edit, delegate it or ask Josh for approval." deno run --no-config --allow-read --allow-run=timeout --allow-env --allow-write "$GATE_LIB" 2>/dev/null || true)"
+    gate_json="$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name opus-delegation-gate --allow-with-note "The Opus delegation gate checker returned no usable decision; proceeding by workflow default. If this is a Fable session editing work Josh has not chosen Fable for, hand it to Opus or a cheaper model." deno run --no-config --allow-read --allow-run=timeout --allow-env --allow-write "$GATE_LIB" 2>/dev/null || true)"
     decision="$(printf '%s' "$gate_json" | jq -r '.decision // empty' 2>/dev/null || true)"
     if [ "$decision" = "allow" ]; then
       exit 0
@@ -192,7 +195,7 @@ else
 fi
 
 # Step 4: One invocation of opus_gate.ts decides the rest.
-gate_json="$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name opus-delegation-gate --allow-with-note "The Opus delegation gate checker returned no usable decision; proceeding by workflow default. If this is an unapproved Opus repository edit, delegate it or ask Josh for approval." --note-file "$NOTE_FILE" deno run --no-config --allow-read --allow-run=timeout --allow-env --allow-write "$GATE_LIB" 2>/dev/null || true)"
+gate_json="$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name opus-delegation-gate --allow-with-note "The Opus delegation gate checker returned no usable decision; proceeding by workflow default. If this is a Fable session editing work Josh has not chosen Fable for, hand it to Opus or a cheaper model." --note-file "$NOTE_FILE" deno run --no-config --allow-read --allow-run=timeout --allow-env --allow-write "$GATE_LIB" 2>/dev/null || true)"
 if [ -s "$NOTE_FILE" ]; then
   cat "$NOTE_FILE"
   exit 0
@@ -206,7 +209,7 @@ if [ "$decision" != "deny" ]; then
     why="The Opus delegation gate checker returned no usable decision; proceeding by workflow default."
   fi
   if [ -n "$why" ]; then
-    note="Opus delegation gate: $why If this is an unapproved Opus repository edit, delegate it or ask Josh for approval."
+    note="Opus delegation gate: $why If this is a Fable session editing work Josh has not chosen Fable for, hand it to Opus or a cheaper model."
     jq -cn --arg note "$note" '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$note}}'
   fi
   exit 0
@@ -225,16 +228,15 @@ if [ "$kind" = "subagent" ]; then
     why="The subagent's model or spawning message could not be determined."
   fi
   reason="⛔ Opus delegation gate: refused a subagent's $what.
-In auto mode a Sonnet or Haiku subagent may edit. An Opus subagent may edit only when the message Josh typed to ask for it contains \"opus edit ok\", asks for an Opus subagent, or asks Opus to do the work.
+In auto mode a Haiku, Sonnet or Opus subagent may edit. A Fable subagent may edit only when the message Josh typed to ask for it contains \"fable edit ok\", asks for a Fable subagent, or asks Fable to do the work.
 $why"
 else
   reason="⛔ Opus delegation gate: refused ${via_bash:+a }$what.
-Repository code must not be edited directly on Opus — implementation work belongs on a cheaper tier.
-To delegate:
-  • Backend / contained coding work: spawn a subagent with model: \"sonnet\" (or Haiku)
-  • Frontend / UI work: delegate to Flash via agy (/work-issue or Antigravity)
-To authorize Opus edits for the rest of this session, include the exact phrase: opus edit ok
-(that approval then holds until you withdraw it with: opus edit off)"
+This session runs on Fable, which edits repository files only for work Josh has chosen Fable for:
+a /work-issue he typed on an issue he labeled Fable, a /fix-pr he typed naming a pull request, or a
+message of his asking Fable to do the work or containing: fable edit ok
+(withdrawn with: fable edit off). An Opus or Sol label, or \"opus edit ok\", does not choose Fable.
+Otherwise hand the work to a model that edits directly: Opus, Sonnet or Haiku in Claude Code, or agy."
   if [ -n "$why" ]; then
     reason="$reason
 ($why)"

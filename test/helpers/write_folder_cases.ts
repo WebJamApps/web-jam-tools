@@ -171,7 +171,13 @@ export async function verifyFolderRow(
         },
         {
           type: "assistant",
-          message: { role: "assistant", model: "claude-opus-5", content: "ok" },
+          // The delegation gate refuses only a Fable session Josh has not chosen Fable for
+          // (delegation-gate-design.md revision 1.3.0); Opus edits directly.
+          message: {
+            role: "assistant",
+            model: hook === "opus-delegation-gate" ? "claude-fable-5-2" : "claude-opus-5",
+            content: "ok",
+          },
         },
       ].map((entry) => JSON.stringify(entry)).join("\n"),
     );

@@ -8,7 +8,7 @@ import { assert, assertEquals } from "@std/assert";
 import { folderCases, verifyFolderRow } from "./helpers/write_folder_cases.ts";
 
 for (const [index, row] of folderCases("/repo", "/scratch", "/home/test").entries()) {
-  Deno.test(`folder design table, Opus: ${row.name}`, () =>
+  Deno.test(`folder design table, Fable: ${row.name}`, () =>
     verifyFolderRow(index, "opus-delegation-gate"));
 }
 
@@ -93,14 +93,14 @@ function workIssueTurn(args: string): Record<string, unknown> {
 }
 
 // A stand-in `gh` on PATH for the D-7 cases, with its own label cache directory: issue 1 is labeled
-// Opus, issue 2 Sonnet, and any other number fails to look up.
+// Opus, issue 2 Sonnet, issue 3 Fable, and any other number fails to look up.
 async function withFakeGh(fn: (env: Record<string, string>) => Promise<void>): Promise<void> {
   const bin = await Deno.makeTempDir();
   const cache = await Deno.makeTempDir();
   try {
     await Deno.writeTextFile(
       `${bin}/gh`,
-      `#!/usr/bin/env bash\ncase "$3" in\n  1) echo '{"labels":[{"name":"Opus"}]}' ;;\n  2) echo '{"labels":[{"name":"Sonnet"}]}' ;;\n  *) exit 1 ;;\nesac\n`,
+      `#!/usr/bin/env bash\ncase "$3" in\n  1) echo '{"labels":[{"name":"Opus"}]}' ;;\n  2) echo '{"labels":[{"name":"Sonnet"}]}' ;;\n  3) echo '{"labels":[{"name":"Fable"}]}' ;;\n  *) exit 1 ;;\nesac\n`,
     );
     await Deno.chmod(`${bin}/gh`, 0o755);
     await fn({ PATH: `${bin}:${Deno.env.get("PATH") ?? ""}`, OPUS_GATE_CACHE_DIR: cache });
@@ -153,7 +153,7 @@ function assertAllowedWithNote(res: RunResult, expected: string): void {
   assertAllowed(res);
   const note = JSON.parse(res.stdout).hookSpecificOutput.additionalContext;
   assert(note.includes(expected), note);
-  assert(note.includes("delegate it or ask Josh for approval"), note);
+  assert(note.includes("hand it to Opus or a cheaper model"), note);
   assert(!res.stderr.trim(), "the note belongs in agent context, not terminal stderr");
 }
 
@@ -187,8 +187,8 @@ Deno.test("subagent tool call (agent_id present) is still allowed under permissi
 // Each case builds a real session layout: <root>/sess.jsonl plus
 // <root>/sess/subagents/agent-<id>.{jsonl,meta.json}. The payload passes the MAIN transcript as
 // transcript_path, which is what Claude Code 2.1.267 sends; the shape case also passes the
-// subagent's own jsonl. Case (b) is the web-jam-tools#663 regression guard: an Opus subagent
-// that Opus started without Josh asking is still refused.
+// subagent's own jsonl. Case (b) is the web-jam-tools#663 regression guard: a Fable subagent
+// that Fable started without Josh asking is still refused.
 
 interface AgentSpec {
   id: string;
@@ -238,7 +238,7 @@ function spawnTurn(toolUseId: string): Record<string, unknown> {
     type: "assistant",
     message: {
       role: "assistant",
-      model: "claude-opus-5",
+      model: "claude-fable-5-2",
       content: [{ type: "tool_use", id: toolUseId, name: "Agent", input: {} }],
     },
   };
@@ -275,10 +275,10 @@ Deno.test("(a) auto mode: a Sonnet subagent's edit proceeds", async () => {
   );
 });
 
-Deno.test("(b) auto mode: an Opus subagent whose spawning human prompt carries no approval is refused", async () => {
+Deno.test("(b) auto mode: a Fable subagent whose spawning human prompt carries no approval is refused", async () => {
   await withSession(
     [userTurn("please fix this file"), spawnTurn("toolu_b")],
-    [{ id: "o1", meta: agentMeta("opus", "toolu_b") }],
+    [{ id: "o1", meta: agentMeta("fable", "toolu_b") }],
     async ({ mainPath }) => {
       const res = await runHook(subagentCall("o1", mainPath));
       assertEquals(res.code, 0);
@@ -287,31 +287,31 @@ Deno.test("(b) auto mode: an Opus subagent whose spawning human prompt carries n
   );
 });
 
-Deno.test("(c) auto mode: an Opus subagent spawned by an 'opus edit ok' prompt proceeds after later prompts lack it", async () => {
+Deno.test("(c) auto mode: a Fable subagent spawned by a 'fable edit ok' prompt proceeds after later prompts lack it", async () => {
   await withSession(
     [
-      userTurn("opus edit ok — spawn an agent to fix it"),
+      userTurn("fable edit ok — spawn an agent to fix it"),
       spawnTurn("toolu_c"),
-      assistantTurn("claude-opus-5"),
+      assistantTurn("claude-fable-5-2"),
       userTurn("how is it going?"),
     ],
-    [{ id: "o1", meta: agentMeta("opus", "toolu_c") }],
+    [{ id: "o1", meta: agentMeta("fable", "toolu_c") }],
     async ({ mainPath }) => assertAllowed(await runHook(subagentCall("o1", mainPath))),
   );
 });
 
-Deno.test("(d) auto mode: an Opus subagent whose spawning prompt asks for an Opus subagent proceeds", async () => {
+Deno.test("(d) auto mode: a Fable subagent whose spawning prompt asks for a Fable subagent proceeds", async () => {
   await withSession(
-    [userTurn("dispatch to an Opus subagent"), spawnTurn("toolu_d")],
-    [{ id: "o1", meta: agentMeta("opus", "toolu_d") }],
+    [userTurn("dispatch to a Fable subagent"), spawnTurn("toolu_d")],
+    [{ id: "o1", meta: agentMeta("fable", "toolu_d") }],
     async ({ mainPath }) => assertAllowed(await runHook(subagentCall("o1", mainPath))),
   );
 });
 
-Deno.test("(e) auto mode: a nested Sonnet subagent under an Opus subagent proceeds", async () => {
+Deno.test("(e) auto mode: a nested Sonnet subagent under a Fable subagent proceeds", async () => {
   await withSession(
     [userTurn("please fix this file"), spawnTurn("toolu_e")],
-    [{ id: "o1", meta: agentMeta("opus", "toolu_e") }, {
+    [{ id: "o1", meta: agentMeta("fable", "toolu_e") }, {
       id: "s2",
       meta: agentMeta("sonnet", "toolu_inner", "o1"),
     }],
@@ -319,12 +319,12 @@ Deno.test("(e) auto mode: a nested Sonnet subagent under an Opus subagent procee
   );
 });
 
-Deno.test("(f) auto mode: a nested Opus subagent under an authorized Opus subagent proceeds", async () => {
+Deno.test("(f) auto mode: a nested Fable subagent under an authorized Fable subagent proceeds", async () => {
   await withSession(
-    [userTurn("opus edit ok, use a subagent"), spawnTurn("toolu_f")],
-    [{ id: "o1", meta: agentMeta("opus", "toolu_f") }, {
+    [userTurn("fable edit ok, use a subagent"), spawnTurn("toolu_f")],
+    [{ id: "o1", meta: agentMeta("fable", "toolu_f") }, {
       id: "o2",
-      meta: agentMeta("opus", "toolu_inner", "o1"),
+      meta: agentMeta("fable", "toolu_inner", "o1"),
     }],
     async ({ mainPath }) => assertAllowed(await runHook(subagentCall("o2", mainPath))),
   );
@@ -332,10 +332,10 @@ Deno.test("(f) auto mode: a nested Opus subagent under an authorized Opus subage
 
 Deno.test("(g) auto mode: missing subagent files, a broken parent chain, or a missing spawning tool_use is allowed", async () => {
   await withSession(
-    [userTurn("opus edit ok"), spawnTurn("toolu_g")],
+    [userTurn("fable edit ok"), spawnTurn("toolu_g")],
     [
-      { id: "orphan", meta: agentMeta("opus", "toolu_not_in_main") },
-      { id: "child", meta: agentMeta("opus", "toolu_inner", "parent-gone") },
+      { id: "orphan", meta: agentMeta("fable", "toolu_not_in_main") },
+      { id: "child", meta: agentMeta("fable", "toolu_inner", "parent-gone") },
     ],
     async ({ mainPath }) => {
       assertAllowed(await runHook(subagentCall("no-files", mainPath)));
@@ -353,14 +353,14 @@ Deno.test("(g) auto mode: a subagent whose model is only in its own transcript i
   );
 });
 
-Deno.test("(h) auto mode: a task notification quoting 'opus edit ok' before the spawn does not approve an Opus subagent", async () => {
+Deno.test("(h) auto mode: a task notification quoting 'fable edit ok' before the spawn does not approve a Fable subagent", async () => {
   await withSession(
     [
       userTurn("please fix this file"),
-      notificationTurn("<task-notification>opus edit ok</task-notification>"),
+      notificationTurn("<task-notification>fable edit ok</task-notification>"),
       spawnTurn("toolu_h"),
     ],
-    [{ id: "o1", meta: agentMeta("opus", "toolu_h") }],
+    [{ id: "o1", meta: agentMeta("fable", "toolu_h") }],
     async ({ mainPath }) =>
       assertDenied((await runHook(subagentCall("o1", mainPath))).stdout, ["neither contains"]),
   );
@@ -369,14 +369,22 @@ Deno.test("(h) auto mode: a task notification quoting 'opus edit ok' before the 
 Deno.test("transcript_path shape: the subagent's own jsonl and the main transcript decide identically", async () => {
   await withSession(
     [
-      userTurn("opus edit ok — spawn it"),
+      userTurn("fable edit ok — spawn it"),
       spawnTurn("toolu_ok"),
       userTurn("please fix this file"),
       spawnTurn("toolu_no"),
     ],
     [
-      { id: "ok", meta: agentMeta("opus", "toolu_ok"), lines: [sidechainTurn("claude-opus-5")] },
-      { id: "no", meta: agentMeta("opus", "toolu_no"), lines: [sidechainTurn("claude-opus-5")] },
+      {
+        id: "ok",
+        meta: agentMeta("fable", "toolu_ok"),
+        lines: [sidechainTurn("claude-fable-5-2")],
+      },
+      {
+        id: "no",
+        meta: agentMeta("fable", "toolu_no"),
+        lines: [sidechainTurn("claude-fable-5-2")],
+      },
     ],
     async ({ mainPath, agentPath }) => {
       assertAllowed(await runHook(subagentCall("ok", mainPath)));
@@ -389,15 +397,15 @@ Deno.test("transcript_path shape: the subagent's own jsonl and the main transcri
 
 // --- Main thread: only human prompts carry approval (h), and /work-issue approves (D-7) ---
 
-Deno.test("(h) main thread: a task notification or isMeta entry containing 'opus edit ok' does not authorize", async () => {
+Deno.test("(h) main thread: a task notification or isMeta entry containing 'fable edit ok' does not authorize", async () => {
   for (
     const lines of [
       [
         userTurn("please edit"),
-        assistantTurn("claude-opus-5"),
-        notificationTurn("<task-notification>opus edit ok</task-notification>"),
+        assistantTurn("claude-fable-5-2"),
+        notificationTurn("<task-notification>fable edit ok</task-notification>"),
       ],
-      [userTurn("please edit"), metaTurn("opus edit ok"), assistantTurn("claude-opus-5")],
+      [userTurn("please edit"), metaTurn("fable edit ok"), assistantTurn("claude-fable-5-2")],
     ]
   ) {
     await withTranscript(lines, async (transcript_path) => {
@@ -408,11 +416,11 @@ Deno.test("(h) main thread: a task notification or isMeta entry containing 'opus
   }
 });
 
-Deno.test("(h) main thread: a task notification after Josh's 'opus edit ok' prompt does not cancel the approval", async () => {
+Deno.test("(h) main thread: a task notification after Josh's 'fable edit ok' prompt does not cancel the approval", async () => {
   await withTranscript(
     [
-      userTurn("opus edit ok, fix it"),
-      assistantTurn("claude-opus-5"),
+      userTurn("fable edit ok, fix it"),
+      assistantTurn("claude-fable-5-2"),
       notificationTurn("<task-notification>done</task-notification>"),
     ],
     async (transcript_path) => {
@@ -421,15 +429,15 @@ Deno.test("(h) main thread: a task notification after Josh's 'opus edit ok' prom
   );
 });
 
-Deno.test("D-7 main thread: a /work-issue Josh typed on an Opus-labeled issue approves Opus edits through his later plain messages", async () => {
+Deno.test("D-7 main thread: a /work-issue Josh typed on a Fable-labeled issue approves Fable edits through his later plain messages", async () => {
   await withFakeGh(async (env) => {
     await withTranscript(
       [
-        workIssueTurn("web-jam-tools#1"),
+        workIssueTurn("web-jam-tools#3"),
         metaTurn("Base directory for this skill: /home/joshua/.claude/skills/work-issue"),
-        assistantTurn("claude-opus-5"),
+        assistantTurn("claude-fable-5-2"),
         userTurn("why?"),
-        assistantTurn("claude-opus-5"),
+        assistantTurn("claude-fable-5-2"),
       ],
       async (transcript_path) => {
         const payload = {
@@ -444,17 +452,17 @@ Deno.test("D-7 main thread: a /work-issue Josh typed on an Opus-labeled issue ap
   });
 });
 
-Deno.test("D-7 main thread: a /work-issue on a Sonnet-labeled issue, on no issue, or on an unreadable issue does not approve Opus", async () => {
+Deno.test("D-7 main thread: a /work-issue on a Sonnet-labeled issue, on no issue, or on an unreadable issue does not approve Fable", async () => {
   await withFakeGh(async (env) => {
     for (
       const args of [
         "web-jam-tools#2",
-        "when the label is Opus = Opus can edit",
+        "when the label is Fable = Fable can edit",
         "web-jam-tools#99",
       ]
     ) {
       await withTranscript(
-        [workIssueTurn(args), assistantTurn("claude-opus-5")],
+        [workIssueTurn(args), assistantTurn("claude-fable-5-2")],
         async (transcript_path) => {
           assertDenied(
             (await runHook({ tool_input: { file_path: IN_REPO_FILE }, transcript_path }, env))
@@ -479,9 +487,9 @@ Deno.test("D-7 main thread: another slash command after /work-issue ends the app
       await withTranscript(
         [
           workIssueTurn("web-jam-tools#1"),
-          assistantTurn("claude-opus-5"),
+          assistantTurn("claude-fable-5-2"),
           later,
-          assistantTurn("claude-opus-5"),
+          assistantTurn("claude-fable-5-2"),
         ],
         async (transcript_path) => {
           assertDenied(
@@ -494,9 +502,9 @@ Deno.test("D-7 main thread: another slash command after /work-issue ends the app
   });
 });
 
-Deno.test("main-thread (no agent_id) Opus call under permission_mode 'auto' is denied without escape phrase (unchanged baseline)", async () => {
+Deno.test("main-thread (no agent_id) Fable call under permission_mode 'auto' is denied without escape phrase (unchanged baseline)", async () => {
   await withTranscript(
-    [userTurn("please edit this file directly"), assistantTurn("claude-opus-4-6")],
+    [userTurn("please edit this file directly"), assistantTurn("claude-fable-5-2")],
     async (transcript_path) => {
       const res = await runHook({
         permission_mode: "auto",
@@ -536,7 +544,7 @@ Deno.test("target path outside any git repository is allowed", async () => {
   }
 });
 
-// --- Step 5: Session model is not Opus allowed ---
+// --- Step 5: Session model is not Fable allowed ---
 
 Deno.test("in-repo write by Sonnet main session is allowed", async () => {
   await withTranscript(
@@ -603,11 +611,11 @@ Deno.test("in-repo write by gpt-6-astra main session is allowed (web-jam-tools#1
   );
 });
 
-Deno.test("in-repo write by claude-opus-5-5 main session without escape phrase is denied (web-jam-tools#1140)", async () => {
+Deno.test("in-repo write by claude-fable-5-2 main session without Josh's choice of Fable is denied (web-jam-tools#1140)", async () => {
   await withTranscript(
     [
       userTurn("please edit this file directly"),
-      assistantTurn("claude-opus-5-5"),
+      assistantTurn("claude-fable-5-2"),
     ],
     async (transcript_path) => {
       const res = await runHook({
@@ -617,19 +625,19 @@ Deno.test("in-repo write by claude-opus-5-5 main session without escape phrase i
       assertEquals(res.code, 0);
       assertDenied(res.stdout, [
         IN_REPO_FILE,
-        "Repository code must not be edited directly on Opus",
+        "This session runs on Fable",
       ]);
     },
   );
 });
 
-// --- Step 6: Escape phrase 'opus edit ok' present in latest user message ---
+// --- Step 6: Escape phrase 'fable edit ok' present in latest user message ---
 
-Deno.test("Opus session is allowed when latest user message contains 'opus edit ok'", async () => {
+Deno.test("Fable session is allowed when latest user message contains 'fable edit ok'", async () => {
   await withTranscript(
     [
-      userTurn("opus edit ok, go ahead and fix this file"),
-      assistantTurn("claude-opus-4-6"),
+      userTurn("fable edit ok, go ahead and fix this file"),
+      assistantTurn("claude-fable-5-2"),
     ],
     async (transcript_path) => {
       const res = await runHook({
@@ -641,11 +649,11 @@ Deno.test("Opus session is allowed when latest user message contains 'opus edit 
   );
 });
 
-Deno.test("Opus session with NotebookEdit is allowed when latest user message contains 'opus edit ok'", async () => {
+Deno.test("Fable session with NotebookEdit is allowed when latest user message contains 'fable edit ok'", async () => {
   await withTranscript(
     [
-      userTurn("opus edit ok — edit notebook"),
-      assistantTurn("claude-opus-4-6"),
+      userTurn("fable edit ok — edit notebook"),
+      assistantTurn("claude-fable-5-2"),
     ],
     async (transcript_path) => {
       const res = await runHook({
@@ -659,11 +667,11 @@ Deno.test("Opus session with NotebookEdit is allowed when latest user message co
 
 // --- Step 7: Refusals (denials) ---
 
-Deno.test("Opus main session in-repo write without escape phrase is denied with complete refusal message", async () => {
+Deno.test("Fable main session in-repo write without escape phrase is denied with complete refusal message", async () => {
   await withTranscript(
     [
       userTurn("please edit this file directly"),
-      assistantTurn("claude-opus-4-6"),
+      assistantTurn("claude-fable-5-2"),
     ],
     async (transcript_path) => {
       const res = await runHook({
@@ -673,25 +681,28 @@ Deno.test("Opus main session in-repo write without escape phrase is denied with 
       assertEquals(res.code, 0);
       assertDenied(res.stdout, [
         IN_REPO_FILE,
-        "Repository code must not be edited directly on Opus",
-        'model: "sonnet"',
-        "Flash via agy",
-        "opus edit ok",
+        "This session runs on Fable",
+        "a /work-issue he typed on an issue he labeled Fable",
+        "a /fix-pr he typed naming a pull request",
+        "fable edit ok",
+        "fable edit off",
+        'An Opus or Sol label, or "opus edit ok", does not choose Fable.',
+        "Opus, Sonnet or Haiku in Claude Code, or agy",
       ]);
     },
   );
 });
 
-Deno.test("Opus session where the escape phrase was in an older turn is still allowed", async () => {
+Deno.test("Fable session where the escape phrase was in an older turn is still allowed", async () => {
   // Josh's approval is session-scoped. It used to be read from his latest prompt alone, so any
   // following message silently withdrew permission he had already given and he had to retype the
   // phrase before every edit — the guard policing him rather than the agent.
   await withTranscript(
     [
-      userTurn("opus edit ok — first turn"),
-      assistantTurn("claude-opus-4-6", "done turn 1"),
+      userTurn("fable edit ok — first turn"),
+      assistantTurn("claude-fable-5-2", "done turn 1"),
       userTurn("now do another edit on this file"),
-      assistantTurn("claude-opus-4-6"),
+      assistantTurn("claude-fable-5-2"),
     ],
     async (transcript_path) => {
       const res = await runHook({
@@ -704,13 +715,13 @@ Deno.test("Opus session where the escape phrase was in an older turn is still al
   );
 });
 
-Deno.test("Opus session is denied again once Josh withdraws his approval", async () => {
+Deno.test("Fable session is denied again once Josh withdraws his approval", async () => {
   await withTranscript(
     [
-      userTurn("opus edit ok"),
-      assistantTurn("claude-opus-4-6", "done turn 1"),
-      userTurn("opus edit off"),
-      assistantTurn("claude-opus-4-6"),
+      userTurn("fable edit ok"),
+      assistantTurn("claude-fable-5-2", "done turn 1"),
+      userTurn("fable edit off"),
+      assistantTurn("claude-fable-5-2"),
     ],
     async (transcript_path) => {
       const res = await runHook({
@@ -723,11 +734,11 @@ Deno.test("Opus session is denied again once Josh withdraws his approval", async
   );
 });
 
-Deno.test("Opus session with interleaved Haiku subagent is still recognized as Opus and denied without escape phrase", async () => {
+Deno.test("Fable session with interleaved Haiku subagent is still recognized as Fable and denied without escape phrase", async () => {
   await withTranscript(
     [
       userTurn("run subagent and then do edit"),
-      assistantTurn("claude-opus-4-6"),
+      assistantTurn("claude-fable-5-2"),
       sidechainTurn("claude-haiku-3-5"),
     ],
     async (transcript_path) => {
@@ -745,7 +756,7 @@ Deno.test("fix-pr: the installed shell entry point allows the active typed call 
   for (const [later, expected] of [["go ahead", "allow"], ["/pr-review", "deny"]]) {
     await withTranscript([
       userTurn("/fix-pr web-jam-tools#1318"),
-      assistantTurn("claude-opus-5"),
+      assistantTurn("claude-fable-5-2"),
       userTurn(later),
     ], async (transcript_path) => {
       const res = await runHook({
@@ -836,7 +847,7 @@ function bashPayload(
   return { tool_name: "Bash", tool_input: { command }, cwd: REPO_DIR, transcript_path, ...extra };
 }
 
-const UNAUTHORIZED_OPUS = [userTurn("please look at this"), assistantTurn("claude-opus-5")];
+const UNAUTHORIZED_FABLE = [userTurn("please look at this"), assistantTurn("claude-fable-5-2")];
 
 const BASH_WRITES_REFUSED = [
   "python3 - <<'EOF'\nopen('hooks/x.ts','w').write('x')\nEOF",
@@ -856,12 +867,12 @@ const BASH_NON_WRITES_ALLOWED = [
   "gh pr view 1 --json title",
 ];
 
-Deno.test("Bash: an unapproved Opus session's file-writing command is refused like an Edit", async () => {
-  await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+Deno.test("Bash: an unapproved Fable session's file-writing command is refused like an Edit", async () => {
+  await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
     for (const command of BASH_WRITES_REFUSED) {
       const res = await runHook(bashPayload(command, transcript_path));
       assertEquals(res.code, 0, command);
-      assertDenied(res.stdout, ["Bash command that writes to", "opus edit ok"]);
+      assertDenied(res.stdout, ["Bash command that writes to", "fable edit ok"]);
     }
   });
 });
@@ -869,7 +880,7 @@ Deno.test("Bash: an unapproved Opus session's file-writing command is refused li
 Deno.test("Bash: commands that write no file, or write only outside a git working tree, are allowed", async () => {
   const outside = await Deno.makeTempDir();
   try {
-    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
       const commands = [
         ...BASH_NON_WRITES_ALLOWED,
         `echo x > ${outside}/notes.md`,
@@ -885,11 +896,11 @@ Deno.test("Bash: commands that write no file, or write only outside a git workin
   }
 });
 
-Deno.test("Bash: an approved Opus session, a Sonnet session, a non-auto subagent and a non-Opus agy model may write", async () => {
+Deno.test("Bash: an approved Fable session, a Sonnet session, a non-auto subagent and a non-Fable agy model may write", async () => {
   await withTranscript(
     [
-      userTurn("yes dispatch the fix for that hook right now to Opus please"),
-      assistantTurn("claude-opus-5"),
+      userTurn("yes dispatch the fix for that hook right now to Fable please"),
+      assistantTurn("claude-fable-5-2"),
     ],
     async (transcript_path) => {
       for (const command of BASH_WRITES_REFUSED) {
@@ -915,10 +926,10 @@ Deno.test("Bash: an approved Opus session, a Sonnet session, a non-auto subagent
   );
 });
 
-Deno.test("Bash: an agy payload naming an Opus model without a transcript exits 0 silently", async () => {
+Deno.test("Bash: an agy payload naming a Fable model without a transcript exits 0 silently", async () => {
   const res = await runHook(
     bashPayload("echo x > src/a.ts", "/nonexistent.jsonl", {
-      modelName: "claude-opus-4-6-thinking",
+      modelName: "claude-fable-4-6-thinking",
     }),
   );
   assertEquals(res.code, 0);
@@ -935,9 +946,9 @@ Deno.test("agy early exit: claude-opus-5-5-high and all other agy models exit 0 
     "claude-sonnet-5-5-high",
   ];
 
-  // Even when a Claude Code unauthorized-Opus transcript is supplied, non-empty modelName exits 0
+  // Even when a Claude Code unauthorized-Fable transcript is supplied, non-empty modelName exits 0
   // before tool-branch parsing or transcript checks run.
-  await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+  await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
     for (const modelName of agyModels) {
       const payloads: Array<{ label: string; body: Record<string, unknown> }> = [
         {
@@ -1000,7 +1011,7 @@ Deno.test("agy early exit: claude-opus-5-5-high and all other agy models exit 0 
         modelName: blankModel,
       });
       assertEquals(res.code, 0);
-      assertDenied(res.stdout, ["opus edit ok"]);
+      assertDenied(res.stdout, ["fable edit ok"]);
     }
   });
 });
@@ -1028,7 +1039,7 @@ Deno.test("agy shim end-to-end: claude-opus-5-5-high edit_file and run_command a
     await writer.write(
       new TextEncoder().encode(
         JSON.stringify({
-          conversationId: "conv-opus-agy-test",
+          conversationId: "conv-fable-agy-test",
           modelName: "claude-opus-5-5-high",
           toolCall,
         }),
@@ -1042,7 +1053,7 @@ Deno.test("agy shim end-to-end: claude-opus-5-5-high edit_file and run_command a
 });
 
 Deno.test("Bash reproduction: deno eval containing a Python heredoc writing via pathlib allows", async () => {
-  await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+  await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
     const cmd = `deno eval '
 const script = \`
 cd ${REPO_DIR}
@@ -1060,7 +1071,7 @@ console.log(script);
 });
 
 Deno.test("Bash: a real write chained onto a read-only invocation is still refused", async () => {
-  await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+  await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
     for (
       const cmd of [
         `deno eval 'console.log(1)' && echo pwned > ${IN_REPO_FILE}`,
@@ -1092,8 +1103,8 @@ function applyPatchPayload(
   };
 }
 
-Deno.test("apply_patch: in-repo patch by unauthorized Opus session is denied", async () => {
-  await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+Deno.test("apply_patch: in-repo patch by unauthorized Fable session is denied", async () => {
+  await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
     const res = await runHook(
       applyPatchPayload(`*** Add File: ${IN_REPO_FILE}\n+test\n`, transcript_path),
     );
@@ -1101,16 +1112,16 @@ Deno.test("apply_patch: in-repo patch by unauthorized Opus session is denied", a
     assertDenied(res.stdout, [
       IN_REPO_FILE,
       "apply_patch targeting",
-      "opus edit ok",
+      "fable edit ok",
     ]);
   });
 });
 
-Deno.test("apply_patch: in-repo patch by approved Opus session ('opus edit ok') is allowed", async () => {
+Deno.test("apply_patch: in-repo patch by approved Fable session ('fable edit ok') is allowed", async () => {
   await withTranscript(
     [
-      userTurn("opus edit ok, apply the patch"),
-      assistantTurn("claude-opus-5"),
+      userTurn("fable edit ok, apply the patch"),
+      assistantTurn("claude-fable-5-2"),
     ],
     async (transcript_path) => {
       const res = await runHook(
@@ -1133,10 +1144,10 @@ Deno.test("apply_patch: in-repo patch by Sonnet session is allowed", async () =>
   );
 });
 
-Deno.test("apply_patch: patch with out-of-tree files only is allowed on unauthorized Opus", async () => {
+Deno.test("apply_patch: patch with out-of-tree files only is allowed on unauthorized Fable", async () => {
   const outside = await Deno.makeTempDir();
   try {
-    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
       const res = await runHook(
         applyPatchPayload(
           `*** Update File: ${outside}/notes.md\n--- a/notes\n+++ b/notes\n`,
@@ -1150,10 +1161,10 @@ Deno.test("apply_patch: patch with out-of-tree files only is allowed on unauthor
   }
 });
 
-Deno.test("apply_patch: two files in one patch where one is in-repo is denied on unauthorized Opus", async () => {
+Deno.test("apply_patch: two files in one patch where one is in-repo is denied on unauthorized Fable", async () => {
   const outside = await Deno.makeTempDir();
   try {
-    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
       const patch = `*** Add File: ${outside}/out-of-tree.txt
 +outside
 *** Update File: ${IN_REPO_FILE}
@@ -1165,7 +1176,7 @@ Deno.test("apply_patch: two files in one patch where one is in-repo is denied on
       assertDenied(res.stdout, [
         IN_REPO_FILE,
         "apply_patch targeting",
-        "opus edit ok",
+        "fable edit ok",
       ]);
     });
   } finally {
@@ -1174,7 +1185,7 @@ Deno.test("apply_patch: two files in one patch where one is in-repo is denied on
 });
 
 Deno.test("apply_patch: patch with no parseable file path is refused (fails closed)", async () => {
-  await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+  await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
     const res = await runHook(
       applyPatchPayload("malformed patch without header lines\n", transcript_path),
     );
@@ -1185,7 +1196,7 @@ Deno.test("apply_patch: patch with no parseable file path is refused (fails clos
 
 // --- Workflow switch tests (web-jam-tools#1046) ---
 
-Deno.test("workflow switch: unexpired switch naming 'opus-delegation-gate' allows refused Opus Bash write and logs release", async () => {
+Deno.test("workflow switch: unexpired switch naming 'opus-delegation-gate' allows refused Fable Bash write and logs release", async () => {
   const dir = await Deno.makeTempDir();
   try {
     const switchPath = `${dir}/switch.json`;
@@ -1196,7 +1207,7 @@ Deno.test("workflow switch: unexpired switch naming 'opus-delegation-gate' allow
       JSON.stringify({ guard: "opus-delegation-gate", expires_at: future }),
     );
 
-    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
       const res = await runHook(
         bashPayload("echo x > src/a.ts", transcript_path),
         { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
@@ -1211,7 +1222,7 @@ Deno.test("workflow switch: unexpired switch naming 'opus-delegation-gate' allow
   }
 });
 
-Deno.test("workflow switch: unexpired switch naming 'all workflow guards' allows refused Opus Bash write and logs release", async () => {
+Deno.test("workflow switch: unexpired switch naming 'all workflow guards' allows refused Fable Bash write and logs release", async () => {
   const dir = await Deno.makeTempDir();
   try {
     const switchPath = `${dir}/switch.json`;
@@ -1222,7 +1233,7 @@ Deno.test("workflow switch: unexpired switch naming 'all workflow guards' allows
       JSON.stringify({ guard: "all workflow guards", expires_at: future }),
     );
 
-    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
       const res = await runHook(
         bashPayload("echo x > src/a.ts", transcript_path),
         { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
@@ -1237,7 +1248,7 @@ Deno.test("workflow switch: unexpired switch naming 'all workflow guards' allows
   }
 });
 
-Deno.test("workflow switch: expired switch naming 'opus-delegation-gate' still refuses Opus Bash write", async () => {
+Deno.test("workflow switch: expired switch naming 'opus-delegation-gate' still refuses Fable Bash write", async () => {
   const dir = await Deno.makeTempDir();
   try {
     const switchPath = `${dir}/switch.json`;
@@ -1248,20 +1259,20 @@ Deno.test("workflow switch: expired switch naming 'opus-delegation-gate' still r
       JSON.stringify({ guard: "opus-delegation-gate", expires_at: past }),
     );
 
-    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
       const res = await runHook(
         bashPayload("echo x > src/a.ts", transcript_path),
         { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
       );
       assertEquals(res.code, 0);
-      assertDenied(res.stdout, ["Bash command that writes to", "opus edit ok"]);
+      assertDenied(res.stdout, ["Bash command that writes to", "fable edit ok"]);
     });
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
 });
 
-Deno.test("workflow switch: switch naming different guard still refuses Opus Bash write", async () => {
+Deno.test("workflow switch: switch naming different guard still refuses Fable Bash write", async () => {
   const dir = await Deno.makeTempDir();
   try {
     const switchPath = `${dir}/switch.json`;
@@ -1272,20 +1283,20 @@ Deno.test("workflow switch: switch naming different guard still refuses Opus Bas
       JSON.stringify({ guard: "agy-model-guard", expires_at: future }),
     );
 
-    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
       const res = await runHook(
         bashPayload("echo x > src/a.ts", transcript_path),
         { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
       );
       assertEquals(res.code, 0);
-      assertDenied(res.stdout, ["Bash command that writes to", "opus edit ok"]);
+      assertDenied(res.stdout, ["Bash command that writes to", "fable edit ok"]);
     });
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
 });
 
-Deno.test("workflow switch: unparseable expiry still refuses Opus Bash write", async () => {
+Deno.test("workflow switch: unparseable expiry still refuses Fable Bash write", async () => {
   const dir = await Deno.makeTempDir();
   try {
     const switchPath = `${dir}/switch.json`;
@@ -1295,33 +1306,33 @@ Deno.test("workflow switch: unparseable expiry still refuses Opus Bash write", a
       JSON.stringify({ guard: "opus-delegation-gate", expires_at: "not-a-valid-date" }),
     );
 
-    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
       const res = await runHook(
         bashPayload("echo x > src/a.ts", transcript_path),
         { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
       );
       assertEquals(res.code, 0);
-      assertDenied(res.stdout, ["Bash command that writes to", "opus edit ok"]);
+      assertDenied(res.stdout, ["Bash command that writes to", "fable edit ok"]);
     });
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
 });
 
-Deno.test("workflow switch: malformed JSON state file proceeds as absent and refuses Opus Bash write", async () => {
+Deno.test("workflow switch: malformed JSON state file proceeds as absent and refuses Fable Bash write", async () => {
   const dir = await Deno.makeTempDir();
   try {
     const switchPath = `${dir}/switch.json`;
     const logPath = `${dir}/switch.log`;
     await Deno.writeTextFile(switchPath, "{ broken json content");
 
-    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
       const res = await runHook(
         bashPayload("echo x > src/a.ts", transcript_path),
         { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
       );
       assertEquals(res.code, 0);
-      assertDenied(res.stdout, ["Bash command that writes to", "opus edit ok"]);
+      assertDenied(res.stdout, ["Bash command that writes to", "fable edit ok"]);
     });
   } finally {
     await Deno.remove(dir, { recursive: true });
@@ -1339,7 +1350,7 @@ Deno.test("workflow switch: unexpired switch naming 'opus-delegation-gate' allow
       JSON.stringify({ guard: "opus-delegation-gate", expires_at: future }),
     );
 
-    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
       const res = await runHook(
         applyPatchPayload("malformed patch without header lines\n", transcript_path),
         { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
@@ -1365,7 +1376,7 @@ Deno.test("workflow switch: expired switch naming 'opus-delegation-gate' still r
       JSON.stringify({ guard: "opus-delegation-gate", expires_at: past }),
     );
 
-    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    await withTranscript(UNAUTHORIZED_FABLE, async (transcript_path) => {
       const res = await runHook(
         applyPatchPayload("malformed patch without header lines\n", transcript_path),
         { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
@@ -1378,4 +1389,163 @@ Deno.test("workflow switch: expired switch naming 'opus-delegation-gate' still r
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
+});
+
+// --- Revision 1.3.0: Opus coding and Josh's choice of Fable (web-jam-tools#1781) ---
+//
+// Each case is a row of "Opus coding and Josh’s choice of Fable" in delegation-gate-design.md.
+// Helper launch limits (the two-slot cap, an agent-selected or inherited Fable launch) belong to the
+// subagent cap, web-jam-tools#708, and are tested with it.
+
+/** Asserts the gate allowed the call silently: no refusal and no note. */
+function assertAllowedSilently(res: RunResult): void {
+  assertEquals(res.code, 0, res.stderr);
+  assertEquals(res.stdout.trim(), "", res.stdout);
+}
+
+Deno.test("1.3.0: a main session recorded as claude-opus-5-5 edits a repository file directly with Edit, Write, NotebookEdit and Bash", async () => {
+  await withTranscript(
+    [userTurn("please edit this file directly"), assistantTurn("claude-opus-5-5")],
+    async (transcript_path) => {
+      for (const tool_name of ["Edit", "Write"]) {
+        assertAllowedSilently(
+          await runHook({ tool_name, tool_input: { file_path: IN_REPO_FILE }, transcript_path }),
+        );
+      }
+      assertAllowedSilently(
+        await runHook({
+          tool_name: "NotebookEdit",
+          tool_input: { notebook_path: IN_REPO_FILE },
+          transcript_path,
+        }),
+      );
+      for (const command of BASH_WRITES_REFUSED) {
+        assertAllowedSilently(await runHook(bashPayload(command, transcript_path)));
+      }
+    },
+  );
+});
+
+Deno.test("1.3.0: an Opus main session in auto mode edits directly with no edit grant", async () => {
+  await withTranscript(
+    [userTurn("fix it"), assistantTurn("claude-opus-5-5")],
+    async (transcript_path) => {
+      assertAllowedSilently(
+        await runHook({
+          permission_mode: "auto",
+          tool_name: "Edit",
+          tool_input: { file_path: IN_REPO_FILE },
+          transcript_path,
+        }),
+      );
+    },
+  );
+});
+
+Deno.test("1.3.0: an Opus helper edits code in auto mode although Josh's message never asked for Opus", async () => {
+  await withSession(
+    [userTurn("please fix the failing test"), spawnTurn("toolu_opus_helper")],
+    [{
+      id: "helper",
+      meta: agentMeta("opus", "toolu_opus_helper"),
+      lines: [sidechainTurn("claude-opus-5-5")],
+    }],
+    async ({ mainPath }) => {
+      assertAllowedSilently(await runHook(subagentCall("helper", mainPath)));
+    },
+  );
+});
+
+Deno.test("1.3.0: an Opus session runs a formatter with an earlier Opus refusal and a withdrawn Opus grant in the transcript", async () => {
+  await withTranscript(
+    [
+      userTurn("opus edit ok"),
+      assistantTurn("claude-opus-5-5"),
+      userTurn("opus edit off"),
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "toolu_old",
+            is_error: true,
+            content: "⛔ Opus delegation gate: refused a write to 'src/a.ts'.",
+          }],
+        },
+      },
+      assistantTurn("claude-opus-5-5"),
+    ],
+    async (transcript_path) => {
+      assertAllowedSilently(await runHook(bashPayload("deno fmt src/a.ts", transcript_path)));
+      assertAllowedSilently(await runHook(bashPayload("echo x > src/a.ts", transcript_path)));
+    },
+  );
+});
+
+Deno.test("1.3.0: a Fable session with only an Opus or Sol assignment or an old Opus grant is refused", async () => {
+  await withFakeGh(async (env) => {
+    for (
+      const lines of [
+        [workIssueTurn("web-jam-tools#1"), assistantTurn("claude-fable-5-2")],
+        [userTurn("opus edit ok"), assistantTurn("claude-fable-5-2")],
+        [userTurn("use Opus to fix it"), assistantTurn("claude-fable-5-2")],
+      ]
+    ) {
+      await withTranscript(lines, async (transcript_path) => {
+        const res = await runHook(
+          { tool_name: "Edit", tool_input: { file_path: IN_REPO_FILE }, transcript_path },
+          env,
+        );
+        assertDenied(res.stdout, ["This session runs on Fable"]);
+      });
+    }
+  });
+});
+
+Deno.test("1.3.0: Josh chooses Fable for the named task, and the Fable session edits within it", async () => {
+  await withFakeGh(async (env) => {
+    for (
+      const lines of [
+        [workIssueTurn("web-jam-tools#3"), assistantTurn("claude-fable-5-2")],
+        [userTurn("use Fable to fix PR 968"), assistantTurn("claude-fable-5-2")],
+        [userTurn("/fix-pr web-jam-tools#1318"), assistantTurn("claude-fable-5-2")],
+      ]
+    ) {
+      await withTranscript(lines, async (transcript_path) => {
+        assertAllowedSilently(
+          await runHook(
+            { tool_name: "Edit", tool_input: { file_path: IN_REPO_FILE }, transcript_path },
+            env,
+          ),
+        );
+      });
+    }
+  });
+});
+
+Deno.test("1.3.0: a Fable helper Josh did not choose is refused in auto mode, an Opus label notwithstanding", async () => {
+  await withFakeGh(async (env) => {
+    await withSession(
+      [workIssueTurn("web-jam-tools#1"), spawnTurn("toolu_fable_helper")],
+      [{
+        id: "fable",
+        meta: agentMeta("fable", "toolu_fable_helper"),
+        lines: [sidechainTurn("claude-fable-5-2")],
+      }],
+      async ({ mainPath }) => {
+        const res = await runHook(subagentCall("fable", mainPath), env);
+        assertDenied(res.stdout, ["A Fable subagent may edit only when"]);
+      },
+    );
+  });
+});
+
+Deno.test("1.3.0: an unreadable session identity applies the workflow default", async () => {
+  const res = await runHook({
+    tool_name: "Edit",
+    tool_input: { file_path: IN_REPO_FILE },
+    transcript_path: "/nonexistent/transcript.jsonl",
+  });
+  assertAllowedWithNote(res, "could not be read");
 });
