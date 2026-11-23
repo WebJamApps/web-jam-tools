@@ -935,6 +935,128 @@ Deno.test("entry commands running at once each keep their transaction and open a
   }
 });
 
+function madeUpEntry(description: string) {
+  return createEntry({
+    date: "2026-03-04",
+    description,
+    amount: 9.99,
+    category: "Expenses:Supplies",
+    fromAccount: "Liabilities:CreditCard",
+  });
+}
+
+Deno.test("an entry keeps the books owner-only under a permissive umask and keeps stricter books stricter", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "accounting-test-mode-" });
+  try {
+    const original = "2026-01-01 open Liabilities:CreditCard USD\n";
+
+    // The entry command runs under umask 002, which would leave a new file group-writable.
+    const privateBooks = path.join(dir, "private.beancount");
+    await Deno.writeTextFile(privateBooks, original);
+    await Deno.chmod(privateBooks, 0o600);
+    const out = await new Deno.Command("sh", {
+      args: [
+        "-c",
+        'umask 002 && exec "$@"',
+        "sh",
+        Deno.execPath(),
+        "run",
+        "--allow-env=HOME",
+        `--allow-read=${dir}`,
+        `--allow-write=${dir}`,
+        ACCOUNTING_CLI,
+        "entry",
+        "--books",
+        privateBooks,
+        "--date",
+        "2026-03-04",
+        "--desc",
+        "Made-up Store A",
+        "--amount",
+        "9.99",
+        "--category",
+        "Expenses:Supplies",
+        "--from",
+        "Liabilities:CreditCard",
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(out.code, 0, new TextDecoder().decode(out.stderr));
+    assertEquals((await Deno.stat(privateBooks)).mode! & 0o777, 0o600);
+    assertStringIncludes(await Deno.readTextFile(privateBooks), `"Made-up Store A"`);
+
+    const sharedBooks = path.join(dir, "shared.beancount");
+    await Deno.writeTextFile(sharedBooks, original);
+    await Deno.chmod(sharedBooks, 0o664);
+    await appendEntryToBooks(sharedBooks, madeUpEntry("Made-up Store B"));
+    assertEquals((await Deno.stat(sharedBooks)).mode! & 0o777, 0o600);
+
+    const readOnlyBooks = path.join(dir, "read-only.beancount");
+    await Deno.writeTextFile(readOnlyBooks, original);
+    await Deno.chmod(readOnlyBooks, 0o400);
+    await appendEntryToBooks(readOnlyBooks, madeUpEntry("Made-up Store C"));
+    assertEquals((await Deno.stat(readOnlyBooks)).mode! & 0o777, 0o400);
+
+    const newBooks = path.join(dir, "new.beancount");
+    await appendEntryToBooks(newBooks, madeUpEntry("Made-up Store D"));
+    assertEquals((await Deno.stat(newBooks)).mode! & 0o777, 0o600);
+
+    const leftovers = [];
+    for await (const entry of Deno.readDir(dir)) {
+      if (entry.name.endsWith(".tmp")) leftovers.push(entry.name);
+    }
+    assertEquals(leftovers, [], "a temporary write file was left beside the books");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("an entry through a linked books path reaches the linked ledger and leaves the link in place", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "accounting-test-link-" });
+  try {
+    const original = "2026-01-01 open Liabilities:CreditCard USD\n";
+    const ledgerDir = path.join(dir, "ledger");
+    await Deno.mkdir(ledgerDir);
+    const ledger = path.join(ledgerDir, "2026.beancount");
+    await Deno.writeTextFile(ledger, original);
+    const alias = path.join(dir, "alias.beancount");
+    await Deno.symlink(ledger, alias);
+
+    await appendEntryToBooks(alias, madeUpEntry("Made-up Store A"));
+    assert((await Deno.lstat(alias)).isSymlink, "the link was replaced by a separate file");
+    assertEquals(await Deno.readLink(alias), ledger);
+    const content = await Deno.readTextFile(ledger);
+    assert(content.startsWith(original), "the linked ledger lost its earlier lines");
+    assertStringIncludes(content, `"Made-up Store A"`);
+
+    const notes = path.join(dir, "notes.txt");
+    await Deno.writeTextFile(notes, "made-up notes\n");
+    const wrongAlias = path.join(dir, "wrong.beancount");
+    await Deno.symlink(notes, wrongAlias);
+    await assertRejects(
+      () => appendEntryToBooks(wrongAlias, madeUpEntry("Made-up Store B")),
+      Error,
+      "is not a .beancount file",
+    );
+    assertEquals(await Deno.readTextFile(notes), "made-up notes\n");
+    assert((await Deno.lstat(wrongAlias)).isSymlink);
+
+    const dangling = path.join(dir, "dangling.beancount");
+    const missing = path.join(dir, "missing.beancount");
+    await Deno.symlink(missing, dangling);
+    await assertRejects(
+      () => appendEntryToBooks(dangling, madeUpEntry("Made-up Store C")),
+      Error,
+      "a link to a ledger that does not exist",
+    );
+    assert((await Deno.lstat(dangling)).isSymlink);
+    await assertRejects(() => Deno.lstat(missing), Deno.errors.NotFound);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 Deno.test("an entry with a date that is not a real calendar date is refused and leaves the books untouched", async () => {
   const home = await Deno.makeTempDir({ prefix: "accounting-test-dates-" });
   try {

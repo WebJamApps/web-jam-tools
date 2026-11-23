@@ -173,22 +173,64 @@ async function readBooksOrEmpty(booksPath: string): Promise<string> {
   }
 }
 
+/** The books hold private figures: only their owner may read or write them. */
+const BOOKS_MODE = 0o600;
+
 /**
  * Replaces `target` by writing a temporary file beside it and renaming it into place, so a write
  * cut short leaves the previous books whole.
+ *
+ * The temporary file is created owner-only, whatever the umask, and is given the existing books'
+ * permissions with every group and other bit removed before the rename. New books are owner-only,
+ * and books already stricter than that, such as read-only ones, keep their stricter permissions.
  */
 async function replaceFileAtomically(target: string, content: string): Promise<void> {
+  let mode = BOOKS_MODE;
+  try {
+    const current = await Deno.stat(target);
+    if (current.mode !== null) mode = current.mode & BOOKS_MODE;
+  } catch (err) {
+    if (!(err instanceof Deno.errors.NotFound)) throw err;
+  }
   const temp = path.join(
     path.dirname(target),
     `.${path.basename(target)}.${crypto.randomUUID()}.tmp`,
   );
   try {
-    await Deno.writeTextFile(temp, content);
+    await Deno.writeTextFile(temp, content, { createNew: true, mode: BOOKS_MODE });
+    await Deno.chmod(temp, mode);
     await Deno.rename(temp, target);
   } catch (err) {
     await Deno.remove(temp).catch(() => {});
     throw err;
   }
+}
+
+/**
+ * The ledger an entry is written to. When `booksPath` is a symbolic link, the entry goes to the
+ * ledger the link names and the link stays in place, so the read, the lock and the replacement all
+ * act on that one ledger. The ledger the link names must itself be a .beancount file, and a link
+ * to a ledger that does not exist is refused.
+ */
+async function resolveBooksTarget(booksPath: string): Promise<string> {
+  let info: Deno.FileInfo;
+  try {
+    info = await Deno.lstat(booksPath);
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) return booksPath;
+    throw err;
+  }
+  if (!info.isSymlink) return booksPath;
+  let resolved: string;
+  try {
+    resolved = await Deno.realPath(booksPath);
+  } catch {
+    throw new Error(
+      `The books at ${booksPath} are a link to a ledger that does not exist; nothing was written.`,
+    );
+  }
+  assertBeancountTarget(resolved, "accounting:entry");
+  return resolved;
 }
 
 /**
@@ -206,12 +248,13 @@ export async function appendEntryToBooks(booksPath: string, tx: Transaction): Pr
   assertCalendarDate(tx.date);
   const formatted = formatBeancountTransaction(tx);
 
-  const booksDir = path.dirname(booksPath);
+  const target = await resolveBooksTarget(booksPath);
+  const booksDir = path.dirname(target);
   await Deno.mkdir(booksDir, { recursive: true });
   const lock = await Deno.open(booksDir, { read: true });
   try {
     await lock.lock(true);
-    const existing = await readBooksOrEmpty(booksPath);
+    const existing = await readBooksOrEmpty(target);
     const opened = openedAccounts(existing);
     const openLines = [...new Set(tx.postings.map((p) => p.account))]
       .filter((account) => !opened.has(account))
@@ -226,7 +269,7 @@ export async function appendEntryToBooks(booksPath: string, tx: Transaction): Pr
       ? "\n"
       : "\n\n";
 
-    await replaceFileAtomically(booksPath, existing + prefix + block);
+    await replaceFileAtomically(target, existing + prefix + block);
   } finally {
     lock.close();
   }
