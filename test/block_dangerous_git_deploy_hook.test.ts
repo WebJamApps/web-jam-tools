@@ -495,6 +495,10 @@ const CHECKER_COULD_NOT_RUN_CASES: {
   runner?: string;
   /** Extra environment for the guard, such as an unusable TMPDIR. */
   env?: Record<string, string>;
+  /** Hook input in place of a Bash call to `git status`. */
+  stdin?: string;
+  /** Run the guard with a PATH that holds only these tools, such as `cat` without jq. */
+  onlyTools?: string[];
   expect: string[];
 }[] = [
   {
@@ -596,7 +600,88 @@ const CHECKER_COULD_NOT_RUN_CASES: {
       "Stop and report this refusal to Josh; do not retry the action through another route.",
     ],
   },
+  // Reading the hook input is part of the guard: jq missing, or input it cannot parse, refuses.
+  {
+    id: "R16",
+    checker: 'console.log("OK");\n',
+    onlyTools: ["cat"],
+    expect: [
+      "BLOCKED (block-dangerous-git-deploy): safety guard could not run (could not read the hook input). Refusing action (safety default: fail closed).",
+      "Stop and report this refusal to Josh; do not retry the action through another route.",
+    ],
+  },
+  {
+    id: "R17",
+    checker: 'console.log("OK");\n',
+    stdin: '{"tool_name": "Bash", "tool_input": {"command": "gh pr merge 1 --squash"',
+    expect: [
+      "BLOCKED (block-dangerous-git-deploy): safety guard could not run (could not read the hook input). Refusing action (safety default: fail closed).",
+      "Stop and report this refusal to Josh; do not retry the action through another route.",
+    ],
+  },
+  // An empty stream, or one holding only whitespace, is no hook event: jq succeeds on it with no
+  // value, so the guard checks for it before jq.
+  ...[["R18", ""], ["R19", " \n\t \n"]].map(([id, stdin]) => ({
+    id,
+    checker: 'console.log("OK");\n',
+    stdin,
+    expect: [
+      "BLOCKED (block-dangerous-git-deploy): safety guard could not run (the hook input was empty). Refusing action (safety default: fail closed).",
+      "Stop and report this refusal to Josh; do not retry the action through another route.",
+    ],
+  })),
+  // The input cannot be taken in: the PATH holds jq but not cat.
+  {
+    id: "R20",
+    checker: 'console.log("OK");\n',
+    onlyTools: ["jq"],
+    expect: [
+      "BLOCKED (block-dangerous-git-deploy): safety guard could not run (could not read the hook input). Refusing action (safety default: fail closed).",
+      "Stop and report this refusal to Josh; do not retry the action through another route.",
+    ],
+  },
+  // JSON that is not a hook event object.
+  ...[["R21", "null"], ["R22", '"gh pr merge 1"'], ["R23", "[]"]].map(([id, stdin]) => ({
+    id,
+    checker: 'console.log("OK");\n',
+    stdin,
+    expect: [
+      "BLOCKED (block-dangerous-git-deploy): safety guard could not run (could not read the hook input). Refusing action (safety default: fail closed).",
+      "Stop and report this refusal to Josh; do not retry the action through another route.",
+    ],
+  })),
 ];
+
+/** bash's own path, so the guard can run under a PATH that does not hold it. */
+function bashPath(): string {
+  for (const dir of (Deno.env.get("PATH") ?? "").split(":")) {
+    try {
+      Deno.statSync(`${dir}/bash`);
+      return `${dir}/bash`;
+    } catch {
+      // not in this directory
+    }
+  }
+  return "bash";
+}
+
+/** A PATH holding only the named tools, linked from where the test's own PATH finds them. */
+async function pathWithOnly(dir: string, tools: string[]): Promise<string> {
+  const bin = `${dir}/bin-with-only-${tools.join("-")}`;
+  await Deno.mkdir(bin);
+  for (const tool of tools) {
+    for (const pathDir of (Deno.env.get("PATH") ?? "").split(":")) {
+      try {
+        Deno.statSync(`${pathDir}/${tool}`);
+        await Deno.symlink(`${pathDir}/${tool}`, `${bin}/${tool}`);
+        break;
+      } catch {
+        // not in this directory
+      }
+    }
+  }
+  return bin;
+}
 
 for (const row of CHECKER_COULD_NOT_RUN_CASES) {
   Deno.test(`checker that could not run ${row.id}: refuses as a guard that could not run`, async () => {
@@ -614,8 +699,9 @@ for (const row of CHECKER_COULD_NOT_RUN_CASES) {
       await Deno.writeTextFile(`${dir}/hooks/lib/check_dangerous_git_deploy.ts`, row.checker);
       const env: Record<string, string> = { BASH_ENV: "", AGY_HOOK_RECORD_PATH: "off" };
       if (row.noDeno) env.PATH = pathWithoutDeno();
+      if (row.onlyTools) env.PATH = await pathWithOnly(dir, row.onlyTools);
       Object.assign(env, row.env ?? {});
-      const child = new Deno.Command("bash", {
+      const child = new Deno.Command(bashPath(), {
         args: [`${dir}/hooks/block-dangerous-git-deploy.sh`],
         stdin: "piped",
         stdout: "piped",
@@ -625,7 +711,8 @@ for (const row of CHECKER_COULD_NOT_RUN_CASES) {
       const writer = child.stdin.getWriter();
       await writer.write(
         new TextEncoder().encode(
-          JSON.stringify({ tool_name: "Bash", tool_input: { command: "git status" } }),
+          row.stdin ??
+            JSON.stringify({ tool_name: "Bash", tool_input: { command: "git status" } }),
         ),
       );
       await writer.close();
@@ -644,3 +731,24 @@ for (const row of CHECKER_COULD_NOT_RUN_CASES) {
     }
   });
 }
+
+Deno.test("hook input that parses but names no command is let through with no output", async () => {
+  const child = new Deno.Command("bash", {
+    args: [SCRIPT_PATH],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+  }).spawn();
+  const writer = child.stdin.getWriter();
+  await writer.write(
+    new TextEncoder().encode(
+      JSON.stringify({ tool_name: "Read", tool_input: { file_path: "/tmp/made-up.txt" } }),
+    ),
+  );
+  await writer.close();
+  const out = await child.output();
+  assertEquals({ code: out.code, stderr: new TextDecoder().decode(out.stderr) }, {
+    code: 0,
+    stderr: "",
+  });
+});

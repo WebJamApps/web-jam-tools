@@ -17,10 +17,6 @@
 # `gh pr merge --admin` dev->main that triggered a production deploy.
 set -euo pipefail
 
-input=$(cat)
-cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .toolCall.args.CommandLine // empty' 2>/dev/null || true)
-[ -z "$cmd" ] && exit 0
-
 block() {
   echo "BLOCKED (merge/deploy guard): $1" >&2
   echo "This is Josh's action to perform, not Claude's: propose it and STOP, let Josh run it himself." >&2
@@ -49,6 +45,22 @@ could_not_run() {
   echo "Stop and report this refusal to Josh; do not retry the action through another route." >&2
   exit 2
 }
+
+# Reading the hook input is part of the guard: if the input cannot be taken
+# in, is empty, or is not a JSON object, or jq is missing or cannot parse it,
+# the guard could not run, and the action is refused rather than let through
+# with no command seen. A hook event that parses but names no command, such
+# as another tool's call, has nothing for this guard to check.
+if ! input=$(cat 2>/dev/null); then
+  could_not_run "could not read the hook input"
+fi
+if [[ ! "$input" =~ [^[:space:]] ]]; then
+  could_not_run "the hook input was empty"
+fi
+if ! cmd=$(printf '%s' "$input" | jq -r 'if type == "object" then (.tool_input.command // .toolCall.args.CommandLine // empty) else error("not a hook event") end' 2>/dev/null); then
+  could_not_run "could not read the hook input"
+fi
+[ -z "$cmd" ] && exit 0
 
 if ! HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd); then
   could_not_run "could not find the guard's own directory"
