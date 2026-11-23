@@ -337,6 +337,13 @@ Deno.test("a year folder that leads to another folder is refused before any retu
   }
 });
 
+Deno.test("the finder's task may read only the private tax folder", async () => {
+  const config = JSON.parse(await Deno.readTextFile(path.join(REPO_ROOT, "deno.json")));
+  const task: string = config.tasks["accounting:return-figures"];
+  const reads = task.split(/\s+/).filter((part) => part.startsWith("--allow-read"));
+  assertEquals(reads, ["--allow-read=$HOME/Dropbox/financial-private/tax"]);
+});
+
 const RETURN_FIGURES_MODULE = new URL("../../src/accounting/return_figures.ts", import.meta.url)
   .href;
 

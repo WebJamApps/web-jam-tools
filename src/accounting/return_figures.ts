@@ -296,24 +296,36 @@ export async function runReturnFigures(opts: ReturnFiguresOptions): Promise<Retu
   const outDir = path.join(opts.booksDir, "tax", opts.year);
   const outputPath = path.join(outDir, "return-figures.md");
   await Deno.mkdir(outDir, { recursive: true });
-  // The record is written in full to a temporary file beside it, then linked into place. Linking
-  // never replaces an existing file, so an existing record is kept, and a write that fails leaves
-  // the record's name free for the next run. The temporary file is removed either way.
-  const temp = path.join(outDir, `.return-figures.${crypto.randomUUID()}.tmp`);
+  // createNew claims the record's name only when no file holds it, so an existing record is never
+  // replaced. If writing the contents then fails, the file this run created is removed, so the
+  // name stays free for the next run. Every step needs write access only: the finder never reads
+  // the books folder.
+  let file: Deno.FsFile;
   try {
-    await Deno.writeTextFile(temp, markdown, { createNew: true });
-    try {
-      await Deno.link(temp, outputPath);
-    } catch (err) {
-      if (err instanceof Deno.errors.AlreadyExists) {
-        throw new ReturnFiguresRefusal(
-          `${outputPath} already exists; rename it first if the figures are to be found again.`,
-        );
-      }
-      throw err;
+    file = await Deno.open(outputPath, { write: true, createNew: true });
+  } catch (err) {
+    if (err instanceof Deno.errors.AlreadyExists) {
+      throw new ReturnFiguresRefusal(
+        `${outputPath} already exists; rename it first if the figures are to be found again.`,
+      );
     }
-  } finally {
-    await Deno.remove(temp).catch(() => {});
+    throw err;
+  }
+  try {
+    const bytes = new TextEncoder().encode(markdown);
+    let written = 0;
+    while (written < bytes.length) {
+      written += await file.write(bytes.subarray(written));
+    }
+    file.close();
+  } catch (err) {
+    try {
+      file.close();
+    } catch {
+      // already closed
+    }
+    await Deno.remove(outputPath).catch(() => {});
+    throw err;
   }
   return { outputPath, results };
 }
