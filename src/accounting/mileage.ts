@@ -8,12 +8,13 @@
 // - The home map point is read from `home-point.json` in the private books folder, never from this
 //   repository, and is never printed.
 // - Each venue's driving miles are looked up once through the free OSRM routing service. A line is
-//   the round trip, home to the venue and back.
+//   the round trip, home to the venue and back. A venue with no map pin is placed from its street
+//   address by the free US Census geocoder, the same service web-jam-back uses for new pins.
 // - The log itself keeps every figure: a line already holding miles is never looked up again, and
 //   a new gig at a destination already in the log takes that destination's figure, so a figure Josh
 //   corrected in the log is kept.
-// - A gig with no venue record, a venue with no map pin, and a lookup the routing service could not
-//   answer each leave the line with no miles and are listed for Josh.
+// - A gig with no venue record, a venue that cannot be placed on the map, and a lookup the routing
+//   service could not answer each leave the line with no miles and are listed for Josh.
 
 import { parseArgs } from "@std/cli/parse-args";
 import * as path from "@std/path";
@@ -36,6 +37,7 @@ export const HOME_POINT_FILE = "home-point.json";
 export const MILEAGE_HEADER = ["date", "destination", "purpose", "miles"];
 export const GIG_PURPOSE = "Gig performance (round trip)";
 export const ROUTING_BASE_URL = "https://router.project-osrm.org";
+export const GEOCODER_BASE_URL = "https://geocoding.geo.census.gov";
 export const GIG_TIME_ZONE = "America/New_York";
 const METERS_PER_MILE = 1609.344;
 
@@ -63,12 +65,16 @@ export interface MileageGig extends LinkableGig {
 }
 
 export interface MileageVenue extends LinkableVenue {
+  address?: string;
   city?: string;
   usState?: string;
+  zipCode?: string;
+  country?: string;
   location?: { type?: string; coordinates?: unknown };
 }
 
 export type OneWayLookup = (home: HomePoint, venue: HomePoint) => Promise<number | null>;
+export type VenueLocator = (venue: MileageVenue) => Promise<HomePoint | null>;
 
 export interface BuildMileageOptions {
   year: number;
@@ -78,6 +84,8 @@ export interface BuildMileageOptions {
   home: HomePoint;
   existing: MileageLine[];
   lookup: OneWayLookup;
+  /** Places a venue on the map; defaults to its stored pin only. */
+  locate?: VenueLocator;
 }
 
 export interface BuildMileageResult {
@@ -162,6 +170,49 @@ export function venuePoint(venue: MileageVenue): HomePoint | null {
   if (typeof longitude !== "number" || typeof latitude !== "number") return null;
   if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return null;
   return { latitude, longitude };
+}
+
+/**
+ * A venue's stored pin, else its street address placed by the US Census geocoder (US addresses
+ * only, as in web-jam-back's census-geocoder), else null.
+ */
+export function makeVenueLocator(fetchFn: typeof fetch = fetch): VenueLocator {
+  return async (venue) => {
+    const pinned = venuePoint(venue);
+    if (pinned) return pinned;
+    const street = (venue.address || "").trim();
+    const country = (venue.country || "US").trim().toUpperCase();
+    if (!street || country !== "US") return null;
+    const params = new URLSearchParams({
+      street,
+      city: (venue.city || "").trim(),
+      state: (venue.usState || "").trim(),
+      zip: (venue.zipCode || "").trim(),
+      benchmark: "Public_AR_Current",
+      format: "json",
+    });
+    try {
+      const res = await fetchFn(`${GEOCODER_BASE_URL}/geocoder/locations/address?${params}`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) {
+        await res.body?.cancel();
+        return null;
+      }
+      const data = await res.json();
+      const coords = data?.result?.addressMatches?.[0]?.coordinates;
+      const x = coords?.x;
+      const y = coords?.y;
+      if (
+        typeof x !== "number" || typeof y !== "number" || !Number.isFinite(x) ||
+        !Number.isFinite(y) || Math.abs(x) > 180 || Math.abs(y) > 90
+      ) return null;
+      return { latitude: y, longitude: x };
+    } catch {
+      return null;
+    }
+  };
 }
 
 export function formatMiles(miles: number): string {
@@ -260,6 +311,7 @@ function lineKey(date: string, destination: string): string {
 /** Merges the year's played gigs into the existing log; pure apart from the lookup it is given. */
 export async function buildMileageLog(options: BuildMileageOptions): Promise<BuildMileageResult> {
   const { year, today, gigs, venues, home, existing, lookup } = options;
+  const locate: VenueLocator = options.locate ?? ((venue) => Promise.resolve(venuePoint(venue)));
 
   const lines = new Map<string, MileageLine>();
   const figureByDestination = new Map<string, { date: string; miles: string }>();
@@ -279,7 +331,7 @@ export async function buildMileageLog(options: BuildMileageOptions): Promise<Bui
   }
   const nameIndex = buildUnambiguousNameIndex(venues);
 
-  const oneWayByVenue = new Map<string, number | null>();
+  const outcomeByVenue = new Map<string, { oneWay: number } | { reason: string }>();
   const noVenueRecord: LineForJosh[] = [];
   const noMiles: LineForJosh[] = [];
   let lookups = 0;
@@ -309,22 +361,28 @@ export async function buildMileageLog(options: BuildMileageOptions): Promise<Bui
     let miles = figureByDestination.get(destination)?.miles ?? "";
     let reason = "";
     if (!miles) {
-      const point = venuePoint(venue);
-      if (!point) {
-        reason = "the venue record has no map pin";
-      } else {
-        const id = String(venue._id);
-        if (!oneWayByVenue.has(id)) {
-          lookups++;
-          oneWayByVenue.set(id, await lookup(home, point));
-        }
-        const oneWay = oneWayByVenue.get(id);
-        if (oneWay === null || oneWay === undefined) {
-          reason = "the routing service gave no answer";
+      const id = String(venue._id);
+      let outcome = outcomeByVenue.get(id);
+      if (!outcome) {
+        const point = await locate(venue);
+        if (!point) {
+          outcome = {
+            reason: (venue.address || "").trim()
+              ? "the venue's street address could not be placed on the map"
+              : "the venue record has no map pin or street address",
+          };
         } else {
-          miles = formatMiles(oneWay * 2);
-          figureByDestination.set(destination, { date, miles });
+          lookups++;
+          const oneWay = await lookup(home, point);
+          outcome = oneWay === null ? { reason: "the routing service gave no answer" } : { oneWay };
         }
+        outcomeByVenue.set(id, outcome);
+      }
+      if ("oneWay" in outcome) {
+        miles = formatMiles(outcome.oneWay * 2);
+        figureByDestination.set(destination, { date, miles });
+      } else {
+        reason = outcome.reason;
       }
     }
 
@@ -377,6 +435,7 @@ export async function runMileage(options: RunMileageOptions): Promise<RunMileage
     home,
     existing,
     lookup: makeRoutingLookup(fetchFn),
+    locate: makeVenueLocator(fetchFn),
   });
 
   const tmpPath = `${logPath}.tmp`;

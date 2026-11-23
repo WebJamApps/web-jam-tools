@@ -6,6 +6,7 @@ import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/
 import * as path from "@std/path";
 import {
   formatMileageLog,
+  GEOCODER_BASE_URL,
   GIG_PURPOSE,
   gigLocalDate,
   HOME_POINT_FILE,
@@ -37,6 +38,7 @@ interface Stub {
   fetchFn: typeof fetch;
   routingCalls: () => number;
   backendCalls: () => number;
+  geocodeUrls: () => string[];
 }
 
 function stubFetch(
@@ -44,11 +46,18 @@ function stubFetch(
   venues: MileageVenue[],
   routing: "up" | "down" = "up",
   oneWayMeters = 16093.44,
+  geocode: "match" | "no-match" = "match",
 ): Stub {
   let routingCalls = 0;
   let backendCalls = 0;
+  const geocodeUrls: string[] = [];
   const fetchFn = ((input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
+    if (url.startsWith(GEOCODER_BASE_URL)) {
+      geocodeUrls.push(url);
+      const addressMatches = geocode === "match" ? [{ coordinates: { x: 5, y: 6 } }] : [];
+      return Promise.resolve(Response.json({ result: { addressMatches } }));
+    }
     if (url.startsWith(ROUTING_BASE_URL)) {
       routingCalls++;
       if (routing === "down") return Promise.resolve(new Response("unavailable", { status: 503 }));
@@ -59,7 +68,12 @@ function stubFetch(
     if (url === `${BACKEND}/venue`) return Promise.resolve(Response.json(venues));
     return Promise.resolve(new Response("not found", { status: 404 }));
   }) as typeof fetch;
-  return { fetchFn, routingCalls: () => routingCalls, backendCalls: () => backendCalls };
+  return {
+    fetchFn,
+    routingCalls: () => routingCalls,
+    backendCalls: () => backendCalls,
+    geocodeUrls: () => geocodeUrls,
+  };
 }
 
 async function booksWithHome(): Promise<string> {
@@ -175,12 +189,51 @@ Deno.test("mileage: the routing service down leaves the line for Josh, and a lat
   assertEquals((await readLog(books)).map((l) => l.miles), ["20.0", "20.0"]);
 });
 
-Deno.test("mileage: a venue with no map pin is listed for Josh and not looked up", async () => {
+Deno.test("mileage: a venue with no map pin or address is listed for Josh and not looked up", async () => {
   const books = await booksWithHome();
   const stub = stubFetch([gig("2026-03-14T23:00:00Z", "v1")], [venue("v1", "Pinless", false)]);
   const result = await run(books, stub);
+  assertEquals(stub.routingCalls() + stub.geocodeUrls().length, 0);
+  assertEquals(result.noMiles[0].reason, "the venue record has no map pin or street address");
+});
+
+Deno.test("mileage: a pinless venue is placed once from its street address, then routed", async () => {
+  const books = await booksWithHome();
+  const pinless = { ...venue("v1", "Pinless", false), address: "1 Main St", zipCode: "24153" };
+  const stub = stubFetch(
+    [gig("2026-03-14T23:00:00Z", "v1"), gig("2026-04-14T23:00:00Z", "v1")],
+    [pinless],
+  );
+  const result = await run(books, stub);
+
+  assertEquals(stub.geocodeUrls().length, 1);
+  const query = new URL(stub.geocodeUrls()[0]).searchParams;
+  assertEquals(
+    [query.get("street"), query.get("city"), query.get("state"), query.get("zip")],
+    ["1 Main St", "Testville", "Virginia", "24153"],
+  );
+  assertEquals(stub.routingCalls(), 1);
+  assertEquals(result.noMiles.length, 0);
+  assertEquals((await readLog(books)).map((l) => l.miles), ["20.0", "20.0"]);
+});
+
+Deno.test("mileage: an address the geocoder cannot place is listed for Josh, once per venue", async () => {
+  const books = await booksWithHome();
+  const pinless = { ...venue("v1", "Pinless", false), address: "Nowhere Rd" };
+  const stub = stubFetch(
+    [gig("2026-03-14T23:00:00Z", "v1"), gig("2026-04-14T23:00:00Z", "v1")],
+    [pinless],
+    "up",
+    16093.44,
+    "no-match",
+  );
+  const result = await run(books, stub);
+  assertEquals(stub.geocodeUrls().length, 1);
   assertEquals(stub.routingCalls(), 0);
-  assertEquals(result.noMiles[0].reason, "the venue record has no map pin");
+  assertEquals(result.noMiles.map((n) => n.reason), [
+    "the venue's street address could not be placed on the map",
+    "the venue's street address could not be placed on the map",
+  ]);
 });
 
 Deno.test("mileage: only gigs of the year already played are logged, dated where they were played", async () => {
