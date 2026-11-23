@@ -1875,11 +1875,11 @@ export function collectWholeStringPaths(val: unknown, out: string[]): void {
  * a structured `Arguments` value (`buildToolInput` in agy_hook_shim.ts): an object, which the
  * collector already descends into, and JSON text, which is decoded here so its paths are inspected
  * too. The arguments themselves are never changed. That contract belongs to the MCP envelope
- * alone: the JSON-text form is decoded only when `sourceTool` (the payload's `agy_tool_name`) is
- * `call_mcp_tool`, or when no source tool name was carried. Any other tool's `Arguments` text is an
- * ordinary argument, already inspected as a whole-string path. Throws when the MCP envelope's
- * `Arguments` is text that does not decode to a JSON object, so each guard refuses what it cannot
- * read.
+ * alone: it applies only when `sourceTool` (the payload's `agy_tool_name`) is `call_mcp_tool`, or
+ * when no source tool name was carried. Any other tool's `Arguments` is an ordinary argument,
+ * already inspected as a whole-string path. For the MCP envelope, a present `Arguments` must be a
+ * JSON object in either encoding; anything else (bad JSON text, or a list, null or scalar, native or
+ * encoded) throws, so each guard refuses what it cannot read. An absent `Arguments` is allowed.
  */
 export function collectUntranslatedArgumentPaths(
   toolInput: Record<string, unknown>,
@@ -1887,20 +1887,24 @@ export function collectUntranslatedArgumentPaths(
 ): string[] {
   const paths: string[] = [];
   collectWholeStringPaths(toolInput, paths);
-  const structured = toolInput.Arguments;
+  const raw = toolInput.Arguments;
   const mcpEnvelope = typeof sourceTool !== "string" || sourceTool === "call_mcp_tool";
-  if (mcpEnvelope && typeof structured === "string") {
-    let decoded: unknown;
+  if (!mcpEnvelope || raw === undefined) return paths;
+  // Decode the text form once, then hold both encodings to one shape: the shim recognises only
+  // a set of named values, so a native list, null or scalar is as unreadable as bad JSON text.
+  let structured: unknown = raw;
+  if (typeof raw === "string") {
     try {
-      decoded = JSON.parse(structured);
+      structured = JSON.parse(raw);
     } catch {
       throw new Error("the structured Arguments value is not valid JSON");
     }
-    if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) {
-      throw new Error("the structured Arguments value does not decode to a JSON object");
-    }
-    collectWholeStringPaths(decoded, paths);
   }
+  if (structured === null || typeof structured !== "object" || Array.isArray(structured)) {
+    throw new Error("the structured Arguments value is not a JSON object");
+  }
+  // The object form was already collected with the rest of the arguments.
+  if (typeof raw === "string") collectWholeStringPaths(structured, paths);
   return paths;
 }
 

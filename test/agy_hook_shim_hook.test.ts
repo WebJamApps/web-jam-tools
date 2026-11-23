@@ -1856,6 +1856,54 @@ for (
   });
 }
 
+for (
+  const [label, value] of [
+    ["a list", ["/tmp/a.txt"]],
+    ["null", null],
+    ["a number", 42],
+    ["a boolean", true],
+  ] as const
+) {
+  Deno.test(`a native structured Arguments value that is not an object is refused by both Dropbox guards: ${label}`, async () => {
+    await withMediaHome(async (home) => {
+      const toolCall = {
+        name: "call_mcp_tool",
+        args: { ServerName: "filesystem", ToolName: "read_text_file", Arguments: value },
+      };
+      for (
+        const [matcher, guard] of [
+          [PRIVATE_FOLDER_AGY_MATCHER, PRIVATE_FOLDER_GUARD],
+          [PRODUCTION_MEDIA_AGY_MATCHER, PRODUCTION_MEDIA_GUARD],
+        ]
+      ) {
+        const result = await runUntranslatedThroughShim(matcher, guard, toolCall, home);
+        assertEquals(result.decision, "deny", `${guard}: ${result.reason}`);
+        assert(result.reason.includes("Arguments"), result.reason);
+      }
+    });
+  });
+}
+
+Deno.test("an MCP call without Arguments, and a non-MCP tool's list Arguments, pass both Dropbox guards", async () => {
+  await withMediaHome(async (home) => {
+    const calls = [
+      { name: "call_mcp_tool", args: { ServerName: "filesystem", ToolName: "list_allowed" } },
+      { name: "apply_text", args: { Path: `${home}/WebJamApps/a.ts`, Arguments: ["--dry-run"] } },
+    ];
+    for (const toolCall of calls) {
+      for (
+        const [matcher, guard] of [
+          [PRIVATE_FOLDER_AGY_MATCHER, PRIVATE_FOLDER_GUARD],
+          [PRODUCTION_MEDIA_AGY_MATCHER, PRODUCTION_MEDIA_GUARD],
+        ]
+      ) {
+        const result = await runUntranslatedThroughShim(matcher, guard, toolCall, home);
+        assertEquals(result.decision, "allow", `${toolCall.name} ${guard}: ${result.reason}`);
+      }
+    }
+  });
+});
+
 Deno.test("production-media guard judges an untranslated tool's real destination through symlinks", async () => {
   await withMediaHome(async (home) => {
     const scratch = `${home}/scratch`;
