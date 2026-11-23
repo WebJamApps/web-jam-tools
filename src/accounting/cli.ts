@@ -8,7 +8,12 @@ import * as path from "@std/path";
 import { expandHome } from "../design-issue/gate1.ts";
 import { closeMonth } from "./close_month.ts";
 import { convertBankFile } from "./convert.ts";
-import { appendEntryToBooks, assertBeancountTarget, createEntry } from "./entry.ts";
+import {
+  appendEntryToBooks,
+  assertBeancountTarget,
+  assertCalendarDate,
+  createEntry,
+} from "./entry.ts";
 import { importStatement } from "./import.ts";
 import { fileReceipt } from "./receipt.ts";
 import { checkBooks } from "./verify.ts";
@@ -80,6 +85,15 @@ export async function runCli(args: string[]): Promise<number> {
 
   const command = flags._.length > 0 ? String(flags._[0]) : "";
 
+  // Import and month close still write the year's .journal file (until web-jam-tools#1866), so a
+  // caller naming Beancount books with --books is refused before either picks a destination.
+  if ((command === "import" || command === "close-month") && flags.books !== undefined) {
+    console.error(
+      `Error: ${command} still writes the year's .journal file; it refuses --books, which names Beancount books, and wrote nothing.`,
+    );
+    return 1;
+  }
+
   if (flags.help || !command || command === "help") {
     console.log(`Web Jam LLC Accounting CLI (rustledger)
 
@@ -117,6 +131,7 @@ Commands:
         }
 
         const date = flags.date || new Date().toISOString().slice(0, 10);
+        assertCalendarDate(date);
         const year = parseInt(date.slice(0, 4), 10);
         if (flags.journal) {
           console.error("Error: entry writes the Beancount books; name them with --books.");

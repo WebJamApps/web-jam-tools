@@ -24,6 +24,7 @@ import {
 import {
   appendEntryToBooks,
   assertBeancountAccount,
+  assertCalendarDate,
   createEntry,
   formatBeancountTransaction,
   formatTransaction,
@@ -870,6 +871,169 @@ Deno.test("import and month close keep their .journal defaults and refuse explic
         "refuses the Beancount books",
       );
       assertEquals(await Deno.readTextFile(books), original);
+    });
+  } finally {
+    await Deno.remove(home, { recursive: true });
+  }
+});
+
+const ACCOUNTING_CLI = path.resolve(
+  new URL("../../src/accounting/cli.ts", import.meta.url).pathname,
+);
+
+Deno.test("entry commands running at once each keep their transaction and open a shared new account once", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "accounting-test-writers-" });
+  try {
+    const books = path.join(dir, "2026.beancount");
+    const original = "2026-01-01 open Liabilities:CreditCard USD\n";
+    await Deno.writeTextFile(books, original);
+    const writers = ["Made-up Store A", "Made-up Store B", "Made-up Store C", "Made-up Store D"];
+    const results = await Promise.all(writers.map((desc) =>
+      new Deno.Command(Deno.execPath(), {
+        args: [
+          "run",
+          "--allow-env=HOME",
+          `--allow-read=${dir}`,
+          `--allow-write=${dir}`,
+          ACCOUNTING_CLI,
+          "entry",
+          "--books",
+          books,
+          "--date",
+          "2026-03-04",
+          "--desc",
+          desc,
+          "--amount",
+          "9.99",
+          "--category",
+          "Expenses:NewSupplies",
+          "--from",
+          "Liabilities:CreditCard",
+        ],
+        stdout: "piped",
+        stderr: "piped",
+      }).output()
+    ));
+    for (const out of results) {
+      assertEquals(out.code, 0, new TextDecoder().decode(out.stderr));
+    }
+    const content = await Deno.readTextFile(books);
+    assert(content.startsWith(original), "the books lost their earlier lines");
+    for (const desc of writers) assertStringIncludes(content, `"${desc}"`);
+    assertEquals(parseBeancount(content).length, writers.length);
+    assertEquals(
+      content.split("\n").filter((l) => l.includes("open Expenses:NewSupplies")).length,
+      1,
+    );
+    const leftovers = [];
+    for await (const entry of Deno.readDir(dir)) {
+      if (entry.name.endsWith(".tmp")) leftovers.push(entry.name);
+    }
+    assertEquals(leftovers, [], "a temporary write file was left beside the books");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("an entry with a date that is not a real calendar date is refused and leaves the books untouched", async () => {
+  const home = await Deno.makeTempDir({ prefix: "accounting-test-dates-" });
+  try {
+    await withEnv({ HOME: home }, async () => {
+      const books = path.join(home, "2026.beancount");
+      const original = "2026-01-01 open Expenses:Supplies USD\n";
+      await Deno.writeTextFile(books, original);
+      for (
+        const date of [
+          "2026-02-30",
+          "2026-13-01",
+          "2026-04-31",
+          "2026-2-3",
+          "20260203",
+          "2026-02-03x",
+          "0000-01-01",
+        ]
+      ) {
+        const entry = [
+          "entry",
+          "--date",
+          date,
+          "--desc",
+          "Made-up Store",
+          "--amount",
+          "1.00",
+          "--category",
+          "Expenses:Supplies",
+          "--from",
+          "Liabilities:CreditCard",
+        ];
+        assertEquals(await runCli([...entry, "--books", books]), 1, date);
+        assertEquals(await runCli(entry), 1, `${date} with the default books`);
+        assertThrows(() => assertCalendarDate(date), Error, "not a real calendar date", date);
+      }
+      assertEquals(await Deno.readTextFile(books), original);
+      await assertRejects(
+        () => Deno.stat(path.dirname(getDefaultBooksPath(2026))),
+        Deno.errors.NotFound,
+      );
+      const tx = createEntry({
+        date: "2026-02-30",
+        description: "Made-up Store",
+        amount: 1,
+        category: "Expenses:Supplies",
+        fromAccount: "Liabilities:CreditCard",
+      });
+      await assertRejects(() => appendEntryToBooks(books, tx), Error, "not a real calendar date");
+      assertEquals(await Deno.readTextFile(books), original);
+      assertCalendarDate("2024-02-29");
+      assertThrows(() => assertCalendarDate("2026-02-29"), Error, "not a real calendar date");
+    });
+  } finally {
+    await Deno.remove(home, { recursive: true });
+  }
+});
+
+Deno.test("import and month close refuse --books, write nothing, and leave the default journal uncreated", async () => {
+  const home = await Deno.makeTempDir({ prefix: "accounting-test-books-flag-" });
+  try {
+    await withEnv({ HOME: home }, async () => {
+      const statement = path.join(home, "statement.csv");
+      await Deno.writeTextFile(
+        statement,
+        "Date,Description,Amount,Id\n2026-01-10,Made-up Deposit,100.00,T1\n",
+      );
+      const books = path.join(home, "2026.beancount");
+      const original = "2026-01-01 open Assets:Checking:Truist USD\n";
+      await Deno.writeTextFile(books, original);
+
+      assertEquals(
+        await runCli([
+          "import",
+          "--statement",
+          statement,
+          "--account",
+          "Assets:Checking:Truist",
+          "--books",
+          books,
+        ]),
+        1,
+      );
+      assertEquals(
+        await runCli([
+          "close-month",
+          "--year",
+          "2026",
+          "--month",
+          "1",
+          "--balance",
+          "Assets:Checking:Truist=100.00",
+          "--books",
+          books,
+        ]),
+        1,
+      );
+      assertEquals(await Deno.readTextFile(books), original);
+      await assertRejects(() => Deno.stat(getDefaultJournalPath()), Deno.errors.NotFound);
+      await assertRejects(() => Deno.stat(getDefaultJournalPath(2026)), Deno.errors.NotFound);
     });
   } finally {
     await Deno.remove(home, { recursive: true });

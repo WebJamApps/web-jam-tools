@@ -29,6 +29,21 @@ export function assertJournalTarget(target: string, command: string): void {
 
 export const BOOKS_COMMODITY = "USD";
 
+/** A real calendar date written YYYY-MM-DD. Anything else is refused before any books are chosen. */
+export function assertCalendarDate(date: string): void {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  const [year, month, day] = match ? match.slice(1).map(Number) : [];
+  const parsed = match ? new Date(Date.UTC(year, month - 1, day)) : null;
+  if (
+    !parsed || parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    throw new Error(
+      `'${date}' is not a real calendar date in YYYY-MM-DD form; nothing was written.`,
+    );
+  }
+}
+
 const ACCOUNT_ROOTS = new Set(["Assets", "Liabilities", "Equity", "Income", "Expenses"]);
 
 /** A Beancount account: a root type, then parts that start with a capital letter or digit. */
@@ -159,29 +174,62 @@ async function readBooksOrEmpty(booksPath: string): Promise<string> {
 }
 
 /**
+ * Replaces `target` by writing a temporary file beside it and renaming it into place, so a write
+ * cut short leaves the previous books whole.
+ */
+async function replaceFileAtomically(target: string, content: string): Promise<void> {
+  const temp = path.join(
+    path.dirname(target),
+    `.${path.basename(target)}.${crypto.randomUUID()}.tmp`,
+  );
+  try {
+    await Deno.writeTextFile(temp, content);
+    await Deno.rename(temp, target);
+  } catch (err) {
+    await Deno.remove(temp).catch(() => {});
+    throw err;
+  }
+}
+
+/**
  * Appends one entry to the year's Beancount books, first opening, on January 1 of the entry's
  * year, any account the books do not open yet, so `rledger check` accepts the entry.
+ *
+ * Reading the books, choosing which accounts to open and writing the result happen under an
+ * exclusive lock on the books' directory, so two entry commands running at once each keep their
+ * transaction and open a shared new account once. Locking the directory leaves no lock file
+ * beside the books. The operating system releases the lock when the process ends, so a crashed
+ * writer never leaves the books locked.
  */
 export async function appendEntryToBooks(booksPath: string, tx: Transaction): Promise<void> {
   assertBeancountTarget(booksPath, "accounting:entry");
+  assertCalendarDate(tx.date);
   const formatted = formatBeancountTransaction(tx);
-  const existing = await readBooksOrEmpty(booksPath);
-  const opened = openedAccounts(existing);
-  const openLines = [...new Set(tx.postings.map((p) => p.account))]
-    .filter((account) => !opened.has(account))
-    .map((account) => `${tx.date.slice(0, 4)}-01-01 open ${account} ${BOOKS_COMMODITY}`);
 
-  const block = (openLines.length > 0 ? openLines.join("\n") + "\n\n" : "") + formatted;
-  const prefix = existing.length === 0
-    ? ""
-    : existing.endsWith("\n\n")
-    ? ""
-    : existing.endsWith("\n")
-    ? "\n"
-    : "\n\n";
+  const booksDir = path.dirname(booksPath);
+  await Deno.mkdir(booksDir, { recursive: true });
+  const lock = await Deno.open(booksDir, { read: true });
+  try {
+    await lock.lock(true);
+    const existing = await readBooksOrEmpty(booksPath);
+    const opened = openedAccounts(existing);
+    const openLines = [...new Set(tx.postings.map((p) => p.account))]
+      .filter((account) => !opened.has(account))
+      .map((account) => `${tx.date.slice(0, 4)}-01-01 open ${account} ${BOOKS_COMMODITY}`);
 
-  await Deno.mkdir(path.dirname(booksPath), { recursive: true });
-  await Deno.writeTextFile(booksPath, existing + prefix + block);
+    const block = (openLines.length > 0 ? openLines.join("\n") + "\n\n" : "") + formatted;
+    const prefix = existing.length === 0
+      ? ""
+      : existing.endsWith("\n\n")
+      ? ""
+      : existing.endsWith("\n")
+      ? "\n"
+      : "\n\n";
+
+    await replaceFileAtomically(booksPath, existing + prefix + block);
+  } finally {
+    lock.close();
+  }
 }
 
 // ---- Journal (import and month close, until web-jam-tools#1866) ----
