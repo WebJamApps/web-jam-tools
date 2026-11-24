@@ -303,9 +303,7 @@ export async function resolveFixRun(
     const repo = remote.code === 0 ? githubRepository(remote.stdout) : null;
     if (!repo) return { kind: "none" };
     const ref = parseFixPrReference(call.arguments, repo);
-    const preliminary = checkFixRun(call, repo, branch, null);
-    if (preliminary.kind === "refused" || !ref) return preliminary;
-    const pr = await (deps.lookupPullRequest ?? lookupPullRequest)(ref);
+    const pr = ref ? await (deps.lookupPullRequest ?? lookupPullRequest)(ref) : null;
     return checkFixRun(call, repo, branch, pr);
   } catch {
     return { kind: "none" };

@@ -55,6 +55,7 @@ import {
   githubRepository,
   latestTypedSkillCall,
   parseFixPrReference,
+  type PullRequestRef,
   type PullRequestState,
 } from "../hooks/lib/fix_run.ts";
 import { resolveFixRun } from "../scripts/push.ts";
@@ -1158,8 +1159,7 @@ Deno.test("active fix requires a comment and preserves every forbidden push form
 Deno.test("fix run binds state, number, branch and repository including fork refusal", () => {
   for (
     const changes of [
-      { state: "CLOSED" },
-      { state: "MERGED" },
+      { state: "UNKNOWN" },
       { number: 1322 },
       { headRefName: "another-branch" },
       { isCrossRepository: true },
@@ -1216,6 +1216,23 @@ Deno.test("resolution failure never grants a fix run or falls back to another ty
   });
   assertEquals(code, 0);
   assertEquals(spawned, true);
+});
+
+Deno.test("resolveFixRun looks up the named repository before enforcing an open run's scope", async () => {
+  const checkoutRepo = "WebJamApps/JaMmusic";
+  for (const [state, kind] of [["OPEN", "refused"], ["MERGED", "none"], ["CLOSED", "none"]]) {
+    const lookups: PullRequestRef[] = [];
+    const result = await resolveFixRun("probe-branch", undefined, {
+      readSkillCall: () => Promise.resolve(fixCall),
+      runGit: () => Promise.resolve({ code: 0, stdout: `https://github.com/${checkoutRepo}.git` }),
+      lookupPullRequest: (ref) => {
+        lookups.push(ref);
+        return Promise.resolve({ ...targetPr, state });
+      },
+    });
+    assertEquals(lookups, [{ repo: targetRepo, number: targetPr.number }]);
+    assertEquals(result.kind, kind, state);
+  }
 });
 
 const fixtureThread = "12345678-1234-5678-abcd-123456789abc";
@@ -1406,18 +1423,19 @@ for (const surface of ["claude", "agy", "codex"] as const) {
           rule: "force-with-lease-confirmation",
         },
         { texts: [fixCall.text], args: forceArgs, damaged: true, rule: "fix-comment-outside-run" },
-        {
-          texts: [fixCall.text],
-          args: forceArgs,
-          pr: { ...targetPr, state: "CLOSED" },
-          rule: "fix-run-mismatch",
-        },
-        {
-          texts: [fixCall.text],
-          args: forceArgs,
-          pr: { ...targetPr, state: "MERGED" },
-          rule: "fix-run-mismatch",
-        },
+        ...["CLOSED", "MERGED"].flatMap((state) =>
+          [targetRepo, "WebJamApps/JaMmusic"].flatMap((repo) => {
+            const endedRun = {
+              texts: [`/fix-pr https://github.com/${repo}/pull/${targetPr.number}`],
+              pr: { ...targetPr, state, headRepository: { nameWithOwner: repo } },
+            };
+            return [
+              { ...endedRun, args: [], ok: true },
+              { ...endedRun, args: forceArgs, rule: "fix-comment-outside-run" },
+              { ...endedRun, args: ["--force-with-lease"], rule: "force-with-lease-confirmation" },
+            ];
+          })
+        ),
         {
           texts: [fixCall.text],
           args: forceArgs,
@@ -1640,15 +1658,16 @@ Deno.test("web-jam-tools#1916: closed 13-row case list for fix-pr/<number> throw
   assertEquals(emptyTarget.outcome, "refused");
   assertEquals(emptyTarget.rule, "fix-run-mismatch");
 
-  // Row 7: fix-pr/1907 + closed or cross-repository PR 1907 -> Refused (fix-run-mismatch)
-  for (const badPr of [{ ...pr1907, state: "CLOSED" }, { ...pr1907, isCrossRepository: true }]) {
-    const badFix = checkFixRun(pr1907Call, targetRepo, "fix-pr/1907", badPr);
-    assertEquals(badFix.kind, "refused");
-    assertEquals(
-      evaluatePush(["--fix-comment", "/tmp/c.md"], "fix-pr/1907", badFix).rule,
-      "fix-run-mismatch",
-    );
-  }
+  // Row 7: an open cross-repository PR cannot activate the throwaway branch.
+  const forkedFix = checkFixRun(pr1907Call, targetRepo, "fix-pr/1907", {
+    ...pr1907,
+    isCrossRepository: true,
+  });
+  assertEquals(forkedFix.kind, "refused");
+  assertEquals(
+    evaluatePush(["--fix-comment", "/tmp/c.md"], "fix-pr/1907", forkedFix).rule,
+    "fix-run-mismatch",
+  );
 
   // Row 8: fix-pr/1907 + no active fix run (plain, unreadable session/PR, or other skill) -> Refused (fix-pr-branch-outside-run)
   assertEquals(evaluatePush([], "fix-pr/1907", { kind: "none" }).rule, "fix-pr-branch-outside-run");
