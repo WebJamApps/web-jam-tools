@@ -751,3 +751,76 @@ Deno.test("an XML OFX file is parsed as XML: CDATA and references are text, and 
     [{ date: "2026-03-14", description: "PENN STATION", amount: "-22.86", id: "1" }],
   );
 });
+
+Deno.test("XML character rules: a forbidden character or reference, or a literal ]]>, writes no CSV", async () => {
+  const doc = (memo: string, before = "") =>
+    [
+      `${before}<?xml version="1.0" encoding="UTF-8"?>`,
+      '<?OFX OFXHEADER="200" VERSION="220"?>',
+      "<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><BANKTRANLIST>",
+      `<STMTTRN><DTPOSTED>20260314</DTPOSTED><TRNAMT>-22.86</TRNAMT><FITID>X-1</FITID><NAME>PENN STATION</NAME><MEMO>${memo}</MEMO></STMTTRN>`,
+      "</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>",
+    ].join("\n");
+  for (
+    const [label, text, message] of [
+      ["a NUL reference", doc("TRAIN&#0;TICKET"), "names a character XML does not allow"],
+      ["a hex control reference", doc("TRAIN&#x1F;"), "names a character XML does not allow"],
+      ["a surrogate reference", doc("TRAIN&#xD800;"), "names a character XML does not allow"],
+      ["an out-of-range reference", doc("TRAIN&#x110000;"), "names a character XML does not allow"],
+      ["a literal NUL", doc("TRAIN\u0000TICKET"), "holds a character XML does not allow"],
+      ["a literal ]]>", doc("TRAIN ]]> TICKET"), "text holds ]]>"],
+      ["a comment holding --", doc("TRAIN<!-- a -- b -->"), "a comment holds --"],
+      [
+        "a late XML declaration",
+        doc('TRAIN<?xml version="1.0"?>'),
+        "XML declaration is not at the start",
+      ],
+      [
+        "an end tag with a space before its name",
+        doc("TRAIN</ MEMO><MEMO>"),
+        "end tag cannot be read",
+      ],
+    ]
+  ) {
+    assertThrowsRefusal(() => parseOfxLines(text), message);
+    const f = await fixture("march.qfx", text);
+    try {
+      await assertRejects(
+        () => cleanDownload({ input: f.input, booksDir: f.booksDir }),
+        CleanRefusal,
+        message,
+        label,
+      );
+      assertEquals(await exists(f.booksDir), false, `${label} left a CSV in the books`);
+    } finally {
+      await f.cleanup();
+    }
+  }
+  // Allowed references still decode, a tab included.
+  assertEquals(parseOfxLines(doc("A&#x9;B &#x1F600;"))[0].description, "PENN STATION A\tB 😀");
+});
+
+Deno.test("no kept value may carry a control character, whatever the download's form", async () => {
+  for (
+    const [name, content] of [
+      ["march.csv", "Date,Description,Amount\n2026-03-14,PENN\u0000STATION,22.86\n"],
+      [
+        "march.qfx",
+        ofx(["<STMTTRN><DTPOSTED>20260314<TRNAMT>-22.86<FITID>1<NAME>PENN&#0;STATION</STMTTRN>"]),
+      ],
+    ]
+  ) {
+    const f = await fixture(name, content);
+    try {
+      await assertRejects(
+        () => cleanDownload({ input: f.input, booksDir: f.booksDir }),
+        CleanRefusal,
+        "kept line 1 holds a control character",
+        name,
+      );
+      assertEquals(await exists(f.booksDir), false, name);
+    } finally {
+      await f.cleanup();
+    }
+  }
+});

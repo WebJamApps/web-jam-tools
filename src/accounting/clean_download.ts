@@ -263,19 +263,43 @@ const XML_NAMED_REFERENCES: Record<string, string> = {
   apos: "'",
 };
 
-/** Text between tags with its character references decoded; a stray `&` is refused. */
+/** Whether a value holds a control character other than tab, line feed or carriage return. */
+function hasControlCharacter(value: string): boolean {
+  for (const ch of value) {
+    const code = ch.codePointAt(0)!;
+    if ((code < 0x20 && code !== 0x9 && code !== 0xA && code !== 0xD) || code === 0x7F) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Whether a code point is a character XML 1.0 allows (its `Char` production). */
+function isXmlChar(code: number): boolean {
+  return code === 0x9 || code === 0xA || code === 0xD ||
+    (code >= 0x20 && code <= 0xD7FF) || (code >= 0xE000 && code <= 0xFFFD) ||
+    (code >= 0x10000 && code <= 0x10FFFF);
+}
+
+/** Any character outside XML 1.0's `Char` production, a lone surrogate included. */
+const NOT_XML_CHAR = /[^\t\n\r\u0020-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/u;
+
+/**
+ * Text between tags with its references decoded. A stray `&`, a reference to a character XML
+ * does not allow (such as `&#0;`), and a literal `]]>` are refused, as XML 1.0 requires.
+ */
 function decodeXmlText(raw: string): string {
+  if (raw.includes("]]>")) notWellFormed("text holds ]]>, which only ends a CDATA section");
   if (/&(?!(?:#x[0-9a-fA-F]+|#[0-9]+|lt|gt|amp|quot|apos);)/.test(raw)) {
     notWellFormed("an & does not start a character reference");
   }
   return raw.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|lt|gt|amp|quot|apos);/g, (_, ref: string) => {
     if (!ref.startsWith("#")) return XML_NAMED_REFERENCES[ref];
     const code = ref.startsWith("#x") ? parseInt(ref.slice(2), 16) : Number(ref.slice(1));
-    try {
-      return String.fromCodePoint(code);
-    } catch {
-      return notWellFormed("a character reference names no character");
+    if (!isXmlChar(code)) {
+      notWellFormed("a character reference names a character XML does not allow");
     }
+    return String.fromCodePoint(code);
   });
 }
 
@@ -287,6 +311,7 @@ function decodeXmlText(raw: string): string {
  */
 function parseXmlDocument(text: string): XmlElement {
   const src = text.replace(/^\uFEFF/, "");
+  if (NOT_XML_CHAR.test(src)) notWellFormed("it holds a character XML does not allow");
   const doc: XmlElement = { name: "", children: [], text: "" };
   const stack: XmlElement[] = [doc];
   let i = 0;
@@ -306,12 +331,21 @@ function parseXmlDocument(text: string): XmlElement {
     if (src.startsWith("<?", lt)) {
       const end = src.indexOf("?>", lt + 2);
       if (end === -1) notWellFormed("a processing instruction never closes");
+      const target = src.slice(lt + 2, end).match(/^[A-Za-z_][\w.-]*/)?.[0];
+      if (!target) notWellFormed("a processing instruction has no name");
+      // The XML declaration may only open the document; any other target named xml is reserved.
+      if (target.toLowerCase() === "xml" && (target !== "xml" || lt !== 0)) {
+        notWellFormed("the XML declaration is not at the start of the document");
+      }
       i = end + 2;
       continue;
     }
     if (src.startsWith("<!--", lt)) {
       const end = src.indexOf("-->", lt + 4);
       if (end === -1) notWellFormed("a comment never closes");
+      if (src.slice(lt + 4, end).includes("--") || src[end - 1] === "-") {
+        notWellFormed("a comment holds --");
+      }
       i = end + 3;
       continue;
     }
@@ -330,7 +364,9 @@ function parseXmlDocument(text: string): XmlElement {
     const inner = src.slice(lt + 1, gt);
     const top = stack[stack.length - 1];
     if (inner.startsWith("/")) {
-      const name = inner.slice(1).trim();
+      const end = inner.match(/^\/([A-Za-z_][\w.-]*)\s*$/);
+      if (!end) notWellFormed("an end tag cannot be read");
+      const name = end[1];
       if (top === doc) notWellFormed(`</${name}> closes nothing`);
       if (top.name !== name) notWellFormed(`<${top.name}> is closed by </${name}>`);
       stack.pop();
@@ -653,6 +689,14 @@ export async function cleanDownload(options: CleanOptions): Promise<CleanResult>
   }
   const lines = parseDownload(text);
   if (lines.length === 0) throw new CleanRefusal("the file holds no lines to keep");
+  // Whatever the download's form, no kept value may carry a control character such as NUL into
+  // the books. Tab and line breaks stay, since a quoted CSV field may hold them.
+  lines.forEach((line, index) => {
+    const fields = [line.date, line.description, line.amount, line.id];
+    if (fields.some(hasControlCharacter)) {
+      throw new CleanRefusal(`kept line ${index + 1} holds a control character`);
+    }
+  });
   const csv = cleanCsv(lines);
   let findings;
   try {
