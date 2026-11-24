@@ -86,12 +86,35 @@ fi
 
 cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 
-# Prints "true" when a path (relative to the payload cwd) is inside a git working tree. A path that
-# does not exist yet is judged by its nearest existing ancestor directory.
+# Prints "true" when a write to a path (relative to the payload cwd) lands inside a git working tree.
+# The path is judged where the write really lands, as writeDestination in hooks/lib/opus_gate.ts
+# judges it: each symlink is followed before any later "..", and a path that does not exist yet is
+# judged by its nearest existing ancestor directory. A destination that cannot be verified (a
+# relative path with no cwd, a dangling symlink along the way, or one realpath cannot read) also
+# prints "true", so the gate itself decides rather than this early exit.
 in_git_tree() {
-  local resolved_path="$1" dir parent
+  local resolved_path="$1" dir parent prefix="" part
+  local -a parts
   if [[ "$resolved_path" != /* ]] && [ -n "$cwd" ]; then
     resolved_path="$cwd/$resolved_path"
+  fi
+  if [[ "$resolved_path" != /* ]]; then
+    echo true
+    return
+  fi
+  IFS=/ read -r -a parts <<<"$resolved_path"
+  for part in "${parts[@]}"; do
+    [ -z "$part" ] && continue
+    prefix="$prefix/$part"
+    if [ -L "$prefix" ] && [ ! -e "$prefix" ]; then
+      echo true
+      return
+    fi
+  done
+  resolved_path="$(realpath -m -- "$resolved_path" 2>/dev/null || true)"
+  if [ -z "$resolved_path" ]; then
+    echo true
+    return
   fi
   dir="$resolved_path"
   if [ ! -d "$dir" ]; then

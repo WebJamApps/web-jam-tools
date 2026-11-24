@@ -911,11 +911,11 @@ function workIssueGrant(
     const command = slashCommandOf(text);
     if (command === null) continue;
     if (command !== "work-issue" || !isHumanPrompt(entry)) return null;
-    const args = workIssueArgs(text);
-    const ref = parseIssueRef(args);
-    if (!ref) return null;
+    const target = workIssueTarget(workIssueArgs(text));
+    if (!target) return null;
+    const { ref } = target;
     // A Fable choice typed with the call is Josh's choice for this issue, bound to its repository.
-    if (choosesFable(withoutIssueRefs(args))) return ref;
+    if (choosesFable(target.instructions)) return ref;
     const labels = lookupLabels(ref);
     return labels !== null && labels.some((label) => label.toLowerCase() === FABLE_TASK_LABEL)
       ? ref
@@ -924,11 +924,25 @@ function workIssueGrant(
   return null;
 }
 
-/** Skill arguments with each issue reference replaced by a line break, so what follows opens a line. */
-function withoutIssueRefs(args: string): string {
-  return args
-    .replace(/https?:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/issues\/\d+/g, "\n")
-    .replace(/(?:^|\s)(?:[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+#\d+\b/g, "\n");
+/**
+ * The issue a typed `/work-issue` selects and the instructions after it. The issue comes from the
+ * first argument alone (an issue URL, `Owner/Repo#N` or `Repo#N`, with surrounding punctuation
+ * trimmed), so an issue cited later in the instructions never becomes the target. The instructions
+ * are the rest of the arguments exactly as typed, so every sentence boundary and negation in them
+ * still governs a Fable choice. Null when the first argument names no issue.
+ */
+export function workIssueTarget(args: string): { ref: IssueRef; instructions: string } | null {
+  const first = args.trim().match(/^\S+/)?.[0] ?? "";
+  const token = first.replace(/^[(\[<"'“‘]+/, "").replace(/[,.;:)\]>"'”’!?]+$/, "");
+  const ref = token.match(
+    /^(?:https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/issues\/|(?:([A-Za-z0-9_.-]+)\/)?([A-Za-z0-9_.-]+)#)([1-9]\d*)$/,
+  );
+  if (!ref || !Number.isSafeInteger(Number(ref[5]))) return null;
+  const repo = ref[1] ? `${ref[1]}/${ref[2]}` : `${ref[3] ?? DEFAULT_OWNER}/${ref[4]}`;
+  return {
+    ref: { repo, number: Number(ref[5]) },
+    instructions: args.trim().slice(first.length).trim(),
+  };
 }
 
 /**

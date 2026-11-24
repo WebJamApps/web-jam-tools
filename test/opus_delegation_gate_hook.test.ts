@@ -817,6 +817,66 @@ Deno.test("task grants through the shell: a typed task edits its own repository,
   }
 });
 
+Deno.test("task grants through the shell: a write is judged where it lands through symlinks, even from outside any working tree", async () => {
+  const root = await Deno.makeTempDir({ prefix: "opus-gate-symlinks-" });
+  try {
+    for (
+      const [name, url] of [
+        ["tools", "https://github.com/WebJamApps/web-jam-tools.git"],
+        ["music", "git@github.com:WebJamApps/JaMmusic.git"],
+      ]
+    ) {
+      const repo = `${root}/${name}`;
+      for (const args of [["init", "-q", repo], ["-C", repo, "remote", "add", "origin", url]]) {
+        const { success } = await new Deno.Command("git", { args, stdout: "null", stderr: "null" })
+          .output();
+        assert(success, args.join(" "));
+      }
+    }
+    await Deno.mkdir(`${root}/music/src`);
+    await Deno.mkdir(`${root}/tools/src`);
+    await Deno.mkdir(`${root}/outside`);
+    await Deno.writeTextFile(`${root}/music/src/b.ts`, "");
+    await Deno.writeTextFile(`${root}/tools/src/a.ts`, "");
+    await Deno.symlink(`${root}/music/src`, `${root}/tools/music-dir`);
+    await Deno.symlink(`${root}/music/src/b.ts`, `${root}/outside/to-music.ts`);
+    await Deno.symlink(`${root}/tools/src/a.ts`, `${root}/outside/to-tools.ts`);
+    await Deno.symlink(`${root}/music/src/missing.ts`, `${root}/outside/dangling.ts`);
+
+    const lines = [
+      userTurn("/fix-pr https://github.com/WebJamApps/web-jam-tools/pull/5"),
+      assistantTurn("claude-fable-5-2"),
+    ];
+    await withTranscript(lines, async (transcript_path) => {
+      const write = (file_path: string) =>
+        runHook({ tool_name: "Write", tool_input: { file_path }, transcript_path });
+      const bash = (command: string) =>
+        runHook({
+          tool_name: "Bash",
+          tool_input: { command },
+          transcript_path,
+          cwd: `${root}/tools`,
+        });
+
+      // The ".." after a directory link, through Bash and Write.
+      assertDenied((await bash("printf x > music-dir/../c.ts")).stdout);
+      assertDenied((await write(`${root}/tools/music-dir/../c.ts`)).stdout);
+      // A file link outside any working tree that points into another repository.
+      assertDenied((await write(`${root}/outside/to-music.ts`)).stdout);
+      assertDenied((await bash(`printf x > ${root}/outside/to-music.ts`)).stdout);
+      // A dangling link cannot be verified, so it is never inside the task's repository.
+      assertDenied((await write(`${root}/outside/dangling.ts`)).stdout);
+      // The task's own repository through a link, and a plain file outside any working tree.
+      assertAllowed(await write(`${root}/outside/to-tools.ts`));
+      assertAllowed(await bash(`printf x > ${root}/outside/to-tools.ts`));
+      assertAllowed(await write(`${root}/outside/plain.txt`));
+      assertAllowed(await bash("printf x > src/new.ts"));
+    });
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 // --- Allow on missing/unreadable transcript (workflow guard default) ---
 
 Deno.test("missing transcript_path is allowed (workflow default)", async () => {

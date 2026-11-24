@@ -138,7 +138,8 @@ Deno.test("resolvePath: relative, absolute, ~, $HOME, dot segments, and unknown 
   assertEquals(resolvePath("~/notes.md", CWD, HOME), "/home/j/notes.md");
   assertEquals(resolvePath("${HOME}/a", CWD, HOME), "/home/j/a");
   assertEquals(resolvePath("$HOME", CWD, HOME), "/home/j");
-  assertEquals(resolvePath("./a/../b/./c", CWD, HOME), "/repo/b/c");
+  // A ".." is kept: the kernel resolves it after any symlink before it.
+  assertEquals(resolvePath("./a/../b/./c", CWD, HOME), "/repo/a/../b/c");
   assertEquals(resolvePath("$TMPDIR/x", CWD, HOME), null);
   assertEquals(resolvePath("$(pwd)/x", CWD, HOME), null);
   assertEquals(resolvePath("", CWD, HOME), null);

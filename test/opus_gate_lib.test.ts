@@ -36,6 +36,7 @@ import {
   slashCommandOf,
   workIssueApprovalActive,
   workIssueArgs,
+  workIssueTarget,
   writeDestination,
 } from "../hooks/lib/opus_gate.ts";
 import { extractEntryText, type TranscriptEntry } from "../hooks/lib/select_transcript_entry.ts";
@@ -811,6 +812,22 @@ Deno.test("task grants: a Fable choice typed inside /work-issue covers that issu
     [[human(workIssue("use Fable"))], [TOOLS_FILE], "deny"],
     [[human(USE_FABLE), human("fable edit off")], [TOOLS_FILE], "deny"],
     [[human(USE_FABLE), human(PR_REVIEW)], [TOOLS_FILE], "deny"],
+    // The grant follows the issue the command selects, never an issue cited in the instructions.
+    [[human(workIssue("web-jam-tools#2 see https://github.com/WebJamApps/JaMmusic/issues/3"))], [
+      MUSIC_FILE,
+    ], "deny"],
+    [[human(workIssue("web-jam-tools#2, per JaMmusic#9, use Fable"))], [TOOLS_FILE], "allow"],
+    [[human(workIssue("web-jam-tools#2, per JaMmusic#9, use Fable"))], [MUSIC_FILE], "deny"],
+    [[human(workIssue("see web-jam-tools#3"))], [TOOLS_FILE], "deny"],
+    [[human(workIssue("https://github.com/WebJamApps/web-jam-tools/issues/3, thanks"))], [
+      TOOLS_FILE,
+    ], "allow"],
+    // A reference inside the instructions no longer separates a negation from the choice it governs.
+    [
+      [human(workIssue("web-jam-tools#2 do not, per web-jam-tools#9, use Fable"))],
+      [TOOLS_FILE],
+      "deny",
+    ],
   ];
   for (const [entries, targets, expected] of cases) {
     const read = reader({ [MAIN]: jsonl([...entries, assistant("claude-fable-5-2")]) });
@@ -831,6 +848,36 @@ Deno.test("task grants: a Fable choice typed inside /work-issue covers that issu
     ]),
     false,
   );
+});
+
+Deno.test("workIssueTarget: the first argument selects the issue and the rest is kept as typed", () => {
+  assertEquals(workIssueTarget("web-jam-tools#2, use Fable"), {
+    ref: { repo: "WebJamApps/web-jam-tools", number: 2 },
+    instructions: "use Fable",
+  });
+  assertEquals(
+    workIssueTarget("(Owner/Repo#7) do not, per web-jam-tools#9, use Fable")?.instructions,
+    "do not, per web-jam-tools#9, use Fable",
+  );
+  assertEquals(
+    workIssueTarget("https://github.com/WebJamApps/JaMmusic/issues/12 go")?.ref,
+    { repo: "WebJamApps/JaMmusic", number: 12 },
+  );
+  assertEquals(
+    workIssueTarget("web-jam-tools#2 see https://github.com/WebJamApps/JaMmusic/issues/3")?.ref,
+    { repo: "WebJamApps/web-jam-tools", number: 2 },
+  );
+  for (
+    const args of [
+      "",
+      "see web-jam-tools#3",
+      "https://github.com/WebJamApps/web-jam-tools/pull/3",
+      "web-jam-tools#0",
+      "web-jam-tools#9007199254740992",
+    ]
+  ) {
+    assertEquals(workIssueTarget(args), null, args);
+  }
 });
 
 Deno.test("decideSubagentEdit: fable edit off after the spawning message ends a directly requested Fable helper", () => {
@@ -993,6 +1040,8 @@ Deno.test("decide: a task grant judges a write by where it lands through symlink
       assertEquals(run({ file_path: `${root}/tools/dangling.ts` }), "deny", task);
       assertEquals(run({ command: "printf x > to-music.ts" }, "Bash"), "deny", task);
       assertEquals(run({ command: "printf x > to-tools.ts" }, "Bash"), "allow", task);
+      // The Bash reader keeps the "..", so it is resolved after the directory link, as written.
+      assertEquals(run({ command: "printf x > music-dir/../c.ts" }, "Bash"), "deny", task);
     }
   } finally {
     await Deno.remove(root, { recursive: true });

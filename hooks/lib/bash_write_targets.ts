@@ -80,7 +80,13 @@ export interface WriteTargetOptions {
   home: string;
 }
 
-export const resolvePath = resolveCommandPath;
+/**
+ * A written file's absolute path with each ".." kept, so a guard that follows symlinks judges the
+ * file the kernel writes ("link/../a.ts" lands beside the link's target). A guard that wants a
+ * lexical path normalizes it itself, as check_feature_branch.ts does.
+ */
+export const resolvePath = (raw: string, cwd: string | null, home: string): string | null =>
+  resolveCommandPath(raw, cwd, home, true);
 
 interface ScriptToken {
   text: string;
