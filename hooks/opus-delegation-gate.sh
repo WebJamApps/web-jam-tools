@@ -34,8 +34,9 @@
 #       "fable edit ok" or asking Fable to do the work, anywhere earlier in the SESSION and not since
 #       withdrawn with "fable edit off"; the most recent slash command he typed being /work-issue on
 #       an issue he labeled Fable (the label is read with gh and reused for ten minutes); or a typed
-#       /fix-pr naming a pull request while that call is in force. An Opus or Sol label, or an Opus
-#       edit grant ("opus edit ok"), never authorizes a Fable edit.
+#       /fix-pr naming a pull request while that call is in force. Either typed task covers only edits
+#       in its issue's or pull request's repository, and a later "fable edit off" ends it. An Opus or
+#       Sol label, or an Opus edit grant ("opus edit ok"), never authorizes a Fable edit.
 #     Only prompts Josh actually sent (origin.kind "human", not isMeta) count, so a task
 #     notification neither grants approval nor cancels it.
 #   Step 5: Otherwise refuse (deny) with JSON naming the target file and the reason. A main-thread
@@ -233,8 +234,9 @@ $why"
 else
   reason="⛔ Opus delegation gate: refused ${via_bash:+a }$what.
 This session runs on Fable, which edits repository files only for work Josh has chosen Fable for:
-a /work-issue he typed on an issue he labeled Fable, a /fix-pr he typed naming a pull request, or a
-message of his asking Fable to do the work or containing: fable edit ok
+a /work-issue he typed on an issue he labeled Fable or a /fix-pr he typed naming a pull request (each
+for edits in that issue's or pull request's repository), or a message of his asking Fable to do the
+work or containing: fable edit ok
 (withdrawn with: fable edit off). An Opus or Sol label, or \"opus edit ok\", does not choose Fable.
 Otherwise hand the work to a model that edits directly: Opus, Sonnet or Haiku in Claude Code, or agy."
   if [ -n "$why" ]; then

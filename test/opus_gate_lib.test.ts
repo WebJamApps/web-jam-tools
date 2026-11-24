@@ -22,10 +22,12 @@ import {
   type IssueRef,
   LABEL_CACHE_TTL_MS,
   type LabelLookup,
+  parseGitHubRepo,
   parseIssueRef,
   parseLabelsJson,
   type ReadText,
   readTextOrNull,
+  type RepoLookup,
   resolveSessionFiles,
   resolveSubagentModel,
   runGhLabels,
@@ -177,6 +179,9 @@ Deno.test("isOpusModel / isFableModel / asksForFableSubagent / approvesFableSuba
   assert(approvesFableSubagent("OK, fable edit ok, go"));
   assert(approvesFableSubagent("spawn a Fable subagent"));
   assert(!approvesFableSubagent("please fix it"));
+  assert(!approvesFableSubagent("why did you spawn a Fable subagent?"));
+  assert(!approvesFableSubagent("the Fable subagent broke it"));
+  assert(!approvesFableSubagent("don't use a Fable subagent"));
   // An Opus grant or request is not a choice of Fable.
   assert(!approvesFableSubagent("opus edit ok"));
   assert(!approvesFableSubagent("dispatch to an Opus subagent"));
@@ -313,6 +318,62 @@ Deno.test("asksFableToDoTheWork: a bare affirmation before the routing verb stil
     "yesterday send it to Fable",
   ];
   for (const text of refuses) assert(!asksFableToDoTheWork(text), text);
+});
+
+Deno.test("asksFableToDoTheWork: a use/have/let instruction that is a question does not choose Fable", () => {
+  const refuses = [
+    "use Fable?",
+    "have Fable fix it?",
+    "yes use Fable?",
+    "ok, let Fable do it?",
+    "use Fable for this or Opus?",
+    "please use a Fable agent?",
+  ];
+  for (const text of refuses) assert(!asksFableToDoTheWork(text), text);
+  for (const text of refuses) assert(!approvesFableSubagent(text), text);
+
+  const approves = [
+    "use Fable? yes, use Fable",
+    "have Fable fix it. is that clear?",
+    "use Fable and then tell me what changed?",
+  ];
+  for (const text of approves) assert(asksFableToDoTheWork(text), text);
+});
+
+Deno.test("asksForFableSubagent: only an instruction putting a Fable subagent to work counts", () => {
+  const approves = [
+    "dispatch to a Fable subagent",
+    "use fable sub-agents for this",
+    "spawn a Fable subagent",
+    "yes, please spawn a Fable subagent",
+    "fix it with a Fable subagent",
+    "fix them now using a Fable subagent, then report",
+    "/pr-review web-jam-tools#1000 dispatch to Fable subagent",
+  ];
+  for (const text of approves) assert(asksForFableSubagent(text), text);
+
+  const refuses = [
+    // Questions:
+    "why did you spawn a Fable subagent",
+    "did you use a Fable subagent?",
+    "spawn a Fable subagent?",
+    "can you spawn a Fable subagent",
+    "do you have a Fable subagent running",
+    // Negative mentions:
+    "don't use a Fable subagent",
+    "no Fable subagent",
+    "use a Sonnet subagent, not a Fable subagent",
+    "stop using a Fable subagent",
+    "never spawn a Fable subagent",
+    // Incidental mentions and second-hand reports:
+    "the Fable subagent broke it",
+    "Fable subagents are expensive",
+    "I told you to use a Fable subagent",
+    "you used a Fable subagent",
+    "fable is fine here",
+    "dispatch to a Sonnet subagent",
+  ];
+  for (const text of refuses) assert(!asksForFableSubagent(text), text);
 });
 
 Deno.test("resolveSessionFiles: main transcript and subagent transcript resolve to the same files", () => {
@@ -602,9 +663,183 @@ Deno.test("fix-pr: only a named PR in a typed skill call approves, including wra
   ];
   for (const [calls, expected] of [[approves, "allow"], [refuses, "deny"]] as const) {
     for (const call of calls) {
-      const read = reader({ [MAIN]: jsonl([human(call), assistant("claude-fable-5-2")]) });
-      assertEquals(decideMainThreadEdit(MAIN, read, labels).decision, expected, call);
+      // A bare number names the repository of the folder Josh typed the call in.
+      const typed = { ...human(call), cwd: "/work/web-jam-tools" };
+      const read = reader({ [MAIN]: jsonl([typed, assistant("claude-fable-5-2")]) });
+      assertEquals(
+        decideMainThreadEdit(MAIN, read, labels, [TOOLS_FILE], twoRepos).decision,
+        expected,
+        call,
+      );
     }
+  }
+});
+
+// --- Typed task grants are bound to their repository and ended by "fable edit off" ---
+
+const TOOLS_FILE = "/work/web-jam-tools/hooks/a.ts";
+const MUSIC_FILE = "/work/JaMmusic/src/b.tsx";
+
+/** Two repositories, a working tree whose origin cannot be read, and everything else outside git. */
+const twoRepos: RepoLookup = (path) => {
+  if (path.startsWith("/work/web-jam-tools")) {
+    return { inTree: true, repo: "webjamapps/web-jam-tools" };
+  }
+  if (path.startsWith("/work/JaMmusic")) return { inTree: true, repo: "webjamapps/jammusic" };
+  if (path.startsWith("/work/no-origin")) return { inTree: true, repo: null };
+  return { inTree: false, repo: null };
+};
+
+Deno.test("task grants: a typed /work-issue or /fix-pr covers edits in its own repository only", () => {
+  const ISSUE = workIssue("web-jam-tools#3");
+  const PR_LINK = "/fix-pr https://github.com/WebJamApps/web-jam-tools/pull/1318";
+  const OUTSIDE = "/tmp/fix-pr-1318-comment.md";
+  const NO_ORIGIN = "/work/no-origin/c.ts";
+  const cases: [TranscriptEntry, string[], "allow" | "deny"][] = [
+    [human(ISSUE), [TOOLS_FILE], "allow"],
+    [human(ISSUE), [MUSIC_FILE], "deny"],
+    [human(ISSUE), [TOOLS_FILE, MUSIC_FILE], "deny"],
+    [human(ISSUE), [TOOLS_FILE, OUTSIDE], "allow"],
+    [human(ISSUE), [NO_ORIGIN], "deny"],
+    [human(PR_LINK), [TOOLS_FILE], "allow"],
+    [human(PR_LINK), [MUSIC_FILE], "deny"],
+    [human("/fix-pr WebJamApps/JaMmusic#5"), [MUSIC_FILE], "allow"],
+    [human("/fix-pr JaMmusic#5"), [TOOLS_FILE], "deny"],
+    [human("/fix-pr webjamapps/WEB-JAM-TOOLS#1318"), [TOOLS_FILE], "allow"],
+    [{ ...human("/fix-pr 1318"), cwd: "/work/JaMmusic" }, [MUSIC_FILE], "allow"],
+    [{ ...human("/fix-pr 1318"), cwd: "/work/JaMmusic" }, [TOOLS_FILE], "deny"],
+    // A bare number typed outside any repository, or with no folder recorded, names none.
+    [{ ...human("/fix-pr 1318"), cwd: "/home/joshua" }, [MUSIC_FILE], "deny"],
+    [human("/fix-pr 1318"), [MUSIC_FILE], "deny"],
+  ];
+  for (const [call, targets, expected] of cases) {
+    const read = reader({ [MAIN]: jsonl([call, assistant("claude-fable-5-2")]) });
+    const decision = decideMainThreadEdit(MAIN, read, labels, targets, twoRepos);
+    assertEquals(decision.decision, expected, `${extractEntryText(call)} -> ${targets}`);
+  }
+
+  const read = reader({ [MAIN]: jsonl([human(ISSUE), assistant("claude-fable-5-2")]) });
+  assert(
+    decideMainThreadEdit(MAIN, read, labels, [MUSIC_FILE], twoRepos).why.includes(
+      "webjamapps/web-jam-tools",
+    ),
+  );
+
+  // Josh's separate session grant is not tied to the task's repository.
+  const granted = reader({
+    [MAIN]: jsonl([human(ISSUE), human("fable edit ok"), assistant("claude-fable-5-2")]),
+  });
+  assertEquals(
+    decideMainThreadEdit(MAIN, granted, labels, [MUSIC_FILE], twoRepos).decision,
+    "allow",
+  );
+});
+
+Deno.test("task grants: fable edit off after a typed task ends it until Josh chooses Fable again", () => {
+  for (const task of [workIssue("web-jam-tools#3"), "/fix-pr web-jam-tools#1318"]) {
+    const cases: [TranscriptEntry[], "allow" | "deny"][] = [
+      [[human(task)], "allow"],
+      [[human(task), human("fable edit off")], "deny"],
+      [[human(task), human("fable edit off"), human("go ahead")], "deny"],
+      [[human(task), human("fable edit ok"), human("fable edit off")], "deny"],
+      [[human(task), human("fable edit off"), human("fable edit ok")], "allow"],
+      [[human(task), human("fable edit off"), human(task)], "allow"],
+      [[human("fable edit off"), human(task)], "allow"],
+      // Only Josh's own prompt withdraws.
+      [[human(task), notification("fable edit off")], "allow"],
+      [[human(task), metaEntry("fable edit off")], "allow"],
+    ];
+    for (const [entries, expected] of cases) {
+      const read = reader({ [MAIN]: jsonl([...entries, assistant("claude-fable-5-2")]) });
+      assertEquals(
+        decideMainThreadEdit(MAIN, read, labels, [TOOLS_FILE], twoRepos).decision,
+        expected,
+        jsonl(entries),
+      );
+    }
+  }
+});
+
+Deno.test("fix-pr: a Fable helper edits only in its pull request's repository, until fable edit off", () => {
+  const call = "/fix-pr https://github.com/WebJamApps/web-jam-tools/pull/1318 use a Fable helper";
+  const cases: [TranscriptEntry[], string[], "allow" | "deny"][] = [
+    [[], [TOOLS_FILE], "allow"],
+    [[], [MUSIC_FILE], "deny"],
+    [[human("go ahead")], [TOOLS_FILE], "allow"],
+    [[human("fable edit off")], [TOOLS_FILE], "deny"],
+    [[human("fable edit off"), human("go ahead")], [TOOLS_FILE], "deny"],
+  ];
+  for (const [later, targets, expected] of cases) {
+    const read = reader({
+      [MAIN]: jsonl([human(call), spawn("toolu_fix"), ...later]),
+      ...meta("fix", { model: "fable", toolUseId: "toolu_fix" }),
+    });
+    assertEquals(
+      decideSubagentEdit("fix", MAIN, read, targets, twoRepos).decision,
+      expected,
+      `${jsonl(later)} -> ${targets}`,
+    );
+  }
+});
+
+Deno.test("parseGitHubRepo: owner/name in lower case from GitHub remote URLs only", () => {
+  assertEquals(
+    parseGitHubRepo("git@github.com:WebJamApps/web-jam-tools.git"),
+    "webjamapps/web-jam-tools",
+  );
+  assertEquals(parseGitHubRepo("https://github.com/WebJamApps/JaMmusic"), "webjamapps/jammusic");
+  assertEquals(
+    parseGitHubRepo("https://github.com/WebJamApps/JaMmusic.git/\n"),
+    "webjamapps/jammusic",
+  );
+  assertEquals(
+    parseGitHubRepo("ssh://git@github.com/WebJamApps/web-jam-tools.git"),
+    "webjamapps/web-jam-tools",
+  );
+  assertEquals(parseGitHubRepo("https://gitlab.com/WebJamApps/web-jam-tools.git"), null);
+  assertEquals(parseGitHubRepo(""), null);
+});
+
+Deno.test("decide: a typed task's grant reaches its own repository and not another (two real repositories)", async () => {
+  const root = await Deno.makeTempDir({ prefix: "opus-gate-two-repos-" });
+  try {
+    const repos: [string, string][] = [
+      ["tools", "git@github.com:WebJamApps/web-jam-tools.git"],
+      ["music", "https://github.com/WebJamApps/JaMmusic.git"],
+      ["no-origin", ""],
+    ];
+    for (const [name, url] of repos) {
+      const repo = `${root}/${name}`;
+      const steps = [
+        ["init", "-q", repo],
+        ...(url ? [["-C", repo, "remote", "add", "origin", url]] : []),
+      ];
+      for (const args of steps) {
+        const { success } = await new Deno.Command("git", { args, stdout: "null", stderr: "null" })
+          .output();
+        assert(success, args.join(" "));
+      }
+    }
+    for (const task of ["/fix-pr web-jam-tools#1318", workIssue("web-jam-tools#3")]) {
+      const read = reader({ [MAIN]: jsonl([human(task), assistant("claude-fable-5-2")]) });
+      const run = (tool_input: Record<string, unknown>, tool_name = "Write") =>
+        decide({ tool_name, tool_input, transcript_path: MAIN, cwd: `${root}/tools` }, read, labels)
+          .decision;
+
+      // A folder that does not exist yet is judged by its nearest existing parent.
+      assertEquals(run({ file_path: `${root}/tools/src/new/a.ts` }), "allow", task);
+      assertEquals(run({ file_path: `${root}/music/src/b.ts` }), "deny", task);
+      assertEquals(run({ file_path: `${root}/no-origin/c.ts` }), "deny", task);
+      assertEquals(run({ command: "printf x > src/d.ts" }, "Bash"), "allow", task);
+      assertEquals(run({ command: `printf x > ${root}/music/d.ts` }, "Bash"), "deny", task);
+      assertEquals(
+        run({ command: `printf x | tee src/e.ts ${root}/music/e.ts` }, "Bash"),
+        "deny",
+        task,
+      );
+    }
+  } finally {
+    await Deno.remove(root, { recursive: true });
   }
 });
 

@@ -774,6 +774,49 @@ Deno.test("fix-pr: the installed shell entry point allows the active typed call 
   }
 });
 
+Deno.test("task grants through the shell: a typed task edits its own repository, not another, until fable edit off (two real repositories)", async () => {
+  const root = await Deno.makeTempDir({ prefix: "opus-gate-two-repos-" });
+  try {
+    for (
+      const [name, url] of [
+        ["tools", "https://github.com/WebJamApps/web-jam-tools.git"],
+        ["music", "git@github.com:WebJamApps/JaMmusic.git"],
+      ]
+    ) {
+      const repo = `${root}/${name}`;
+      for (const args of [["init", "-q", repo], ["-C", repo, "remote", "add", "origin", url]]) {
+        const { success } = await new Deno.Command("git", { args, stdout: "null", stderr: "null" })
+          .output();
+        assert(success, args.join(" "));
+      }
+    }
+    await withFakeGh(async (env) => {
+      const tasks = [
+        workIssueTurn("JaMmusic#3"),
+        userTurn("/fix-pr https://github.com/WebJamApps/JaMmusic/pull/5"),
+      ];
+      for (const task of tasks) {
+        for (const withdrawn of [false, true]) {
+          const lines = [task, assistantTurn("claude-fable-5-2")];
+          if (withdrawn) lines.push(userTurn("fable edit off"), assistantTurn("claude-fable-5-2"));
+          await withTranscript(lines, async (transcript_path) => {
+            const write = (file_path: string) =>
+              runHook({ tool_name: "Write", tool_input: { file_path }, transcript_path }, env);
+            const own = await write(`${root}/music/src/a.ts`);
+            if (withdrawn) assertDenied(own.stdout);
+            else assertAllowed(own);
+            assertDenied((await write(`${root}/tools/hooks/b.ts`)).stdout, [
+              withdrawn ? "fable edit off" : "outside that repository",
+            ]);
+          });
+        }
+      }
+    });
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 // --- Allow on missing/unreadable transcript (workflow guard default) ---
 
 Deno.test("missing transcript_path is allowed (workflow default)", async () => {
