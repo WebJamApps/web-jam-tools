@@ -343,7 +343,9 @@ function parseXmlDocument(text: string): XmlElement {
     if (src.startsWith("<!--", lt)) {
       const end = src.indexOf("-->", lt + 4);
       if (end === -1) notWellFormed("a comment never closes");
-      if (src.slice(lt + 4, end).includes("--") || src[end - 1] === "-") {
+      // Only the body between <!-- and --> is checked, so an empty comment <!----> is allowed.
+      const body = src.slice(lt + 4, end);
+      if (body.includes("--") || body.endsWith("-")) {
         notWellFormed("a comment holds --");
       }
       i = end + 3;

@@ -770,6 +770,7 @@ Deno.test("XML character rules: a forbidden character or reference, or a literal
       ["a literal NUL", doc("TRAIN\u0000TICKET"), "holds a character XML does not allow"],
       ["a literal ]]>", doc("TRAIN ]]> TICKET"), "text holds ]]>"],
       ["a comment holding --", doc("TRAIN<!-- a -- b -->"), "a comment holds --"],
+      ["a comment ending --->", doc("TRAIN<!-- a --->"), "a comment holds --"],
       [
         "a late XML declaration",
         doc('TRAIN<?xml version="1.0"?>'),
@@ -798,6 +799,18 @@ Deno.test("XML character rules: a forbidden character or reference, or a literal
   }
   // Allowed references still decode, a tab included.
   assertEquals(parseOfxLines(doc("A&#x9;B &#x1F600;"))[0].description, "PENN STATION A\tB 😀");
+  // An empty comment is valid XML, and the memo text around it is kept.
+  assertEquals(parseOfxLines(doc("TRAIN<!---->TICKET"))[0].description, "PENN STATION TRAINTICKET");
+  const f = await fixture("march.qfx", doc("TRAIN<!---->TICKET"));
+  try {
+    const result = await cleanDownload({ input: f.input, booksDir: f.booksDir });
+    assertEquals(
+      await Deno.readTextFile(result.outputPath),
+      `${HEADER}\n2026-03-14,PENN STATION TRAINTICKET,-22.86,X-1\n`,
+    );
+  } finally {
+    await f.cleanup();
+  }
 });
 
 Deno.test("no kept value may carry a control character, whatever the download's form", async () => {
