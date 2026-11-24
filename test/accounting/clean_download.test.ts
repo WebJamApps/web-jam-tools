@@ -403,6 +403,33 @@ Deno.test("a CSV row whose fields do not line up with the header is refused, nev
   );
 });
 
+Deno.test("a CSV with no header must have 3 or 4 fields, so a split amount is never read", async () => {
+  // An unquoted comma splits 1,023.45 into 1 and 023.45, making a five-field first row that would
+  // otherwise read as an amount of 1.00 and an id of 023.45, dropping the real id.
+  assertThrowsRefusal(
+    () => parseCsvLines("2026-03-14,PENN STATION,1,023.45,T-1\n2026-03-15,GIG,1,250.00,T-2\n"),
+    "line 1 has 5 fields; a download with no header must have 3",
+  );
+  assertThrowsRefusal(
+    () => parseCsvLines("2026-03-14,PENN STATION\n"),
+    "line 1 has 2 fields; a download with no header must have 3",
+  );
+  assertEquals(parseCsvLines("2026-03-14,PENN STATION,22.86\n"), [
+    { date: "2026-03-14", description: "PENN STATION", amount: "22.86", id: "" },
+  ]);
+  const f = await fixture("march.csv", "2026-03-14,PENN STATION,1,023.45,T-1\n");
+  try {
+    await assertRejects(
+      () => cleanDownload({ input: f.input, booksDir: f.booksDir }),
+      CleanRefusal,
+      "line 1 has 5 fields",
+    );
+    assertEquals(await exists(f.booksDir), false);
+  } finally {
+    await f.cleanup();
+  }
+});
+
 Deno.test("a CSV quote that is not a whole field is refused, never joined to the field", () => {
   assertThrowsRefusal(
     () => parseCsvLines('Date,Description,Amount\n2026-03-14,"PENN" STATION,22.86\n'),
@@ -444,11 +471,11 @@ Deno.test("an OFX file cut off or missing its structure is refused, in SGML and 
   // The list or the statement never closes.
   assertThrowsRefusal(
     () => parseOfxLines(ofx([trn]).replace("</BANKTRANLIST>", "")),
-    "transaction list is missing or never closes",
+    "the OFX file's <BANKTRANLIST> never closes",
   );
   assertThrowsRefusal(
     () => parseOfxLines(ofx([trn]).replace("</OFX>", "")),
-    "does not end with </OFX>",
+    "the OFX file's <OFX> never closes",
   );
   // A transaction with no id.
   assertThrowsRefusal(
@@ -470,6 +497,88 @@ Deno.test("an OFX file cut off or missing its structure is refused, in SGML and 
   assertEquals(parseOfxLines(xml), [
     { date: "2026-03-14", description: "PENN STATION", amount: "-22.86", id: "X-1" },
   ]);
+});
+
+Deno.test("an OFX file is read as its structure: comments hold no transactions, and every statement element must close", async () => {
+  const trn = "<STMTTRN><DTPOSTED>20260314<TRNAMT>-22.86<FITID>1<NAME>PENN STATION</STMTTRN>";
+  const xmlTrn =
+    "<STMTTRN><DTPOSTED>20260314</DTPOSTED><TRNAMT>-22.86</TRNAMT><FITID>X-1</FITID><NAME>PENN STATION</NAME></STMTTRN>";
+  const xml = (body: string) =>
+    [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<?OFX OFXHEADER="200" VERSION="220"?>',
+      body,
+    ].join("\n");
+
+  // A transaction that appears only inside a comment is no transaction.
+  assertThrowsRefusal(
+    () =>
+      parseOfxLines(
+        xml(
+          `<OFX><CREDITCARDMSGSRSV1><CCSTMTTRNRS><CCSTMTRS><!-- <BANKTRANLIST>${xmlTrn}</BANKTRANLIST> --></CCSTMTRS></CCSTMTTRNRS></CREDITCARDMSGSRSV1></OFX>`,
+        ),
+      ),
+    "the OFX file has no transaction list",
+  );
+  // A commented-out transaction beside a real one is skipped; only the real one is read.
+  assertEquals(
+    parseOfxLines(
+      ofx([`<!-- ${trn.replace("PENN STATION", "MADE-UP COMMENT")} -->`, trn]),
+    ).map((l) => l.description),
+    ["PENN STATION"],
+  );
+  assertThrowsRefusal(
+    () => parseOfxLines(ofx([trn, "<!-- never closed"])),
+    "comment that never closes",
+  );
+
+  // XML whose outer statement elements are left unclosed.
+  assertThrowsRefusal(
+    () =>
+      parseOfxLines(
+        xml(
+          `<OFX><CREDITCARDMSGSRSV1><CCSTMTTRNRS><CCSTMTRS><BANKTRANLIST>${xmlTrn}</BANKTRANLIST></OFX>`,
+        ),
+      ),
+    "the OFX file's <CCSTMTRS> never closes",
+  );
+  // A transaction list outside any statement, or a statement outside its message set.
+  assertThrowsRefusal(
+    () => parseOfxLines(xml(`<OFX><BANKTRANLIST>${xmlTrn}</BANKTRANLIST></OFX>`)),
+    "opens <BANKTRANLIST> outside <STMTRS> or <CCSTMTRS>",
+  );
+  assertThrowsRefusal(
+    () =>
+      parseOfxLines(
+        xml(
+          `<OFX><STMTRS><BANKTRANLIST>${xmlTrn}</BANKTRANLIST></STMTRS></OFX>`,
+        ),
+      ),
+    "opens <STMTRS> outside <STMTTRNRS>",
+  );
+  // Content after the closing </OFX>.
+  assertThrowsRefusal(
+    () => parseOfxLines(ofx([trn]) + "<STMTTRN>"),
+    "opens <STMTTRN> outside",
+  );
+
+  // The cleaner writes nothing for a file whose only transaction is in a comment.
+  const f = await fixture(
+    "march.qfx",
+    xml(
+      `<OFX><CREDITCARDMSGSRSV1><CCSTMTTRNRS><CCSTMTRS><!-- <BANKTRANLIST>${xmlTrn}</BANKTRANLIST> --></CCSTMTRS></CCSTMTTRNRS></CREDITCARDMSGSRSV1></OFX>`,
+    ),
+  );
+  try {
+    await assertRejects(
+      () => cleanDownload({ input: f.input, booksDir: f.booksDir }),
+      CleanRefusal,
+      "no transaction list",
+    );
+    assertEquals(await exists(f.booksDir), false);
+  } finally {
+    await f.cleanup();
+  }
 });
 
 Deno.test("dates that are not on the calendar and ambiguous amounts are refused", () => {

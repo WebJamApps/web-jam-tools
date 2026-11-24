@@ -141,71 +141,98 @@ function ofxValue(block: string, tag: keyof typeof OFX_VALUE_PATTERNS): string |
 }
 
 /**
- * Refuses an OFX download whose statement or transactions are incomplete, such as a file cut off
- * inside a transaction. In both the legacy SGML form and the XML form, an aggregate such as
- * `<BANKTRANLIST>` or `<STMTTRN>` always has its closing tag; only single values may go unclosed
- * in SGML. So every transaction must open inside a transaction list and close before the next
- * one opens, every list must close, and the file must end with `</OFX>` after the last list.
+ * The aggregates of an OFX statement, each with the aggregate it must sit directly inside. In
+ * both the legacy SGML form and the XML form, an aggregate always has its closing tag; only single
+ * values may go unclosed in SGML. Other aggregates, such as the sign-on response or the account,
+ * are not followed: they hold nothing the cleaner keeps.
  */
-function assertCompleteOfx(text: string): void {
-  if (!/<OFX>/i.test(text)) throw new CleanRefusal("the OFX file has no <OFX> statement");
-  let inList = false;
-  let inTransaction = false;
+const OFX_PARENTS: Record<string, string[]> = {
+  OFX: [],
+  BANKMSGSRSV1: ["OFX"],
+  CREDITCARDMSGSRSV1: ["OFX"],
+  STMTTRNRS: ["BANKMSGSRSV1"],
+  CCSTMTTRNRS: ["CREDITCARDMSGSRSV1"],
+  STMTRS: ["STMTTRNRS"],
+  CCSTMTRS: ["CCSTMTTRNRS"],
+  BANKTRANLIST: ["STMTRS", "CCSTMTRS"],
+  STMTTRN: ["BANKTRANLIST"],
+};
+
+const OFX_AGGREGATE_TAG =
+  /<(\/?)(OFX|BANKMSGSRSV1|CREDITCARDMSGSRSV1|STMTTRNRS|CCSTMTTRNRS|STMTRS|CCSTMTRS|BANKTRANLIST|STMTTRN)>/gi;
+
+/**
+ * The body of each transaction in an OFX download, read as the statement's structure. Comments
+ * are removed first, so a transaction inside a comment is never read. Every statement aggregate
+ * must open directly inside its parent and close in order, so a file cut off inside a transaction
+ * or with an unclosed statement element is refused, and the file must end with `</OFX>`.
+ */
+function ofxTransactionBlocks(raw: string): string[] {
+  const text = raw.replace(/<!--[\s\S]*?-->/g, "");
+  if (text.includes("<!--")) throw new CleanRefusal("the OFX file has a comment that never closes");
+  const stack: string[] = [];
+  const blocks: string[] = [];
   let lists = 0;
   let transactions = 0;
-  let lastListClose = -1;
-  for (const tag of text.matchAll(/<(\/?)(STMTTRN|BANKTRANLIST)>/gi)) {
-    const closing = tag[1] === "/";
-    if (tag[2].toUpperCase() === "BANKTRANLIST") {
-      if (closing ? !inList || inTransaction : inList) {
-        throw new CleanRefusal(
-          inTransaction
-            ? `transaction ${transactions} is cut off before it closes`
-            : "the OFX file's transaction list is opened or closed out of place",
-        );
-      }
-      inList = !closing;
-      if (closing) lastListClose = tag.index!;
-      else lists++;
-    } else if (!closing) {
-      if (!inList) {
-        throw new CleanRefusal(
-          `transaction ${transactions + 1} is outside the OFX file's transaction list`,
-        );
-      }
-      if (inTransaction) {
+  let transactionStart = -1;
+  let ofxEnd = -1;
+  for (const tag of text.matchAll(OFX_AGGREGATE_TAG)) {
+    const name = tag[2].toUpperCase();
+    const top = stack.at(-1);
+    if (tag[1] !== "/") {
+      if (top === "STMTTRN") {
         throw new CleanRefusal(`transaction ${transactions} is cut off before it closes`);
       }
-      inTransaction = true;
-      transactions++;
-    } else {
-      if (!inTransaction) {
-        throw new CleanRefusal(`the OFX file closes a transaction it never opened`);
+      const parents = OFX_PARENTS[name];
+      const misplaced = parents.length === 0
+        ? stack.length > 0 || ofxEnd !== -1
+        : !parents.includes(top ?? "");
+      if (misplaced) {
+        throw new CleanRefusal(
+          `the OFX file opens <${name}> outside ${
+            parents.length === 0 ? "the top level" : parents.map((q) => `<${q}>`).join(" or ")
+          }`,
+        );
       }
-      inTransaction = false;
+      stack.push(name);
+      if (name === "BANKTRANLIST") lists++;
+      if (name === "STMTTRN") {
+        transactions++;
+        transactionStart = tag.index! + tag[0].length;
+      }
+    } else {
+      if (top !== name) {
+        throw new CleanRefusal(
+          top === "STMTTRN"
+            ? `transaction ${transactions} is cut off before it closes`
+            : top === undefined
+            ? `the OFX file closes <${name}> it never opened`
+            : `the OFX file's <${top}> never closes`,
+        );
+      }
+      stack.pop();
+      if (name === "STMTTRN") blocks.push(text.slice(transactionStart, tag.index));
+      if (name === "OFX") ofxEnd = tag.index! + tag[0].length;
     }
   }
-  if (inTransaction) {
+  if (stack.includes("STMTTRN")) {
     throw new CleanRefusal(
       `transaction ${transactions} is cut off: the file ends before it closes`,
     );
   }
-  if (lists === 0 || inList) {
-    throw new CleanRefusal("the OFX file's transaction list is missing or never closes");
+  if (stack.length > 0) throw new CleanRefusal(`the OFX file's <${stack.at(-1)}> never closes`);
+  if (ofxEnd === -1) throw new CleanRefusal("the OFX file has no <OFX> statement");
+  if (lists === 0) throw new CleanRefusal("the OFX file has no transaction list");
+  if (text.slice(ofxEnd).trim() !== "") {
+    throw new CleanRefusal("the OFX file has content after its closing </OFX>");
   }
-  const end = text.search(/<\/OFX>\s*$/i);
-  if (end === -1 || end < lastListClose) {
-    throw new CleanRefusal("the OFX file is cut off: it does not end with </OFX>");
-  }
+  return blocks;
 }
 
 /** The lines of an OFX download: only the four kept fields leave this function. */
 export function parseOfxLines(text: string): CleanLine[] {
-  assertCompleteOfx(text);
   const lines: CleanLine[] = [];
-  const blocks = text.split(/<STMTTRN>/i).slice(1);
-  blocks.forEach((raw, index) => {
-    const block = raw.split(/<\/STMTTRN>/i)[0];
+  ofxTransactionBlocks(text).forEach((block, index) => {
     const n = index + 1;
     const date = normalizeDate(ofxValue(block, "DTPOSTED") ?? "");
     if (!date) throw new CleanRefusal(`transaction ${n} has a date the cleaner cannot read`);
@@ -353,9 +380,18 @@ export function parseCsvLines(text: string): CleanLine[] {
   let body = rows.slice(1);
   if (!columns) {
     // No header: the cleaner's own column order, date, description, amount and an optional id.
-    if (!normalizeDate(rows[0][0] ?? "") || rows[0].length < 3) {
+    if (!normalizeDate(rows[0][0] ?? "")) {
       throw new CleanRefusal(
         "the cleaner cannot tell which columns hold the date, description and amount",
+      );
+    }
+    // Only the cleaner's own layout is read without a header: three fields, or four with the
+    // line id. Any other width, such as an amount split by an unquoted comma, is refused.
+    if (rows[0].length !== 3 && rows[0].length !== 4) {
+      throw new CleanRefusal(
+        `line 1 has ${
+          rows[0].length
+        } fields; a download with no header must have 3 (date, description, amount) or 4 (with the line id)`,
       );
     }
     columns = { date: 0, description: 1, amount: 2, id: rows[0].length > 3 ? 3 : undefined };
