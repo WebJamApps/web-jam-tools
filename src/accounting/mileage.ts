@@ -7,14 +7,23 @@
 //   the exact normalized-name rule shared with web-jam-back (src/book-gig/venue_link.ts).
 // - The home map point is read from `home-point.json` in the private books folder, never from this
 //   repository, and is never printed.
-// - Each venue's driving miles are looked up once through the free OSRM routing service. A line is
-//   the round trip, home to the venue and back. A venue with no map pin is placed from its street
-//   address by the free US Census geocoder, the same service web-jam-back uses for new pins.
-// - The log itself keeps every figure: a line already holding miles is never looked up again, and
-//   a new gig at a destination already in the log takes that destination's figure, so a figure Josh
-//   corrected in the log is kept.
-// - A gig with no venue record, a venue that cannot be placed on the map, and a lookup the routing
-//   service could not answer each leave the line with no miles and are listed for Josh.
+// - Each venue's driving miles are looked up once through the free OSRM routing service, as one
+//   route from home to the venue and back home. A venue with no map pin is placed from its street
+//   address by the free US Census geocoder, the same service web-jam-back uses for new pins. Each
+//   lookup has a deadline, so a stalled service leaves the line with no miles instead of stopping
+//   the log.
+// - Each line holds the date, destination, purpose and miles, then the gig and venue record ids a
+//   generated line came from. A log written before those two columns still reads; its gig lines
+//   are matched to their gigs on the next run.
+// - The log itself keeps every figure and every line. A line already holding miles is never looked
+//   up again, and a new gig at a venue already in the log takes that venue's figure, so a figure
+//   Josh corrected is kept. When the log holds different figures for one venue, none is carried
+//   forward: the new line is left for Josh.
+// - A gig with no venue record, a venue that cannot be placed on the map, a lookup the routing
+//   service could not answer, and a gig that more than one line could be each leave the log as it
+//   is for that gig and are listed for Josh.
+// - The log is re-read before it is replaced, so an edit saved during the lookups is never
+//   overwritten: the run refuses and writes nothing.
 
 import { parseArgs } from "@std/cli/parse-args";
 import * as path from "@std/path";
@@ -34,11 +43,15 @@ import {
 import { parseCsvRows } from "./import.ts";
 
 export const HOME_POINT_FILE = "home-point.json";
-export const MILEAGE_HEADER = ["date", "destination", "purpose", "miles"];
+export const MILEAGE_HEADER = ["date", "destination", "purpose", "miles", "gig", "venue"];
+/** The first line of a log written before the gig and venue columns. */
+const LEGACY_HEADER = MILEAGE_HEADER.slice(0, 4);
 export const GIG_PURPOSE = "Gig performance (round trip)";
 export const ROUTING_BASE_URL = "https://router.project-osrm.org";
 export const GEOCODER_BASE_URL = "https://geocoding.geo.census.gov";
 export const GIG_TIME_ZONE = "America/New_York";
+/** How long one routing or geocoding request, its answer included, may take. */
+export const LOOKUP_TIMEOUT_MS = 20_000;
 const METERS_PER_MILE = 1609.344;
 
 export interface HomePoint {
@@ -51,6 +64,10 @@ export interface MileageLine {
   destination: string;
   purpose: string;
   miles: string;
+  /** The gig record a generated line came from; empty for a drive Josh added. */
+  gig?: string;
+  /** The venue record of that gig; empty when there is none. */
+  venue?: string;
 }
 
 export interface LineForJosh {
@@ -73,17 +90,19 @@ export interface MileageVenue extends LinkableVenue {
   location?: { type?: string; coordinates?: unknown };
 }
 
-export type OneWayLookup = (home: HomePoint, venue: HomePoint) => Promise<number | null>;
+/** Driving miles from home to the venue and back home, or null when there is no answer. */
+export type RoundTripLookup = (home: HomePoint, venue: HomePoint) => Promise<number | null>;
 export type VenueLocator = (venue: MileageVenue) => Promise<HomePoint | null>;
 
 export interface BuildMileageOptions {
   year: number;
-  today: string;
+  /** Only gigs that started before this moment are logged. */
+  now: Date;
   gigs: MileageGig[];
   venues: MileageVenue[];
   home: HomePoint;
   existing: MileageLine[];
-  lookup: OneWayLookup;
+  lookup: RoundTripLookup;
   /** Places a venue on the map; defaults to its stored pin only. */
   locate?: VenueLocator;
 }
@@ -92,6 +111,8 @@ export interface BuildMileageResult {
   lines: MileageLine[];
   noVenueRecord: LineForJosh[];
   noMiles: LineForJosh[];
+  /** Gigs that more than one line could be, whose lines were left as they are. */
+  ambiguous: LineForJosh[];
   lookups: number;
 }
 
@@ -134,11 +155,17 @@ export async function readHomePoint(booksDir: string): Promise<HomePoint> {
   return { latitude, longitude };
 }
 
-/** The gig's calendar date where it was played, as YYYY-MM-DD. */
-export function gigLocalDate(datetime: unknown): string | null {
+/** The moment a gig starts, or null when it has no readable time. */
+function gigStart(datetime: unknown): Date | null {
   if (datetime === undefined || datetime === null || datetime === "") return null;
   const when = new Date(datetime as string);
-  if (Number.isNaN(when.getTime())) return null;
+  return Number.isNaN(when.getTime()) ? null : when;
+}
+
+/** The gig's calendar date where it was played, as YYYY-MM-DD. */
+export function gigLocalDate(datetime: unknown): string | null {
+  const when = gigStart(datetime);
+  if (!when) return null;
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: GIG_TIME_ZONE,
     year: "numeric",
@@ -173,10 +200,49 @@ export function venuePoint(venue: MileageVenue): HomePoint | null {
 }
 
 /**
+ * GETs a JSON answer within `timeoutMs`, the response body included. Null on any failure: an error
+ * status, a network error, an unreadable body, or the deadline passing.
+ */
+async function fetchJsonWithin(
+  fetchFn: typeof fetch,
+  url: string,
+  timeoutMs: number,
+): Promise<unknown> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(null);
+    }, timeoutMs);
+  });
+  const answer = (async () => {
+    const res = await fetchFn(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      await res.body?.cancel();
+      return null;
+    }
+    return await res.json();
+  })().catch(() => null);
+  try {
+    return await Promise.race([answer, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * A venue's stored pin, else its street address placed by the US Census geocoder (US addresses
  * only, as in web-jam-back's census-geocoder), else null.
  */
-export function makeVenueLocator(fetchFn: typeof fetch = fetch): VenueLocator {
+export function makeVenueLocator(
+  fetchFn: typeof fetch = fetch,
+  timeoutMs = LOOKUP_TIMEOUT_MS,
+): VenueLocator {
   return async (venue) => {
     const pinned = venuePoint(venue);
     if (pinned) return pinned;
@@ -191,27 +257,19 @@ export function makeVenueLocator(fetchFn: typeof fetch = fetch): VenueLocator {
       benchmark: "Public_AR_Current",
       format: "json",
     });
-    try {
-      const res = await fetchFn(`${GEOCODER_BASE_URL}/geocoder/locations/address?${params}`, {
-        method: "GET",
-        headers: { Accept: "application/json" },
-      });
-      if (!res.ok) {
-        await res.body?.cancel();
-        return null;
-      }
-      const data = await res.json();
-      const coords = data?.result?.addressMatches?.[0]?.coordinates;
-      const x = coords?.x;
-      const y = coords?.y;
-      if (
-        typeof x !== "number" || typeof y !== "number" || !Number.isFinite(x) ||
-        !Number.isFinite(y) || Math.abs(x) > 180 || Math.abs(y) > 90
-      ) return null;
-      return { latitude: y, longitude: x };
-    } catch {
-      return null;
-    }
+    const data = await fetchJsonWithin(
+      fetchFn,
+      `${GEOCODER_BASE_URL}/geocoder/locations/address?${params}`,
+      timeoutMs,
+    ) as { result?: { addressMatches?: Array<{ coordinates?: { x?: unknown; y?: unknown } }> } };
+    const coords = data?.result?.addressMatches?.[0]?.coordinates;
+    const x = coords?.x;
+    const y = coords?.y;
+    if (
+      typeof x !== "number" || typeof y !== "number" || !Number.isFinite(x) ||
+      !Number.isFinite(y) || Math.abs(x) > 180 || Math.abs(y) > 90
+    ) return null;
+    return { latitude: y, longitude: x };
   };
 }
 
@@ -219,24 +277,26 @@ export function formatMiles(miles: number): string {
   return miles.toFixed(1);
 }
 
-/** One-way driving miles from home to a point, or null when the routing service gives no answer. */
-export function makeRoutingLookup(fetchFn: typeof fetch = fetch): OneWayLookup {
+/**
+ * Round-trip driving miles: one ordered route from home to the venue and back home, so a return
+ * leg that differs (one-way streets, turn restrictions) is counted as driven. Null when the
+ * routing service gives no answer in time.
+ */
+export function makeRoutingLookup(
+  fetchFn: typeof fetch = fetch,
+  timeoutMs = LOOKUP_TIMEOUT_MS,
+): RoundTripLookup {
   return async (home, venue) => {
+    const homeAt = `${home.longitude},${home.latitude}`;
     const url =
-      `${ROUTING_BASE_URL}/route/v1/driving/${home.longitude},${home.latitude};${venue.longitude},${venue.latitude}?overview=false`;
-    try {
-      const res = await fetchFn(url, { method: "GET", headers: { Accept: "application/json" } });
-      if (!res.ok) {
-        await res.body?.cancel();
-        return null;
-      }
-      const data = await res.json();
-      const meters = data?.code === "Ok" ? data?.routes?.[0]?.distance : undefined;
-      if (typeof meters !== "number" || !Number.isFinite(meters) || meters <= 0) return null;
-      return meters / METERS_PER_MILE;
-    } catch {
-      return null;
-    }
+      `${ROUTING_BASE_URL}/route/v1/driving/${homeAt};${venue.longitude},${venue.latitude};${homeAt}?overview=false`;
+    const data = await fetchJsonWithin(fetchFn, url, timeoutMs) as {
+      code?: unknown;
+      routes?: Array<{ distance?: unknown }>;
+    } | null;
+    const meters = data?.code === "Ok" ? data?.routes?.[0]?.distance : undefined;
+    if (typeof meters !== "number" || !Number.isFinite(meters) || meters <= 0) return null;
+    return meters / METERS_PER_MILE;
   };
 }
 
@@ -277,11 +337,12 @@ export async function fetchGigsAndVenues(
   return { gigs: gigs as MileageGig[], venues: venues as MileageVenue[] };
 }
 
+/** Reads a log with the gig and venue columns, or one written before them. */
 export function parseMileageLog(content: string): MileageLine[] {
   const rows = parseCsvRows(content);
   if (rows.length === 0) return [];
-  const header = rows[0].map((h) => h.trim().toLowerCase());
-  if (header.join(",") !== MILEAGE_HEADER.join(",")) {
+  const header = rows[0].map((h) => h.trim().toLowerCase()).join(",");
+  if (header !== MILEAGE_HEADER.join(",") && header !== LEGACY_HEADER.join(",")) {
     throw new Error(`The mileage log's first line must be "${MILEAGE_HEADER.join(",")}".`);
   }
   return rows.slice(1).map((r) => ({
@@ -289,6 +350,8 @@ export function parseMileageLog(content: string): MileageLine[] {
     destination: (r[1] ?? "").trim(),
     purpose: (r[2] ?? "").trim(),
     miles: (r[3] ?? "").trim(),
+    gig: (r[4] ?? "").trim(),
+    venue: (r[5] ?? "").trim(),
   }));
 }
 
@@ -299,30 +362,37 @@ function csvField(value: string): string {
 export function formatMileageLog(lines: MileageLine[]): string {
   const out = [MILEAGE_HEADER.join(",")];
   for (const l of lines) {
-    out.push([l.date, l.destination, l.purpose, l.miles].map(csvField).join(","));
+    out.push(
+      [l.date, l.destination, l.purpose, l.miles, l.gig ?? "", l.venue ?? ""].map(csvField).join(
+        ",",
+      ),
+    );
   }
   return out.join("\n") + "\n";
 }
 
-function lineKey(date: string, destination: string): string {
-  return `${date}\u0000${destination}`;
+interface PlayedGig {
+  date: string;
+  destination: string;
+  venue?: MileageVenue;
+  /** The gig's record id, else its date and venue. */
+  id: string;
 }
 
-/** Merges the year's played gigs into the existing log; pure apart from the lookup it is given. */
+/** Merges the year's played gigs into the existing log; pure apart from the lookups it is given. */
 export async function buildMileageLog(options: BuildMileageOptions): Promise<BuildMileageResult> {
-  const { year, today, gigs, venues, home, existing, lookup } = options;
+  const { year, now, gigs, venues, home, existing, lookup } = options;
   const locate: VenueLocator = options.locate ?? ((venue) => Promise.resolve(venuePoint(venue)));
 
-  const lines = new Map<string, MileageLine>();
-  const figureByDestination = new Map<string, { date: string; miles: string }>();
-  for (const line of existing) {
-    lines.set(lineKey(line.date, line.destination), line);
-    if (line.miles) {
-      const known = figureByDestination.get(line.destination);
-      if (!known || line.date >= known.date) {
-        figureByDestination.set(line.destination, { date: line.date, miles: line.miles });
-      }
-    }
+  // Every existing line is kept, in its own copy: two drives on one day to one place stay two.
+  const lines: MileageLine[] = existing.map((l) => ({
+    ...l,
+    gig: l.gig ?? "",
+    venue: l.venue ?? "",
+  }));
+  const linesByGig = new Map<string, MileageLine[]>();
+  for (const line of lines) {
+    if (line.gig) linesByGig.set(line.gig, [...(linesByGig.get(line.gig) ?? []), line]);
   }
 
   const venueById = new Map<string, MileageVenue>();
@@ -331,38 +401,90 @@ export async function buildMileageLog(options: BuildMileageOptions): Promise<Bui
   }
   const nameIndex = buildUnambiguousNameIndex(venues);
 
-  const outcomeByVenue = new Map<string, { oneWay: number } | { reason: string }>();
-  const noVenueRecord: LineForJosh[] = [];
-  const noMiles: LineForJosh[] = [];
-  let lookups = 0;
-
-  const played = gigs
-    .map((gig) => ({ gig, date: gigLocalDate(gig.datetime) }))
-    .filter((g): g is { gig: MileageGig; date: string } =>
-      g.date !== null && g.date.startsWith(`${year}-`) && g.date <= today
-    )
+  const played: PlayedGig[] = gigs
+    .flatMap((gig) => {
+      const start = gigStart(gig.datetime);
+      if (!start || start.getTime() > now.getTime()) return [];
+      const date = gigLocalDate(start)!;
+      if (!date.startsWith(`${year}-`)) return [];
+      const venueId = resolveGigVenueId(gig, nameIndex);
+      const venue = venueId ? venueById.get(venueId) : undefined;
+      const destination = venue ? venueDestination(venue) : unlinkedDestination(gig);
+      const recordId = gig._id === undefined || gig._id === null ? "" : String(gig._id);
+      const id = recordId || `${date} ${venue ? String(venue._id) : destination}`;
+      return [{ date, destination, venue, id }];
+    })
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  for (const { gig, date } of played) {
-    const venueId = resolveGigVenueId(gig, nameIndex);
-    const venue = venueId ? venueById.get(venueId) : undefined;
-    const destination = venue ? venueDestination(venue) : unlinkedDestination(gig);
-    const key = lineKey(date, destination);
-    const existingLine = lines.get(key);
+  // A gig line written before the gig column is matched to its gig by date and destination, only
+  // when exactly one such line and exactly one such gig pair up. A drive Josh added under another
+  // purpose is never taken for a gig.
+  const unmatched = lines.filter((l) => !l.gig && l.purpose === GIG_PURPOSE);
+  const candidates = new Map<PlayedGig, MileageLine[]>();
+  const claims = new Map<MileageLine, number>();
+  for (const gig of played) {
+    if (linesByGig.has(gig.id)) continue;
+    const found = unmatched.filter((l) => l.date === gig.date && l.destination === gig.destination);
+    candidates.set(gig, found);
+    for (const l of found) claims.set(l, (claims.get(l) ?? 0) + 1);
+  }
+  for (const [gig, found] of candidates) {
+    if (found.length !== 1 || claims.get(found[0]) !== 1) continue;
+    found[0].gig = gig.id;
+    if (!found[0].venue && gig.venue) found[0].venue = String(gig.venue._id);
+    linesByGig.set(gig.id, [found[0]]);
+  }
 
-    if (existingLine?.miles) continue;
+  // Each venue's figures in the log, by venue record, so two venues sharing a name and city never
+  // share a figure.
+  const figures = new Map<string, Set<string>>();
+  const addFigure = (venueId: string, miles: string) =>
+    figures.set(venueId, new Set([...(figures.get(venueId) ?? []), miles]));
+  for (const l of lines) if (l.venue && l.miles) addFigure(l.venue, l.miles);
+
+  const outcomeByVenue = new Map<string, { miles: number } | { reason: string }>();
+  const noVenueRecord: LineForJosh[] = [];
+  const noMiles: LineForJosh[] = [];
+  const ambiguous: LineForJosh[] = [];
+  let lookups = 0;
+
+  for (const gig of played) {
+    const { date, destination, venue } = gig;
+    const matched = linesByGig.get(gig.id);
+    const found = candidates.get(gig) ?? [];
+    if ((matched && matched.length > 1) || (!matched && found.length > 0)) {
+      ambiguous.push({
+        date,
+        destination,
+        reason: "more than one line in the log could be this gig, so they were left as they are",
+      });
+      continue;
+    }
+    let line = matched?.[0];
+    if (line?.miles) continue;
+    if (!line) {
+      line = { date, destination, purpose: GIG_PURPOSE, miles: "", gig: gig.id, venue: "" };
+      lines.push(line);
+    }
 
     if (!venue) {
-      lines.set(key, existingLine ?? { date, destination, purpose: GIG_PURPOSE, miles: "" });
       noVenueRecord.push({ date, destination, reason: "no venue record for this gig" });
       continue;
     }
 
-    let miles = figureByDestination.get(destination)?.miles ?? "";
+    const venueId = String(venue._id);
+    line.venue ||= venueId;
+    const known = [...(figures.get(venueId) ?? [])];
+    let miles = "";
     let reason = "";
-    if (!miles) {
-      const id = String(venue._id);
-      let outcome = outcomeByVenue.get(id);
+    if (known.length === 1) {
+      miles = known[0];
+    } else if (known.length > 1) {
+      reason = `the log holds different figures for this venue (${
+        known.sort().join(", ")
+      }); make those lines agree, then run again`;
+    } else {
+      let outcome = outcomeByVenue.get(venueId);
       if (!outcome) {
         const point = await locate(venue);
         if (!point) {
@@ -373,74 +495,92 @@ export async function buildMileageLog(options: BuildMileageOptions): Promise<Bui
           };
         } else {
           lookups++;
-          const oneWay = await lookup(home, point);
-          outcome = oneWay === null ? { reason: "the routing service gave no answer" } : { oneWay };
+          const roundTrip = await lookup(home, point);
+          outcome = roundTrip === null
+            ? { reason: "the routing service gave no answer" }
+            : { miles: roundTrip };
         }
-        outcomeByVenue.set(id, outcome);
+        outcomeByVenue.set(venueId, outcome);
       }
-      if ("oneWay" in outcome) {
-        miles = formatMiles(outcome.oneWay * 2);
-        figureByDestination.set(destination, { date, miles });
+      if ("miles" in outcome) {
+        miles = formatMiles(outcome.miles);
+        addFigure(venueId, miles);
       } else {
         reason = outcome.reason;
       }
     }
 
-    lines.set(key, {
-      date,
-      destination,
-      purpose: existingLine?.purpose || GIG_PURPOSE,
-      miles,
-    });
+    line.miles = miles;
     if (!miles) noMiles.push({ date, destination, reason });
   }
 
-  const sorted = [...lines.values()].sort((a, b) =>
+  const sorted = [...lines].sort((a, b) =>
     a.date.localeCompare(b.date) || a.destination.localeCompare(b.destination)
   );
-  return { lines: sorted, noVenueRecord, noMiles, lookups };
+  return { lines: sorted, noVenueRecord, noMiles, ambiguous, lookups };
 }
 
 export interface RunMileageOptions extends BackendConfigOptions {
   year: number;
   booksDir: string;
-  today?: string;
+  now?: Date;
   fetchFn?: typeof fetch;
+  lookupTimeoutMs?: number;
 }
 
 export interface RunMileageResult extends BuildMileageResult {
   logPath: string;
 }
 
+async function readLogText(logPath: string): Promise<string | null> {
+  try {
+    return await Deno.readTextFile(logPath);
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) return null;
+    throw err;
+  }
+}
+
 export async function runMileage(options: RunMileageOptions): Promise<RunMileageResult> {
   const fetchFn = options.fetchFn ?? fetch;
-  const today = options.today ?? gigLocalDate(new Date())!;
+  const timeoutMs = options.lookupTimeoutMs ?? LOOKUP_TIMEOUT_MS;
   const logPath = mileageLogPath(options.booksDir, options.year);
 
   // Everything local is read and checked before any network call.
   const home = await readHomePoint(options.booksDir);
-  let existing: MileageLine[] = [];
-  try {
-    existing = parseMileageLog(await Deno.readTextFile(logPath));
-  } catch (err) {
-    if (!(err instanceof Deno.errors.NotFound)) throw err;
-  }
+  const before = await readLogText(logPath);
+  const existing = before === null ? [] : parseMileageLog(before);
 
   const { gigs, venues } = await fetchGigsAndVenues(options, fetchFn);
   const result = await buildMileageLog({
     year: options.year,
-    today,
+    now: options.now ?? new Date(),
     gigs,
     venues,
     home,
     existing,
-    lookup: makeRoutingLookup(fetchFn),
-    locate: makeVenueLocator(fetchFn),
+    lookup: makeRoutingLookup(fetchFn, timeoutMs),
+    locate: makeVenueLocator(fetchFn, timeoutMs),
   });
 
-  const tmpPath = `${logPath}.tmp`;
-  await Deno.writeTextFile(tmpPath, formatMileageLog(result.lines));
-  await Deno.rename(tmpPath, logPath);
+  // An edit saved while the routes were looked up is Josh's: keep it and write nothing.
+  if (await readLogText(logPath) !== before) {
+    throw new Error(
+      `${logPath} changed while the routes were being looked up, so nothing was written. Run again to add the gigs to the saved log.`,
+    );
+  }
+  const tmpPath = await Deno.makeTempFile({
+    dir: options.booksDir,
+    prefix: `mileage-${options.year}.`,
+    suffix: ".tmp",
+  });
+  try {
+    await Deno.writeTextFile(tmpPath, formatMileageLog(result.lines));
+    await Deno.rename(tmpPath, logPath);
+  } catch (err) {
+    await Deno.remove(tmpPath).catch(() => {});
+    throw err;
+  }
   return { ...result, logPath };
 }
 
@@ -462,12 +602,12 @@ export async function runMileageCli(args: string[]): Promise<number> {
 Usage:
   deno task accounting:mileage [--year <year>] [--books-dir <dir>]
 
-Writes mileage-<year>.csv in the books folder (date, destination, purpose, miles).
+Writes mileage-<year>.csv in the books folder (date, destination, purpose, miles, gig, venue).
 Reads the home map point from ${HOME_POINT_FILE} in the books folder.`);
     return 0;
   }
 
-  const year = flags.year ? Number(flags.year) : new Date().getFullYear();
+  const year = flags.year ? Number(flags.year) : Number(gigLocalDate(new Date())!.slice(0, 4));
   if (!Number.isInteger(year) || year < 2000 || year > 2100) {
     console.error("Error: --year must be a four-digit year.");
     return 1;
@@ -484,6 +624,7 @@ Reads the home map point from ${HOME_POINT_FILE} in the books folder.`);
     );
     printForJosh("Gigs with no venue record, for Josh", result.noVenueRecord);
     printForJosh("Lines left with no miles, for Josh", result.noMiles);
+    printForJosh("Gigs more than one line could be, left as they are, for Josh", result.ambiguous);
     return 0;
   } catch (err) {
     console.error(`[accounting:mileage] ${err instanceof Error ? err.message : String(err)}`);
