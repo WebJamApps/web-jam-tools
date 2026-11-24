@@ -229,21 +229,196 @@ function ofxTransactionBlocks(raw: string): string[] {
   return blocks;
 }
 
+/** The values the cleaner reads from one OFX transaction; a missing value is undefined. */
+type OfxFields = Partial<Record<keyof typeof OFX_VALUE_PATTERNS, string>>;
+const OFX_FIELD_NAMES = Object.keys(OFX_VALUE_PATTERNS) as (keyof typeof OFX_VALUE_PATTERNS)[];
+
+/** The transactions of a legacy SGML OFX download, where single values may go unclosed. */
+function sgmlOfxTransactions(text: string): OfxFields[] {
+  return ofxTransactionBlocks(text).map((block) =>
+    Object.fromEntries(OFX_FIELD_NAMES.map((tag) => [tag, ofxValue(block, tag)])) as OfxFields
+  );
+}
+
+/** Whether a download is the XML form of OFX (version 2): it opens with an XML declaration. */
+function isXmlOfx(text: string): boolean {
+  return /^\uFEFF?\s*<\?xml[\s?]/i.test(text);
+}
+
+interface XmlElement {
+  name: string;
+  children: XmlElement[];
+  text: string;
+}
+
+function notWellFormed(what: string): never {
+  throw new CleanRefusal(`the OFX file is not well-formed XML: ${what}`);
+}
+
+const XML_NAMED_REFERENCES: Record<string, string> = {
+  lt: "<",
+  gt: ">",
+  amp: "&",
+  quot: '"',
+  apos: "'",
+};
+
+/** Text between tags with its character references decoded; a stray `&` is refused. */
+function decodeXmlText(raw: string): string {
+  if (/&(?!(?:#x[0-9a-fA-F]+|#[0-9]+|lt|gt|amp|quot|apos);)/.test(raw)) {
+    notWellFormed("an & does not start a character reference");
+  }
+  return raw.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|lt|gt|amp|quot|apos);/g, (_, ref: string) => {
+    if (!ref.startsWith("#")) return XML_NAMED_REFERENCES[ref];
+    const code = ref.startsWith("#x") ? parseInt(ref.slice(2), 16) : Number(ref.slice(1));
+    try {
+      return String.fromCodePoint(code);
+    } catch {
+      return notWellFormed("a character reference names no character");
+    }
+  });
+}
+
+/**
+ * The root element of an XML document, read with XML's own rules: every element closes in
+ * order, CDATA sections are text, comments and processing instructions are skipped, character
+ * references are decoded, and anything else is refused. OFX elements carry no attributes and an
+ * OFX download declares no document type, so either is refused too.
+ */
+function parseXmlDocument(text: string): XmlElement {
+  const src = text.replace(/^\uFEFF/, "");
+  const doc: XmlElement = { name: "", children: [], text: "" };
+  const stack: XmlElement[] = [doc];
+  let i = 0;
+  while (i < src.length) {
+    const lt = src.indexOf("<", i);
+    const textEnd = lt === -1 ? src.length : lt;
+    if (textEnd > i) {
+      const raw = src.slice(i, textEnd);
+      const top = stack[stack.length - 1];
+      if (top === doc) {
+        if (raw.trim() !== "") notWellFormed("it has text outside the root element");
+      } else {
+        top.text += decodeXmlText(raw);
+      }
+    }
+    if (lt === -1) break;
+    if (src.startsWith("<?", lt)) {
+      const end = src.indexOf("?>", lt + 2);
+      if (end === -1) notWellFormed("a processing instruction never closes");
+      i = end + 2;
+      continue;
+    }
+    if (src.startsWith("<!--", lt)) {
+      const end = src.indexOf("-->", lt + 4);
+      if (end === -1) notWellFormed("a comment never closes");
+      i = end + 3;
+      continue;
+    }
+    if (src.startsWith("<![CDATA[", lt)) {
+      const end = src.indexOf("]]>", lt + 9);
+      if (end === -1) notWellFormed("a CDATA section never closes");
+      const top = stack[stack.length - 1];
+      if (top === doc) notWellFormed("it has character data outside the root element");
+      top.text += src.slice(lt + 9, end);
+      i = end + 3;
+      continue;
+    }
+    if (src.startsWith("<!", lt)) notWellFormed("it declares a document type");
+    const gt = src.indexOf(">", lt);
+    if (gt === -1) notWellFormed("a tag never closes");
+    const inner = src.slice(lt + 1, gt);
+    const top = stack[stack.length - 1];
+    if (inner.startsWith("/")) {
+      const name = inner.slice(1).trim();
+      if (top === doc) notWellFormed(`</${name}> closes nothing`);
+      if (top.name !== name) notWellFormed(`<${top.name}> is closed by </${name}>`);
+      stack.pop();
+    } else {
+      const m = inner.match(/^([A-Za-z_][\w.-]*)\s*(\/?)$/);
+      if (!m) notWellFormed("a tag carries attributes or cannot be read");
+      if (top === doc && doc.children.length > 0) {
+        notWellFormed("it has more than one root element");
+      }
+      const element: XmlElement = { name: m[1], children: [], text: "" };
+      top.children.push(element);
+      if (m[2] !== "/") stack.push(element);
+    }
+    i = gt + 1;
+  }
+  if (stack.length > 1) notWellFormed(`<${stack[stack.length - 1].name}> never closes`);
+  if (doc.children.length === 0) notWellFormed("it has no root element");
+  return doc.children[0];
+}
+
+/** One transaction's values, each taken from the single element of that name inside it. */
+function xmlTransactionFields(transaction: XmlElement, n: number): OfxFields {
+  const fields: OfxFields = {};
+  for (const tag of OFX_FIELD_NAMES) {
+    const found = transaction.children.filter((c) => c.name.toUpperCase() === tag);
+    if (found.length > 1) throw new CleanRefusal(`transaction ${n} has more than one <${tag}>`);
+    if (found.length === 0) continue;
+    if (found[0].children.length > 0) {
+      throw new CleanRefusal(`transaction ${n}'s <${tag}> holds elements instead of a value`);
+    }
+    fields[tag] = found[0].text.trim();
+  }
+  return fields;
+}
+
+/**
+ * The transactions of an XML OFX download. The document is parsed as XML, then every statement
+ * aggregate must sit directly inside its parent, and transactions are read only from the
+ * `STMTTRN` elements of a transaction list.
+ */
+function xmlOfxTransactions(text: string): OfxFields[] {
+  const root = parseXmlDocument(text);
+  if (root.name.toUpperCase() !== "OFX") {
+    throw new CleanRefusal("the OFX file's root element is not <OFX>");
+  }
+  const transactions: OfxFields[] = [];
+  let lists = 0;
+  const walk = (element: XmlElement) => {
+    const parentName = element.name.toUpperCase();
+    for (const child of element.children) {
+      const name = child.name.toUpperCase();
+      const parents = OFX_PARENTS[name];
+      if (parents !== undefined && !parents.includes(parentName)) {
+        throw new CleanRefusal(
+          `the OFX file opens <${name}> outside ${
+            parents.length === 0 ? "the top level" : parents.map((q) => `<${q}>`).join(" or ")
+          }`,
+        );
+      }
+      if (name === "BANKTRANLIST") lists++;
+      if (name === "STMTTRN") {
+        transactions.push(xmlTransactionFields(child, transactions.length + 1));
+      } else {
+        walk(child);
+      }
+    }
+  };
+  walk(root);
+  if (lists === 0) throw new CleanRefusal("the OFX file has no transaction list");
+  return transactions;
+}
+
 /** The lines of an OFX download: only the four kept fields leave this function. */
 export function parseOfxLines(text: string): CleanLine[] {
   const lines: CleanLine[] = [];
-  ofxTransactionBlocks(text).forEach((block, index) => {
+  const transactions = isXmlOfx(text) ? xmlOfxTransactions(text) : sgmlOfxTransactions(text);
+  transactions.forEach((fields, index) => {
     const n = index + 1;
-    const date = normalizeDate(ofxValue(block, "DTPOSTED") ?? "");
+    const date = normalizeDate(fields.DTPOSTED ?? "");
     if (!date) throw new CleanRefusal(`transaction ${n} has a date the cleaner cannot read`);
-    const amount = normalizeAmount(ofxValue(block, "TRNAMT") ?? "");
+    const amount = normalizeAmount(fields.TRNAMT ?? "");
     if (amount === null) {
       throw new CleanRefusal(`transaction ${n} has an amount the cleaner cannot read`);
     }
-    const id = ofxValue(block, "FITID") ?? "";
+    const id = fields.FITID ?? "";
     if (!id) throw new CleanRefusal(`transaction ${n} has no transaction id (FITID)`);
-    const name = ofxValue(block, "NAME") ?? "";
-    const memo = ofxValue(block, "MEMO") ?? "";
+    const name = fields.NAME ?? "";
+    const memo = fields.MEMO ?? "";
     const description = name && memo && memo !== name ? `${name} ${memo}` : name || memo;
     lines.push({ date, description, amount, id });
   });

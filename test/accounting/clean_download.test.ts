@@ -540,7 +540,7 @@ Deno.test("an OFX file is read as its structure: comments hold no transactions, 
           `<OFX><CREDITCARDMSGSRSV1><CCSTMTTRNRS><CCSTMTRS><BANKTRANLIST>${xmlTrn}</BANKTRANLIST></OFX>`,
         ),
       ),
-    "the OFX file's <CCSTMTRS> never closes",
+    "not well-formed XML: <CCSTMTRS> is closed by </OFX>",
   );
   // A transaction list outside any statement, or a statement outside its message set.
   assertThrowsRefusal(
@@ -678,4 +678,76 @@ Deno.test({
       await f.cleanup();
     }
   },
+});
+
+Deno.test("an XML OFX file is parsed as XML: CDATA and references are text, and a missing end tag is refused", async () => {
+  const doc = (transaction: string, extra = "") =>
+    [
+      '<?xml version="1.0" encoding="UTF-8" standalone="no"?>',
+      '<?OFX OFXHEADER="200" VERSION="220" SECURITY="NONE" OLDFILEUID="NONE" NEWFILEUID="NONE"?>',
+      "<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><BANKTRANLIST>",
+      transaction,
+      `</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>${extra}`,
+    ].join("\n");
+  const trn = (memo: string) =>
+    `<STMTTRN><DTPOSTED>20260314</DTPOSTED><TRNAMT>-22.86</TRNAMT><FITID>X-1</FITID><NAME>PENN STATION</NAME>${memo}</STMTTRN>`;
+
+  // A memo inside CDATA is the memo's text.
+  assertEquals(
+    parseOfxLines(doc(trn("<MEMO><![CDATA[TRAIN <TICKET> & SEAT]]></MEMO>")))[0].description,
+    "PENN STATION TRAIN <TICKET> & SEAT",
+  );
+  // Character references decode.
+  assertEquals(
+    parseOfxLines(doc(trn("<MEMO>CAF&#xC9; &amp; CO &#8212; A&lt;B</MEMO>")))[0].description,
+    "PENN STATION CAFÉ & CO — A<B",
+  );
+  // A self-closed or empty memo is an empty value.
+  assertEquals(parseOfxLines(doc(trn("<MEMO/>")))[0].description, "PENN STATION");
+
+  for (
+    const [label, text, message] of [
+      ["a missing memo end tag", doc(trn("<MEMO>TRAIN TICKET")), "<MEMO> is closed by </STMTTRN>"],
+      ["a mismatched end tag", doc(trn("<MEMO>TRAIN</NAME>")), "<MEMO> is closed by </NAME>"],
+      ["a stray ampersand", doc(trn("<MEMO>A & B</MEMO>")), "does not start a character reference"],
+      ["an unclosed CDATA", doc(trn("<MEMO><![CDATA[TRAIN</MEMO>")), "CDATA section never closes"],
+      ["an attribute", doc(trn('<MEMO lang="en">TRAIN</MEMO>')), "carries attributes"],
+      ["a document type", doc(trn("")).replace("<OFX>", "<!DOCTYPE OFX><OFX>"), "document type"],
+      ["text after the root", doc(trn(""), "TRAILING"), "text outside the root element"],
+      ["a second root", doc(trn(""), "<OFX></OFX>"), "more than one root element"],
+      ["a cut-off file", doc(trn("")).slice(0, -12), "never closes"],
+      [
+        "a value holding an element",
+        doc(trn("<MEMO><B>TRAIN</B></MEMO>")),
+        "<MEMO> holds elements instead of a value",
+      ],
+      [
+        "a repeated value",
+        doc(trn("<MEMO>A</MEMO><MEMO>B</MEMO>")),
+        "transaction 1 has more than one <MEMO>",
+      ],
+    ]
+  ) {
+    assertThrowsRefusal(() => parseOfxLines(text), message);
+    const f = await fixture("march.qfx", text);
+    try {
+      await assertRejects(
+        () => cleanDownload({ input: f.input, booksDir: f.booksDir }),
+        CleanRefusal,
+        message,
+        label,
+      );
+      assertEquals(await exists(f.booksDir), false, label);
+    } finally {
+      await f.cleanup();
+    }
+  }
+
+  // A legacy SGML export, where single values go unclosed, still reads through its own reader.
+  assertEquals(
+    parseOfxLines(
+      ofx(["<STMTTRN><DTPOSTED>20260314<TRNAMT>-22.86<FITID>1<NAME>PENN STATION</STMTTRN>"]),
+    ),
+    [{ date: "2026-03-14", description: "PENN STATION", amount: "-22.86", id: "1" }],
+  );
 });
