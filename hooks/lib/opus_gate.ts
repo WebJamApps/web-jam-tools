@@ -17,18 +17,22 @@
  *       - a human prompt containing "fable edit ok" or asking Fable to do the work, anywhere earlier
  *         in the SESSION, not since withdrawn with "fable edit off", or
  *       - the most recent slash command is a `/work-issue` Josh typed naming an issue he labeled
- *         Fable. An Opus or Sol label, no issue named, or a failed lookup gives no approval, or
+ *         Fable, or whose own instructions choose Fable for it. An Opus or Sol label, no issue
+ *         named, or a failed lookup gives no approval, or
  *       - the newest skill Josh typed is `/fix-pr` naming a pull request. Later plain messages keep
  *         this approval; another typed skill ends it.
  *     A typed task grant covers only edits in the repository of the issue or pull request it
- *     names, and a "fable edit off" Josh sends after it ends it until he chooses Fable again.
+ *     names, judged by where each write really lands (through symlinks), and a "fable edit off"
+ *     Josh sends after it ends it until he chooses Fable again. A Fable choice typed inside a skill
+ *     call never grants the whole session.
  *     An Opus label or an Opus edit grant ("opus edit ok") never authorizes a Fable edit.
  *
  * Subagent call in auto mode — allowed when the subagent's own model is not Fable (an Opus coding
  * helper edits directly). A Fable subagent is allowed only when the human prompt that spawned it
- * contains "fable edit ok", asks for a Fable subagent, or asks Fable to do the work; during a fix-pr
- * call, only that call's explicit Fable helper request approves it, for edits in that pull request's
- * repository and until Josh says "fable edit off". An undeterminable model or
+ * contains "fable edit ok", asks for a Fable subagent, or asks Fable to do the work, until Josh says
+ * "fable edit off" after it; during a fix-pr call, only that call's explicit Fable helper request
+ * approves it, for edits in that pull request's repository and until Josh says "fable edit off".
+ * An undeterminable model or
  * spawning prompt allows with a note. Whether a helper may be launched at all — the two-slot cap and
  * the refusal of an agent-selected or inherited Fable launch — belongs to the subagent cap,
  * hooks/lib/check_agent_concurrency.ts (web-jam-tools#708).
@@ -412,12 +416,37 @@ function clauseStartBefore(text: string, at: number): number {
 }
 
 /**
- * True when the clause running on from `end` is a question: "?" is the first clause-ending
- * punctuation after it ("use Fable?"). A "?" in a later clause does not count.
+ * True when the instruction running on from `end` is a question: the punctuation closing its
+ * sentence includes "?". A multi-step request is one instruction, so "use Fable and fix it?" is a
+ * question; a "?" in a later sentence ("have Fable fix it. is that clear?") does not count. A "." or
+ * "?" inside a link is not followed by a space and does not end the sentence.
  */
-function clauseIsQuestion(text: string, end: number): boolean {
-  const nextBreak = text.slice(end).match(/[.!?]+|\b(?:and|then)\b/i);
-  return !!nextBreak && nextBreak[0].includes("?");
+function sentenceIsQuestion(text: string, end: number): boolean {
+  const close = text.slice(end).match(/[.!?]+(?=\s|$)|\n/);
+  return !!close && close[0].includes("?");
+}
+
+/** A verb that makes a clause an instruction of its own. */
+const INSTRUCTION_VERB =
+  /\b(?:use|using|have|let|make|get|ask|send|dispatch|give|hand|assign|route|spawn|start|launch|run|create)\b/i;
+
+/**
+ * True when a negation governs the instruction verb at `verbStart`: one earlier in the verb's own
+ * clause ("I don't want you to stop and then use Fable"), or in an earlier clause of the same
+ * sentence that gives no instruction of its own ("do not, under any circumstances, use Fable"). A
+ * negated instruction of its own before it ("don't use Sonnet, use Fable") governs only its own verb.
+ */
+function negationGoverns(text: string, verbStart: number): boolean {
+  let start = clauseStartBefore(text, verbStart);
+  if (NEGATION.test(text.slice(start, verbStart))) return true;
+  while (start > 0 && !".!?\n".includes(text[start - 1])) {
+    const end = start - 1;
+    start = clauseStartBefore(text, end);
+    const clause = text.slice(start, end);
+    if (INSTRUCTION_VERB.test(clause)) return false;
+    if (NEGATION.test(clause)) return true;
+  }
+  return false;
 }
 
 /** A clause opening that asks, complains or describes rather than instructs. */
@@ -434,9 +463,9 @@ const SUBAGENT_VERB =
 /**
  * True when the text asks for a Fable subagent: "dispatch to a Fable subagent", "spawn a Fable
  * subagent", "fix them now using a Fable subagent". The mention's clause must put the subagent to
- * work (a verb such as use, spawn or dispatch before it), carry no negation before it, not open as a
- * question, complaint or statement ("why did you spawn a Fable subagent", "the Fable subagent broke
- * it"), and not end in "?". Anything else fails closed.
+ * work (a verb such as use, spawn or dispatch before it), carry no negation governing it, not open as
+ * a question, complaint or statement ("why did you spawn a Fable subagent", "the Fable subagent broke
+ * it"), and its sentence must not end in "?". Anything else fails closed.
  */
 export function asksForFableSubagent(text: string): boolean {
   const mention = /\bfable\s+sub-?agents?\b/gi;
@@ -445,8 +474,9 @@ export function asksForFableSubagent(text: string): boolean {
     const before = text.slice(clauseStartBefore(text, match.index), match.index);
     const opening = before.trim().replace(LEADING_AFFIRMATIONS, "");
     if (
-      SUBAGENT_VERB.test(before) && !NEGATION.test(before) && !NOT_AN_INSTRUCTION.test(opening) &&
-      !clauseIsQuestion(text, match.index + match[0].length)
+      SUBAGENT_VERB.test(before) && !negationGoverns(text, match.index) &&
+      !NOT_AN_INSTRUCTION.test(opening) &&
+      !sentenceIsQuestion(text, match.index + match[0].length)
     ) return true;
   }
   return false;
@@ -470,12 +500,19 @@ function useHaveLetMakeGetAsk(model: InstructedModel): RegExp {
   );
 }
 
-/** True when a use/have/let/make/get/ask instruction names the model and is not a question ("use Fable?"). */
+/**
+ * True when a use/have/let/make/get/ask instruction names the model, no negation governs its verb
+ * ("do not, under any circumstances, use Fable"), and it is not a question ("use Fable?").
+ */
 function putsModelToWork(text: string, model: InstructedModel): boolean {
   const pattern = useHaveLetMakeGetAsk(model);
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text))) {
-    if (!clauseIsQuestion(text, match.index + match[0].length)) return true;
+    const verbStart = match.index + match[0].search(/\b(?:use|have|let|make|get|ask)\b/i);
+    if (
+      !negationGoverns(text, verbStart) &&
+      !sentenceIsQuestion(text, match.index + match[0].length)
+    ) return true;
   }
   return false;
 }
@@ -493,20 +530,19 @@ const NEGATION =
   /\b(?:not|no|never|stop|nothing|none|cannot|\w+n['’]t|dont|didnt|doesnt|wont|cant|shouldnt|wouldnt)\b/i;
 
 /**
- * True when a routing verb opening a clause sends work to the model, with no negation earlier in
- * that clause or in the object ("don't take this and send it to Fable", "send nothing to Fable"), and
- * the clause not a question: "?" must not be the first clause-ending punctuation after the match
- * ("send it to Fable?"). A "?" in a later clause does not count.
+ * True when a routing verb opening a clause sends work to the model, with no negation governing the
+ * verb or in the object ("don't take this and send it to Fable", "send nothing to Fable"), and the
+ * instruction not a question: its sentence must not close with "?" ("send it to Fable?", "send it to
+ * Fable and rebase?"). A "?" in a later sentence does not count.
  */
 function routesWorkTo(text: string, model: InstructedModel): boolean {
   const pattern = routesTo(model);
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text))) {
     const verbStart = match.index + match[0].search(/(?:send|dispatch|give|hand|assign|route)\b/i);
-    const negated = NEGATION.test(text.slice(clauseStartBefore(text, verbStart), verbStart)) ||
-      NEGATION.test(match[1] ?? "");
+    const negated = negationGoverns(text, verbStart) || NEGATION.test(match[1] ?? "");
 
-    if (!negated && !clauseIsQuestion(text, match.index + match[0].length)) return true;
+    if (!negated && !sentenceIsQuestion(text, match.index + match[0].length)) return true;
   }
   return false;
 }
@@ -529,6 +565,11 @@ export function asksModelToDoTheWork(text: string, model: InstructedModel): bool
 /** Josh's instruction choosing Fable for the work. */
 export function asksFableToDoTheWork(text: string): boolean {
   return asksModelToDoTheWork(text, "fable");
+}
+
+/** The grant phrase, or an instruction choosing Fable for the work. */
+function choosesFable(text: string): boolean {
+  return text.toLowerCase().includes(FABLE_EDIT_PHRASE) || asksFableToDoTheWork(text);
 }
 
 /** A spawning prompt that chooses a Fable subagent: the grant phrase, or asking for Fable. */
@@ -841,7 +882,8 @@ export function defaultLabelLookup(): LabelLookup {
 
 /**
  * D-7, as revision 1.3.0 narrows it: true when the most recent slash command in the transcript is a
- * `/work-issue` Josh typed that names an issue he labeled Fable. An `Opus` or `Sol` label names the
+ * `/work-issue` Josh typed that names an issue he labeled Fable, or whose own instructions choose
+ * Fable for that issue ("/work-issue web-jam-tools#5 use Fable"). An `Opus` or `Sol` label names the
  * top coding lane and never authorizes Fable.
  *
  * Josh's later plain messages do not end the approval; any other slash command does — the same
@@ -869,14 +911,24 @@ function workIssueGrant(
     const command = slashCommandOf(text);
     if (command === null) continue;
     if (command !== "work-issue" || !isHumanPrompt(entry)) return null;
-    const ref = parseIssueRef(workIssueArgs(text));
+    const args = workIssueArgs(text);
+    const ref = parseIssueRef(args);
     if (!ref) return null;
+    // A Fable choice typed with the call is Josh's choice for this issue, bound to its repository.
+    if (choosesFable(withoutIssueRefs(args))) return ref;
     const labels = lookupLabels(ref);
     return labels !== null && labels.some((label) => label.toLowerCase() === FABLE_TASK_LABEL)
       ? ref
       : null;
   }
   return null;
+}
+
+/** Skill arguments with each issue reference replaced by a line break, so what follows opens a line. */
+function withoutIssueRefs(args: string): string {
+  return args
+    .replace(/https?:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/issues\/\d+/g, "\n")
+    .replace(/(?:^|\s)(?:[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+#\d+\b/g, "\n");
 }
 
 /**
@@ -888,6 +940,8 @@ function workIssueGrant(
  * an earlier approval. Only prompts Josh actually sent count (`isHumanPrompt`, not `isMeta`), so a
  * task notification or an injected reminder can neither grant approval nor cancel it. An Opus grant
  * ("opus edit ok", or asking Opus to do the work) is not a choice of Fable and counts for nothing.
+ * Only a separate message grants the session: a Fable choice typed inside a skill call belongs to
+ * that task ({@link workIssueGrant}), though a "fable edit off" typed there still withdraws.
  */
 export function fableEditApprovalActive(entries: readonly TranscriptEntry[]): boolean {
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -895,10 +949,12 @@ export function fableEditApprovalActive(entries: readonly TranscriptEntry[]): bo
     if (!isUserTurnBoundary(entry) || entry.isMeta === true) continue;
     if (!isHumanPrompt(entry)) continue;
     const text = extractEntryText(entry).toLowerCase();
+    const command = slashCommandOf(text);
     // A fix-pr helper request is scoped to that call, never a permanent session grant.
-    if (slashCommandOf(text) === "fix-pr") continue;
+    if (command === "fix-pr") continue;
     if (text.includes(FABLE_REVOKE_PHRASE)) return false;
-    if (text.includes(FABLE_EDIT_PHRASE) || asksFableToDoTheWork(text)) return true;
+    if (command !== null) continue;
+    if (choosesFable(text)) return true;
   }
   return false;
 }
@@ -952,11 +1008,48 @@ function gitOutput(dir: string, args: string[]): string | null {
 }
 
 /**
- * The live lookup: asks git about the path's nearest existing directory, so a file about to be
- * created is judged by the folder it will land in.
+ * The path a write to `path` actually lands on. Each existing component is resolved through its
+ * symlinks in turn, so a link is followed before a later "..", the same way
+ * hooks/lib/check_private_folder_read.ts resolves a destination; a missing remainder is kept as
+ * written. Null when the destination cannot be verified: a relative path, a dangling symlink (the
+ * write would create whatever it points at), or a component that cannot be read.
+ */
+export function writeDestination(path: string): string | null {
+  if (!path.startsWith("/")) return null;
+  let current = "/";
+  for (const part of path.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      current = current.slice(0, current.lastIndexOf("/")) || "/";
+      continue;
+    }
+    const candidate = current === "/" ? `/${part}` : `${current}/${part}`;
+    try {
+      current = Deno.realPathSync(candidate);
+    } catch (err) {
+      if (!(err instanceof Deno.errors.NotFound)) return null;
+      try {
+        Deno.lstatSync(candidate);
+        return null;
+      } catch (statErr) {
+        if (!(statErr instanceof Deno.errors.NotFound)) return null;
+      }
+      current = candidate;
+    }
+  }
+  return current;
+}
+
+/**
+ * The live lookup: asks git about the nearest existing directory of the write's real destination
+ * ({@link writeDestination}), so a symlink is judged by where it points and a file about to be
+ * created by the folder it will land in. A destination that cannot be verified is reported as a
+ * working tree with no known origin, which no task grant covers.
  */
 export function gitRepoOfPath(path: string): PathRepo {
-  let dir = path;
+  const destination = writeDestination(path);
+  if (destination === null) return { inTree: true, repo: null };
+  let dir = destination;
   for (;;) {
     try {
       if (Deno.statSync(dir).isDirectory) break;
@@ -1107,12 +1200,21 @@ export function decideSubagentEdit(
       }; this edit writes outside it.`,
     );
   }
-  if (approvesFableSubagent(extractEntryText(context.prompt))) return allow("subagent");
-  return deny(
-    "subagent",
-    'This is a Fable subagent, and the message that spawned it neither contains "fable edit ok", ' +
-      "asks for a Fable subagent, nor asks Fable to do the work.",
-  );
+  if (!approvesFableSubagent(extractEntryText(context.prompt))) {
+    return deny(
+      "subagent",
+      'This is a Fable subagent, and the message that spawned it neither contains "fable edit ok", ' +
+        "asks for a Fable subagent, nor asks Fable to do the work.",
+    );
+  }
+  // A withdrawal Josh sends after the spawning message ends this helper's choice of Fable too.
+  if (!sinceFableWithdrawal(context.entries).includes(context.prompt)) {
+    return deny(
+      "subagent",
+      "Josh said fable edit off after the message that spawned this Fable subagent.",
+    );
+  }
+  return allow("subagent");
 }
 
 export function decide(

@@ -16,6 +16,7 @@ import {
   decideSubagentEdit,
   fableEditApprovalActive,
   findSpawningHumanPrompt,
+  gitRepoOfPath,
   isFableModel,
   isOpusModel,
   isReadOnlyQuotedWrite,
@@ -35,6 +36,7 @@ import {
   slashCommandOf,
   workIssueApprovalActive,
   workIssueArgs,
+  writeDestination,
 } from "../hooks/lib/opus_gate.ts";
 import { extractEntryText, type TranscriptEntry } from "../hooks/lib/select_transcript_entry.ts";
 
@@ -328,6 +330,12 @@ Deno.test("asksFableToDoTheWork: a use/have/let instruction that is a question d
     "ok, let Fable do it?",
     "use Fable for this or Opus?",
     "please use a Fable agent?",
+    // A multi-step request closing with "?" is one question, however many steps it joins:
+    "use Fable and then tell me what changed?",
+    "use Fable and fix the gate?",
+    "have Fable fix it and then push?",
+    "send it to Fable and then rebase?",
+    "ok, dispatch this to Fable, then report back?",
   ];
   for (const text of refuses) assert(!asksFableToDoTheWork(text), text);
   for (const text of refuses) assert(!approvesFableSubagent(text), text);
@@ -335,7 +343,30 @@ Deno.test("asksFableToDoTheWork: a use/have/let instruction that is a question d
   const approves = [
     "use Fable? yes, use Fable",
     "have Fable fix it. is that clear?",
-    "use Fable and then tell me what changed?",
+    "use Fable and then tell me what changed. thanks!",
+    // A "?" or "." inside a link does not end the sentence:
+    "use Fable to fix https://example.com/a?b=1",
+  ];
+  for (const text of approves) assert(asksFableToDoTheWork(text), text);
+});
+
+Deno.test("asksFableToDoTheWork: a negation governing the verb refuses, though an earlier negated instruction does not", () => {
+  const refuses = [
+    "do not, under any circumstances, use Fable",
+    "never, ever, have Fable fix it",
+    "I don't want you to stop and then use Fable",
+    "don't wait and send it to Fable",
+    "do not, under any circumstances, send it to Fable",
+    "no, not now, use Fable",
+  ];
+  for (const text of refuses) assert(!asksFableToDoTheWork(text), text);
+  for (const text of refuses) assert(!approvesFableSubagent(text), text);
+
+  const approves = [
+    "don't use Sonnet, use Fable",
+    "stop using Opus, use Fable",
+    "do not wait. use Fable",
+    "don't send it to Sonnet, send it to Fable",
   ];
   for (const text of approves) assert(asksFableToDoTheWork(text), text);
 });
@@ -365,6 +396,8 @@ Deno.test("asksForFableSubagent: only an instruction putting a Fable subagent to
     "use a Sonnet subagent, not a Fable subagent",
     "stop using a Fable subagent",
     "never spawn a Fable subagent",
+    "do not, under any circumstances, spawn a Fable subagent",
+    "spawn a Fable subagent and fix it?",
     // Incidental mentions and second-hand reports:
     "the Fable subagent broke it",
     "Fable subagents are expensive",
@@ -760,6 +793,73 @@ Deno.test("task grants: fable edit off after a typed task ends it until Josh cho
   }
 });
 
+Deno.test("task grants: a Fable choice typed inside /work-issue covers that issue's repository, never the session", () => {
+  // Issue 2 is Sonnet-labeled and 99 cannot be looked up: the typed choice alone names Fable.
+  // The comma opens a clause, which the session-grant reader used to take as a session-wide grant.
+  const USE_FABLE = workIssue("web-jam-tools#2, use Fable");
+  const cases: [TranscriptEntry[], string[], "allow" | "deny"][] = [
+    [[human(USE_FABLE)], [TOOLS_FILE], "allow"],
+    [[human(workIssue("web-jam-tools#2 use Fable"))], [TOOLS_FILE], "allow"],
+    [[human(USE_FABLE)], [MUSIC_FILE], "deny"],
+    [[human(USE_FABLE), human("go ahead")], [MUSIC_FILE], "deny"],
+    [[human(workIssue("https://github.com/WebJamApps/web-jam-tools/issues/99, fable edit ok"))], [
+      TOOLS_FILE,
+    ], "allow"],
+    [[human(workIssue("web-jam-tools#99 fable edit ok"))], [MUSIC_FILE], "deny"],
+    [[human(workIssue("web-jam-tools#2 don't use Fable"))], [TOOLS_FILE], "deny"],
+    [[human(workIssue("web-jam-tools#2 use Fable?"))], [TOOLS_FILE], "deny"],
+    [[human(workIssue("use Fable"))], [TOOLS_FILE], "deny"],
+    [[human(USE_FABLE), human("fable edit off")], [TOOLS_FILE], "deny"],
+    [[human(USE_FABLE), human(PR_REVIEW)], [TOOLS_FILE], "deny"],
+  ];
+  for (const [entries, targets, expected] of cases) {
+    const read = reader({ [MAIN]: jsonl([...entries, assistant("claude-fable-5-2")]) });
+    assertEquals(
+      decideMainThreadEdit(MAIN, read, labels, targets, twoRepos).decision,
+      expected,
+      `${jsonl(entries)} -> ${targets}`,
+    );
+  }
+
+  assertEquals(fableEditApprovalActive([human(USE_FABLE)]), false);
+  assertEquals(fableEditApprovalActive([human("/pr-review web-jam-tools#5 use Fable")]), false);
+  // A "fable edit off" typed inside a skill call still withdraws the session grant.
+  assertEquals(
+    fableEditApprovalActive([
+      human("fable edit ok"),
+      human(workIssue("web-jam-tools#2 fable edit off")),
+    ]),
+    false,
+  );
+});
+
+Deno.test("decideSubagentEdit: fable edit off after the spawning message ends a directly requested Fable helper", () => {
+  const ask = human("spawn a Fable subagent");
+  const cases: [TranscriptEntry[], "allow" | "deny"][] = [
+    [[ask, spawn("toolu_a")], "allow"],
+    [[ask, spawn("toolu_a"), human("go ahead")], "allow"],
+    [[ask, spawn("toolu_a"), human("fable edit off")], "deny"],
+    [[ask, spawn("toolu_a"), human("fable edit off"), human("go ahead")], "deny"],
+    [[human("fable edit off"), ask, spawn("toolu_a")], "allow"],
+    [[ask, spawn("toolu_a"), notification("fable edit off")], "allow"],
+    [[ask, spawn("toolu_a"), metaEntry("fable edit off")], "allow"],
+  ];
+  for (const [entries, expected] of cases) {
+    const read = reader({
+      [MAIN]: jsonl(entries),
+      ...meta("a", { model: "fable", toolUseId: "toolu_a" }),
+      ...meta("nested", { model: "fable", parentAgentId: "a" }),
+    });
+    for (const id of ["a", "nested"]) {
+      assertEquals(
+        decideSubagentEdit(id, MAIN, read).decision,
+        expected,
+        `${id}: ${jsonl(entries)}`,
+      );
+    }
+  }
+});
+
 Deno.test("fix-pr: a Fable helper edits only in its pull request's repository, until fable edit off", () => {
   const call = "/fix-pr https://github.com/WebJamApps/web-jam-tools/pull/1318 use a Fable helper";
   const cases: [TranscriptEntry[], string[], "allow" | "deny"][] = [
@@ -837,6 +937,62 @@ Deno.test("decide: a typed task's grant reaches its own repository and not anoth
         "deny",
         task,
       );
+    }
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("decide: a task grant judges a write by where it lands through symlinks (two real repositories)", async () => {
+  const root = await Deno.makeTempDir({ prefix: "opus-gate-symlinks-" });
+  try {
+    const repos: [string, string][] = [
+      ["tools", "git@github.com:WebJamApps/web-jam-tools.git"],
+      ["music", "https://github.com/WebJamApps/JaMmusic.git"],
+    ];
+    for (const [name, url] of repos) {
+      const repo = `${root}/${name}`;
+      for (const args of [["init", "-q", repo], ["-C", repo, "remote", "add", "origin", url]]) {
+        const { success } = await new Deno.Command("git", { args, stdout: "null", stderr: "null" })
+          .output();
+        assert(success, args.join(" "));
+      }
+    }
+    await Deno.mkdir(`${root}/music/src`);
+    await Deno.mkdir(`${root}/tools/src`);
+    await Deno.writeTextFile(`${root}/music/src/b.ts`, "");
+    await Deno.writeTextFile(`${root}/tools/src/a.ts`, "");
+    await Deno.symlink(`${root}/music/src/b.ts`, `${root}/tools/to-music.ts`);
+    await Deno.symlink(`${root}/tools/src/a.ts`, `${root}/tools/to-tools.ts`);
+    await Deno.symlink(`${root}/music/src`, `${root}/tools/music-dir`);
+    await Deno.symlink(`${root}/music/src/missing.ts`, `${root}/tools/dangling.ts`);
+    await Deno.symlink("../music/src/b.ts", `${root}/tools/relative-to-music.ts`);
+
+    assertEquals(gitRepoOfPath(`${root}/tools/to-music.ts`), {
+      inTree: true,
+      repo: "webjamapps/jammusic",
+    });
+    assertEquals(gitRepoOfPath(`${root}/tools/dangling.ts`), { inTree: true, repo: null });
+    assertEquals(gitRepoOfPath("relative/path.ts"), { inTree: true, repo: null });
+    assertEquals(
+      writeDestination(`${root}/tools/music-dir/../x.ts`),
+      `${Deno.realPathSync(root)}/music/x.ts`,
+    );
+
+    for (const task of ["/fix-pr web-jam-tools#1318", workIssue("web-jam-tools#3")]) {
+      const read = reader({ [MAIN]: jsonl([human(task), assistant("claude-fable-5-2")]) });
+      const run = (tool_input: Record<string, unknown>, tool_name = "Write") =>
+        decide({ tool_name, tool_input, transcript_path: MAIN, cwd: `${root}/tools` }, read, labels)
+          .decision;
+
+      assertEquals(run({ file_path: `${root}/tools/to-tools.ts` }), "allow", task);
+      assertEquals(run({ file_path: `${root}/tools/to-music.ts` }), "deny", task);
+      assertEquals(run({ file_path: `${root}/tools/relative-to-music.ts` }), "deny", task);
+      assertEquals(run({ file_path: `${root}/tools/music-dir/new.ts` }), "deny", task);
+      assertEquals(run({ file_path: `${root}/tools/music-dir/../c.ts` }), "deny", task);
+      assertEquals(run({ file_path: `${root}/tools/dangling.ts` }), "deny", task);
+      assertEquals(run({ command: "printf x > to-music.ts" }, "Bash"), "deny", task);
+      assertEquals(run({ command: "printf x > to-tools.ts" }, "Bash"), "allow", task);
     }
   } finally {
     await Deno.remove(root, { recursive: true });
