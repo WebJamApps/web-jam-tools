@@ -528,7 +528,9 @@ Deno.test({
         const r = await new Deno.Command("sh", {
           args: [
             "-c",
-            `trap '' XFSZ; ulimit -f 0 && exec "$@"`,
+            // The child drops DENO_COVERAGE_DIR: under the 0-byte limit, its own coverage profile
+            // would be left empty and break the coverage gate.
+            `trap '' XFSZ; ulimit -f 0 && exec env -u DENO_COVERAGE_DIR "$@"`,
             "sh",
             Deno.execPath(),
             "run",
