@@ -1460,6 +1460,11 @@ export function lintDesignDoc(
     );
   }
 
+  // 10. Body-path check ("Paths the design names"): every path named in the body outside
+  // fenced code blocks, the revision table, Load-bearing Premises, Appendix* sections, and
+  // "Where Things Live" itself must be covered by "Where Things Live".
+  violations.push(...validateBodyPathsListedInWhereThingsLive(lines));
+
   // 11. Check for copied text of 12 or more consecutive words from another design document's body
   // ("One document owns each rule", web-jam-tools#1636) when the design-documents root option is
   // supplied.
@@ -1473,6 +1478,331 @@ export function lintDesignDoc(
     valid: violations.length === 0,
     violations,
   };
+}
+
+function hasSpaceOutsideAnglePlaceholders(token: string): boolean {
+  let i = 0;
+  while (i < token.length) {
+    if (token[i] === "<") {
+      const closeIdx = token.indexOf(">", i + 1);
+      if (closeIdx !== -1) {
+        i = closeIdx + 1;
+        continue;
+      }
+    }
+    if (/\s/.test(token[i])) {
+      return true;
+    }
+    i++;
+  }
+  return false;
+}
+
+function isWhereThingsLivePathToken(token: string): boolean {
+  if (hasSpaceOutsideAnglePlaceholders(token)) {
+    return false;
+  }
+  if (token.startsWith("~/")) {
+    return token.length > 2;
+  }
+  if (token.startsWith("/")) {
+    return token.length > 1 && token[1] !== "/";
+  }
+  return false;
+}
+
+function isDesignBodyPathToken(token: string): boolean {
+  if (!isWhereThingsLivePathToken(token)) {
+    return false;
+  }
+  if (token.startsWith("~/")) {
+    return true;
+  }
+  return token.indexOf("/", 1) > 1;
+}
+
+function extractBacktickCodeTokens(line: string): string[] {
+  const ranges = computeBacktickSpanRanges(line);
+  const tokens: string[] = [];
+  for (const { start, end } of ranges) {
+    const rawSpan = line.slice(start, end);
+    let runLen = 0;
+    while (runLen < rawSpan.length && rawSpan[runLen] === "`") {
+      runLen++;
+    }
+    if (runLen > 0 && rawSpan.length >= runLen * 2) {
+      tokens.push(rawSpan.slice(runLen, rawSpan.length - runLen));
+    }
+  }
+  return tokens;
+}
+
+function stripOneTrailingSlash(pathStr: string): string {
+  return pathStr.length > 1 && pathStr.endsWith("/") ? pathStr.slice(0, -1) : pathStr;
+}
+
+function coversPath(coveredRoot: string, normBodyPath: string): boolean {
+  if (coveredRoot === "/") {
+    return normBodyPath === "/" || normBodyPath.startsWith("/");
+  }
+  return normBodyPath === coveredRoot || normBodyPath.startsWith(`${coveredRoot}/`);
+}
+
+function isBodyPathCovered(bodyPath: string, whereThingsLiveTokens: string[]): boolean {
+  const normBody = stripOneTrailingSlash(bodyPath);
+  for (const entry of whereThingsLiveTokens) {
+    if (coversPath(stripOneTrailingSlash(entry), normBody)) {
+      return true;
+    }
+    const angleIdx = entry.indexOf("<");
+    if (angleIdx !== -1) {
+      const coveredRoot = stripOneTrailingSlash(entry.slice(0, angleIdx));
+      if (coveredRoot.length > 0 && coversPath(coveredRoot, normBody)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+interface OpenFenceState {
+  char: "`" | "~";
+  length: number;
+  quoteDepth: number;
+  listIndent: number;
+}
+
+function peelBlockQuotes(
+  line: string,
+  maxQuotes?: number,
+): { quoteDepth: number; content: string } {
+  let rest = line;
+  let quoteDepth = 0;
+  while (maxQuotes === undefined || quoteDepth < maxQuotes) {
+    const match = rest.match(/^\s{0,3}>(?: ?)(.*)$/);
+    if (!match) break;
+    quoteDepth++;
+    rest = match[1];
+  }
+  return { quoteDepth, content: rest };
+}
+
+function columnWidth(text: string): number {
+  let cols = 0;
+  for (const ch of text) {
+    if (ch === "\t") {
+      cols += 4 - (cols % 4);
+    } else {
+      cols++;
+    }
+  }
+  return cols;
+}
+
+function leadingIndentWidth(text: string): number {
+  let indent = 0;
+  for (const ch of text) {
+    if (ch === " ") {
+      indent++;
+    } else if (ch === "\t") {
+      indent += 4 - (indent % 4);
+    } else {
+      break;
+    }
+  }
+  return indent;
+}
+
+function stripIndentColumns(text: string, maxCols: number): string {
+  if (maxCols <= 0) return text;
+  let cols = 0;
+  let idx = 0;
+  while (idx < text.length && cols < maxCols) {
+    const ch = text[idx];
+    if (ch === " ") {
+      cols++;
+      idx++;
+    } else if (ch === "\t") {
+      const step = 4 - (cols % 4);
+      if (cols + step <= maxCols) {
+        cols += step;
+        idx++;
+      } else {
+        const remainSpaces = " ".repeat(cols + step - maxCols);
+        return remainSpaces + text.slice(idx + 1);
+      }
+    } else {
+      break;
+    }
+  }
+  return text.slice(idx);
+}
+
+function parseOpeningFence(text: string): { char: "`" | "~"; length: number } | null {
+  const match = text.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
+  if (!match) return null;
+  const fenceRun = match[1];
+  const infoString = match[2];
+  const fenceChar = fenceRun[0] as "`" | "~";
+  if (fenceChar === "`" && infoString.includes("`")) {
+    return null;
+  }
+  return { char: fenceChar, length: fenceRun.length };
+}
+
+/**
+ * Validates that every backtick-quoted path named in the document body is covered by an entry
+ * in the "Where Things Live" section. Excludes fenced code blocks (including inside Markdown
+ * block quotes and list containers), the revision table, Load-bearing Premises, any Appendix
+ * section, and "Where Things Live" itself.
+ */
+export function validateBodyPathsListedInWhereThingsLive(lines: string[]): LintViolation[] {
+  const whereThingsLiveTokens: string[] = [];
+  const bodyPathOccurrences: Array<{ line: number; lineContent: string; token: string }> = [];
+
+  let openFence: OpenFenceState | null = null;
+  const listIndentByDepth = new Map<number, number>();
+  let loadBearingLevel: number | null = null;
+  let appendixLevel: number | null = null;
+  let whereThingsLiveLevel: number | null = null;
+  let revisionLevel: number | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNum = i + 1;
+
+    if (openFence !== null) {
+      const peeled = peelBlockQuotes(line, openFence.quoteDepth);
+      if (peeled.quoteDepth < openFence.quoteDepth) {
+        openFence = null;
+      } else {
+        const isBlank = !/\S/.test(peeled.content);
+        if (
+          !isBlank &&
+          openFence.listIndent > 0 &&
+          leadingIndentWidth(peeled.content) < openFence.listIndent
+        ) {
+          openFence = null;
+        } else {
+          const inner = stripIndentColumns(peeled.content, openFence.listIndent);
+          const closeMatch = inner.match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+          if (
+            closeMatch &&
+            closeMatch[1][0] === openFence.char &&
+            closeMatch[1].length >= openFence.length
+          ) {
+            openFence = null;
+          }
+          continue;
+        }
+      }
+    }
+
+    const { quoteDepth, content } = peelBlockQuotes(line);
+    const isBlank = !/\S/.test(content);
+    const indent = leadingIndentWidth(content);
+    const activeListIndent = listIndentByDepth.get(quoteDepth) ?? 0;
+
+    if (!isBlank && indent < activeListIndent) {
+      listIndentByDepth.delete(quoteDepth);
+    }
+
+    const listMarkerMatch = content.match(/^(\s{0,3}(?:[-+*]|\d{1,9}[.)])\s+)(.*)$/);
+    if (listMarkerMatch) {
+      const markerIndent = columnWidth(listMarkerMatch[1]);
+      listIndentByDepth.set(quoteDepth, markerIndent);
+      const markerFence = parseOpeningFence(listMarkerMatch[2]);
+      if (markerFence) {
+        openFence = { ...markerFence, quoteDepth, listIndent: markerIndent };
+        continue;
+      }
+    } else {
+      const containerIndent = listIndentByDepth.get(quoteDepth) ?? 0;
+      const fenceCandidate = containerIndent > 0 && indent >= containerIndent
+        ? stripIndentColumns(content, containerIndent)
+        : content;
+      const fence = parseOpeningFence(fenceCandidate);
+      if (fence) {
+        openFence = {
+          ...fence,
+          quoteDepth,
+          listIndent: indent >= containerIndent ? containerIndent : 0,
+        };
+        continue;
+      }
+    }
+
+    if (quoteDepth === 0) {
+      const headingMatch = content.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*$/);
+      if (headingMatch) {
+        const level = headingMatch[1].length;
+        const headingText = headingMatch[2].replace(/\s+#+\s*$/, "").trim();
+
+        if (loadBearingLevel !== null && level <= loadBearingLevel) loadBearingLevel = null;
+        if (appendixLevel !== null && level <= appendixLevel) appendixLevel = null;
+        if (whereThingsLiveLevel !== null && level <= whereThingsLiveLevel) {
+          whereThingsLiveLevel = null;
+        }
+        if (revisionLevel !== null && level <= revisionLevel) revisionLevel = null;
+
+        if (loadBearingLevel === null && appendixLevel === null) {
+          if (/^load-bearing\s+premises\b/i.test(headingText)) {
+            loadBearingLevel = level;
+          } else if (/^appendix\b/i.test(headingText)) {
+            appendixLevel = level;
+          } else if (
+            whereThingsLiveLevel === null &&
+            /^["']?where\s+things\s+live["']?\b/i.test(headingText)
+          ) {
+            whereThingsLiveLevel = level;
+          } else if (
+            whereThingsLiveLevel === null &&
+            revisionLevel === null &&
+            /^revision\s+history\b/i.test(headingText)
+          ) {
+            revisionLevel = level;
+          }
+        }
+      }
+    }
+
+    if (loadBearingLevel !== null || appendixLevel !== null) {
+      continue;
+    }
+
+    if (whereThingsLiveLevel !== null) {
+      for (const token of extractBacktickCodeTokens(content)) {
+        if (isWhereThingsLivePathToken(token)) {
+          whereThingsLiveTokens.push(token);
+        }
+      }
+      continue;
+    }
+
+    if (quoteDepth === 0 && revisionLevel !== null && content.trim().startsWith("|")) {
+      continue;
+    }
+
+    for (const token of extractBacktickCodeTokens(content)) {
+      if (isDesignBodyPathToken(token)) {
+        bodyPathOccurrences.push({ line: lineNum, lineContent: line, token });
+      }
+    }
+  }
+
+  const violations: LintViolation[] = [];
+  for (const occ of bodyPathOccurrences) {
+    if (!isBodyPathCovered(occ.token, whereThingsLiveTokens)) {
+      violations.push({
+        rule: "body-path-missing-from-where-things-live",
+        line: occ.line,
+        lineContent: occ.lineContent,
+        message:
+          `Line ${occ.line}: path "${occ.token}" named in the design body is not covered by "Where Things Live"`,
+      });
+    }
+  }
+  return violations;
 }
 
 /**
@@ -1548,6 +1878,7 @@ Checks a design document against the skill's body rules:
     exactly match a stored Gate 1 row. An unreadable record refuses the check.
   - Fails if the document names a target issue it was invoked on but carries no verbatim
     blockquote of that issue's directive lines.
+  - Fails if the document's body names a path not covered by "Where Things Live".
   - Fails if the document's body shares a run of 12 or more consecutive words with another design
     document's body. When another design document cannot be read, refuses naming it.
 
