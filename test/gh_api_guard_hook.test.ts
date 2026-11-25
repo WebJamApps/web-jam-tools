@@ -427,6 +427,26 @@ Deno.test("quoted JSON examples are data and never send a command to the text fa
       `gh issue view 1 --json body --jq '{body}' # gh api -X DELETE repos/o/r`,
     ]
   ) assertEquals(ghApiVerdict(cmd), { decision: "allow" }, cmd);
+  // A brace expansion in one command never reclassifies quoted data in another.
+  for (
+    const cmd of [
+      `printf '%s\\n' '{"note":"gh api --method DELETE repos/o/r/issues/1"}' && mkdir -p out/{a,b}`,
+      `mkdir -p out/{a,b}; printf '%s' '{"x":"gh api -X POST repos/o/r/issues/1/dependencies/blocked_by"}'`,
+      `touch f{1,2}.txt | echo '{"cmd":"gh api -XDELETE repos/o/r"}'`,
+      `mkdir -p out/{a,b} && gh api repos/o/r/issues/1/dependencies/blocked_by`,
+    ]
+  ) assertEquals(ghApiVerdict(cmd), { decision: "allow" }, cmd);
+  // ...while the gh api call that carries the brace is still judged, on its own text.
+  assertEquals(
+    ghApiVerdict(
+      `printf '%s' '{"a":1}' && gh api -X DELETE repos/o/r/issues/{1,2}/dependencies/blocked_by/3`,
+    ),
+    { decision: "deny", link: "unblock-issue" },
+  );
+  assertEquals(
+    checkGhApi(`mkdir -p out/{a,b} && gh api repos/o/r/issues/{1,2}/labels -f name=x`),
+    "ask",
+  );
   // A real write that reads its JSON body from a quoted example is still judged as a write.
   assertEquals(
     ghApiVerdict(

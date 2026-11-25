@@ -58,38 +58,54 @@ function hasExecutableExpansion(segment: string): boolean {
 // The shared splitter cuts an unquoted word at a brace. gh's own endpoint placeholders,
 // `repos/{owner}/{repo}/...`, are rewritten to plain words first so the endpoint reaches
 // the guard whole. Any other unquoted brace inside a word (brace expansion such as
-// `issues/{1,2}`, or `xargs -I{}`) takes the text fallback. Quoted text, such as a JSON
-// example, is data and never triggers the fallback.
+// `issues/{1,2}`, or `xargs -I{}`) is swapped for a marker so the splitter keeps the word
+// whole; only a `gh api` call carrying a marker is judged by the text fallback, on its own
+// text. Quoted text, such as a JSON example, is data and is never touched.
 const GH_PLACEHOLDER = /\{(owner|repo|branch)\}/g;
+const OPEN_MARK = "\u0001";
+const CLOSE_MARK = "\u0002";
 
-function hasBraceInWord(segment: string): boolean {
+function markBracesInWords(command: string): string {
+  let out = "";
   let quote = "";
-  for (let i = 0; i < segment.length; i++) {
-    const ch = segment[i];
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
     if (ch === "\\" && quote !== "'") {
+      out += ch + (command[i + 1] ?? "");
       i++;
       continue;
     }
     if (quote) {
       if (ch === quote) quote = "";
     } else if (ch === "'" || ch === '"') quote = ch;
-    else if (ch === "$" && segment[i + 1] === "{") {
-      const close = segment.indexOf("}", i);
-      if (close < 0) return true;
-      i = close;
-    } else if (ch === "{" && i + 1 < segment.length && !/\s/.test(segment[i + 1])) return true;
-    else if (ch === "}" && i > 0 && !/[\s;]/.test(segment[i - 1])) return true;
+    else if (ch === "$" && command[i + 1] === "{") {
+      const close = command.indexOf("}", i);
+      const end = close < 0 ? command.length : close + 1;
+      out += command.slice(i, end);
+      i = end - 1;
+      continue;
+    } else if (ch === "{" && i + 1 < command.length && !/\s/.test(command[i + 1])) {
+      out += OPEN_MARK;
+      continue;
+    } else if (ch === "}" && i > 0 && !/[\s;]/.test(command[i - 1])) {
+      out += CLOSE_MARK;
+      continue;
+    }
+    out += ch;
   }
-  return false;
+  return out;
 }
 
-function apiCalls(rawCommand: string, depth = 0): string[][] {
+function unmark(text: string): string {
+  return text.replaceAll(OPEN_MARK, "{").replaceAll(CLOSE_MARK, "}");
+}
+
+function apiCalls(rawCommand: string, depth = 0): GhApiVerdict[] {
   if (depth > MAX_WRAPPER_RECURSION_DEPTH) throw new Error("Wrapper recursion limit");
-  const command = rawCommand.replace(GH_PLACEHOLDER, "_$1_");
-  if (hasBraceInWord(command)) throw new Error("Brace inside a word");
+  const command = markBracesInWords(rawCommand.replace(GH_PLACEHOLDER, "_$1_"));
   const { segments, unterminated } = splitOnOperators(command);
   if (unterminated) throw new Error("Unterminated shell syntax");
-  const calls: string[][] = [];
+  const calls: GhApiVerdict[] = [];
   for (const segment of segments) {
     if (hasExecutableExpansion(segment)) throw new Error("Executable expansion");
     const tokens = splitShellTokens(segment);
@@ -97,7 +113,7 @@ function apiCalls(rawCommand: string, depth = 0): string[][] {
     const resolved = resolveThroughWrappers(tokens);
     if (resolved.kind === "cap-exceeded") throw new Error("Wrapper iteration limit");
     if (resolved.kind === "nested") {
-      calls.push(...apiCalls(resolved.command, depth + 1));
+      calls.push(...apiCalls(unmark(resolved.command), depth + 1));
       continue;
     }
     const argv = resolved.argv;
@@ -105,7 +121,10 @@ function apiCalls(rawCommand: string, depth = 0): string[][] {
     while (ASSIGN_RE.test(argv[i] ?? "")) i++;
     const program = argv[i]?.split("/").pop();
     if (program === "gh") {
-      if (argv[i + 1] === "api") calls.push(argv.slice(i + 2));
+      if (argv[i + 1] !== "api") continue;
+      // A brace-expanded word can become several endpoints: this call alone takes the text check.
+      const marked = segment.includes(OPEN_MARK) || segment.includes(CLOSE_MARK);
+      calls.push(marked ? textFallback(unmark(segment)) : callDecision(argv.slice(i + 2)));
     } else if (
       SHELLS.has(program ?? "") ||
       (tokens.length > 0 && argv.length === 0) ||
@@ -189,7 +208,7 @@ function textFallback(command: string): GhApiVerdict {
 export function ghApiVerdict(command: string): GhApiVerdict {
   let verdicts: GhApiVerdict[];
   try {
-    verdicts = apiCalls(command).map(callDecision);
+    verdicts = apiCalls(command);
   } catch {
     verdicts = [textFallback(command)];
   }
