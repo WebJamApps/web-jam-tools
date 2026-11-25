@@ -22,6 +22,23 @@ export function getDefaultBooksDir(): string {
   return path.join(home, "Dropbox", "web-jam-llms", "financial", "books");
 }
 
+/** A `--year` value: exactly four digits, nothing else. */
+export function parseYearFlag(raw: string): number {
+  const value = String(raw).trim();
+  if (!/^\d{4}$/.test(value)) throw new Error(`--year must be a four-digit year; '${raw}' is not.`);
+  return Number(value);
+}
+
+/** A `--month` value: one or two digits for a month from 1 to 12, nothing else. */
+export function parseMonthFlag(raw: string): number {
+  const value = String(raw).trim();
+  const month = /^\d{1,2}$/.test(value) ? Number(value) : NaN;
+  if (!(month >= 1 && month <= 12)) {
+    throw new Error(`--month must be a month from 1 to 12; '${raw}' is not.`);
+  }
+  return month;
+}
+
 /** The year's Beancount books, which entry and verify use. */
 export function getDefaultBooksPath(year?: number): string {
   const yr = year || new Date().getFullYear();
@@ -155,7 +172,7 @@ Commands:
         }
 
         const date = flags.date || new Date().toISOString().slice(0, 10);
-        const year = flags.year ? parseInt(flags.year, 10) : parseInt(date.slice(0, 4), 10);
+        const year = flags.year ? parseYearFlag(flags.year) : parseInt(date.slice(0, 4), 10);
 
         const result = await fileReceipt({
           booksDir,
@@ -183,7 +200,7 @@ Commands:
         }
         const booksPath = flags.books
           ? path.resolve(expandHome(flags.books))
-          : getDefaultBooksPath(flags.year ? parseInt(flags.year, 10) : undefined);
+          : getDefaultBooksPath(flags.year ? parseYearFlag(flags.year) : undefined);
         assertBeancountTarget(booksPath, "accounting:import");
         const configPath = flags.config
           ? path.resolve(expandHome(flags.config))
@@ -218,8 +235,8 @@ Commands:
           return 1;
         }
 
-        const year = parseInt(flags.year, 10);
-        const month = parseInt(flags.month, 10);
+        const year = parseYearFlag(flags.year);
+        const month = parseMonthFlag(flags.month);
         const booksPath = flags.books
           ? path.resolve(expandHome(flags.books))
           : getDefaultBooksPath(year);
@@ -268,7 +285,7 @@ Commands:
         }
         const booksPath = flags.books
           ? path.resolve(expandHome(flags.books))
-          : getDefaultBooksPath(flags.year ? parseInt(flags.year, 10) : undefined);
+          : getDefaultBooksPath(flags.year ? parseYearFlag(flags.year) : undefined);
 
         const result = await checkBooks(booksPath);
         if (result.outcome === "pass") {
@@ -286,7 +303,6 @@ Commands:
 
       case "init-books": {
         const dirs = [
-          path.join(booksDir, "rules"),
           path.join(booksDir, "inbox"),
           path.join(booksDir, "receipts"),
           path.join(booksDir, "statements"),

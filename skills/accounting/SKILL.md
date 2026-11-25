@@ -141,17 +141,25 @@ Check the year's books with `deno task accounting:verify`, which runs `rledger c
    deno task accounting:import --statement statements/<year>/<file>.csv --importer <profile>
    ```
    It runs `rledger extract` with `--config` pointing at the books' own `importers.toml` (or the
-   file named with `--config`), `--importer` naming the profile, and `--existing` naming the
-   year's books. Lines the books already hold are left out, so running a file twice adds nothing.
-   Why `--config` is always passed is explained under "Each month" in the design.
+   file named with `--config`) and `--importer` naming the profile. Why `--config` is always
+   passed is explained under "Each month" in the design, which also holds the literal cases.
+   - A line with a bank line id is matched by its id: it is left out when the books already hold
+     that id as `bank_id` metadata or the file carries it earlier, and a `0.00` line is left out.
+     The rest go through `rledger extract` without `--existing`, so two identical same-day
+     purchases with their own ids are both kept, and each imported transaction gets
+     `bank_id: "<id>"`. If the extracted transactions do not match those lines one to one, in
+     order and on the same dates, it refuses.
+   - A line with no id goes through `rledger extract --existing` naming the year's books.
+   - Either way, running a file twice adds nothing.
    - The profile's `mappings` give each line its category, matched on the description; a line no
      mapping places lands in its `default_expense` or `default_income` account. Ask Josh about
      any line the profile cannot place.
    - The extracted lines are staged with the books, and any account they use that the books do
-     not open yet is opened on January 1. The staged books must pass `rledger check` before they
-     replace the books.
-   - It refuses, and leaves the books exactly as they were, when `rledger` cannot run,
-     `importers.toml` cannot be read, the profile is not found, the books cannot be read, or the
+     not open yet is opened on January 1 of the earliest imported line's year. The staged books
+     must pass `rledger check` before they replace the books.
+   - It refuses, and leaves the books exactly as they were, when the file is not a clean CSV or
+     cannot be read, `rledger` cannot run, `importers.toml` cannot be read, the profile is not
+     found, the books cannot be read, the extracted lines do not match the file's lines, or the
      staged books fail `rledger check`. `--dry-run` shows what it would import.
 3. **Month-End Close**: Once the month's lines are in and match the statement:
    ```sh

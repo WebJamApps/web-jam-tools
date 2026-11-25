@@ -80,6 +80,9 @@ async function report(rledger: string, books: string, title: string, query: stri
  */
 export async function closeMonth(options: CloseMonthOptions): Promise<MonthCloseResult> {
   assertBeancountTarget(options.booksPath, "accounting:close-month");
+  if (!Number.isInteger(options.year) || options.year < 1000 || options.year > 9999) {
+    throw new Error(`'${options.year}' is not a four-digit year; nothing was written.`);
+  }
   if (!Number.isInteger(options.month) || options.month < 1 || options.month > 12) {
     throw new Error(`'${options.month}' is not a month from 1 to 12; nothing was written.`);
   }

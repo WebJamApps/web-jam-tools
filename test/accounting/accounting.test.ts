@@ -11,7 +11,12 @@ import {
   assertThrows,
 } from "@std/assert";
 import * as path from "@std/path";
-import { getDefaultBooksPath, runCli } from "../../src/accounting/cli.ts";
+import {
+  getDefaultBooksPath,
+  parseMonthFlag,
+  parseYearFlag,
+  runCli,
+} from "../../src/accounting/cli.ts";
 import { closeMonth } from "../../src/accounting/close_month.ts";
 import {
   appendEntryToBooks,
@@ -1115,4 +1120,272 @@ Deno.test("the import and close-month commands read importers.toml beside the bo
       );
     });
   });
+});
+
+// ---- "Each month": the import's bank_id deduplication cases (web-jam-tools#1866) ----
+
+const COFFEE_A1 = `
+2026-01-01 open Expenses:Uncategorized USD
+
+2026-03-04 * "COFFEE"
+  bank_id: "A1"
+  Assets:Checking:Truist  -3.00 USD
+  Expenses:Uncategorized
+`;
+
+const COFFEE_A2 = `
+2026-03-04 * "COFFEE"
+  bank_id: "A2"
+  Assets:Checking:Truist  -3.00 USD
+  Expenses:Uncategorized
+`;
+
+/** Writes `lines` as a clean CSV beside the books and imports it with the test profile. */
+async function importLines(
+  dir: string,
+  books: string,
+  config: string,
+  lines: string[],
+  rledger?: string,
+) {
+  const csv = path.join(dir, "statement.csv");
+  await Deno.writeTextFile(csv, cleanCsv(lines));
+  return await importStatement({
+    csvPath: csv,
+    booksPath: books,
+    configPath: config,
+    importer: "truist-checking",
+    rledger: rledger ?? await rledgerPath(),
+  });
+}
+
+/** The `bank_id` written under each transaction header, in order, as [description, id]. */
+function bankIds(text: string): Array<[string, string]> {
+  const ids: Array<[string, string]> = [];
+  const lines = text.split("\n");
+  lines.forEach((line, i) => {
+    const header = /^\d{4}-\d{2}-\d{2} \* "([^"]*)"/.exec(line);
+    const meta = /^\s+bank_id: "([^"]*)"/.exec(lines[i + 1] ?? "");
+    if (header && meta) ids.push([header[1], meta[1]]);
+  });
+  return ids;
+}
+
+const COFFEES = ["2026-03-04,COFFEE,-3.00,A1", "2026-03-04,COFFEE,-3.00,A2"];
+
+Deno.test("Each month case 1: two identical same-day purchases with their own ids both import", async () => {
+  await withBooksFolder(async (_dir, books, config) => {
+    const result = await importLines(_dir, books, config, COFFEES);
+    assertEquals(result.importedCount, 2);
+    const after = await Deno.readTextFile(books);
+    assertEquals(bankIds(after), [["COFFEE", "A1"], ["COFFEE", "A2"]]);
+    assertEquals((await checkBooks(books, { rledger: await rledgerPath() })).outcome, "pass");
+  });
+});
+
+Deno.test("Each month case 2: with one coffee in the books, A1 is skipped and A2 imports", async () => {
+  await withBooksFolder(async (dir, books, config) => {
+    await Deno.writeTextFile(books, BASE_BOOKS + COFFEE_A1);
+    const result = await importLines(dir, books, config, COFFEES);
+    assertEquals(result.importedCount, 1);
+    assertEquals(bankIds(result.extracted), [["COFFEE", "A2"]]);
+    assertEquals(bankIds(await Deno.readTextFile(books)), [["COFFEE", "A1"], ["COFFEE", "A2"]]);
+  });
+});
+
+Deno.test("Each month case 3: with both coffees in the books, nothing imports and the books are unchanged", async () => {
+  await withBooksFolder(async (dir, books, config) => {
+    const held = BASE_BOOKS + COFFEE_A1 + COFFEE_A2;
+    await Deno.writeTextFile(books, held);
+    const result = await importLines(dir, books, config, COFFEES);
+    assertEquals(result.importedCount, 0);
+    assertEquals(await Deno.readTextFile(books), held);
+  });
+});
+
+Deno.test("Each month case 4: an id repeated in one CSV imports once", async () => {
+  await withBooksFolder(async (dir, books, config) => {
+    const result = await importLines(dir, books, config, [COFFEES[0], COFFEES[0]]);
+    assertEquals(result.importedCount, 1);
+    assertEquals(bankIds(await Deno.readTextFile(books)), [["COFFEE", "A1"]]);
+  });
+});
+
+Deno.test("Each month case 5: a 0.00 line is skipped and the next line keeps its own id", async () => {
+  await withBooksFolder(async (dir, books, config) => {
+    const result = await importLines(dir, books, config, [
+      "2026-03-04,ZERO BALANCE,0.00,Z1",
+      "2026-03-04,COFFEE,-3.00,A2",
+    ]);
+    assertEquals(result.importedCount, 1);
+    assert(!result.extracted.includes("ZERO BALANCE"));
+    assertEquals(bankIds(result.extracted), [["COFFEE", "A2"]]);
+  });
+});
+
+Deno.test("Each month case 6: unsorted lines import with each id matched to its own line", async () => {
+  await withBooksFolder(async (dir, books, config) => {
+    const result = await importLines(dir, books, config, [
+      "2026-03-10,LATER,-5.00,B1",
+      "2026-03-04,COFFEE,-3.00,A2",
+      "2026-03-01,EARLIER,-2.00,C1",
+    ]);
+    assertEquals(result.importedCount, 3);
+    assertEquals(bankIds(result.extracted), [["LATER", "B1"], ["COFFEE", "A2"], [
+      "EARLIER",
+      "C1",
+    ]]);
+  });
+});
+
+Deno.test("Each month case 7: a line with no id imports without bank_id, and again adds nothing", async () => {
+  await withBooksFolder(async (dir, books, config) => {
+    const first = await importLines(dir, books, config, ["2026-03-04,COFFEE,-3.00,"]);
+    assertEquals(first.importedCount, 1);
+    assert(!first.extracted.includes("bank_id"));
+    const afterFirst = await Deno.readTextFile(books);
+    const repeat = await importLines(dir, books, config, ["2026-03-04,COFFEE,-3.00,"]);
+    assertEquals(repeat.importedCount, 0);
+    assertEquals(await Deno.readTextFile(books), afterFirst);
+  });
+});
+
+Deno.test("Each month case 8: a new id imports while a repeated line with no id is skipped by --existing", async () => {
+  await withBooksFolder(async (dir, books, config) => {
+    const parking = `
+2026-03-05 * "PARKING"
+  Assets:Checking:Truist  -5.00 USD
+  Expenses:Uncategorized
+`;
+    await Deno.writeTextFile(books, BASE_BOOKS + COFFEE_A1 + parking);
+    const result = await importLines(dir, books, config, [
+      "2026-03-04,COFFEE,-3.00,A2",
+      "2026-03-05,PARKING,-5.00,",
+    ]);
+    assertEquals(result.importedCount, 1);
+    assertEquals(bankIds(result.extracted), [["COFFEE", "A2"]]);
+    const after = await Deno.readTextFile(books);
+    assertEquals(after.split('"PARKING"').length - 1, 1);
+  });
+});
+
+Deno.test("Each month case 9: extracted transactions that do not line up with the CSV lines are refused", async () => {
+  await withBooksFolder(async (dir, books, config) => {
+    const fake = (output: string) => {
+      const script = path.join(dir, `fake-rledger-${crypto.randomUUID()}`);
+      Deno.writeTextFileSync(script, `#!/bin/sh\ncat <<'OUT'\n${output}OUT\n`, { mode: 0o755 });
+      return script;
+    };
+    const oneCoffee = '2026-03-04 * "COFFEE"\n  Assets:Checking:Truist  -3.00 USD\n' +
+      "  Expenses:Uncategorized\n";
+    const wrongDate = oneCoffee.replace("2026-03-04", "2026-03-05");
+    for (const output of [oneCoffee, oneCoffee + wrongDate]) {
+      await assertRejects(
+        () => importLines(dir, books, config, COFFEES, fake(output)),
+        Error,
+        "bank line ids could not be matched",
+      );
+      assertEquals(await Deno.readTextFile(books), BASE_BOOKS);
+    }
+    await assertNoCandidates(dir);
+  });
+});
+
+Deno.test("Each month case 10: an unreadable or non-clean CSV is refused with the books unchanged", async () => {
+  await withBooksFolder(async (dir, books, config) => {
+    const base = {
+      booksPath: books,
+      configPath: config,
+      importer: "truist-checking",
+      rledger: await rledgerPath(),
+    };
+    await assertRejects(
+      () => importStatement({ ...base, csvPath: path.join(dir, "missing.csv") }),
+      Error,
+      "Cannot read the clean CSV",
+    );
+    const raw = path.join(dir, "raw.csv");
+    await Deno.writeTextFile(raw, "Date,Memo,Debit\n2026-03-04,COFFEE,3.00\n");
+    await assertRejects(
+      () => importStatement({ ...base, csvPath: raw }),
+      Error,
+      "is not a clean CSV",
+    );
+    assertEquals(await Deno.readTextFile(books), BASE_BOOKS);
+    await assertNoCandidates(dir);
+  });
+});
+
+Deno.test("the import opens new accounts in the earliest year of an unsorted statement", async () => {
+  await withBooksFolder(async (dir, books, config) => {
+    const opened2025 = `option "operating_currency" "USD"
+
+2025-01-01 open Assets:Checking:Truist USD
+`;
+    await Deno.writeTextFile(books, opened2025);
+    const result = await importLines(dir, books, config, [
+      "2026-01-02,NEW YEAR,-2.00,Y1",
+      "2025-12-31,OLD YEAR,-1.00,Y2",
+    ]);
+    assertEquals(result.importedCount, 2);
+    assertStringIncludes(
+      await Deno.readTextFile(books),
+      "2025-01-01 open Expenses:Uncategorized USD",
+    );
+    assertEquals((await checkBooks(books, { rledger: await rledgerPath() })).outcome, "pass");
+  });
+});
+
+Deno.test("the month close refuses a year that is not four digits, and the CLI parses --year and --month strictly", async () => {
+  await withBooksFolder(async (dir, books) => {
+    const base = {
+      month: 3,
+      balances: { "Assets:Checking:Truist": 0 },
+      booksPath: books,
+      rledger: await rledgerPath(),
+    };
+    for (const year of [NaN, 26, 2026.5, 10000]) {
+      await assertRejects(
+        () => closeMonth({ ...base, year }),
+        Error,
+        "not a four-digit year",
+      );
+    }
+    assertEquals(await Deno.readTextFile(books), BASE_BOOKS);
+    await assertRejects(() => Deno.stat(path.join(dir, "closed")), Deno.errors.NotFound);
+  });
+
+  assertEquals(parseYearFlag("2026"), 2026);
+  assertEquals(parseMonthFlag("03"), 3);
+  for (const bad of ["2026abc", "26", "2026.5", "", " "]) {
+    assertThrows(() => parseYearFlag(bad), Error, "--year must be a four-digit year");
+  }
+  for (const bad of ["3foo", "0", "13", "1.5", ""]) {
+    assertThrows(() => parseMonthFlag(bad), Error, "--month must be a month from 1 to 12");
+  }
+  const closeArgs = ["close-month", "--balance", "Assets:Checking:Truist=1", "--books"];
+  assertEquals(
+    await runCli([...closeArgs, "x.beancount", "--year", "2026abc", "--month", "3"]),
+    1,
+  );
+  assertEquals(
+    await runCli([...closeArgs, "x.beancount", "--year", "2026", "--month", "3foo"]),
+    1,
+  );
+  assertEquals(await runCli(["verify", "--year", "2026abc"]), 1);
+  assertEquals(
+    await runCli(["import", "--statement", "x.csv", "--importer", "p", "--year", "26"]),
+    1,
+  );
+});
+
+Deno.test("init-books does not create the retired rules/ folder", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "accounting-test-init-" });
+  try {
+    assertEquals(await runCli(["init-books", "--books-dir", dir]), 0);
+    await assertRejects(() => Deno.stat(path.join(dir, "rules")), Deno.errors.NotFound);
+    assert((await Deno.stat(path.join(dir, "statements"))).isDirectory);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
 });
