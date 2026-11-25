@@ -1,5 +1,5 @@
-import { assertEquals } from "@std/assert";
-import { checkGhApi } from "../hooks/lib/check_gh_api.ts";
+import { assertEquals, assertStringIncludes } from "@std/assert";
+import { checkGhApi, ghApiVerdict } from "../hooks/lib/check_gh_api.ts";
 
 const HOOK_PATH = new URL("../hooks/gh-api-guard.sh", import.meta.url).pathname;
 
@@ -94,27 +94,85 @@ Deno.test("gh api POST/PUT/PATCH or field flags trigger ask decision", async () 
   assertEquals(parsed2.hookSpecificOutput?.permissionDecision, "ask");
 });
 
-// web-jam-tools: narrow carve-out — removing an issue dependency
-// (`.../issues/<N>/dependencies/blocked_by/<ID>`) is reversible (the
-// dependency can be re-added with the corresponding POST), so it is the
-// one DELETE form allowed to pass through cleanly.
-Deno.test("gh api DELETE blocked_by dependency removal is allowed through", async () => {
-  const allowedForms = [
-    "gh api --method DELETE repos/owner/repo/issues/1/dependencies/blocked_by/2",
-    "gh api -X DELETE repos/owner/repo/issues/1/dependencies/blocked_by/2",
-    `gh api -X 'DELETE' repos/owner/repo/issues/1/dependencies/blocked_by/2`,
-    `gh api -X "DELETE" repos/owner/repo/issues/1/dependencies/blocked_by/2`,
-    `gh api --method='DELETE' repos/owner/repo/issues/1/dependencies/blocked_by/2`,
-    `gh api --method="DELETE" repos/owner/repo/issues/1/dependencies/blocked_by/2`,
-    "gh api --method=DELETE repos/owner/repo/issues/1/dependencies/blocked_by/2",
-    "gh api -XDELETE repos/owner/repo/issues/1/dependencies/blocked_by/2",
-  ];
-  for (const cmd of allowedForms) {
-    const res = await runHook(cmd);
-    assertEquals(res.code, 0, `expected exit 0 for: ${cmd}`);
-    assertEquals(res.stdout, "", `expected no stdout (no ask/prompt) for: ${cmd}`);
-    assertEquals(res.stderr, "", `expected no block message for: ${cmd}`);
+// "Raw writes to an issue's dependency path" in github-write-guards-design.md:
+// both halves refuse, with no exception, on every tool, naming the link command.
+const DEPENDENCY_ADDS = [
+  "gh api --method POST repos/WebJamApps/web-jam-back/issues/973/dependencies/blocked_by -F issue_id=123",
+  "gh api -X POST repos/WebJamApps/web-jam-back/issues/973/dependencies/blocked_by -F issue_id=123",
+  // gh sends a request with fields as POST when no method is named.
+  "gh api repos/WebJamApps/web-jam-back/issues/973/dependencies/blocked_by -F issue_id=123",
+  "gh api https://api.github.com/repos/o/r/issues/973/dependencies/blocked_by -f issue_id=1",
+  "gh api repos/{owner}/{repo}/issues/973/dependencies/blocked_by --input body.json",
+  "gh api -X PUT repos/o/r/issues/973/dependencies/blocked_by",
+];
+const DEPENDENCY_REMOVALS = [
+  "gh api --method DELETE repos/WebJamApps/web-jam-back/issues/973/dependencies/blocked_by/123",
+  "gh api -X DELETE repos/WebJamApps/web-jam-back/issues/973/dependencies/blocked_by/123",
+  "gh api -XDELETE repos/WebJamApps/web-jam-back/issues/973/dependencies/blocked_by/123",
+  "gh api --method=DELETE repos/WebJamApps/web-jam-back/issues/973/dependencies/blocked_by/123",
+  `gh api -X 'DELETE' repos/owner/repo/issues/1/dependencies/blocked_by/2`,
+  `gh api --method="DELETE" repos/owner/repo/issues/1/dependencies/blocked_by/2`,
+];
+const WRAPPERS = [
+  (cmd: string) => cmd,
+  (cmd: string) => `env ${cmd}`,
+  (cmd: string) => `bash -c '${cmd}'`,
+  (cmd: string) => `FLAG=1 timeout 5s ${cmd}`,
+  (cmd: string) => `gh api repos/o/r && ${cmd}`,
+  // Unresolved wrappers reach the text fallback, which refuses the same way.
+  (cmd: string) => `unknown-wrapper '${cmd}'`,
+  (cmd: string) => `bash -lc '${cmd}'`,
+];
+
+Deno.test("a raw dependency-path add is refused on every tool, naming block-issue", async () => {
+  for (const base of DEPENDENCY_ADDS) {
+    for (const wrap of WRAPPERS) {
+      const cmd = wrap(base);
+      assertEquals(ghApiVerdict(cmd), { decision: "deny", link: "block-issue" }, cmd);
+    }
+    for (const surface of ["", "agy", "codex"]) {
+      const res = await runHook(`env ${base}`, { WJT_SURFACE: surface });
+      assertEquals(res.code, 2, `${surface}: ${base}`);
+      assertEquals(res.stdout, "", `${surface}: ${base}`);
+      assertStringIncludes(res.stderr, "BLOCKED (gh api guard)");
+      assertStringIncludes(res.stderr, "deno task block-issue --repo");
+    }
   }
+});
+
+Deno.test("a raw dependency-path removal is refused on every tool, naming unblock-issue", async () => {
+  for (const base of DEPENDENCY_REMOVALS) {
+    for (const wrap of WRAPPERS) {
+      const cmd = wrap(base);
+      assertEquals(ghApiVerdict(cmd), { decision: "deny", link: "unblock-issue" }, cmd);
+    }
+    for (const surface of ["", "agy", "codex"]) {
+      const res = await runHook(base, { WJT_SURFACE: surface });
+      assertEquals(res.code, 2, `${surface}: ${base}`);
+      assertEquals(res.stdout, "", `${surface}: ${base}`);
+      assertStringIncludes(res.stderr, "BLOCKED (gh api guard)");
+      assertStringIncludes(res.stderr, "deno task unblock-issue --repo");
+    }
+  }
+});
+
+Deno.test("reading a dependency path is allowed; other deletes keep the plain refusal", async () => {
+  for (
+    const cmd of [
+      "gh api repos/WebJamApps/web-jam-back/issues/973/dependencies/blocked_by",
+      "gh api --method GET repos/o/r/issues/973/dependencies/blocked_by",
+      "env gh api repos/o/r/issues/973/dependencies/blocked_by --jq '.[].number'",
+    ]
+  ) {
+    assertEquals(ghApiVerdict(cmd), { decision: "allow" }, cmd);
+    assertEquals(await runHook(cmd), { code: 0, stdout: "", stderr: "" }, cmd);
+  }
+  const res = await runHook(
+    "gh api --method DELETE repos/WebJamApps/web-jam-tools/issues/1/labels/x",
+  );
+  assertEquals(res.code, 2);
+  assertStringIncludes(res.stderr, "gh api DELETE is denied");
+  assertEquals(res.stderr.includes("block-issue"), false);
 });
 
 Deno.test("gh api DELETE to a different path is still denied", async () => {
@@ -215,16 +273,6 @@ Deno.test("gh api PUT/PATCH and field flags with WJT_SURFACE=codex exit 0 with n
   }
 });
 
-Deno.test("gh api --method DELETE repos/x/y/issues/1/dependencies/blocked_by/2 with WJT_SURFACE=codex is still allowed", async () => {
-  const res = await runHook(
-    "gh api --method DELETE repos/x/y/issues/1/dependencies/blocked_by/2",
-    { WJT_SURFACE: "codex" },
-  );
-  assertEquals(res.code, 0);
-  assertEquals(res.stdout, "");
-  assertEquals(res.stderr, "");
-});
-
 Deno.test("gh api --method DELETE repos/x/y/issues/1 on any surface is still denied (exit 2)", async () => {
   // On Codex
   const resCodex = await runHook("gh api --method DELETE repos/x/y/issues/1", {
@@ -302,13 +350,6 @@ Deno.test("quoted examples, comments and data heredocs pass the shell entry poin
   }
 });
 
-Deno.test("wrapper resolution does not widen the direct blocked_by exception", async () => {
-  const res = await runHook(
-    "env gh api --method DELETE repos/o/r/issues/1/dependencies/blocked_by/2",
-  );
-  assertEquals(res.code, 2);
-});
-
 Deno.test("gh api positional decisions distinguish flag values from executable methods", () => {
   for (
     const cmd of [
@@ -360,6 +401,60 @@ Deno.test("gh api conservatively falls back on substitutions, malformed syntax a
   assertEquals(checkGhApi('bash -lc "echo hello"'), "allow");
   assertEquals(checkGhApi("env -u"), "allow");
   assertEquals(checkGhApi('bash -lc "gh api repos/o/r -f title=test"'), "ask");
+  // gh's {owner}/{repo}/{branch} placeholders reach the positional reader as one endpoint.
+  assertEquals(checkGhApi("gh api repos/{owner}/{repo}/issues -f title=test"), "ask");
+  assertEquals(checkGhApi("gh api repos/{owner}/{repo}/issues/1/labels"), "allow");
+  assertEquals(checkGhApi("gh api repos/{owner}/{repo}/branches/{branch}"), "allow");
+  assertEquals(checkGhApi("gh api repos/${OWNER}/r/issues -f title=test"), "ask");
+  assertEquals(
+    ghApiVerdict("gh api repos/{owner}/{repo}/issues/9/dependencies/blocked_by -F issue_id=1"),
+    { decision: "deny", link: "block-issue" },
+  );
+  // Other unquoted braces inside a word (brace expansion) still take the text fallback.
+  assertEquals(
+    ghApiVerdict("gh api -X POST repos/o/r/issues/{1,2}/dependencies/blocked_by -F issue_id=1"),
+    { decision: "deny", link: "block-issue" },
+  );
+});
+
+Deno.test("quoted JSON examples are data and never send a command to the text fallback", () => {
+  for (
+    const cmd of [
+      `printf '%s\\n' '{"note":"gh api --method DELETE repos/o/r/issues/1"}'`,
+      `printf '%s' '{"example":"gh api -X POST repos/o/r/issues/1/dependencies/blocked_by"}'`,
+      `echo "{\\"method\\":\\"DELETE\\",\\"cmd\\":\\"gh api repos/o/r\\"}"`,
+      `gh api repos/o/r/issues --jq '.[] | {number, title}'`,
+      `gh issue view 1 --json body --jq '{body}' # gh api -X DELETE repos/o/r`,
+    ]
+  ) assertEquals(ghApiVerdict(cmd), { decision: "allow" }, cmd);
+  // A brace expansion in one command never reclassifies quoted data in another.
+  for (
+    const cmd of [
+      `printf '%s\\n' '{"note":"gh api --method DELETE repos/o/r/issues/1"}' && mkdir -p out/{a,b}`,
+      `mkdir -p out/{a,b}; printf '%s' '{"x":"gh api -X POST repos/o/r/issues/1/dependencies/blocked_by"}'`,
+      `touch f{1,2}.txt | echo '{"cmd":"gh api -XDELETE repos/o/r"}'`,
+      `mkdir -p out/{a,b} && gh api repos/o/r/issues/1/dependencies/blocked_by`,
+    ]
+  ) assertEquals(ghApiVerdict(cmd), { decision: "allow" }, cmd);
+  // ...while the gh api call that carries the brace is still judged, on its own text.
+  assertEquals(
+    ghApiVerdict(
+      `printf '%s' '{"a":1}' && gh api -X DELETE repos/o/r/issues/{1,2}/dependencies/blocked_by/3`,
+    ),
+    { decision: "deny", link: "unblock-issue" },
+  );
+  assertEquals(
+    checkGhApi(`mkdir -p out/{a,b} && gh api repos/o/r/issues/{1,2}/labels -f name=x`),
+    "ask",
+  );
+  // A real write that reads its JSON body from a quoted example is still judged as a write.
+  assertEquals(
+    ghApiVerdict(
+      `echo '{"issue_id":1}' | gh api repos/o/r/issues/9/dependencies/blocked_by --input -`,
+    ),
+    { decision: "deny", link: "block-issue" },
+  );
+  assertEquals(checkGhApi(`gh api repos/o/r/issues -X POST --input - <<< '{"title":"x"}'`), "ask");
 });
 
 Deno.test("gh api CLI accepts the alternate payload and runner refuses malformed input", async () => {
