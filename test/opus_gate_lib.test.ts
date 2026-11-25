@@ -1077,8 +1077,10 @@ Deno.test("decide: a task grant judges a write by where it lands through symlink
         "deny",
         task,
       );
-      // Without -T the destination may be a folder to land inside, so both readings must stay.
-      assertEquals(run({ command: "mv src/a.ts to-music.ts" }, "Bash"), "deny", task);
+      // Without -T the filesystem decides: a link to a regular file is replaced in the folder
+      // holding it, and a link to a folder gains the source's entry inside the folder it points to.
+      assertEquals(run({ command: "mv src/a.ts to-music.ts" }, "Bash"), "allow", task);
+      assertEquals(run({ command: "mv src/a.ts music-dir" }, "Bash"), "deny", task);
     }
   } finally {
     await Deno.remove(root, { recursive: true });
