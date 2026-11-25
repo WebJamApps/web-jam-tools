@@ -1357,7 +1357,7 @@ Deno.test("the month close refuses a year that is not four digits, and the CLI p
 
   assertEquals(parseYearFlag("2026"), 2026);
   assertEquals(parseMonthFlag("03"), 3);
-  for (const bad of ["2026abc", "26", "2026.5", "", " "]) {
+  for (const bad of ["2026abc", "26", "2026.5", "", " ", "0000", "0026", "0999"]) {
     assertThrows(() => parseYearFlag(bad), Error, "--year must be a four-digit year");
   }
   for (const bad of ["3foo", "0", "13", "1.5", ""]) {
@@ -1373,6 +1373,7 @@ Deno.test("the month close refuses a year that is not four digits, and the CLI p
     1,
   );
   assertEquals(await runCli(["verify", "--year", "2026abc"]), 1);
+  assertEquals(await runCli(["verify", "--year", "0000"]), 1);
   assertEquals(
     await runCli(["import", "--statement", "x.csv", "--importer", "p", "--year", "26"]),
     1,

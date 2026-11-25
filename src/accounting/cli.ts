@@ -22,10 +22,12 @@ export function getDefaultBooksDir(): string {
   return path.join(home, "Dropbox", "web-jam-llms", "financial", "books");
 }
 
-/** A `--year` value: exactly four digits, nothing else. */
+/** A `--year` value: exactly four digits, 1000 to 9999, nothing else, as `closeMonth` requires. */
 export function parseYearFlag(raw: string): number {
   const value = String(raw).trim();
-  if (!/^\d{4}$/.test(value)) throw new Error(`--year must be a four-digit year; '${raw}' is not.`);
+  if (!/^[1-9]\d{3}$/.test(value)) {
+    throw new Error(`--year must be a four-digit year; '${raw}' is not.`);
+  }
   return Number(value);
 }
 
