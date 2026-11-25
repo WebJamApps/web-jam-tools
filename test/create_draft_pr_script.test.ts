@@ -2525,6 +2525,41 @@ Deno.test("pair rule: fails closed on --part-of when blocking lookup errors or r
       { blockingFailure: "gh: API rate limit exceeded (HTTP 403)" },
       { blockingJson: '{"message":"bad gateway"}' },
       { blockingJson: "" },
+      {
+        blockingJson: JSON.stringify([
+          {
+            number: 1322,
+            state: "open",
+            title: "Missing labels array on open issue",
+          },
+        ]),
+      },
+      {
+        blockingJson: JSON.stringify([
+          {
+            number: 1321,
+            state: "closed",
+            title: "Valid closed item",
+            labels: [{ name: "Josh" }],
+          },
+          {
+            number: 1323,
+            state: "open",
+            title: "Incomplete row inside valid page",
+            labels: null,
+          },
+        ]),
+      },
+      {
+        blockingJson: JSON.stringify([
+          {
+            number: 1324,
+            state: "unknown",
+            title: "Unrecognized state string",
+            labels: [],
+          },
+        ]),
+      },
     ]
   ) {
     const mockGhDir = await makeMockGh({
@@ -2537,6 +2572,73 @@ Deno.test("pair rule: fails closed on --part-of when blocking lookup errors or r
       const res = await runScript(dir, [...baseArgs(), "--issue", "1320", "--part-of"], env);
       assertEquals(res.code, 1);
       assertMatch(res.stderr, /#1320/);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+      await Deno.remove(mockGhDir, { recursive: true });
+    }
+  }
+});
+
+Deno.test("pair rule: refuses --local-step and --no-close when issue blocks an open standalone Josh issue (web-jam-tools#1460)", async () => {
+  const blockingJson = JSON.stringify([
+    {
+      number: 1321,
+      state: "open",
+      title: "Manual verification: install and test",
+      labels: [{ name: "Josh" }],
+      repository_url: "https://api.github.com/repos/WebJamApps/web-jam-tools",
+    },
+  ]);
+
+  const cases: Array<[string, string[]]> = [
+    ["--local-step", ["Hydrogen"]],
+    ["--local-step", ["Josh", "Hydrogen"]],
+    ["--no-close", ["Hydrogen"]],
+  ];
+  for (const [flag, issueLabels] of cases) {
+    const mockGhDir = await makeMockGh({
+      ownerRepo: "WebJamApps/web-jam-tools",
+      issueLabels,
+      blockingJson,
+    });
+    const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+    const dir = await makeFixtureRepo();
+    try {
+      const res = await runScript(dir, [...baseArgs(), "--issue", "1320", flag], env);
+      assertEquals(res.code, 1);
+      assertStringIncludes(res.stderr, `refusing ${flag} on #1320`);
+      assertStringIncludes(res.stderr, "WebJamApps/web-jam-tools#1321");
+      if (issueLabels.includes("Josh")) {
+        assertMatch(res.stderr, /correct the issue pairing/);
+      }
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+      await Deno.remove(mockGhDir, { recursive: true });
+    }
+  }
+});
+
+Deno.test("pair rule: accepts --part-of, --local-step, and --no-close when blocked open Josh issue also carries a model label (web-jam-tools#1460)", async () => {
+  const mixedBlockingJson = JSON.stringify([
+    {
+      number: 1764,
+      state: "open",
+      title: "accounting skill: local install after merge",
+      labels: [{ name: "Hydrogen" }, { name: "Josh" }],
+      repository_url: "https://api.github.com/repos/WebJamApps/web-jam-tools",
+    },
+  ]);
+
+  for (const flag of ["--part-of", "--local-step", "--no-close"] as const) {
+    const mockGhDir = await makeMockGh({
+      ownerRepo: "WebJamApps/web-jam-tools",
+      blockingJson: mixedBlockingJson,
+    });
+    const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+    const dir = await makeFixtureRepo();
+    try {
+      const res = await runScript(dir, [...baseArgs(), "--issue", "1320", flag], env);
+      assertEquals(res.code, 0, res.stderr);
     } finally {
       await Deno.remove(dir, { recursive: true });
       await Deno.remove(mockGhDir, { recursive: true });

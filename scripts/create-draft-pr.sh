@@ -155,10 +155,10 @@
 # (GitHub strips them silently — backtick them); current branch is dev/main;
 # working tree dirty; the repo has no `dev` branch; a resolved issue is
 # missing/closed; an issue is labeled 'Josh' without --part-of/--no-close
-# (web-jam-tools#848); --part-of is passed for an issue blocking an open
-# 'Josh' issue or its blocking lookup fails (web-jam-tools#1460); --part-of is
-# passed without a resolvable issue; or --update is passed but the current
-# branch has no existing open PR to update.
+# (web-jam-tools#848); --part-of, --local-step, or --no-close is passed for an
+# issue blocking a standalone open 'Josh' issue or its blocking lookup fails
+# (web-jam-tools#1460); --part-of is passed without a resolvable issue; or
+# --update is passed but the current branch has no existing open PR to update.
 
 set -euo pipefail
 
@@ -514,10 +514,17 @@ else
     exit 1
   fi
 
-  # --- refuse --part-of when the issue blocks an open 'Josh' issue (web-jam-tools#1460) ---
-  # In a Josh verification pair (issue A -> Josh issue B), A's PR must close A on merge
-  # (`Closes #A`) rather than leaving A open via `Part of #A` while B waits on A.
-  if [ "$PART_OF" -eq 1 ]; then
+  # --- refuse non-closing modes (--part-of / --local-step / --no-close) when the issue blocks a standalone open 'Josh' issue (web-jam-tools#1460) ---
+  # In a Josh verification pair (issue A -> standalone Josh issue B without a model label),
+  # A's PR must close A on merge rather than leaving A open while B waits on A.
+  if [ "$PART_OF" -eq 1 ] || [ "$LOCAL_STEP" -eq 1 ] || [ "$NO_CLOSE" -eq 1 ]; then
+    if [ "$PART_OF" -eq 1 ]; then
+      NON_CLOSE_FLAG="--part-of"
+    elif [ "$LOCAL_STEP" -eq 1 ]; then
+      NON_CLOSE_FLAG="--local-step"
+    else
+      NON_CLOSE_FLAG="--no-close"
+    fi
     BLOCKING_REPO_ARG="${TARGET_OWNER_REPO:-$CURRENT_REPO}"
     if [ -z "$BLOCKING_REPO_ARG" ]; then
       echo "ERROR: could not determine repository for $FORMATTED_ISSUE while checking blocking dependencies (web-jam-tools#1460)." >&2
@@ -531,22 +538,41 @@ else
       exit 1
     fi
     rm -f "$BLOCKING_ERR"
-    if ! OPEN_JOSH_BLOCKED="$(printf '%s' "$BLOCKING_JSON" | jq -rs '
+    BLOCKING_JQ_FILTER='
       if (length > 0 and all(.[]; type == "array")) then
         add
       else
         error("unexpected blocking dependencies payload")
       end
-      | if all(.[]; type == "object" and (.state | type) == "string") then
+      | if all(
+          .[];
+          type == "object"
+          and (.state | type) == "string"
+          and ((.state | ascii_downcase) == "open" or (.state | ascii_downcase) == "closed")
+          and (
+            ((.state | ascii_downcase) != "open")
+            or (
+              (.labels | type) == "array"
+              and all(.labels[]; (type == "object" and (.name | type) == "string") or type == "string")
+            )
+          )
+        ) then
           .
         else
           error("unexpected blocking issue entry")
         end
       | map(
-          select(
-            ((.state // "") | ascii_downcase) == "open"
-            and ((.labels // []) | any((type == "object" and .name == "Josh") or . == "Josh"))
-          )
+          ((.labels // []) | map(if type == "object" then .name else . end)) as $labelNames
+          | select(
+              ((.state | ascii_downcase) == "open")
+              and ($labelNames | index("Josh") != null)
+              and (
+                ($labelNames | any(
+                  . == "Argon" or . == "Astra" or . == "Fable" or . == "Haiku" or . == "Hydrogen"
+                  or . == "Luna" or . == "Neon" or . == "Opus" or . == "Sol" or . == "Sonnet" or . == "Terra"
+                )) | not
+              )
+            )
         )
       | map(
           "- "
@@ -559,14 +585,19 @@ else
           + " \"\(.title // "")\""
         )
       | join("\n")
-    ' 2>/dev/null)"; then
+    '
+    if ! OPEN_JOSH_BLOCKED="$(printf %s "$BLOCKING_JSON" | jq -rs "$BLOCKING_JQ_FILTER" 2>/dev/null)"; then
       echo "ERROR: could not parse blocking dependencies for $FORMATTED_ISSUE (fail closed, web-jam-tools#1460)." >&2
       exit 1
     fi
     if [ -n "$OPEN_JOSH_BLOCKED" ]; then
-      echo "ERROR: refusing --part-of on $FORMATTED_ISSUE because it blocks open 'Josh' issue(s) (web-jam-tools#1460):" >&2
+      echo "ERROR: refusing $NON_CLOSE_FLAG on $FORMATTED_ISSUE because it blocks open 'Josh' issue(s) (web-jam-tools#1460):" >&2
       printf '%s\n' "$OPEN_JOSH_BLOCKED" | sed 's/^/         /' >&2
-      echo "       A PR for $FORMATTED_ISSUE must close it on merge (omit --part-of) so it is not left open for Josh to close by hand." >&2
+      if [ "$HAS_JOSH_LABEL" -eq 1 ]; then
+        echo "       Issue $FORMATTED_ISSUE also carries the 'Josh' label, so closing it on merge is blocked too — correct the issue pairing or remove the conflicting label or dependency link before opening the PR." >&2
+      else
+        echo "       A PR for $FORMATTED_ISSUE must close it on merge (omit $NON_CLOSE_FLAG) so it is not left open for Josh to close by hand." >&2
+      fi
       exit 1
     fi
   fi
