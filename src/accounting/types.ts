@@ -1,13 +1,12 @@
 // src/accounting/types.ts
-// Data structures for Web Jam LLC's books (web-jam-tools#1764). Entries, receipts and the check
-// use rustledger's Beancount books; import and month close still read and write the journal
-// format until web-jam-tools#1866 moves them (web-jam-tools#1865).
+// Data structures for Web Jam LLC's books (web-jam-tools#1764), kept in rustledger's Beancount
+// books (web-jam-tools#1865, web-jam-tools#1866). The import and month-close options live beside
+// their commands in import.ts and close_month.ts.
 
 export interface Posting {
   account: string;
   amount: number;
   commodity?: string;
-  balanceAssertion?: number;
 }
 
 export interface Transaction {
@@ -20,66 +19,6 @@ export interface Transaction {
   comment?: string;
 }
 
-export interface BankTransaction {
-  date: string; // YYYY-MM-DD
-  amount: number;
-  payee: string;
-  memo?: string;
-  id: string; // FITID / unique transaction identifier
-  type?: string;
-}
-
-export interface AccountRule {
-  /** Literal payee substring, matched case-insensitively; never evaluated as a regex. */
-  pattern: string;
-  category: string;
-  purpose?: string;
-}
-
-export interface ConvertOptions {
-  inputPath: string;
-  outputPath?: string;
-  format?: "qfx" | "ofx" | "qbo" | "qif" | "auto";
-}
-
-export interface ConvertResult {
-  csv: string;
-  count: number;
-  outputPath?: string;
-}
-
-export interface ImportOptions {
-  statementPath: string;
-  journalPath: string;
-  rulesPath?: string;
-  account?: string;
-  dryRun?: boolean;
-}
-
-export interface ImportResult {
-  importedCount: number;
-  skippedCount: number;
-  transactions: Transaction[];
-}
-
-export interface CloseMonthOptions {
-  year: number;
-  month: number; // 1-12
-  balances: Record<string, number>; // account -> statement balance
-  journalPath: string;
-  booksDir?: string;
-  dryRun?: boolean;
-}
-
-export interface MonthCloseResult {
-  year: number;
-  month: number;
-  closeDate: string;
-  balances: Record<string, number>;
-  snapshotPath: string;
-  reportPaths: string[];
-}
-
 /**
  * What `rledger check` decided about the books: `pass` when it finds them valid, `fail` when it
  * reports an error (the diagnostic is in `message`), and `refuse` when the check could not run —
@@ -88,10 +27,4 @@ export interface MonthCloseResult {
 export interface BooksCheckResult {
   outcome: "pass" | "fail" | "refuse";
   message: string;
-}
-
-export interface VerificationResult {
-  valid: boolean;
-  errors: string[];
-  assertionsChecked: number;
 }

@@ -1,6 +1,6 @@
 ---
 name: accounting
-description: Keep Web Jam LLC's books in rustledger under ~/Dropbox/web-jam-llms/financial/books/. Record plain-text entries, file receipt scans, check the books with rledger, convert Quicken/QuickBooks bank files to CSV, import statements, and run the month-end close. No personal lines or amounts go to GitHub.
+description: Keep Web Jam LLC's books in rustledger under ~/Dropbox/web-jam-llms/financial/books/. Record plain-text entries, file receipt scans, check the books with rledger, import the clean statement CSVs with rledger extract, and run the month-end close. No personal lines or amounts go to GitHub.
 ---
 
 # /accounting — Web Jam LLC Double-Entry Bookkeeping in rustledger
@@ -8,18 +8,16 @@ description: Keep Web Jam LLC's books in rustledger under ~/Dropbox/web-jam-llms
 This skill manages Web Jam LLC's books in rustledger, which reads Beancount's plain-text format
 through its `rledger` command. It runs across Claude Code, Antigravity (agy), and Codex. Josh or
 Maria communicates transactions in plain language at the laptop (e.g. "penn station, 22.86"), and
-the agent writes the corresponding entries, files receipts, checks the books, converts bank
-files, or runs the month-end close.
+the agent writes the corresponding entries, files receipts, checks the books, imports the month's
+clean statement files, or runs the month-end close.
 
-Entries, receipts and the check use the year's Beancount books (`<year>.beancount`). Statement
-import and the month-end close still use the year's `<year>.journal` file until they move to the
-Beancount books; each refuses the other format's file and writes nothing.
+Every command works on the year's Beancount books (`<year>.beancount`) and refuses any other file.
 
 No bookkeeping is performed on a phone.
 
 ## Code and Data Separation
 
-The skill text, conversion tooling, and automated test suite live in this public repository
+The skill text, its commands, and automated test suite live in this public repository
 (`web-jam-tools`). All actual financial data, journals, statements, receipts, and reports
 live exclusively in the private Dropbox folder:
 
@@ -34,14 +32,13 @@ to GitHub or include them in issue descriptions, commit messages, or PR bodies.
 
 All accounting files reside in `~/Dropbox/web-jam-llms/financial/books/`:
 
-- `<year>.beancount` — the year's books, which entries and the check use (e.g. `2026.beancount`)
-- `<year>.journal` — the journal file statement import and the month-end close still use (e.g. `2026.journal`)
-- `rules/` — account import mapping rules (e.g. `truist-checking.rules`, `credit-card.rules`)
+- `<year>.beancount` — the year's books (e.g. `2026.beancount`)
+- `importers.toml` — the import profile for each account, read by `rledger extract`
 - `inbox/` — scanned receipts waiting to be filed
 - `receipts/<year>/` — filed receipt PDFs organized by year (e.g. `receipts/2026/2026-11-10-penn-station.pdf`)
 - `statements/<year>/` — downloaded bank and card statement files (e.g. `statements/2026/`)
 - `sweep/` — personal account statements placed temporarily during quarterly sweeps
-- `closed/<year>-<month>/` — closed month journal snapshots and verification reports
+- `closed/<year>-<month>/` — the dated copy of the books and the month's reports, saved by the close
 - `reports/<year>/` — year-to-date and annual balance sheets and profit & loss reports
 - `tax/<year>/` — quarterly penalty worksheets and the annual tax package
 - `mileage-<year>.csv` — gig and business travel mileage log
@@ -133,35 +130,50 @@ Check the year's books with `deno task accounting:verify`, which runs `rledger c
 
 ## Monthly Routine: Bank Import & Close
 
-Each month, downloaded statements are processed and closed. These steps still work on the year's
-`<year>.journal` file, their default; naming a `.beancount` file with `--journal` is refused
-before anything is written.
-
-1. **Download Statements**: Place checking and credit card statement files in `statements/<year>/`.
-2. **Convert Quicken / QuickBooks Format**: If downloaded in QFX, OFX, QBO, or QIF format, convert
-   to CSV:
+1. **Clean downloads (Josh, in his own terminal)**: Josh gets each business account's statement
+   file and runs `deno task accounting:clean-download <file>` on it himself, as "Each month" and
+   "What never reaches an agent" in the design set out. The clean CSV
+   (`date,description,amount,id`) lands in `statements/<year>/`; an agent never opens a download as
+   it was produced. An account with no downloadable file is typed in by Josh.
+2. **Import**: Import each clean file into the year's books with its account's profile from
+   `importers.toml`:
    ```sh
-   deno task accounting:convert --input <statement-file> --output <csv-file>
+   deno task accounting:import --statement statements/<year>/<file>.csv --importer <profile>
    ```
-3. **Import Transactions**: Import the CSV statement into the journal:
-   ```sh
-   deno task accounting:import --statement <csv-file> --account <account-name> --journal <journal-file>
-   ```
-   The importer enforces duplicate prevention: lines previously imported are skipped.
-4. **Categorize**: Review uncategorized transactions and apply mapping rules from `rules/`.
-   Pass the account's file with `--rules <rules-file>` on `accounting:import`. The importer accepts
-   `if <payee text> account2 <category>` on one line, or `if <payee text>` followed by an indented
-   `account2 <category>`. Payee text is a case-insensitive literal substring, not a regular expression;
-   punctuation such as `.` and `+` is matched as written. Rules are tried in file order.
-5. **Month-End Close**: Once all transactions are entered and reconciled to the statement balance:
+   It runs `rledger extract` with `--config` pointing at the books' own `importers.toml` (or the
+   file named with `--config`) and `--importer` naming the profile. Why `--config` is always
+   passed is explained under "Each month" in the design, which also holds the literal cases.
+   - A line with a bank line id is matched by its id: it is left out when the books already hold
+     that id as `bank_id` metadata or the file carries it earlier, and a `0.00` line is left out.
+     The rest go through `rledger extract` without `--existing`, so two identical same-day
+     purchases with their own ids are both kept, and each imported transaction gets
+     `bank_id: "<id>"`. If the extracted transactions do not match those lines one to one, in
+     order and on the same dates, it refuses.
+   - A line with no id goes through `rledger extract --existing` naming the year's books.
+   - Either way, running a file twice adds nothing.
+   - The profile's `mappings` give each line its category, matched on the description; a line no
+     mapping places lands in its `default_expense` or `default_income` account. Ask Josh about
+     any line the profile cannot place.
+   - The extracted lines are staged with the books, and any account they use that the books do
+     not open yet is opened on January 1 of the earliest imported line's year. The staged books
+     must pass `rledger check` before they replace the books.
+   - It refuses, and leaves the books exactly as they were, when the file is not a clean CSV or
+     cannot be read, `rledger` cannot run, `importers.toml` cannot be read, the profile is not
+     found, the books cannot be read, the extracted lines do not match the file's lines, or the
+     staged books fail `rledger check`. `--dry-run` shows what it would import.
+3. **Month-End Close**: Once the month's lines are in and match the statement:
    ```sh
    deno task accounting:close-month --year <year> --month <month> --balance <account>=<amount>
    ```
-   The close operation:
-   - Appends a balance assertion to `<year>.journal` (e.g. `Assets:Checking:Truist 0 = $5420.50`).
-   - Copies the journal to `closed/<year>-<month>/<year>.journal`.
-   - Generates month-end balance sheet and income statement reports under `closed/<year>-<month>/`.
-   - Ensures any future edit that alters the closed period's balance triggers an assertion failure.
+   Give one `--balance` for each account, with the statement's ending balance. The close:
+   - Writes each balance as a `balance` line dated the first day of the following month (e.g.
+     `2026-04-01 balance Assets:Checking:Truist 5420.50 USD` for March), so a purchase on the
+     statement's last day is counted.
+   - Checks the books with those lines with `rledger check` first. A balance that does not match
+     the books is refused with rustledger's diagnostic, and nothing is written.
+   - Saves a dated copy of the books, a balance sheet and the month's income statement under
+     `closed/<year>-<month>/`, then writes the books. A month already closed is refused.
+   - From then on, any edit that changes that month's totals fails `rledger check`.
 
 ## Tasks Reference
 
@@ -169,9 +181,8 @@ All accounting operations run via registered `deno task` commands in `deno.json`
 
 - `deno task accounting:entry` — Record a new entry in the year's Beancount books.
 - `deno task accounting:receipt` — File a receipt PDF from `inbox/` to `receipts/<year>/`.
-- `deno task accounting:convert` — Convert QFX, OFX, QBO, or QIF bank statements to CSV.
-- `deno task accounting:import` — Import and reconcile statement transactions into the journal.
-- `deno task accounting:close-month` — Assert statement balances, snapshot the journal, and produce close reports.
+- `deno task accounting:import` — Import a clean statement CSV through `rledger extract`.
+- `deno task accounting:close-month` — Write the statement balances, check the books, and save the dated copy and reports.
 - `deno task accounting:verify` — Check the year's Beancount books with `rledger check`.
 - `deno task accounting:cli init-books` — Create the books directory structure.
 

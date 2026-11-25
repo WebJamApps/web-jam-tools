@@ -1,13 +1,50 @@
 // src/accounting/verify.ts
-// Check the Beancount books with `rledger check` (web-jam-tools#1865), and keep the journal
-// balance checks month close uses until web-jam-tools#1866.
+// Check the Beancount books with `rledger check` (web-jam-tools#1865), and run rustledger for the
+// import and month close (web-jam-tools#1866).
 
-import { assertBeancountTarget, parseJournal } from "./entry.ts";
-import { BooksCheckResult, VerificationResult } from "./types.ts";
+import * as path from "@std/path";
+import { assertBeancountTarget } from "./entry.ts";
+import { BooksCheckResult } from "./types.ts";
 
 export interface CheckBooksOptions {
   /** The rustledger program to run; `rledger` on PATH unless a test names another. */
   rledger?: string;
+}
+
+/** What one rustledger run printed and how it exited. */
+export interface RledgerRun {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** The run could not happen at all: `rledger` is missing or cannot be started. */
+export class RledgerUnavailable extends Error {}
+
+/** Runs `rledger <args>` with colour off and no input, and returns what it printed. */
+export async function runRledger(program: string, args: string[]): Promise<RledgerRun> {
+  let output: Deno.CommandOutput;
+  try {
+    output = await new Deno.Command(program, {
+      args,
+      env: { NO_COLOR: "1" },
+      stdin: "null",
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+  } catch (err) {
+    throw new RledgerUnavailable(
+      err instanceof Deno.errors.NotFound
+        ? `${program} is not installed or not on PATH`
+        : `${program} could not be run: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const decoder = new TextDecoder();
+  return {
+    code: output.code,
+    stdout: decoder.decode(output.stdout),
+    stderr: decoder.decode(output.stderr),
+  };
 }
 
 /**
@@ -36,105 +73,55 @@ export async function checkBooks(
   }
 
   const program = options.rledger ?? "rledger";
-  let output: Deno.CommandOutput;
+  let run: RledgerRun;
   try {
-    output = await new Deno.Command(program, {
-      args: ["check", "--no-cache", booksPath],
-      env: { NO_COLOR: "1" },
-      stdin: "null",
-      stdout: "piped",
-      stderr: "piped",
-    }).output();
+    run = await runRledger(program, ["check", "--no-cache", booksPath]);
   } catch (err) {
-    const reason = err instanceof Deno.errors.NotFound
-      ? `${program} is not installed or not on PATH`
-      : `${program} could not be run: ${err instanceof Error ? err.message : String(err)}`;
-    return { outcome: "refuse", message: `${reason}, so the books cannot be checked.` };
+    if (!(err instanceof RledgerUnavailable)) throw err;
+    return { outcome: "refuse", message: `${err.message}, so the books cannot be checked.` };
   }
 
-  const decoder = new TextDecoder();
-  const text = [decoder.decode(output.stdout), decoder.decode(output.stderr)]
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .join("\n");
-  if (output.code === 0) return { outcome: "pass", message: text };
-  if (output.code === 1) return { outcome: "fail", message: text };
+  const text = [run.stdout, run.stderr].map((s) => s.trim()).filter(Boolean).join("\n");
+  if (run.code === 0) return { outcome: "pass", message: text };
+  if (run.code === 1) return { outcome: "fail", message: text };
   return {
     outcome: "refuse",
-    message: `${program} check exited ${output.code}, so the books could not be checked${
+    message: `${program} check exited ${run.code}, so the books could not be checked${
       text ? `:\n${text}` : "."
     }`,
   };
 }
 
-export function verifyJournalBalances(journalContent: string): VerificationResult {
-  const transactions = parseJournal(journalContent).sort((a, b) => a.date.localeCompare(b.date));
-  const errors: string[] = [];
-  let assertionsChecked = 0;
-
-  // Running balance map for each account
-  const runningBalances = new Map<string, number>();
-
-  for (let i = 0; i < transactions.length; i++) {
-    const tx = transactions[i];
-
-    // 1. Transaction internal balance check (sum of postings must equal 0)
-    let txSum = 0;
-    for (const p of tx.postings) {
-      txSum += p.amount;
-    }
-
-    // Rounding safety to 2 decimal places
-    if (Math.abs(Math.round(txSum * 100) / 100) > 0.001) {
-      errors.push(
-        `Transaction '${tx.date} ${tx.description}' is unbalanced (net sum: ${txSum.toFixed(2)})`,
+/**
+ * Writes `content` beside the books as owner-only candidate books, runs `rledger check` on it, and
+ * hands its path to `use` only when the check passes. A failing check, or a check that cannot run,
+ * throws with the reason and the diagnostic, and the candidate is always removed afterwards, so the
+ * caller publishes nothing it has not checked. The candidate sits beside the books so their
+ * `include` lines resolve the same way.
+ */
+export async function withCheckedCandidate<T>(
+  target: string,
+  content: string,
+  rledger: string,
+  use: (candidatePath: string) => Promise<T>,
+): Promise<T> {
+  const candidate = path.join(
+    path.dirname(target),
+    `.${path.basename(target)}.${crypto.randomUUID()}.candidate.beancount`,
+  );
+  try {
+    await Deno.writeTextFile(candidate, content, { createNew: true, mode: 0o600 });
+    const result = await checkBooks(candidate, { rledger });
+    if (result.outcome === "fail") {
+      throw new Error(
+        `rledger check found errors in the books this would write, so nothing was written:\n${result.message}`,
       );
     }
-
-    // 2. Update running balances and check assertions
-    for (const p of tx.postings) {
-      const prev = runningBalances.get(p.account) || 0;
-      const next = Math.round((prev + p.amount) * 100) / 100;
-      runningBalances.set(p.account, next);
-
-      if (p.balanceAssertion !== undefined) {
-        assertionsChecked++;
-        const asserted = Math.round(p.balanceAssertion * 100) / 100;
-        if (Math.abs(next - asserted) > 0.001) {
-          errors.push(
-            `Balance assertion failed for '${p.account}' at ${tx.date}: expected $${
-              asserted.toFixed(2)
-            }, calculated balance was $${next.toFixed(2)}`,
-          );
-        }
-      }
+    if (result.outcome === "refuse") {
+      throw new Error(`${result.message} Nothing was written.`);
     }
+    return await use(candidate);
+  } finally {
+    await Deno.remove(candidate).catch(() => {});
   }
-
-  return {
-    valid: errors.length === 0,
-    errors,
-    assertionsChecked,
-  };
-}
-
-export function computeAccountBalances(
-  journalContent: string,
-  asOfDate?: string,
-): Map<string, number> {
-  const transactions = parseJournal(journalContent).sort((a, b) => a.date.localeCompare(b.date));
-  const balances = new Map<string, number>();
-
-  for (const tx of transactions) {
-    if (asOfDate && tx.date > asOfDate) {
-      continue;
-    }
-
-    for (const p of tx.postings) {
-      const prev = balances.get(p.account) || 0;
-      balances.set(p.account, Math.round((prev + p.amount) * 100) / 100);
-    }
-  }
-
-  return balances;
 }

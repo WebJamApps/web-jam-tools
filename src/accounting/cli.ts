@@ -1,13 +1,12 @@
 // src/accounting/cli.ts
-// Command-line interface for Web Jam LLC's books (web-jam-tools#1764). Entries, receipts and the
-// check use rustledger's Beancount books (web-jam-tools#1865); import and month close keep the
-// journal file until web-jam-tools#1866.
+// Command-line interface for Web Jam LLC's books (web-jam-tools#1764), all kept in rustledger's
+// Beancount books: entries, receipts and the check (web-jam-tools#1865), and the import of clean
+// CSVs and the month close (web-jam-tools#1866).
 
 import { parseArgs } from "@std/cli/parse-args";
 import * as path from "@std/path";
 import { expandHome } from "../design-issue/gate1.ts";
 import { closeMonth } from "./close_month.ts";
-import { convertBankFile } from "./convert.ts";
 import {
   appendEntryToBooks,
   assertBeancountTarget,
@@ -23,16 +22,29 @@ export function getDefaultBooksDir(): string {
   return path.join(home, "Dropbox", "web-jam-llms", "financial", "books");
 }
 
+/** A `--year` value: exactly four digits, 1000 to 9999, nothing else, as `closeMonth` requires. */
+export function parseYearFlag(raw: string): number {
+  const value = String(raw).trim();
+  if (!/^[1-9]\d{3}$/.test(value)) {
+    throw new Error(`--year must be a four-digit year; '${raw}' is not.`);
+  }
+  return Number(value);
+}
+
+/** A `--month` value: one or two digits for a month from 1 to 12, nothing else. */
+export function parseMonthFlag(raw: string): number {
+  const value = String(raw).trim();
+  const month = /^\d{1,2}$/.test(value) ? Number(value) : NaN;
+  if (!(month >= 1 && month <= 12)) {
+    throw new Error(`--month must be a month from 1 to 12; '${raw}' is not.`);
+  }
+  return month;
+}
+
 /** The year's Beancount books, which entry and verify use. */
 export function getDefaultBooksPath(year?: number): string {
   const yr = year || new Date().getFullYear();
   return path.join(getDefaultBooksDir(), `${yr}.beancount`);
-}
-
-/** The year's journal file, which import and month close use until web-jam-tools#1866. */
-export function getDefaultJournalPath(year?: number): string {
-  const yr = year || new Date().getFullYear();
-  return path.join(getDefaultBooksDir(), `${yr}.journal`);
 }
 
 export async function runCli(args: string[]): Promise<number> {
@@ -52,11 +64,9 @@ export async function runCli(args: string[]): Promise<number> {
       "source",
       "place",
       "input",
-      "output",
-      "format",
       "statement",
-      "account",
-      "rules",
+      "importer",
+      "config",
       "journal",
       "books",
       "books-dir",
@@ -71,7 +81,6 @@ export async function runCli(args: string[]): Promise<number> {
       c: "category",
       j: "journal",
       i: "input",
-      o: "output",
       s: "statement",
       y: "year",
       m: "month",
@@ -85,22 +94,12 @@ export async function runCli(args: string[]): Promise<number> {
 
   const command = flags._.length > 0 ? String(flags._[0]) : "";
 
-  // Import and month close still write the year's .journal file (until web-jam-tools#1866), so a
-  // caller naming Beancount books with --books is refused before either picks a destination.
-  if ((command === "import" || command === "close-month") && flags.books !== undefined) {
-    console.error(
-      `Error: ${command} still writes the year's .journal file; it refuses --books, which names Beancount books, and wrote nothing.`,
-    );
-    return 1;
-  }
-
   if (flags.help || !command || command === "help") {
     console.log(`Web Jam LLC Accounting CLI (rustledger)
 
 Usage:
   deno task accounting:entry [options]
   deno task accounting:receipt [options]
-  deno task accounting:convert [options]
   deno task accounting:import [options]
   deno task accounting:close-month [options]
   deno task accounting:verify [options]
@@ -108,9 +107,10 @@ Usage:
 Commands:
   entry         Add an entry to the year's Beancount books (--books, default <year>.beancount)
   receipt       File a receipt PDF from inbox/ to receipts/<year>/
-  convert       Convert Quicken/QuickBooks (QFX, OFX, QBO, QIF) to CSV
-  import        Import a CSV statement into the year's .journal file with duplicate prevention
-  close-month   Assert statement balances in the .journal file, snapshot it, and generate reports
+  import        Import a clean CSV through rledger extract (--statement, --importer, --config,
+                --books); a line already in the books is skipped
+  close-month   Write each statement balance as a balance line dated the next month's first day,
+                check the books, and save a dated copy and reports under closed/<year>-<month>/
   verify        Check the year's Beancount books with rledger check (--books)
   init-books    Scaffold the private books directory hierarchy
 `);
@@ -174,7 +174,7 @@ Commands:
         }
 
         const date = flags.date || new Date().toISOString().slice(0, 10);
-        const year = flags.year ? parseInt(flags.year, 10) : parseInt(date.slice(0, 4), 10);
+        const year = flags.year ? parseYearFlag(flags.year) : parseInt(date.slice(0, 4), 10);
 
         const result = await fileReceipt({
           booksDir,
@@ -188,51 +188,42 @@ Commands:
         return result.filed ? 0 : 1;
       }
 
-      case "convert": {
-        const inputPath = flags.input;
-        if (!inputPath) {
-          console.error("Error: --input <path> is required for convert.");
-          return 1;
-        }
-
-        const result = await convertBankFile({
-          inputPath: path.resolve(expandHome(inputPath)),
-          outputPath: flags.output ? path.resolve(expandHome(flags.output)) : undefined,
-          format: flags.format as "qfx" | "ofx" | "qbo" | "qif" | "auto" | undefined,
-        });
-
-        if (flags.output) {
-          console.log(
-            `[accounting:convert] Converted ${result.count} transaction(s) to ${flags.output}`,
-          );
-        } else {
-          console.log(result.csv);
-        }
-        return 0;
-      }
-
       case "import": {
         const statementPath = flags.statement || flags.input;
-        if (!statementPath) {
-          console.error("Error: --statement <path> is required for import.");
+        if (!statementPath || !flags.importer) {
+          console.error(
+            "Error: --statement <clean CSV> and --importer <profile> are required for import.",
+          );
           return 1;
         }
-
-        const journalPath = flags.journal
-          ? path.resolve(expandHome(flags.journal))
-          : getDefaultJournalPath();
+        if (flags.journal) {
+          console.error("Error: import writes the Beancount books; name them with --books.");
+          return 1;
+        }
+        const booksPath = flags.books
+          ? path.resolve(expandHome(flags.books))
+          : getDefaultBooksPath(flags.year ? parseYearFlag(flags.year) : undefined);
+        assertBeancountTarget(booksPath, "accounting:import");
+        const configPath = flags.config
+          ? path.resolve(expandHome(flags.config))
+          : path.join(flags["books-dir"] ? booksDir : path.dirname(booksPath), "importers.toml");
 
         const result = await importStatement({
-          statementPath: path.resolve(expandHome(statementPath)),
-          journalPath,
-          account: flags.account,
-          rulesPath: flags.rules ? path.resolve(expandHome(flags.rules)) : undefined,
+          csvPath: path.resolve(expandHome(statementPath)),
+          booksPath,
+          configPath,
+          importer: flags.importer,
           dryRun: flags["dry-run"],
         });
 
+        const verb = flags["dry-run"] ? "Would import" : "Imported";
         console.log(
-          `[accounting:import] Imported ${result.importedCount} transaction(s), skipped ${result.skippedCount} duplicate(s).`,
+          `[accounting:import] ${verb} ${result.importedCount} transaction(s) into ${booksPath}; lines already in the books were skipped.`,
         );
+        if (result.openedAccounts.length > 0) {
+          console.log(`Opened: ${result.openedAccounts.join(", ")}`);
+        }
+        if (result.extracted) console.log(result.extracted.trimEnd());
         return 0;
       }
 
@@ -241,33 +232,29 @@ Commands:
           console.error("Error: --year and --month are required for close-month.");
           return 1;
         }
+        if (flags.journal) {
+          console.error("Error: close-month writes the Beancount books; name them with --books.");
+          return 1;
+        }
 
-        const year = parseInt(flags.year, 10);
-        const month = parseInt(flags.month, 10);
-        const journalPath = flags.journal
-          ? path.resolve(expandHome(flags.journal))
-          : getDefaultJournalPath(year);
+        const year = parseYearFlag(flags.year);
+        const month = parseMonthFlag(flags.month);
+        const booksPath = flags.books
+          ? path.resolve(expandHome(flags.books))
+          : getDefaultBooksPath(year);
 
-        const rawBalances = (flags.balance || []).map(String);
         const balances: Record<string, number> = {};
-
-        for (const b of rawBalances) {
+        for (const b of (flags.balance || []).map(String)) {
           const eqIdx = b.indexOf("=");
-          if (eqIdx !== -1) {
-            const acc = b.slice(0, eqIdx).trim();
-            const raw = b.slice(eqIdx + 1).replace(/[$,]/g, "").trim();
-            const val = Number(raw);
-            if (!acc || !raw || !Number.isFinite(val)) {
-              console.error("Error: --balance must have an account and a finite amount.");
-              return 1;
-            }
-            balances[acc] = val;
-          } else {
+          const acc = eqIdx === -1 ? "" : b.slice(0, eqIdx).trim();
+          const raw = eqIdx === -1 ? "" : b.slice(eqIdx + 1).replace(/[$,]/g, "").trim();
+          const val = Number(raw);
+          if (!acc || !raw || !Number.isFinite(val)) {
             console.error("Error: --balance must have an account and a finite amount.");
             return 1;
           }
+          balances[acc] = val;
         }
-
         if (Object.keys(balances).length === 0) {
           console.error("Error: At least one --balance <account>=<amount> is required.");
           return 1;
@@ -277,18 +264,19 @@ Commands:
           year,
           month,
           balances,
-          journalPath,
-          booksDir,
+          booksPath,
+          booksDir: flags["books-dir"] ? booksDir : undefined,
           dryRun: flags["dry-run"],
         });
 
+        const verb = flags["dry-run"] ? "would close" : "closed";
         console.log(
-          `[accounting:close-month] Month ${result.year}-${result.month} closed as of ${result.closeDate}.`,
+          `[accounting:close-month] ${result.year}-${
+            String(result.month).padStart(2, "0")
+          } ${verb}: balance lines dated ${result.balanceDate}.`,
         );
         console.log(`Snapshot: ${result.snapshotPath}`);
-        for (const r of result.reportPaths) {
-          console.log(`Report: ${r}`);
-        }
+        for (const r of result.reportPaths) console.log(`Report: ${r}`);
         return 0;
       }
 
@@ -299,7 +287,7 @@ Commands:
         }
         const booksPath = flags.books
           ? path.resolve(expandHome(flags.books))
-          : getDefaultBooksPath(flags.year ? parseInt(flags.year, 10) : undefined);
+          : getDefaultBooksPath(flags.year ? parseYearFlag(flags.year) : undefined);
 
         const result = await checkBooks(booksPath);
         if (result.outcome === "pass") {
@@ -317,7 +305,6 @@ Commands:
 
       case "init-books": {
         const dirs = [
-          path.join(booksDir, "rules"),
           path.join(booksDir, "inbox"),
           path.join(booksDir, "receipts"),
           path.join(booksDir, "statements"),

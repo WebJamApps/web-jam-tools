@@ -1,10 +1,23 @@
 // src/accounting/import.ts
-// Reconcile and import statement transactions into the journal with duplicate prevention (web-jam-tools#1764).
+// Import a clean CSV into the year's Beancount books through `rledger extract` (web-jam-tools#1866),
+// as "Each month" in "The accounting skill" of web-jam-music-media-design.md sets out: the books'
+// own importers.toml named with --config and the account's profile with --importer. A line carrying
+// the bank's line id is matched against the books by its `bank_id` metadata, so a second identical
+// same-day purchase with its own id is never mistaken for the first; a line with no id falls back
+// to --existing naming the year's books.
 
 import * as path from "@std/path";
-import { assertJournalTarget, parseJournal } from "./entry.ts";
-import { AccountRule, BankTransaction, ImportOptions, ImportResult, Transaction } from "./types.ts";
+import {
+  appendBlock,
+  assertBeancountTarget,
+  openLinesFor,
+  parseBeancount,
+  quoteBeancount,
+  updateBooks,
+} from "./entry.ts";
+import { RledgerUnavailable, runRledger, withCheckedCandidate } from "./verify.ts";
 
+/** Splits CSV text into rows, keeping quoted commas and line breaks; the mileage log reads with it. */
 export function parseCsvRows(csvContent: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
@@ -39,259 +52,232 @@ export function parseCsvRows(csvContent: string): string[][] {
   return rows;
 }
 
-export function parseStatementCsv(csvContent: string): BankTransaction[] {
-  const rows = parseCsvRows(csvContent);
-  if (rows.length === 0) return [];
-
-  const header = rows[0].map((h) => h.trim().toLowerCase());
-  const dateIdx = header.findIndex((h) => h === "date" || h.includes("posted"));
-  const descIdx = header.findIndex((h) =>
-    h === "description" || h === "payee" || h === "name" || h === "memo"
-  );
-  const amtIdx = header.findIndex((h) => h === "amount");
-  const idIdx = header.findIndex((h) =>
-    h === "id" || h === "fitid" || h === "transactionid" || h === "ref"
-  );
-  const memoIdx = header.findIndex((h) => h === "memo" && h !== header[descIdx]);
-
-  if (dateIdx === -1 || amtIdx === -1) {
-    throw new Error("CSV statement missing required 'date' or 'amount' columns");
-  }
-
-  const transactions: BankTransaction[] = [];
-
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    if (row.length <= dateIdx || row.length <= amtIdx) continue;
-
-    const date = row[dateIdx].trim();
-    const rawAmt = row[amtIdx].replace(/[$,]/g, "").trim();
-    if (!date || !rawAmt) continue;
-
-    const amount = parseFloat(rawAmt);
-    const payee = descIdx !== -1 && row[descIdx]
-      ? row[descIdx].trim().replace(/\s*\r?\n\s*/g, " ")
-      : "Unknown Payee";
-    const memo = memoIdx !== -1 && row[memoIdx]
-      ? row[memoIdx].trim().replace(/\s*\r?\n\s*/g, " ")
-      : undefined;
-    const id = idIdx !== -1 && row[idIdx] && row[idIdx].trim() !== ""
-      ? row[idIdx].trim()
-      : `${date}_${amount}_${payee.replace(/\s+/g, "")}`;
-
-    transactions.push({
-      date,
-      amount,
-      payee,
-      memo,
-      id,
-    });
-  }
-
-  return transactions;
+export interface ImportOptions {
+  /** The clean CSV the download cleaner wrote. */
+  csvPath: string;
+  /** The year's Beancount books; they must already exist. */
+  booksPath: string;
+  /** The books' own importers.toml. */
+  configPath: string;
+  /** The account's profile in importers.toml. */
+  importer: string;
+  /** The rustledger program; `rledger` on PATH unless a test names another. */
+  rledger?: string;
+  /** Report what would be imported and write nothing. */
+  dryRun?: boolean;
 }
 
-export function extractExistingIds(journalContent: string): Set<string> {
-  const ids = new Set<string>();
-  const parsedTxs = parseJournal(journalContent);
-
-  for (const tx of parsedTxs) {
-    if (tx.code) ids.add(tx.code);
-    if (tx.tags && tx.tags["id"]) ids.add(tx.tags["id"]);
-    if (tx.tags && tx.tags["fitid"]) ids.add(tx.tags["fitid"]);
-
-    // Also track date + description + amount signature as fallback
-    for (const p of tx.postings) {
-      ids.add(`${tx.date}_${p.amount}_${tx.description.replace(/\s+/g, "")}`);
-    }
-  }
-
-  return ids;
+export interface ImportResult {
+  /** How many transactions were written, or would be on a dry run. */
+  importedCount: number;
+  /** The Beancount text of those transactions, as rustledger extracted them. */
+  extracted: string;
+  /** Accounts opened so the imported transactions pass the check. */
+  openedAccounts: string[];
 }
 
-export function loadAccountRules(rulesText?: string): AccountRule[] {
-  const rules: AccountRule[] = [];
-  if (!rulesText) return rules;
+const TRANSACTION_HEADER = /^\d{4}-\d{2}-\d{2}\s+[*!]\s/;
+const POSTING_ACCOUNT = /^\s+((?:Assets|Liabilities|Equity|Income|Expenses):\S+)/;
 
-  const lines = rulesText.split(/\r?\n/);
-  let currentPattern: string | null = null;
+/** The download cleaner's header: the only CSV layout the import reads. */
+const CLEAN_CSV_HEADER = ["date", "description", "amount", "id"];
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";")) continue;
+/** One line of a clean CSV. */
+interface CleanRow {
+  date: string;
+  description: string;
+  amount: string;
+  id: string;
+}
 
-    // Check for indented directive following "if <pattern>"
-    if ((line.startsWith(" ") || line.startsWith("\t")) && currentPattern) {
-      const accMatch = trimmed.match(/^account[12]?\s+([A-Za-z0-9:_ -]+)$/i);
-      if (accMatch) {
-        rules.push({
-          pattern: currentPattern,
-          category: accMatch[1].trim(),
-        });
-        currentPattern = null;
-        continue;
-      }
-    }
+const NOTHING_CHANGED = "nothing was imported and the books were not changed";
 
-    // Single-line format: if <pattern> account2 <category>
-    const singleLineMatch = trimmed.match(
-      /^if(?:\s+%description)?\s+(.+?)\s+account[12]?\s+([A-Za-z0-9:_ -]+)$/i,
+/** The rows of a clean CSV, refused unless it carries the download cleaner's header. */
+function readCleanRows(content: string, csvPath: string): CleanRow[] {
+  const rows = parseCsvRows(content);
+  const header = (rows[0] ?? []).map((field) => field.trim().toLowerCase());
+  if (header.join(",") !== CLEAN_CSV_HEADER.join(",")) {
+    throw new Error(
+      `${csvPath} is not a clean CSV: its first line must be ${
+        CLEAN_CSV_HEADER.join(",")
+      }, so ${NOTHING_CHANGED}.`,
     );
-    if (singleLineMatch) {
-      rules.push({
-        pattern: singleLineMatch[1].trim().toLowerCase(),
-        category: singleLineMatch[2].trim(),
-      });
-      currentPattern = null;
-      continue;
-    }
-
-    // Multi-line header: if <pattern>
-    const ifMatch = trimmed.match(/^if(?:\s+%description)?\s+(.+)$/i);
-    if (ifMatch) {
-      currentPattern = ifMatch[1].trim().toLowerCase();
-      continue;
-    }
   }
-
-  return rules;
+  return rows.slice(1).map((row, i) => {
+    const amount = (row[2] ?? "").trim();
+    if (row.length !== CLEAN_CSV_HEADER.length || !amount || !Number.isFinite(Number(amount))) {
+      throw new Error(
+        `Line ${
+          i + 2
+        } of ${csvPath} is not a clean CSV line (date, description, amount, id), so ${NOTHING_CHANGED}.`,
+      );
+    }
+    return { date: row[0].trim(), description: row[1], amount, id: row[3].trim() };
+  });
 }
 
-export function categorizeTransaction(
-  payee: string,
-  amount: number,
-  rules: AccountRule[] = [],
-): string {
-  const lower = payee.toLowerCase();
-  for (const rule of rules) {
-    if (rule.pattern && lower.includes(rule.pattern.toLowerCase())) {
-      return rule.category;
-    }
-  }
-
-  // Built-in rule defaults
-  if (lower.includes("penn station") || lower.includes("restaurant") || lower.includes("cafe")) {
-    return "Expenses:Meals";
-  }
-  if (
-    lower.includes("github") || lower.includes("anthropic") || lower.includes("openai") ||
-    lower.includes("google")
-  ) {
-    return "Expenses:Software";
-  }
-  if (lower.includes("office depot") || lower.includes("staples")) {
-    return "Expenses:Supplies";
-  }
-  if (lower.includes("state corp") || lower.includes("scc")) {
-    return "Expenses:RegistrationFees";
-  }
-
-  return amount >= 0 ? "Income:Uncategorized" : "Expenses:Uncategorized";
+function csvField(value: string): string {
+  return /[",\r\n]|^\s|\s$/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 
-export async function importStatement(options: ImportOptions): Promise<ImportResult> {
-  assertJournalTarget(options.journalPath, "accounting:import");
-  const statementContent = await Deno.readTextFile(options.statementPath);
-  const bankTxs = parseStatementCsv(statementContent);
+function cleanCsvText(rows: CleanRow[]): string {
+  return [
+    CLEAN_CSV_HEADER.join(","),
+    ...rows.map((r) => [r.date, r.description, r.amount, r.id].map(csvField).join(",")),
+  ].join("\n") + "\n";
+}
 
-  let journalContent = "";
+/**
+ * Runs `rledger extract` on `rows`, written owner-only beside the books (the only folder the
+ * import's task may write) and removed afterwards, and returns what it printed.
+ */
+async function extractRows(
+  rows: CleanRow[],
+  booksTarget: string,
+  options: ImportOptions,
+  rledger: string,
+  existing: boolean,
+): Promise<string> {
+  const staged = path.join(
+    path.dirname(booksTarget),
+    `.${path.basename(booksTarget)}.${crypto.randomUUID()}.import.csv`,
+  );
   try {
-    journalContent = await Deno.readTextFile(options.journalPath);
-  } catch (_err) {
-    journalContent = "";
-  }
-
-  let rules: AccountRule[] = [];
-  if (options.rulesPath) {
+    await Deno.writeTextFile(staged, cleanCsvText(rows), { createNew: true, mode: 0o600 });
+    const args = ["extract", "--config", options.configPath, "--importer", options.importer];
+    if (existing) args.push("--existing", booksTarget);
+    let run;
     try {
-      const rulesText = await Deno.readTextFile(options.rulesPath);
-      rules = loadAccountRules(rulesText);
-    } catch (_err) {
-      // rule file optional
+      run = await runRledger(rledger, [...args, staged]);
+    } catch (err) {
+      if (err instanceof RledgerUnavailable) {
+        throw new Error(`${err.message}, so ${NOTHING_CHANGED}.`);
+      }
+      throw err;
+    }
+    if (run.code !== 0) {
+      throw new Error(
+        `rledger extract refused (exit ${run.code}), so ${NOTHING_CHANGED}:\n${run.stderr.trim()}`,
+      );
+    }
+    return run.stdout;
+  } finally {
+    await Deno.remove(staged).catch(() => {});
+  }
+}
+
+/** The transactions in rustledger's output, each as its lines; anything else is refused. */
+function transactionBlocks(output: string): string[][] {
+  const blocks: string[][] = [];
+  for (const line of output.split(/\r?\n/)) {
+    if (TRANSACTION_HEADER.test(line)) {
+      blocks.push([line]);
+    } else if (line.trim()) {
+      if (blocks.length === 0) {
+        throw new Error(
+          `rledger extract printed '${line.trim()}' before any transaction, so the bank line ids could not be matched; ${NOTHING_CHANGED}.`,
+        );
+      }
+      blocks[blocks.length - 1].push(line);
     }
   }
+  return blocks;
+}
 
-  const existingIds = extractExistingIds(journalContent);
-  const account = options.account || "Assets:Checking:Truist";
+/**
+ * Imports one clean CSV, as "Each month" in the design sets out.
+ *
+ * A line with a bank line id is left out when the books already hold that id as `bank_id`
+ * metadata or the same file carries it earlier, and an amount of exactly zero is left out as
+ * `rledger extract` leaves it out. The remaining lines go through `rledger extract` without
+ * `--existing`, so two identical same-day purchases with their own ids are both kept; the import
+ * refuses unless it gets back one transaction per line, in order and on the same dates, and then
+ * writes each line's `bank_id`. A line with no id goes through `rledger extract --existing` naming
+ * the year's books, so running the same file again adds nothing.
+ *
+ * It refuses, leaving the books as they were, when the CSV or the books cannot be read, `rledger`
+ * cannot run, `importers.toml` cannot be read, the profile is not found, the extracted lines do
+ * not match the CSV lines, or the books with the new lines would fail `rledger check`. Accounts
+ * the new lines use are opened on January 1 of the earliest new line's year.
+ */
+export async function importStatement(options: ImportOptions): Promise<ImportResult> {
+  assertBeancountTarget(options.booksPath, "accounting:import");
+  const rledger = options.rledger ?? "rledger";
 
-  const newTransactions: Transaction[] = [];
-  let skippedCount = 0;
-
-  for (const btx of bankTxs) {
-    // Duplicate check
-    const sig = `${btx.date}_${btx.amount}_${btx.payee.replace(/\s+/g, "")}`;
-    // Bank IDs distinguish otherwise identical transactions; id-less rows use
-    // the signature generated by parseStatementCsv as their fallback ID.
-    if (existingIds.has(btx.id)) {
-      skippedCount++;
-      continue;
+  return await updateBooks(options.booksPath, "accounting:import", async (books) => {
+    let existing: string;
+    try {
+      existing = await Deno.readTextFile(books.target);
+    } catch (err) {
+      throw new Error(
+        `Cannot read the books at ${books.target}, so the import cannot tell what is already in them: ${
+          err instanceof Error ? err.message : String(err)
+        }. Nothing was written.`,
+      );
     }
-
-    const category = categorizeTransaction(btx.payee, btx.amount, rules);
-
-    // Double-entry balancing:
-    // If bank amount is negative (-22.86): checking/card was decreased by 22.86, expense is +22.86
-    // If bank amount is positive (+200.00): checking was increased by 200.00, income is -200.00
-    const tx: Transaction = {
-      date: btx.date,
-      code: btx.id,
-      description: btx.payee,
-      postings: [
-        {
-          account: category,
-          amount: -btx.amount,
-        },
-        {
-          account,
-          amount: btx.amount,
-        },
-      ],
-      tags: {
-        id: btx.id,
-      },
-    };
-
-    if (btx.memo) {
-      tx.tags["memo"] = btx.memo;
+    let csvContent: string;
+    try {
+      csvContent = await Deno.readTextFile(options.csvPath);
+    } catch (err) {
+      throw new Error(
+        `Cannot read the clean CSV at ${options.csvPath}: ${
+          err instanceof Error ? err.message : String(err)
+        }. Nothing was written.`,
+      );
     }
+    const rows = readCleanRows(csvContent, options.csvPath);
 
-    newTransactions.push(tx);
-    existingIds.add(btx.id);
-    existingIds.add(sig);
-  }
-
-  if (newTransactions.length > 0 && !options.dryRun) {
-    const linesToAdd: string[] = [];
-    for (const tx of newTransactions) {
-      const parts: string[] = [];
-      const codeStr = tx.code ? ` (${tx.code})` : "";
-      parts.push(`${tx.date}${codeStr} ${tx.description}`);
-      for (const [k, v] of Object.entries(tx.tags)) {
-        parts.push(`    ; ${k}: ${v}`);
-      }
-      for (const p of tx.postings) {
-        const amtStr = `$${p.amount.toFixed(2)}`;
-        parts.push(`    ${p.account.padEnd(34)}  ${amtStr}`);
-      }
-      linesToAdd.push(parts.join("\n"));
-    }
-
-    const dir = path.dirname(options.journalPath);
-    await Deno.mkdir(dir, { recursive: true });
-
-    const prefix = journalContent.length > 0 && !journalContent.endsWith("\n\n")
-      ? (journalContent.endsWith("\n") ? "\n" : "\n\n")
-      : "";
-
-    await Deno.writeTextFile(
-      options.journalPath,
-      journalContent + prefix + linesToAdd.join("\n\n") + "\n",
+    const known = new Set(
+      parseBeancount(existing).map((tx) => tx.tags.bank_id).filter((id): id is string => !!id),
     );
-  }
+    const withId: CleanRow[] = [];
+    const withoutId: CleanRow[] = [];
+    for (const row of rows) {
+      if (!row.id) {
+        withoutId.push(row);
+      } else if (Number(row.amount) !== 0 && !known.has(row.id)) {
+        known.add(row.id);
+        withId.push(row);
+      }
+    }
 
-  return {
-    importedCount: newTransactions.length,
-    skippedCount,
-    transactions: newTransactions,
-  };
+    const parts: string[] = [];
+    if (withId.length > 0) {
+      const blocks = transactionBlocks(
+        await extractRows(withId, books.target, options, rledger, false),
+      );
+      const misaligned = blocks.length !== withId.length ||
+        blocks.some((block, i) => block[0].slice(0, 10) !== withId[i].date);
+      if (misaligned) {
+        throw new Error(
+          `rledger extract returned ${blocks.length} transaction(s) for ${withId.length} bank line(s), or on different dates, so the bank line ids could not be matched; ${NOTHING_CHANGED}.`,
+        );
+      }
+      parts.push(
+        ...blocks.map((block, i) =>
+          [block[0], `  bank_id: ${quoteBeancount(withId[i].id)}`, ...block.slice(1)].join("\n")
+        ),
+      );
+    }
+    if (withoutId.length > 0) {
+      const output = await extractRows(withoutId, books.target, options, rledger, true);
+      if (output.trim()) parts.push(output.trimEnd());
+    }
+
+    const extracted = parts.length > 0 ? parts.join("\n") + "\n" : "";
+    const lines = extracted.split("\n");
+    const dates = lines.filter((line) => TRANSACTION_HEADER.test(line)).map((l) => l.slice(0, 10));
+    if (dates.length === 0) return { importedCount: 0, extracted: "", openedAccounts: [] };
+
+    const accounts = lines.flatMap((line) => POSTING_ACCOUNT.exec(line)?.[1] ?? []);
+    const year = dates.sort()[0].slice(0, 4);
+    const opens = openLinesFor(existing, accounts, year);
+    const candidate = appendBlock(existing, opens + extracted);
+    const openedAccounts = opens.split("\n").filter(Boolean).map((line) => line.split(/\s+/)[2]);
+
+    await withCheckedCandidate(books.target, candidate, rledger, async () => {
+      if (!options.dryRun) await books.replace(candidate);
+    });
+    return { importedCount: dates.length, extracted, openedAccounts };
+  });
 }
