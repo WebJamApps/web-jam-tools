@@ -455,6 +455,104 @@ Deno.test("mileage: an edit saved during the lookups is kept, and nothing is wri
   assertEquals([...Deno.readDirSync(books)].filter((e) => e.name.endsWith(".tmp")), []);
 });
 
+Deno.test("mileage: two runs from the same log never overwrite each other's additions", async () => {
+  const books = await booksWithHome();
+  const logPath = path.join(books, "mileage-2026.csv");
+  const snapshot = formatMileageLog([
+    { date: "2026-01-05", destination: "Music store", purpose: "Strings", miles: "8.0" },
+  ]);
+  await Deno.writeTextFile(logPath, snapshot);
+  const venues = [venue("v1", "The Test Tavern")];
+  // Both runs read the same log, then neither routes until both have reached the lookup.
+  let arrived = 0;
+  let release = () => {};
+  const bothReading = new Promise<void>((resolve) => release = resolve);
+  const meet = () => {
+    if (++arrived === 2) release();
+    return bothReading;
+  };
+  const first = { ...gig("2026-03-14T23:00:00Z", "v1"), _id: "g-first" };
+  const second = { ...gig("2026-05-02T23:00:00Z", "v1"), _id: "g-second" };
+  const runs = await Promise.allSettled([
+    run(books, stubFetch([first], venues, "up", ROUND_TRIP_METERS, "match", meet)),
+    run(books, stubFetch([second], venues, "up", ROUND_TRIP_METERS, "match", meet)),
+  ]);
+
+  const published = runs.filter((r) => r.status === "fulfilled");
+  const refused = runs.filter((r) => r.status === "rejected");
+  assertEquals(published.length, 1);
+  assertEquals(refused.length, 1);
+  assertStringIncludes(String(refused[0].reason), "changed while the routes were being looked up");
+  const winner = runs[0].status === "fulfilled" ? "g-first" : "g-second";
+  const loser = winner === "g-first" ? "g-second" : "g-first";
+  const lines = await readLog(books);
+  assertEquals(lines.filter((l) => l.gig === winner).length, 1);
+  assertEquals(lines.filter((l) => l.gig === loser).length, 0);
+  assert(lines.some((l) => l.purpose === "Strings"));
+  // Neither run leaves its temporary file or the lock behind.
+  assertEquals(
+    [...Deno.readDirSync(books)].map((e) => e.name).sort(),
+    [HOME_POINT_FILE, "mileage-2026.csv"].sort(),
+  );
+});
+
+Deno.test("mileage: a failed lookup retried after the gig is relinked keeps the figure with the venue it was looked up for", async () => {
+  const books = await booksWithHome();
+  const tavern = venue("v1", "The Test Tavern");
+  const hall: MileageVenue = {
+    ...venue("v2", "The Other Hall"),
+    location: { type: "Point", coordinates: [7, 8] },
+  };
+  const thirtyMiles = 48280.32;
+  const byVenue = (url: string) => url.includes(";7,8;") ? thirtyMiles : ROUND_TRIP_METERS;
+  const atTavern = { ...gig("2026-03-14T23:00:00Z", "v1"), _id: "g1" };
+
+  // The lookup fails while the gig links to the tavern.
+  await run(books, stubFetch([atTavern], [tavern, hall], "down"));
+  assertEquals((await readLog(books)).map((l) => [l.gig, l.venue, l.miles]), [["g1", "v1", ""]]);
+
+  // The gig is relinked to the hall: the retried line takes the hall, its destination and its miles.
+  const atHall = { ...atTavern, venueId: "v2" };
+  await run(books, stubFetch([atHall], [tavern, hall], "up", byVenue));
+  assertEquals((await readLog(books)).map((l) => [l.gig, l.destination, l.venue, l.miles]), [
+    ["g1", "The Other Hall, Testville, Virginia", "v2", "30.0"],
+  ]);
+
+  // A later run reuses the hall's figure for the hall and looks the tavern up on its own.
+  const laterTavern = { ...gig("2026-05-02T23:00:00Z", "v1"), _id: "g2" };
+  const laterHall = { ...gig("2026-06-20T23:00:00Z", "v2"), _id: "g3" };
+  const rerun = stubFetch([atHall, laterTavern, laterHall], [tavern, hall], "up", byVenue);
+  const result = await run(books, rerun);
+  assertEquals(result.lookups, 1);
+  assertEquals(rerun.routingUrls().every((u) => u.includes(";3,4;")), true);
+  assertEquals((await readLog(books)).map((l) => [l.gig, l.venue, l.miles]), [
+    ["g1", "v2", "30.0"],
+    ["g2", "v1", "20.0"],
+    ["g3", "v2", "30.0"],
+  ]);
+});
+
+Deno.test("mileage: a blank line changed by hand stays as it is when its gig is relinked", async () => {
+  const books = await booksWithHome();
+  const tavern = venue("v1", "The Test Tavern");
+  const hall = venue("v2", "The Other Hall");
+  for (
+    const edit of [
+      { destination: "Tavern back room", purpose: GIG_PURPOSE },
+      { destination: "The Test Tavern, Testville, Virginia", purpose: "Load-in only" },
+    ]
+  ) {
+    const line = { date: "2026-03-14", miles: "", gig: "g1", venue: "v1", ...edit };
+    await Deno.writeTextFile(path.join(books, "mileage-2026.csv"), formatMileageLog([line]));
+    const stub = stubFetch([{ ...gig("2026-03-14T23:00:00Z", "v2"), _id: "g1" }], [tavern, hall]);
+    const result = await run(books, stub);
+    assertEquals(stub.routingCalls(), 0);
+    assertEquals(result.noMiles.map((n) => n.destination), [edit.destination]);
+    assertStringIncludes(result.noMiles[0].reason, "changed by hand");
+    assertEquals(await readLog(books), [line]);
+  }
+});
+
 Deno.test("mileage: each run writes through its own temporary file", async () => {
   const books = await booksWithHome();
   const otherWriter = path.join(books, "mileage-2026.csv.tmp");

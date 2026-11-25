@@ -22,8 +22,12 @@
 // - A gig with no venue record, a venue that cannot be placed on the map, a lookup the routing
 //   service could not answer, and a gig that more than one line could be each leave the log as it
 //   is for that gig and are listed for Josh.
-// - The log is re-read before it is replaced, so an edit saved during the lookups is never
-//   overwritten: the run refuses and writes nothing.
+// - The new log is staged in a temporary file, then, holding a lock that every mileage run takes,
+//   the log is re-read and replaced. An edit saved, or another run's log published, since this run
+//   read the log is never overwritten: the run refuses and writes nothing.
+// - A blank line generated for a gig follows the venue its gig now links to, so a figure is always
+//   saved under the venue it was looked up for. A blank line whose destination or purpose was
+//   changed by hand is left as it is and listed for Josh.
 
 import { parseArgs } from "@std/cli/parse-args";
 import * as path from "@std/path";
@@ -377,6 +381,8 @@ interface PlayedGig {
   venue?: MileageVenue;
   /** The gig's record id, else its date and venue. */
   id: string;
+  /** The destination a line for this gig holds when no venue record is linked. */
+  unlinked: string;
 }
 
 /** Merges the year's played gigs into the existing log; pure apart from the lookups it is given. */
@@ -409,10 +415,11 @@ export async function buildMileageLog(options: BuildMileageOptions): Promise<Bui
       if (!date.startsWith(`${year}-`)) return [];
       const venueId = resolveGigVenueId(gig, nameIndex);
       const venue = venueId ? venueById.get(venueId) : undefined;
-      const destination = venue ? venueDestination(venue) : unlinkedDestination(gig);
+      const unlinked = unlinkedDestination(gig);
+      const destination = venue ? venueDestination(venue) : unlinked;
       const recordId = gig._id === undefined || gig._id === null ? "" : String(gig._id);
       const id = recordId || `${date} ${venue ? String(venue._id) : destination}`;
-      return [{ date, destination, venue, id }];
+      return [{ date, destination, venue, id, unlinked }];
     })
     .sort((a, b) => a.date.localeCompare(b.date));
 
@@ -473,7 +480,26 @@ export async function buildMileageLog(options: BuildMileageOptions): Promise<Bui
     }
 
     const venueId = String(venue._id);
-    line.venue ||= venueId;
+    if (line.venue !== venueId) {
+      // The gig now links to another venue than the blank line records (a lookup failed, then the
+      // gig was relinked). A line still as generated takes the new venue and its destination, so
+      // the figure looked up below is saved under the venue it was looked up for. A line whose
+      // destination or purpose Josh changed is his: it is left as it is.
+      const previous = line.venue ? venueById.get(line.venue) : undefined;
+      const generated = new Set([destination, gig.unlinked]);
+      if (previous) generated.add(venueDestination(previous));
+      if (line.purpose !== GIG_PURPOSE || !generated.has(line.destination)) {
+        noMiles.push({
+          date,
+          destination: line.destination,
+          reason:
+            "this line was changed by hand and its gig now links to a different venue; set its venue and miles by hand",
+        });
+        continue;
+      }
+      line.venue = venueId;
+      line.destination = destination;
+    }
     const known = [...(figures.get(venueId) ?? [])];
     let miles = "";
     let reason = "";
@@ -541,6 +567,32 @@ async function readLogText(logPath: string): Promise<string | null> {
   }
 }
 
+/**
+ * Runs `publish` while holding the log's lock, so two mileage runs never check and replace the log
+ * at once. The lock is `<log>.lock` beside the log, held with an OS file lock and removed before it
+ * is let go; a run that was waiting on a lock file already removed opens a fresh one and waits
+ * again, so only one run ever holds the lock that is on disk.
+ */
+async function whileHoldingLogLock<T>(logPath: string, publish: () => Promise<T>): Promise<T> {
+  const lockPath = `${logPath}.lock`;
+  for (;;) {
+    const lock = await Deno.open(lockPath, { create: true, write: true });
+    let held = false;
+    try {
+      await lock.lock(true);
+      const [onDisk, ours] = await Promise.all([
+        Deno.stat(lockPath).catch(() => null),
+        lock.stat(),
+      ]);
+      held = onDisk !== null && onDisk.ino === ours.ino && onDisk.dev === ours.dev;
+      if (held) return await publish();
+    } finally {
+      if (held) await Deno.remove(lockPath).catch(() => {});
+      lock.close();
+    }
+  }
+}
+
 export async function runMileage(options: RunMileageOptions): Promise<RunMileageResult> {
   const fetchFn = options.fetchFn ?? fetch;
   const timeoutMs = options.lookupTimeoutMs ?? LOOKUP_TIMEOUT_MS;
@@ -563,12 +615,9 @@ export async function runMileage(options: RunMileageOptions): Promise<RunMileage
     locate: makeVenueLocator(fetchFn, timeoutMs),
   });
 
-  // An edit saved while the routes were looked up is Josh's: keep it and write nothing.
-  if (await readLogText(logPath) !== before) {
-    throw new Error(
-      `${logPath} changed while the routes were being looked up, so nothing was written. Run again to add the gigs to the saved log.`,
-    );
-  }
+  // The new log is staged first, so the check below sits right before the replace. Under the lock,
+  // an edit saved or another run's log published since this run read the log is kept: this run
+  // writes nothing.
   const tmpPath = await Deno.makeTempFile({
     dir: options.booksDir,
     prefix: `mileage-${options.year}.`,
@@ -576,7 +625,14 @@ export async function runMileage(options: RunMileageOptions): Promise<RunMileage
   });
   try {
     await Deno.writeTextFile(tmpPath, formatMileageLog(result.lines));
-    await Deno.rename(tmpPath, logPath);
+    await whileHoldingLogLock(logPath, async () => {
+      if (await readLogText(logPath) !== before) {
+        throw new Error(
+          `${logPath} changed while the routes were being looked up, so nothing was written. Run again to add the gigs to the saved log.`,
+        );
+      }
+      await Deno.rename(tmpPath, logPath);
+    });
   } catch (err) {
     await Deno.remove(tmpPath).catch(() => {});
     throw err;
