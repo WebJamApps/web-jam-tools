@@ -848,6 +848,9 @@ Deno.test("task grants through the shell: a write is judged where it lands throu
     await Deno.symlink(`${root}/outside/target.txt`, `${root}/tools/src/to-outside.txt`);
     // A link kept in the task's repository that points to a regular file in another repository.
     await Deno.symlink(`${root}/music/src/b.ts`, `${root}/tools/src/to-music.ts`);
+    // A folder in the task's repository whose existing child entry links into another repository.
+    await Deno.mkdir(`${root}/tools/drop`);
+    await Deno.symlink(`${root}/music/src/b.ts`, `${root}/tools/drop/a.ts`);
 
     const lines = [
       userTurn("/fix-pr https://github.com/WebJamApps/web-jam-tools/pull/5"),
@@ -919,6 +922,16 @@ Deno.test("task grants through the shell: a write is judged where it lands throu
       }
       // Plain cp writes through a link to a file, into the repository it points to.
       assertDenied((await bash("cp src/a.ts src/to-music.ts")).stdout);
+
+      // Into a folder, the source's existing child entry is what is written: plain cp follows the
+      // child link into the other repository, while a move or install replaces the child itself.
+      assertDenied((await bash("cp src/a.ts drop")).stdout);
+      assertDenied((await bash("cp -t drop src/a.ts")).stdout);
+      assertDenied((await bash("cp src/to-outside.txt src/a.ts drop")).stdout);
+      assertAllowed(await bash("cp src/to-outside.txt drop"));
+      for (const command of ["mv", "install", "cp --remove-destination"]) {
+        assertAllowed(await bash(`${command} src/a.ts drop`));
+      }
     });
   } finally {
     await Deno.remove(root, { recursive: true });

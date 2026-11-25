@@ -210,8 +210,8 @@ Deno.test("bashWriteTargets: in-place editors, copies, moves and patches", () =>
   assertEquals(targets("perl -MFile::Spec -ne 'print' a.ts"), []);
   assertEquals(targets("perl -e 'open(F, \">o\")'"), ["/repo/o"]);
   assertEquals(targets("cp -r a b/c"), ["/repo/b/c"]);
-  assertEquals(targets("mv -t dest a b"), ["/repo/dest", "/repo/a", "/repo/b"]);
-  assertEquals(targets("install --target-directory=/tmp/d a"), ["/tmp/d"]);
+  assertEquals(targets("mv -t dest a b"), ["/repo/dest/a", "/repo/dest/b", "/repo/a", "/repo/b"]);
+  assertEquals(targets("install --target-directory=/tmp/d a"), ["/tmp/d/a"]);
   assertEquals(targets("install -m 755 a /usr/local/bin/a"), ["/usr/local/bin/a"]);
   assertEquals(targets("cp onlyone"), []);
   assertEquals(targets("truncate -s 0 log.txt"), ["/repo/log.txt"]);
@@ -248,7 +248,7 @@ Deno.test("analyzeBashWrites: a write that replaces the entry is kept apart from
   assertEquals(split("mv -T a b"), replaced("/repo/b", "/repo/a"));
   assertEquals(split("mv -fT a b"), replaced("/repo/b", "/repo/a"));
   assertEquals(split("cp --no-target-directory --remove-destination a b"), replaced("/repo/b"));
-  assertEquals(split("mv -t dest a"), { targets: ["/repo/dest"], replacedEntries: ["/repo/a"] });
+  assertEquals(split("mv -t dest a"), replaced("/repo/dest/a", "/repo/a"));
   assertEquals(split("cp a b"), through("/repo/b"));
   // Mode flags come from parsed options, never from an operand or an option's value.
   assertEquals(split("cp -S --remove-destination a b"), through("/repo/b"));
@@ -258,8 +258,10 @@ Deno.test("analyzeBashWrites: a write that replaces the entry is kept apart from
   assertEquals(split("mv -S -T a b"), replaced("/repo/b", "/repo/a"));
   assertEquals(split("mv -- -T b"), replaced("/repo/b", "/repo/-T"));
   assertEquals(split("install -m -T a b"), replaced("/repo/b"));
-  assertEquals(split("mv -fta dest"), { targets: ["/repo/a"], replacedEntries: ["/repo/dest"] });
-  assertEquals(split("mv --target=d a"), { targets: ["/repo/d"], replacedEntries: ["/repo/a"] });
+  assertEquals(split("mv -fta dest"), replaced("/repo/a/dest", "/repo/dest"));
+  assertEquals(split("mv --target=d a"), replaced("/repo/d/a", "/repo/a"));
+  // A source whose name is not literal leaves only the folder known; a trailing slash is dropped.
+  assertEquals(split("cp -t dest $F sub/x/"), through("/repo/dest", "/repo/dest/x"));
   assertEquals(
     split("printf x > link.ts; tee t < x; truncate -s 0 u"),
     through(
@@ -302,25 +304,28 @@ Deno.test("analyzeBashWrites: a destination is a folder only when the filesystem
         targets: [],
         replacedEntries: [`${root}/to-file`, ...moved],
       }, name);
-      // A link to a folder (or the folder) gains a new entry inside the folder it points to.
+      // Into a link to a folder (or the folder) the source replaces its own child entry there.
       assertEquals(split(`${name} a to-dir`), {
-        targets: [`${root}/to-dir`],
-        replacedEntries: moved,
-      });
-      assertEquals(split(`${name} a dir`), { targets: [`${root}/dir`], replacedEntries: moved });
+        targets: [],
+        replacedEntries: [`${root}/to-dir/a`, ...moved],
+      }, name);
+      assertEquals(split(`${name} a dir`), {
+        targets: [],
+        replacedEntries: [`${root}/dir/a`, ...moved],
+      }, name);
       // -T names the link's own entry even when it points to a folder.
       assertEquals(split(`${name} -T a to-dir`), {
         targets: [],
         replacedEntries: [`${root}/to-dir`, ...moved],
       }, name);
     }
-    // Plain cp writes through the link either way.
+    // Plain cp writes through the link to a file, and through the child entry inside a folder.
     assertEquals(split("cp a to-file"), { targets: [`${root}/to-file`], replacedEntries: [] });
-    assertEquals(split("cp a to-dir"), { targets: [`${root}/to-dir`], replacedEntries: [] });
+    assertEquals(split("cp a to-dir"), { targets: [`${root}/to-dir/a`], replacedEntries: [] });
     // An exchange swaps the destination entry, a folder included.
     assertEquals(split("mv --exchange a to-dir"), {
-      targets: [`${root}/to-dir`],
-      replacedEntries: [`${root}/to-dir`, `${root}/a`],
+      targets: [],
+      replacedEntries: [`${root}/to-dir/a`, `${root}/to-dir`, `${root}/a`],
     });
   } finally {
     await Deno.remove(root, { recursive: true });

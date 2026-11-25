@@ -32,8 +32,8 @@
  * `rename` replace the link itself in the folder that holds it (`replacedEntries`). A move (`mv`, a
  * script's `rename`) changes the entries at both ends, so its sources are replaced entries too. A
  * destination of `cp`, `mv` or `install` that is a directory when the command is read (a link to
- * one included), or named by `-t`, gains a new entry inside it instead, so it is written through;
- * `-T` rules that out. Only when the filesystem cannot say is a destination listed both ways.
+ * one included), or named by `-t`, is not itself written: each source's child entry inside it is,
+ * in the same way. `-T` rules that out. Only when the filesystem cannot say are both listed.
  *
  * Known gaps (allowed, on purpose or for now):
  *   - a script file run by an interpreter (`python3 fix.py`, `deno run x.ts`, `node x.js`): its code is
@@ -582,12 +582,12 @@ function isDirectoryNow(path: string): boolean | null {
 }
 
 /**
- * `cp`, `mv` and `install`. A destination folder (`-t`, or a last operand that is a directory and
- * not ruled out by `-T`) gains a new entry inside the folder it resolves to, so it is written
- * through. Otherwise the destination's own entry is written: through it by plain `cp`, replacing it
- * by `mv`, `install` and `cp --remove-destination`. A move also removes each source's entry, so
+ * `cp`, `mv` and `install`. Into a destination folder (`-t`, or a last operand that is a directory
+ * and not ruled out by `-T`) each source writes the child entry `<folder>/<its name>`: through it by
+ * plain `cp`, replacing it by `mv`, `install` and `cp --remove-destination`. Otherwise the
+ * destination's own entry is written the same way. A move also removes each source's entry, so
  * those are replaced entries too. When the filesystem cannot say whether the destination is a
- * folder, it is listed both ways.
+ * folder, both readings are listed.
  */
 function copyMoveTargets(
   name: string,
@@ -604,11 +604,25 @@ function copyMoveTargets(
   if (destination === undefined) return { targets: [], entries: movedSources };
   const replaces = name !== "cp" || parsed.removeDestination;
   const folder = toFolder ? true : parsed.noTargetDirectory ? false : isDirectoryNow(destination);
+  // Inside a folder each source lands at <folder>/<its name>, an entry that may already be a
+  // symlink elsewhere. A name that is not literal leaves only the folder itself known.
+  const folderPath = destination.replace(/\/+$/, "") || "/";
+  const inside: Required<Pick<ArgvResult, "targets" | "entries">> = { targets: [], entries: [] };
+  for (const source of sources) {
+    const base = source.replace(/\/+$/, "").split("/").pop() ?? "";
+    if (!base || base === "." || base === ".." || /[$`*?[\]{}]/.test(base)) {
+      inside.targets.push(destination);
+    } else (replaces ? inside.entries : inside.targets).push(`${folderPath}/${base}`);
+  }
   // An exchange swaps the destination's own entry, a folder included.
-  const entryReplaced = replaces && (folder !== true || parsed.exchange);
+  if (parsed.exchange) inside.entries.push(destination);
+  const own = replaces
+    ? { targets: [], entries: [destination] }
+    : { targets: [destination], entries: [] };
+  const ways = folder === true ? [inside] : folder === false ? [own] : [inside, own];
   return {
-    targets: folder !== false || !replaces ? [destination] : [],
-    entries: [...(entryReplaced ? [destination] : []), ...movedSources],
+    targets: [...new Set(ways.flatMap((way) => way.targets))],
+    entries: [...new Set([...ways.flatMap((way) => way.entries), ...movedSources])],
   };
 }
 
