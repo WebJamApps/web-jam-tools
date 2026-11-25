@@ -8,8 +8,8 @@ version: 2.1
 # validation test, web-jam-tools#133 — and fails under 90% all-files line
 # coverage)
 #   bash -n + shellcheck -S error over every tracked *.sh (scripts/, hooks/)
-#   deno.json "version" bump check (PR branches only — diffs against the
-#   merge-base with origin/dev; skipped on dev/main)
+#   no per-PR deno.json "version" bump check: nothing at runtime reads it, and
+#   requiring it made parallel PRs collide (web-jam-tools#1954)
 #
 # Uses a `docker` executor (Node 24.19.0 LTS base) with Deno, Trivy, Semgrep, and
 # shellcheck installed as binaries — so the whole gate can be reproduced
@@ -209,56 +209,6 @@ jobs:
             echo "-- shellcheck -S error --"
             shellcheck -S error "${SH_FILES[@]}"
             echo "OK: shellcheck found no error-level findings"
-      - run:
-          name: Version bump check (PR branches only)
-          command: |
-            # web-jam-tools#133 / web-jam-tools#582:
-            # Enforces that PR branches have a version strictly greater than origin/dev.
-            # Skipped on dev/main (nothing to diff against itself).
-            # Falls back to the actual git branch when CIRCLE_BRANCH is unset
-            # (e.g. `circleci local execute gate`) so local reproduction works.
-            BRANCH="${CIRCLE_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
-            if [ "$BRANCH" = "dev" ] || [ "$BRANCH" = "main" ]; then
-              echo "On $BRANCH — version-bump check only applies to PR branches, skipping."
-              exit 0
-            fi
-            git fetch --quiet origin dev
-            HEAD_VERSION="$(deno eval "console.log(JSON.parse(Deno.readTextFileSync('deno.json')).version)")"
-            git show "origin/dev:deno.json" > /tmp/dev-deno.json
-            DEV_VERSION="$(deno eval "console.log(JSON.parse(Deno.readTextFileSync('/tmp/dev-deno.json')).version)")"
-            echo "Branch: $BRANCH"
-            echo "origin/dev version: $DEV_VERSION"
-            echo "HEAD version:       $HEAD_VERSION"
-            deno eval '
-              function parseSemver(v) {
-                const parts = v.split(".").map(Number);
-                if (parts.length < 3 || parts.some(isNaN)) {
-                  console.error(`FAIL: invalid semver format: ${v}`);
-                  Deno.exit(1);
-                }
-                return parts;
-              }
-              function compare(a, b) {
-                const pa = parseSemver(a);
-                const pb = parseSemver(b);
-                for (let i = 0; i < 3; i++) {
-                  if (pa[i] !== pb[i]) return pa[i] - pb[i];
-                }
-                return 0;
-              }
-              const dev = Deno.args[0];
-              const head = Deno.args[1];
-              const cmp = compare(head, dev);
-              const [dMaj, dMin, dPatch] = parseSemver(dev);
-              const nextPatch = `${dMaj}.${dMin}.${dPatch + 1}`;
-              if (cmp <= 0) {
-                console.error(`FAIL: deno.json "version" (${head}) must be strictly greater than origin/dev (${dev}).`);
-                console.error(`Next available patch version on origin/dev is ${nextPatch}.`);
-                console.error("Bump the version in deno.json (once per PR, on the first commit) before merging.");
-                Deno.exit(1);
-              }
-              console.log(`OK: version bumped from ${dev} on origin/dev to ${head}`);
-            ' "$DEV_VERSION" "$HEAD_VERSION"
       - run:
           name: PR base branch verification (main requires dev head)
           command: |
