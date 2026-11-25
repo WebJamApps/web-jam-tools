@@ -312,10 +312,11 @@ Review the PR diff, description, mergeability, and non-CircleCI status checks (S
      as a normal correctness finding if it does).
 
 5. **Single Semver Version Bump per PR**:
-   - Check `package.json` (or `deno.json` for `web-jam-tools`).
-   - The version must be bumped on the PR's first commit and must strictly exceed the current `origin/dev` tip (matching `.circleci/config.yml:127`, "Version bump check (PR branches only)", with the strictly-greater comparison at lines 130-160).
+   - Check `package.json` in the active Node repositories (CollegeLutheran, JaMmusic, TimShermanMusic, web-jam-back, WebJamSocketCluster) and in an AppersonAuto critical fix.
+   - There, the version must be bumped on the PR's first commit and must strictly exceed the current `origin/dev` tip, as that repository's CircleCI step "Version bump check (PR branches only)" checks.
+   - **`web-jam-tools` has no per-PR version bump.** Its `deno.json` `"version"` stays untouched on PR branches and its CI has no version step, so an unchanged `deno.json` version is never a finding there. A web-jam-tools PR that changes `deno.json`'s `"version"` gets a Suggestion to leave it untouched.
    - **Suggestion, not Must Fix (`🟡`, never `🛑`)**: any version-bump irregularity within the PR
-     under review — including a **missing version bump** (`package.json` / `deno.json` unchanged in
+     under review — including a **missing version bump** (`package.json` unchanged in
      the PR diff), a version that fails to strictly exceed the `origin/dev` tip (whether omitted on
      the branch, collapsed out by a rebase, or fallen behind from `dev` moving under an open PR), or
      a follow-up commit that re-bumps the version when `dev` did not move (a gratuitous double bump).
@@ -483,12 +484,12 @@ afterward.
 
    ### Checklist Verification
    - **Mergeability**: ✅ No conflicts with `dev`.
-   - **Semver Bump**: 🟡 `deno.json` version does not strictly exceed `origin/dev` (see Suggestions).
+   - **Semver Bump**: 🟡 `package.json` version does not strictly exceed `origin/dev` (see Suggestions).
    - **Snyk**: ✅ Clean.
    - **Scope**: ✅ Matches linked issue.
 
    ### 🟡 Suggestions
-   - 🟡 Version bump — `deno.json`'s version does not strictly exceed `origin/dev`'s current tip (Step 2 item 5).
+   - 🟡 Version bump — `package.json`'s version does not strictly exceed `origin/dev`'s current tip (Step 2 item 5).
 
    ### 🔵 Nits
    - 🔵 The PR body's "How to test locally" block names a worktree path that no longer exists — fix by rerunning `scripts/create-draft-pr.sh --update`; no commit needed.

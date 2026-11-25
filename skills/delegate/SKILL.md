@@ -134,10 +134,10 @@ issue at all (on Claude Code, the `Agent` tool hands it only the prompt); it onl
 ever sees what's in the prompt.
 
 The templates below say `package.json` "version" — that's correct for the Node
-repos (CollegeLutheran, JaMmusic, web-jam-back, AppersonAuto, WebJamSocketCluster).
-`web-jam-tools` itself is Deno: swap in `deno.json` "version" and note that its
-bump is enforced automatically by a pre-push hook (`~/.claude/hooks/`), not a rule
-the subagent has to self-police.
+repos (CollegeLutheran, JaMmusic, TimShermanMusic, web-jam-back, WebJamSocketCluster,
+and AppersonAuto's critical fixes). `web-jam-tools` itself is Deno and has no per-PR
+version bump: drop the bump line from the prompt and tell the subagent to leave
+`deno.json`'s `"version"` untouched.
 
 ### PR-review dispatch nudge (parent-side, before dispatching)
 
@@ -175,11 +175,12 @@ PR attribution & conventions:
     ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "<tool> — <the model actually doing the work>"
 - Commit trailers (`Co-Authored-By:`) name the model actually doing the work,
   not a different one.
-- **One semver version bump per PR, on the first commit only** — `deno.json` for
-  web-jam-tools, `package.json` for JS/TS repos (JaMmusic, web-jam-back,
-  CollegeLutheran, AppersonAuto, TSM, HFS). The CI "Version bump check" gate blocks
-  PRs whose version is unchanged from the merge-base with `dev`. Follow-up commits
-  to an already-open PR keep the same version.
+- **One semver version bump per PR, on the first commit only** — `package.json` in the
+  Node repos (CollegeLutheran, JaMmusic, TSM, web-jam-back, WebJamSocketCluster, and
+  AppersonAuto's critical fixes). Their CI "Version bump check (PR branches only)" step
+  blocks PRs whose version is not strictly greater than `origin/dev`'s. Follow-up commits
+  to an already-open PR keep the same version. web-jam-tools has no per-PR bump: leave
+  `deno.json`'s `"version"` untouched.
 ```
 
 ### Mandatory (code-change dispatches): Dispatch checkpoint (loss prevention)
@@ -440,9 +441,9 @@ Report back:
 - Don't repeat the Opus/Sonnet/Haiku/Flash/Fable routing table — that's
   `docs/ai-team-playbook.md` (migrating there from global CLAUDE.md per
   web-jam-tools#115; link there, don't duplicate).
-- Don't invent a version-bump command — WebJamApps repos bump `package.json`
-  "version" (or `deno.json` for web-jam-tools) by hand, once per PR (see the
-  `one-semver-bump-per-pr` memory).
+- Don't invent a version-bump command — the Node repos bump `package.json`
+  "version" by hand, once per PR (see the `one-semver-bump-per-pr` memory);
+  web-jam-tools does not bump `deno.json` per PR.
 
 ## Rules moved from AGENTS.md
 

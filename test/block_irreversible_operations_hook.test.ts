@@ -386,8 +386,8 @@ Deno.test("an unterminated quote fails CLOSED (blocked)", async () => {
 
 // --- web-jam-tools#714: repo deno.json parse failures must NOT deadlock this guard ---
 //
-// Every PR bumps the `version` line in deno.json, so a rebase conflict on
-// exactly that line is routine, not an edge case. Before the fix, this
+// A rebase conflict inside deno.json (routine while every PR bumped its
+// `version` line, before web-jam-tools#1954) leaves it unparseable. Before the fix, this
 // hook's own `deno run` resolved the nearest deno.json from the working
 // directory; when that file held conflict markers (or any unparseable
 // JSON), deno exited before running the lib at all, the guard's result was

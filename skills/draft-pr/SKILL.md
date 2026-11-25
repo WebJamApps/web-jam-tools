@@ -38,10 +38,12 @@ Josh alone reviews and flips draft → ready on GitHub.
    and its title falls back to the last commit subject — NEVER create an issue just to satisfy the script.
 2. Everything is committed (clean working tree) and lint + tests are green.
    **Push step:** Push your feature branch using `deno task push` on every surface (Claude Code, agy, and Codex alike).
-3. **Version bump:** On the PR's first commit, bump the version once in `deno.json`
-   (web-jam-tools) or `package.json` (other repos). The CI "Version bump check" gate
-   blocks PRs with no version change from the merge-base with `dev`. Follow-up commits
-   to an already-open PR keep the same version.
+3. **Version bump:** In the active Node repositories (CollegeLutheran, JaMmusic,
+   TimShermanMusic, web-jam-back, WebJamSocketCluster), bump `package.json`'s version once,
+   on the PR's first commit. Their CI "Version bump check (PR branches only)" step blocks PRs
+   whose version is not strictly greater than `origin/dev`'s. Follow-up commits to an
+   already-open PR keep the same version. **`web-jam-tools` has no per-PR version bump:**
+   leave `deno.json`'s `"version"` untouched on PR branches.
    The description never mentions the version or the bump, because the diff shows it and CI checks it.
 4. **In-range dependency updates & security fixes:** `npm audit fix` (Node repos) and
    `deno outdated --update` restricted to minor/patch (Deno repos) are allowed and encouraged
@@ -230,16 +232,16 @@ Josh flagged (2026-07-02): web-jam-back PR #892 was built by Sonnet but its foot
 
 ### one-semver-bump-per-pr
 
-A PR carries exactly ONE semver bump (e.g. 2.9.15 → 2.9.16). Follow-up commits pushed to an already-open PR must NOT each re-bump the version.
+In a repository that bumps `package.json` per PR, a PR carries exactly ONE semver bump (e.g. 2.9.15 → 2.9.16). Follow-up commits pushed to an already-open PR must NOT each re-bump the version. `web-jam-tools` does not bump `deno.json` per PR at all.
 
 **Why:** Josh flagged a PR that went 2.9.15 → 2.9.18 in one PR — I'd bumped on every push (feature commit, then a CI tweak, then a security fix) because the PreToolUse semver hook reminds on each push. The hook's intent is "the PR's change is versioned," not "increment on every push."
 
 **SEMVER TRAP — read the current version from `origin/dev`, NEVER from the working checkout.**
-The main clone often sits on a long-merged or unrelated branch, so its `deno.json` /
-`package.json` can be several versions behind. This bit two dispatches in one session
+The main clone often sits on a long-merged or unrelated branch, so its `package.json` can be
+several versions behind. This bit two dispatches in one session
 (2026-07-30): the checkout read `1.22.0` while `origin/dev` was already at `1.23.1`, so both
 dispatch prompts carried stale bump targets — one agent caught it independently, the other had to
-be corrected mid-flight. Always run `git show origin/dev:deno.json` (or `:package.json`) before
+be corrected mid-flight. Always run `git show origin/dev:package.json` before
 naming a bump target in a dispatch prompt. Two PRs cut from the same base will also collide on
 the same next version — re-read `origin/dev` and take the next free one when CI's version-bump
 gate complains.

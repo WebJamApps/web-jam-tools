@@ -95,8 +95,23 @@ Deno.test("skills/pr-review/SKILL.md defines a missing version bump as a Suggest
 
   assertStringIncludes(
     content,
-    "**Suggestion, not Must Fix (`🟡`, never `🛑`)**: any version-bump irregularity within the PR\n     under review — including a **missing version bump** (`package.json` / `deno.json` unchanged in\n     the PR diff)",
+    "**Suggestion, not Must Fix (`🟡`, never `🛑`)**: any version-bump irregularity within the PR\n     under review — including a **missing version bump** (`package.json` unchanged in\n     the PR diff)",
   );
+});
+
+// web-jam-tools#1954: "The version check" — web-jam-tools has no per-PR deno.json bump.
+Deno.test("skills/pr-review/SKILL.md applies the version bump to package.json repositories only, and names the CI step without a line number", async () => {
+  const content = await Deno.readTextFile(SKILL_MD_PATH);
+  assertStringIncludes(
+    content,
+    '**`web-jam-tools` has no per-PR version bump.** Its `deno.json` `"version"` stays untouched on PR branches and its CI has no version step, so an unchanged `deno.json` version is never a finding there.',
+  );
+  assertStringIncludes(
+    content,
+    "Check `package.json` in the active Node repositories (CollegeLutheran, JaMmusic, TimShermanMusic, web-jam-back, WebJamSocketCluster)",
+  );
+  assert(!/config\.yml:\d/.test(content), "the skill names the CI step, never a line number");
+  assert(!content.includes("(or `deno.json` for `web-jam-tools`)"));
   assertStringIncludes(
     content,
     "A version-bump finding (Step 2 item 5 — including a missing version bump, a version that\n       fails to strictly exceed `origin/dev`, or a gratuitous double bump) is always a Suggestion,\n       never a Must Fix",

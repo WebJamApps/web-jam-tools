@@ -99,9 +99,10 @@ skill.
   Each lane MUST run in its own worktree (`scripts/new-agent-worktree.sh`) on its own branch off
   `dev` — never in the shared `~/WebJamApps/<repo>` checkout, which has a single HEAD and would
   branch-switch under a running agent. The MAX 2 CONCURRENT WORKSTREAMS PER TERMINAL cap below
-  still applies. Parallel lanes off the same base will each bump `deno.json`/`package.json` to the
+  still applies. In a Node repo, parallel lanes off the same base will each bump `package.json` to the
   same version; that is an expected merge conflict, resolved by rebasing the second PR onto `dev`
-  and re-bumping — it is **not** a reason to refuse or queue a dispatch. State which lanes are live
+  and re-bumping — it is **not** a reason to refuse or queue a dispatch. web-jam-tools has no
+  per-PR `deno.json` bump, so its lanes do not collide on the version. State which lanes are live
   in a repo; never serialize silently.
 - **MAX 2 CONCURRENT WORKSTREAMS PER TERMINAL**: Two live background jobs (e.g. a subagent + a
   headless agy dispatch) is the cap. When a THIRD thread (new discussion, dispatch, or background
