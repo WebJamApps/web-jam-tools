@@ -1,7 +1,9 @@
 /**
  * gh-api-guard decisions (R-6 consent rules), using the shared shell parser before the legacy fallback.
- * - Deny (exit 2) if method is DELETE (-X DELETE / --method DELETE), except for the narrow
- *   reversible carve-out of removing an issue dependency (allowedDependencyRemoval).
+ * - Deny (exit 2) if method is DELETE (-X DELETE / --method DELETE).
+ * - Deny (exit 2) any write to an issue's dependency path, on every tool, naming
+ *   `deno task block-issue` for an add and `deno task unblock-issue` for a removal
+ *   ("Raw writes to an issue's dependency path" in github-write-guards-design.md).
  * - Force prompt (JSON ask) if method is POST/PUT/PATCH or field flags are passed.
  */
 import {
@@ -13,42 +15,24 @@ import {
 } from "./normalize_command.ts";
 
 export type GhApiDecision = "allow" | "ask" | "deny";
+/** The link command a refused dependency-path write is pointed at. */
+export type LinkCommand = "block-issue" | "unblock-issue";
+export interface GhApiVerdict {
+  decision: GhApiDecision;
+  link?: LinkCommand;
+}
 
 const DELETE_TEXT = /(-x|--method)\s+delete|(-xdelete|--method=delete)/;
 const WRITE_TEXT =
   /(-x|--method)\s+(post|put|patch)|(-xpost|-xput|-xpatch|--method=post|--method=put|--method=patch)|(^|\s)-f([\s=$]|$)|--field|--raw-field|--input/;
-const BLOCKED_BY_REMOVAL =
-  /^gh api (--method\s+delete|--method=delete|-x\s+delete|-xdelete) repos\/[a-z0-9_.-]+\/[a-z0-9_.-]+\/issues\/[0-9]+\/dependencies\/blocked_by\/[0-9]+$/;
+// An issue's dependency path, as an endpoint argument or anywhere in unparsed text.
+const DEPENDENCY_PATH =
+  /(^|\/|\s)repos\/[^/\s]+\/[^/\s]+\/issues\/[^/\s]+\/dependencies(\/|\?|\s|$)/;
 const SHELLS = new Set(["bash", "sh", "zsh", "ksh", "dash", "ash"]);
 const CONTROL_WORDS = new Set(["if", "then", "else", "elif", "while", "until", "do", "!"]);
 
 function normalizedText(command: string): string {
   return command.toLowerCase().replace(/["']/g, "");
-}
-
-/**
- * Narrow carve-out: allow ONLY removing an issue dependency —
- *   gh api --method DELETE repos/<owner>/<repo>/issues/<N>/dependencies/blocked_by/<ID>
- * (or the -X DELETE spelling) — because it is reversible: the dependency
- * can be re-added with the corresponding POST to .../dependencies/blocked_by.
- * Everything else that is a DELETE stays denied.
- *
- * Safety posture (this must never become a general DELETE bypass):
- *  1. The path is matched anchored to the full (whitespace-squeezed)
- *     command, not merely as a substring — "blocked_by" appearing
- *     anywhere else (a comment, a different path) does not match.
- *  2. Any shell metacharacter that could chain or embed another command
- *     (`;`, `&&`, `||`, `|`, backtick, `$(`, or an embedded newline)
- *     disqualifies the command from the carve-out outright, so a DELETE
- *     hidden in a compound/chained command is always denied.
- *  3. Extra trailing arguments, a different owner/repo/issue/dependency
- *     id shape, or a different endpoint all fail the anchored match and
- *     fall through to the standard deny below.
- */
-function allowedDependencyRemoval(command: string): boolean {
-  const text = normalizedText(command);
-  if (/[\n;|&`]|\$\(/.test(text)) return false;
-  return BLOCKED_BY_REMOVAL.test(text.replace(/\s+/g, " ").trim());
 }
 
 // The shared tokenizer does not evaluate substitutions. Use the conservative
@@ -71,8 +55,15 @@ function hasExecutableExpansion(segment: string): boolean {
   return false;
 }
 
+// The shared splitter cuts a word at a brace, so `repos/{owner}/{repo}/...` (gh's own
+// placeholders) would never reach the guard whole. Such a command takes the text fallback.
+function hasBraceInWord(command: string): boolean {
+  return /\{\S|\S\}/.test(command.replace(/\$\{[^}]*\}/g, ""));
+}
+
 function apiCalls(command: string, depth = 0): string[][] {
   if (depth > MAX_WRAPPER_RECURSION_DEPTH) throw new Error("Wrapper recursion limit");
+  if (hasBraceInWord(command)) throw new Error("Brace inside a word");
   const { segments, unterminated } = splitOnOperators(command);
   if (unterminated) throw new Error("Unterminated shell syntax");
   const calls: string[][] = [];
@@ -108,60 +99,106 @@ function apiCalls(command: string, depth = 0): string[][] {
   return calls;
 }
 
-function callDecision(args: string[]): GhApiDecision {
+const VALUE_OPTIONS = [
+  "-H",
+  "--header",
+  "--hostname",
+  "--jq",
+  "-q",
+  "--template",
+  "-t",
+  "--cache",
+  "-p",
+  "--preview",
+];
+
+function callDecision(args: string[]): GhApiVerdict {
   let write = false;
+  let fields = false;
+  let method = "";
+  let endpoint = "";
   for (let i = 0; i < args.length; i++) {
     const arg = args[i].toLowerCase();
     if (["-f", "--field", "--raw-field", "--input"].includes(arg)) {
-      write = true;
+      write = fields = true;
       i++; // The next token is data, even if it resembles a method flag.
       continue;
     }
     if (/^(-f|--field=|--raw-field=|--input=)/.test(arg)) {
-      write = true;
+      write = fields = true;
       continue;
     }
-    if (
-      ["-H", "--header", "--hostname", "--jq", "-q", "--template", "-t", "--cache"].includes(
-        args[i],
-      )
-    ) {
+    if (VALUE_OPTIONS.includes(args[i])) {
       i++;
       continue;
     }
-    let method = "";
-    if (arg === "-x" || arg === "--method") method = args[++i]?.toLowerCase() ?? "";
-    else if (arg.startsWith("--method=")) method = arg.slice(9);
-    else if (arg.startsWith("-x")) method = arg.slice(2);
-    if (method === "delete") return "deny";
-    if (["post", "put", "patch"].includes(method)) write = true;
+    let value = "";
+    if (arg === "-x" || arg === "--method") value = args[++i]?.toLowerCase() ?? "";
+    else if (arg.startsWith("--method=")) value = arg.slice(9);
+    else if (arg.startsWith("-x")) value = arg.slice(2);
+    else if (!arg.startsWith("-") && !endpoint) endpoint = args[i];
+    if (value) method = value;
+    if (["post", "put", "patch"].includes(value)) write = true;
   }
-  return write ? "ask" : "allow";
+  // gh sends a request carrying parameters as POST unless a method is named.
+  const effective = method || (fields ? "post" : "get");
+  const path = endpoint.replace(/^https?:\/\/[^/]+/i, "");
+  if (DEPENDENCY_PATH.test(path) && effective !== "get") {
+    return { decision: "deny", link: effective === "delete" ? "unblock-issue" : "block-issue" };
+  }
+  if (method === "delete") return { decision: "deny" };
+  return { decision: write ? "ask" : "allow" };
 }
 
-function textFallback(command: string): GhApiDecision {
-  if (!/gh +api( |$)/.test(command)) return "allow";
+function textFallback(command: string): GhApiVerdict {
+  if (!/gh +api( |$)/.test(command)) return { decision: "allow" };
   const text = normalizedText(command);
-  if (DELETE_TEXT.test(text)) return "deny";
-  return WRITE_TEXT.test(text) ? "ask" : "allow";
+  const deleting = DELETE_TEXT.test(text);
+  const writing = WRITE_TEXT.test(text);
+  if (DEPENDENCY_PATH.test(text) && (deleting || writing)) {
+    return { decision: "deny", link: deleting ? "unblock-issue" : "block-issue" };
+  }
+  if (deleting) return { decision: "deny" };
+  return { decision: writing ? "ask" : "allow" };
+}
+
+/** The decision, and for a dependency-path write the link command to name. */
+export function ghApiVerdict(command: string): GhApiVerdict {
+  let verdicts: GhApiVerdict[];
+  try {
+    verdicts = apiCalls(command).map(callDecision);
+  } catch {
+    verdicts = [textFallback(command)];
+  }
+  const denied = verdicts.filter((verdict) => verdict.decision === "deny");
+  if (denied.length > 0) return denied.find((verdict) => verdict.link) ?? denied[0];
+  return { decision: verdicts.some((verdict) => verdict.decision === "ask") ? "ask" : "allow" };
 }
 
 export function checkGhApi(command: string): GhApiDecision {
-  let decisions: GhApiDecision[];
-  try {
-    decisions = apiCalls(command).map(callDecision);
-  } catch {
-    decisions = [textFallback(command)];
-  }
-  if (decisions.includes("deny")) return allowedDependencyRemoval(command) ? "allow" : "deny";
-  return decisions.includes("ask") ? "ask" : "allow";
+  return ghApiVerdict(command).decision;
 }
+
+const LINK_USAGE: Record<LinkCommand, string> = {
+  "block-issue":
+    "add a blocked-by link with: deno task block-issue --repo <owner/repo> --issue <n> --blocker <m>",
+  "unblock-issue":
+    "remove a blocked-by link with: deno task unblock-issue --repo <owner/repo> --issue <n> --blocker <m>",
+};
 
 if (import.meta.main) {
   const payload = JSON.parse(await new Response(Deno.stdin.readable).text());
   const command: unknown = payload?.tool_input?.command ?? payload?.toolCall?.args?.CommandLine;
   if (command !== undefined && typeof command !== "string") throw new Error("Invalid command");
-  const decision = checkGhApi(command ?? "");
+  const { decision, link } = ghApiVerdict(command ?? "");
+  if (link) {
+    console.error(
+      "BLOCKED (gh api guard): a raw gh api write to an issue's dependency path is refused.",
+    );
+    console.error(`Instead, ${LINK_USAGE[link]}`);
+    console.error("It prints the command that undoes the change.");
+    Deno.exit(2);
+  }
   if (decision === "deny") {
     console.error("BLOCKED (gh api guard): gh api DELETE is denied (irreversible state change).");
     console.error(

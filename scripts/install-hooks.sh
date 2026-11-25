@@ -705,8 +705,10 @@ ASK_RULES=(
 # ~/Dropbox/web-jam-llms/Token_Savings/pr-review-self-posting-design-2026-08-22.md).
 # Defence in depth on the Claude Code surface ONLY — a second layer nothing
 # depends on, since hooks/block-raw-gh-write.sh is the primary enforcement on
-# BOTH surfaces (decision 8). Names exactly the four guarded `deno task`
-# capabilities this repo now gates the raw gh verbs behind, so approving one
+# BOTH surfaces (decision 8). Names exactly the guarded `deno task`
+# capabilities this repo now gates the raw gh verbs behind, plus the two
+# blocked-by link commands hooks/gh-api-guard.sh names instead of a raw
+# dependency-path write (web-jam-tools#1569), so approving one
 # of them does not also pre-approve unrelated `deno task`/`npm run` scripts —
 # unlike the blanket `Bash(deno task *)`/`Bash(npm run *)` wildcards these
 # narrow rules are meant to make removable (scripts/prune-local-permission-allows.sh).
@@ -717,6 +719,7 @@ ALLOW_RULES=(
   'Bash(deno task post-issue-comment *)'
   'Bash(deno task edit-issue *)'
   'Bash(deno task unblock-issue *)'
+  'Bash(deno task block-issue *)'
 )
 
 CHECK_MODE=0

@@ -1038,16 +1038,17 @@ Deno.test(
 Deno.test(
   "install-hooks.sh's real ALLOW_RULES set merges cleanly and is idempotent (sandboxed CLAUDE_SETTINGS_PATH via --settings-path)",
   async () => {
-    // Mirrors install-hooks.sh's ALLOW_RULES array (web-jam-tools#685, §3a)
-    // rather than parsing it out of the shell script, same convention as the
-    // DENY_RULES test above.
-    const ALLOW_RULES = [
-      "Bash(deno task post-pr-review *)",
-      "Bash(deno task post-pr-comment *)",
-      "Bash(deno task post-issue-comment *)",
-      "Bash(deno task edit-issue *)",
-      "Bash(deno task unblock-issue *)",
-    ];
+    // Read from install-hooks.sh itself (web-jam-tools#685, §3a), so the entries
+    // proved here are the ones the installer writes.
+    const script = await Deno.readTextFile(
+      new URL("../scripts/install-hooks.sh", import.meta.url),
+    );
+    const body = script.match(/^ALLOW_RULES=\(\n([\s\S]*?)\n\)/m)?.[1] ?? "";
+    const ALLOW_RULES = [...body.matchAll(/^\s*'([^']+)'\s*$/gm)].map((m) => m[1]);
+    // The two blocked-by link commands the gh api guard names (web-jam-tools#1569).
+    assert(ALLOW_RULES.includes("Bash(deno task block-issue *)"), ALLOW_RULES.join("\n"));
+    assert(ALLOW_RULES.includes("Bash(deno task unblock-issue *)"), ALLOW_RULES.join("\n"));
+    assertEquals(ALLOW_RULES.length, 6, ALLOW_RULES.join("\n"));
     await withTempSettings(undefined, async (path) => {
       const first = await runMerge(path, ["--allow", ...ALLOW_RULES]);
       assertEquals(first.code, 0, first.stderr);
