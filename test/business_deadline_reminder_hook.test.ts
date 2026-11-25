@@ -2,6 +2,10 @@
 
 import { assert, assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import { readHookRegistrations } from "../src/install-codex/hooks.ts";
+import {
+  type DeadlineEntry,
+  parseDeadlines,
+} from "../hooks/lib/check_business_deadline_reminder.ts";
 
 const SCRIPT_PATH = new URL(
   "../hooks/business-deadline-reminder.sh",
@@ -351,4 +355,147 @@ Deno.test("hook is absent from Codex and agy registrations", () => {
     Error,
     "business-deadline-reminder.sh must not be registered in agy config",
   );
+});
+
+// Literal case table from "Yearly deadlines" ("How the list is read") of
+// web-jam-music-media-design.md (revision 1.5.0). Each row is one literal input
+// and its parser result.
+type Expect =
+  | { field: keyof DeadlineEntry; value: string | number }
+  | { field: "dueDate"; value: string; warnDays: number }
+  | { malformed: string };
+
+const TABLE_HEADER =
+  "| Item | Due Date | Amount | Where Paid | Warn Days | Last Paid Date | Confirmation |\n" +
+  "|---|---|---|---|---|---|---|";
+
+const LITERAL_CASES: Array<[string, Expect]> = [
+  ["- **Due:** 2028-01-31 (the last day of January, the LLC's anniversary month)", {
+    field: "dueDate",
+    value: "2028-01-31",
+  }],
+  ["- **Due**: 2028-01-31", { field: "dueDate", value: "2028-01-31" }],
+  ["- Due: 2028-01-31", { field: "dueDate", value: "2028-01-31" }],
+  ["- **Due:** 2026-02-30 (invalid calendar date)", { malformed: "invalid due date" }],
+  ["- **Due:** January 31, 2028", { malformed: "invalid due date" }],
+  ["- **Due:** not-a-valid-date", { malformed: "invalid due date" }],
+  ["- **Warn:** 30 days ahead", { field: "warnDays", value: 30 }],
+  ["- **Warn:** 14 days", { field: "warnDays", value: 14 }],
+  ["- **Warn:** 1 day before", { field: "warnDays", value: 1 }],
+  ["- **Warn:** 0", { field: "warnDays", value: 0 }],
+  ["- **Warn:** 30", { field: "warnDays", value: 30 }],
+  ["- **Warn:** soon", { malformed: "invalid warn days" }],
+  ["- **Warn:** -5 days", { malformed: "invalid warn days" }],
+  ["- **Warn:** 30 weeks ahead", { malformed: "invalid warn days" }],
+  ["- **Paid through:** 2027 (the 2025-01-31 payment covered 2025, 2026 and 2027)", {
+    field: "paidThrough",
+    value: "2027",
+  }],
+  ["- **Paid through:** 2027-01-31 (verified)", { field: "paidThrough", value: "2027-01-31" }],
+  ["- **Paid through:** next year", { malformed: "invalid paid through" }],
+  ["- **Last payment:** 2025-01-31. Receipt saved in Correspondence.", {
+    field: "lastPaidDate",
+    value: "2025-01-31",
+  }],
+  ["- **Last paid:** 2025-01-31", { field: "lastPaidDate", value: "2025-01-31" }],
+  ["- **Last payment:** 2025-13-45. Bad date.", { malformed: "invalid last paid date" }],
+  ["| Sample Fee | 2026-12-08 | $50.00 | https://example.invalid | 30 | - | - |", {
+    field: "dueDate",
+    value: "2026-12-08",
+    warnDays: 30,
+  }],
+  ["| Corrupt Item | not-a-valid-date | $10.00 | https://example.invalid | 30 | - | - |", {
+    malformed: "invalid due date",
+  }],
+];
+
+/** Wraps one literal line in the smallest document that parses it as one entry. */
+function documentFor(literal: string): string {
+  if (literal.startsWith("|")) return `${TABLE_HEADER}\n${literal}\n`;
+  // Non-Due lines need a valid Due so the entry can be built.
+  const due = /^- (\*\*)?Due/.test(literal) ? "" : "- Due: 2028-01-31\n";
+  return `## Case\n${due}${literal}\n`;
+}
+
+Deno.test("literal case table has all 22 design rows", () => {
+  assertEquals(LITERAL_CASES.length, 22);
+});
+
+for (const [literal, expected] of LITERAL_CASES) {
+  Deno.test(`literal case: ${literal}`, () => {
+    const result = parseDeadlines(documentFor(literal));
+    if ("malformed" in expected) {
+      assertEquals(result.entries, []);
+      assertEquals(result.malformed.length, 1);
+      assertStringIncludes(result.malformed[0].reason, expected.malformed);
+      return;
+    }
+    assertEquals(result.malformed, []);
+    assertEquals(result.entries.length, 1);
+    assertEquals(result.entries[0][expected.field], expected.value);
+    if ("warnDays" in expected) assertEquals(result.entries[0].warnDays, expected.warnDays);
+  });
+}
+
+const NATURAL_BLOCK = `# Web Jam LLC Deadlines
+
+## Virginia SCC Annual Registration Fee
+- **Due:** 2026-12-08 (the anniversary-month due date)
+- **Amount:** $50.00
+- **Where:** https://example.invalid/pay
+- **Warn:** 30 days ahead
+- **Paid through:** 2025 (the prior payment covered 2025)
+- **Last payment:** 2025-01-31. Receipt saved in Correspondence.
+`;
+
+Deno.test("outcome: natural block entry is valid and shown with no malformed message", async () => {
+  await withSandbox(async (listPath) => {
+    await Deno.writeTextFile(listPath, NATURAL_BLOCK);
+    const res = await runHook({
+      BUSINESS_DEADLINES_PATH: listPath,
+      BUSINESS_DEADLINES_NOW: TEST_NOW,
+    });
+    assertEquals(res.code, 0);
+    const parsed = JSON.parse(res.stdout);
+    assertStringIncludes(parsed.systemMessage, "Virginia SCC Annual Registration Fee");
+    assertStringIncludes(parsed.systemMessage, "due in 30 days");
+    assert(!parsed.systemMessage.includes("Malformed"), parsed.systemMessage);
+  });
+});
+
+Deno.test("outcome: malformed block entry is named while valid entries are still evaluated", async () => {
+  await withSandbox(async (listPath) => {
+    const markdown = `${NATURAL_BLOCK}
+## Broken Warn Entry
+- **Due:** 2026-11-20
+- **Warn:** soon
+`;
+    await Deno.writeTextFile(listPath, markdown);
+    const res = await runHook({
+      BUSINESS_DEADLINES_PATH: listPath,
+      BUSINESS_DEADLINES_NOW: TEST_NOW,
+    });
+    assertEquals(res.code, 0);
+    const parsed = JSON.parse(res.stdout);
+    assertStringIncludes(
+      parsed.systemMessage,
+      `Malformed entry: "Broken Warn Entry" (invalid warn days`,
+    );
+    assertStringIncludes(parsed.systemMessage, "Virginia SCC Annual Registration Fee");
+    // The malformed entry is named only, never also evaluated with a default warn window.
+    assert(!parsed.systemMessage.includes("Broken Warn Entry is due"), parsed.systemMessage);
+  });
+});
+
+Deno.test("outcome: unreadable list path proceeds silently", async () => {
+  await withSandbox(async (listPath) => {
+    // A directory at the list path cannot be read as a file.
+    await Deno.mkdir(listPath);
+    const res = await runHook({
+      BUSINESS_DEADLINES_PATH: listPath,
+      BUSINESS_DEADLINES_NOW: TEST_NOW,
+    });
+    assertEquals(res.code, 0);
+    assertEquals(res.stdout, "");
+  });
 });
