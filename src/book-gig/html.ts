@@ -100,7 +100,11 @@ export function renderStatusBadge(status: string, replyKind?: string): string {
   if (replyKind === "bounce" || s === "bounced") {
     return `<span class="badge badge-bounced">bounced</span>`;
   }
-  if (s.includes("seasonal hold") || s.includes("hold:")) {
+  if (
+    s.includes("seasonal hold") || s.includes("hold:") ||
+    s.includes("don't contact until") || s.includes("calendar full through") ||
+    s.includes("booked through:") || s.includes("contact hold:")
+  ) {
     return `<span class="badge badge-seasonal-hold">${escapeHtml(status)}</span>`;
   }
   if (s.includes("gig spacing") || s.includes("spacing:")) {

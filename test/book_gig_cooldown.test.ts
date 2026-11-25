@@ -3,12 +3,15 @@
 import { assertEquals, assertRejects, assertStringIncludes, assertThrows } from "@std/assert";
 import { parseBookGigArgs } from "../src/book-gig/parser.ts";
 import {
+  executeClearVenueHold,
   executeVenueHold,
   type HoldVenueRecord,
   parseBookedThroughDate,
+  parseHoldField,
   parseResumeBookingDate,
   resolveHoldVenue,
 } from "../src/book-gig/cooldown.ts";
+import { fetchCandidates, identifyCandidateBadge } from "../src/book-gig/candidates.ts";
 import { runBookGigCli } from "../src/book-gig/cli.ts";
 
 // -----------------------------------------------------------------------------
@@ -684,5 +687,262 @@ Deno.test("runBookGigCli: handles --until with missing venue identifier", async 
     },
     Error,
     "Missing venue identifier for --hold",
+  );
+});
+
+// -----------------------------------------------------------------------------
+// 6. --clear-hold Parsing, Field Validation, and Execution Tests (#990)
+// -----------------------------------------------------------------------------
+
+Deno.test("parseBookGigArgs: parses --clear-hold and --field flags", () => {
+  const parsed1 = parseBookGigArgs([
+    "--clear-hold",
+    "Martin's Downtown Bar & Grill",
+    "--field",
+    "resumeBooking",
+  ]);
+  assertEquals(parsed1.mode, "clear-hold");
+  assertEquals(parsed1.holdVenue, "Martin's Downtown Bar & Grill");
+  assertEquals(parsed1.clearHoldField, "resumeBooking");
+
+  const parsed2 = parseBookGigArgs([
+    "--clear-hold=v-olde-salem",
+    "--field=bookedThrough",
+  ]);
+  assertEquals(parsed2.mode, "clear-hold");
+  assertEquals(parsed2.holdVenue, "v-olde-salem");
+  assertEquals(parsed2.clearHoldField, "bookedThrough");
+
+  const parsed3 = parseBookGigArgs([
+    "--clear-hold",
+    "--venue",
+    "The Spot on Kirk",
+    "--field",
+    "resumeBooking",
+  ]);
+  assertEquals(parsed3.mode, "clear-hold");
+  assertEquals(parsed3.holdVenue, "The Spot on Kirk");
+  assertEquals(parsed3.clearHoldField, "resumeBooking");
+});
+
+Deno.test("parseHoldField: accepts resumeBooking or bookedThrough and rejects invalid/missing fields (#990)", () => {
+  assertEquals(parseHoldField("resumeBooking"), "resumeBooking");
+  assertEquals(parseHoldField("bookedThrough"), "bookedThrough");
+  assertThrows(() => parseHoldField(undefined), Error, "Missing required --field");
+  assertThrows(() => parseHoldField(""), Error, "Missing required --field");
+  assertThrows(() => parseHoldField("invalidField"), Error, 'Invalid hold field "invalidField"');
+});
+
+Deno.test("executeClearVenueHold & runBookGigCli: Outcome 1 — clears field via PATCH and venue re-fetches eligible (#990)", async () => {
+  const calls: { url: string; method: string; body?: unknown }[] = [];
+  const storedVenue: HoldVenueRecord & { email: string; city: string; usState: string } = {
+    _id: "v-martins",
+    name: "Martin's Downtown Bar & Grill",
+    city: "Roanoke",
+    usState: "VA",
+    email: "booking@martins.com",
+    resumeBooking: "2027-01-01T00:00:00.000Z",
+    bookedThrough: "2026-12-31T23:59:59.999Z",
+  };
+  let eligibleInBackend = false;
+
+  const mockFetch: typeof fetch = (url, init) => {
+    const u = String(url);
+    const method = init?.method || "GET";
+    const bodyStr = init?.body ? String(init.body) : undefined;
+    const body = bodyStr ? JSON.parse(bodyStr) : undefined;
+    calls.push({ url: u, method, body });
+
+    if (u.includes("/outreach/candidates") && method === "GET") {
+      return Promise.resolve(
+        new Response(JSON.stringify(eligibleInBackend ? [storedVenue] : []), { status: 200 }),
+      );
+    }
+    if (u.includes("/outreach?status=") && method === "GET") {
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+    }
+    if (u.includes("/venue/v-martins") && method === "PATCH") {
+      if (body && "resumeBooking" in body) {
+        storedVenue.resumeBooking = body.resumeBooking;
+        eligibleInBackend = true;
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ ...storedVenue }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/venue") && method === "GET") {
+      return Promise.resolve(
+        new Response(JSON.stringify([storedVenue]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  const weekend = {
+    start: "2027-01-08",
+    end: "2027-01-10",
+    rawText: "Jan 8-10 2027",
+    label: "January 8–10, 2027",
+    year: 2027,
+    month: 1,
+    days: [8, 9, 10],
+  };
+
+  // Before clearing: venue is excluded with resumeBooking message
+  const before = await fetchCandidates(
+    { weekend, backendUrl: "https://mock.api", token: "t" },
+    mockFetch,
+  );
+  assertEquals(before.length, 1);
+  assertEquals(before[0].isExcluded, true);
+  assertEquals(
+    identifyCandidateBadge(before[0], new Date("2026-09-13T12:00:00Z"), weekend).badge,
+    "Don't contact until 1 Jan 2027 (resumeBooking)",
+  );
+
+  // Clear resumeBooking via CLI
+  const cliRes = await runBookGigCli(
+    ["--clear-hold", "Martin's Downtown Bar & Grill", "--field", "resumeBooking"],
+    mockFetch,
+  );
+  assertEquals(cliRes.mode, "clear-hold");
+  assertEquals(cliRes.clearHoldResult?.venueId, "v-martins");
+  assertEquals(cliRes.clearHoldResult?.clearedField, "resumeBooking");
+  assertEquals(cliRes.clearHoldResult?.previousValue, "2027-01-01T00:00:00.000Z");
+
+  const patchCall = calls.find((c) => c.method === "PATCH");
+  assertEquals(patchCall?.url.endsWith("/venue/v-martins"), true);
+  assertEquals(patchCall?.body, { resumeBooking: null });
+
+  // After clearing: venue re-fetches eligible without the resumeBooking exclusion
+  const after = await fetchCandidates(
+    { weekend, backendUrl: "https://mock.api", token: "t" },
+    mockFetch,
+  );
+  assertEquals(after.length, 1);
+  assertEquals(after[0].isExcluded, false);
+  assertEquals(
+    identifyCandidateBadge(after[0], new Date("2026-09-13T12:00:00Z"), weekend).isExcluded,
+    false,
+  );
+});
+
+Deno.test("executeClearVenueHold: Outcome 2 — refuses when venue cannot be found by name or id (#990)", async () => {
+  const calls: { method: string }[] = [];
+  const mockFetch: typeof fetch = (url, init) => {
+    const method = init?.method || "GET";
+    calls.push({ method });
+    if (String(url).includes("/venue") && method === "GET") {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockVenues), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  await assertRejects(
+    async () => {
+      await executeClearVenueHold(
+        "Missing Tavern",
+        "bookedThrough",
+        { backendUrl: "https://mock.api", token: "test-token" },
+        mockFetch,
+      );
+    },
+    Error,
+    'Venue "Missing Tavern" not found',
+  );
+  assertEquals(calls.filter((c) => c.method === "PATCH").length, 0);
+});
+
+Deno.test("executeClearVenueHold: Outcome 3 — refuses when PATCH fails (non-2xx, network error, unparseable response) (#990)", async () => {
+  const makeGetOkThenPatch = (patchHandler: () => Promise<Response>): typeof fetch => {
+    return (url, init) => {
+      const u = String(url);
+      const method = init?.method || "GET";
+      if (u.includes("/venue") && method === "GET") {
+        return Promise.resolve(
+          new Response(JSON.stringify(mockVenues), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (u.includes("/venue/v-spot") && method === "PATCH") {
+        return patchHandler();
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    };
+  };
+
+  // (a) Non-2xx response
+  await assertRejects(
+    async () => {
+      await executeClearVenueHold(
+        "v-spot",
+        "resumeBooking",
+        { backendUrl: "https://mock.api", token: "test-token" },
+        makeGetOkThenPatch(() => Promise.resolve(new Response("Server Error", { status: 500 }))),
+      );
+    },
+    Error,
+    "Failed to clear resumeBooking on venue v-spot: HTTP 500",
+  );
+
+  // (b) Network error
+  await assertRejects(
+    async () => {
+      await executeClearVenueHold(
+        "v-spot",
+        "bookedThrough",
+        { backendUrl: "https://mock.api", token: "test-token" },
+        makeGetOkThenPatch(() => Promise.reject(new Error("ECONNRESET"))),
+      );
+    },
+    Error,
+    "ECONNRESET",
+  );
+
+  // (c) Unparseable response on HTTP 200
+  await assertRejects(
+    async () => {
+      await executeClearVenueHold(
+        "v-spot",
+        "resumeBooking",
+        { backendUrl: "https://mock.api", token: "test-token" },
+        makeGetOkThenPatch(() => Promise.resolve(new Response("not-valid-json", { status: 200 }))),
+      );
+    },
+    Error,
+    "unparseable response",
+  );
+});
+
+Deno.test("runBookGigCli: refuses --clear-hold without venue or without --field (#990)", async () => {
+  const mockFetch: typeof fetch = () => Promise.resolve(new Response("[]", { status: 200 }));
+
+  await assertRejects(
+    async () => {
+      await runBookGigCli(["--clear-hold", "--field", "resumeBooking"], mockFetch);
+    },
+    Error,
+    "Missing venue identifier for --clear-hold",
+  );
+
+  await assertRejects(
+    async () => {
+      await runBookGigCli(["--clear-hold", "The Spot on Kirk"], mockFetch);
+    },
+    Error,
+    "Missing required --field for --clear-hold",
   );
 });
