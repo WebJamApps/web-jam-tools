@@ -27,11 +27,22 @@ import {
 import { writeWorkflowSwitchFile } from "../scripts/set-workflow-switch.ts";
 
 Deno.test("defaultWorkflowSwitchPath & defaultWorkflowSwitchLogPath: resolve paths and respect environment overrides", () => {
-  const defaultSwitch = defaultWorkflowSwitchPath();
-  assert(defaultSwitch.endsWith("/.claude/state/workflow-switch.json"));
+  // The suite tasks set both variables to a path that does not exist, so clear them for
+  // this run to see the default paths themselves, and put them back afterwards.
+  const savedSwitch = Deno.env.get("WORKFLOW_SWITCH_PATH");
+  const savedLog = Deno.env.get("WORKFLOW_SWITCH_LOG_PATH");
+  Deno.env.delete("WORKFLOW_SWITCH_PATH");
+  Deno.env.delete("WORKFLOW_SWITCH_LOG_PATH");
+  try {
+    const defaultSwitch = defaultWorkflowSwitchPath();
+    assert(defaultSwitch.endsWith("/.claude/state/workflow-switch.json"));
 
-  const defaultLog = defaultWorkflowSwitchLogPath();
-  assert(defaultLog.endsWith("/.claude/state/workflow-switch.log"));
+    const defaultLog = defaultWorkflowSwitchLogPath();
+    assert(defaultLog.endsWith("/.claude/state/workflow-switch.log"));
+  } finally {
+    if (savedSwitch !== undefined) Deno.env.set("WORKFLOW_SWITCH_PATH", savedSwitch);
+    if (savedLog !== undefined) Deno.env.set("WORKFLOW_SWITCH_LOG_PATH", savedLog);
+  }
 });
 
 Deno.test("logWorkflowSwitchRelease: appends release entry with timestamp and guard", async () => {
