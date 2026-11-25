@@ -2618,30 +2618,66 @@ Deno.test("pair rule: refuses --local-step and --no-close when issue blocks an o
   }
 });
 
-Deno.test("pair rule: accepts --part-of, --local-step, and --no-close when blocked open Josh issue also carries a model label (web-jam-tools#1460)", async () => {
-  const mixedBlockingJson = JSON.stringify([
-    {
-      number: 1764,
-      state: "open",
-      title: "accounting skill: local install after merge",
-      labels: [{ name: "Hydrogen" }, { name: "Josh" }],
-      repository_url: "https://api.github.com/repos/WebJamApps/web-jam-tools",
-    },
-  ]);
+Deno.test("pair rule: accepts --part-of, --local-step, and --no-close for every model label in skills/fix-labels/model-labels.json paired with Josh, and refuses if model-labels.json is unreadable (web-jam-tools#1460)", async () => {
+  const modelLabelsPath = new URL("../skills/fix-labels/model-labels.json", import.meta.url)
+    .pathname;
+  const { modelLabels } = JSON.parse(await Deno.readTextFile(modelLabelsPath)) as {
+    modelLabels: string[];
+  };
 
-  for (const flag of ["--part-of", "--local-step", "--no-close"] as const) {
-    const mockGhDir = await makeMockGh({
-      ownerRepo: "WebJamApps/web-jam-tools",
-      blockingJson: mixedBlockingJson,
-    });
-    const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
-    const dir = await makeFixtureRepo();
-    try {
-      const res = await runScript(dir, [...baseArgs(), "--issue", "1320", flag], env);
-      assertEquals(res.code, 0, res.stderr);
-    } finally {
-      await Deno.remove(dir, { recursive: true });
-      await Deno.remove(mockGhDir, { recursive: true });
+  for (const modelLabel of modelLabels) {
+    const mixedBlockingJson = JSON.stringify([
+      {
+        number: 1764,
+        state: "open",
+        title: `local step for ${modelLabel}`,
+        labels: [{ name: modelLabel }, { name: "Josh" }],
+        repository_url: "https://api.github.com/repos/WebJamApps/web-jam-tools",
+      },
+    ]);
+
+    for (const flag of ["--part-of", "--local-step", "--no-close"] as const) {
+      const mockGhDir = await makeMockGh({
+        ownerRepo: "WebJamApps/web-jam-tools",
+        blockingJson: mixedBlockingJson,
+      });
+      const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+      const dir = await makeFixtureRepo();
+      try {
+        const res = await runScript(dir, [...baseArgs(), "--issue", "1320", flag], env);
+        assertEquals(res.code, 0, `${modelLabel} ${flag}: ${res.stderr}`);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+        await Deno.remove(mockGhDir, { recursive: true });
+      }
     }
+  }
+
+  // Unreadable or malformed model-labels.json fails closed rather than dropping label checks.
+  const badDir = await Deno.makeTempDir({ prefix: "bad-model-labels-" });
+  try {
+    const malformedPath = `${badDir}/malformed.json`;
+    await Deno.writeTextFile(malformedPath, '{"modelLabels": []}');
+    for (const badPath of [`${badDir}/missing.json`, malformedPath]) {
+      const mockGhDir = await makeMockGh({
+        ownerRepo: "WebJamApps/web-jam-tools",
+        blockingJson: "[]",
+      });
+      const env = {
+        PATH: `${mockGhDir}:${Deno.env.get("PATH")}`,
+        MODEL_LABELS_JSON_PATH: badPath,
+      };
+      const dir = await makeFixtureRepo();
+      try {
+        const res = await runScript(dir, [...baseArgs(), "--issue", "1320", "--part-of"], env);
+        assertEquals(res.code, 1);
+        assertStringIncludes(res.stderr, badPath);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+        await Deno.remove(mockGhDir, { recursive: true });
+      }
+    }
+  } finally {
+    await Deno.remove(badDir, { recursive: true });
   }
 });

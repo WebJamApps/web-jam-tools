@@ -538,6 +538,12 @@ else
       exit 1
     fi
     rm -f "$BLOCKING_ERR"
+    MODEL_LABELS_FILE="${MODEL_LABELS_JSON_PATH:-$SIGNING_SCRIPT_DIR/../skills/fix-labels/model-labels.json}"
+    MODEL_LABELS_JQ_FILTER='.modelLabels | if (type == "array" and length > 0 and all(.[]; type == "string" and length > 0)) then . else error("invalid modelLabels") end'
+    if [ ! -r "$MODEL_LABELS_FILE" ] || ! MODEL_LABELS_ARRAY="$(jq -cer "$MODEL_LABELS_JQ_FILTER" "$MODEL_LABELS_FILE" 2>/dev/null)"; then
+      echo "ERROR: could not read model labels from $MODEL_LABELS_FILE while checking $FORMATTED_ISSUE (fail closed, web-jam-tools#1460)." >&2
+      exit 1
+    fi
     BLOCKING_JQ_FILTER='
       if (length > 0 and all(.[]; type == "array")) then
         add
@@ -566,12 +572,7 @@ else
           | select(
               ((.state | ascii_downcase) == "open")
               and ($labelNames | index("Josh") != null)
-              and (
-                ($labelNames | any(
-                  . == "Argon" or . == "Astra" or . == "Fable" or . == "Haiku" or . == "Hydrogen"
-                  or . == "Luna" or . == "Neon" or . == "Opus" or . == "Sol" or . == "Sonnet" or . == "Terra"
-                )) | not
-              )
+              and (($labelNames | any(. as $name | ($modelLabels | index($name)) != null)) | not)
             )
         )
       | map(
@@ -586,7 +587,7 @@ else
         )
       | join("\n")
     '
-    if ! OPEN_JOSH_BLOCKED="$(printf %s "$BLOCKING_JSON" | jq -rs "$BLOCKING_JQ_FILTER" 2>/dev/null)"; then
+    if ! OPEN_JOSH_BLOCKED="$(printf %s "$BLOCKING_JSON" | jq -rs --argjson modelLabels "$MODEL_LABELS_ARRAY" "$BLOCKING_JQ_FILTER" 2>/dev/null)"; then
       echo "ERROR: could not parse blocking dependencies for $FORMATTED_ISSUE (fail closed, web-jam-tools#1460)." >&2
       exit 1
     fi
