@@ -155,8 +155,10 @@
 # (GitHub strips them silently — backtick them); current branch is dev/main;
 # working tree dirty; the repo has no `dev` branch; a resolved issue is
 # missing/closed; an issue is labeled 'Josh' without --part-of/--no-close
-# (web-jam-tools#848); --part-of is passed without a resolvable issue; or --update is
-# passed but the current branch has no existing open PR to update.
+# (web-jam-tools#848); --part-of is passed for an issue blocking an open
+# 'Josh' issue or its blocking lookup fails (web-jam-tools#1460); --part-of is
+# passed without a resolvable issue; or --update is passed but the current
+# branch has no existing open PR to update.
 
 set -euo pipefail
 
@@ -510,6 +512,63 @@ else
     echo "ERROR: issue $FORMATTED_ISSUE carries the 'Josh' label (manual human task) and cannot be closed by an agent PR (web-jam-tools#848)." >&2
     echo "       Pass --part-of to link your work as a contribution without auto-closing the issue." >&2
     exit 1
+  fi
+
+  # --- refuse --part-of when the issue blocks an open 'Josh' issue (web-jam-tools#1460) ---
+  # In a Josh verification pair (issue A -> Josh issue B), A's PR must close A on merge
+  # (`Closes #A`) rather than leaving A open via `Part of #A` while B waits on A.
+  if [ "$PART_OF" -eq 1 ]; then
+    BLOCKING_REPO_ARG="${TARGET_OWNER_REPO:-$CURRENT_REPO}"
+    if [ -z "$BLOCKING_REPO_ARG" ]; then
+      echo "ERROR: could not determine repository for $FORMATTED_ISSUE while checking blocking dependencies (web-jam-tools#1460)." >&2
+      exit 1
+    fi
+    BLOCKING_ERR=$(mktemp)
+    if ! BLOCKING_JSON="$(gh api "repos/$BLOCKING_REPO_ARG/issues/$ISSUE_NUM/dependencies/blocking" --paginate 2>"$BLOCKING_ERR")"; then
+      BLOCKING_FETCH_ERR=$(cat "$BLOCKING_ERR")
+      rm -f "$BLOCKING_ERR"
+      echo "ERROR: could not check blocking dependencies for $FORMATTED_ISSUE (via gh): $BLOCKING_FETCH_ERR" >&2
+      exit 1
+    fi
+    rm -f "$BLOCKING_ERR"
+    if ! OPEN_JOSH_BLOCKED="$(printf '%s' "$BLOCKING_JSON" | jq -rs '
+      if (length > 0 and all(.[]; type == "array")) then
+        add
+      else
+        error("unexpected blocking dependencies payload")
+      end
+      | if all(.[]; type == "object" and (.state | type) == "string") then
+          .
+        else
+          error("unexpected blocking issue entry")
+        end
+      | map(
+          select(
+            ((.state // "") | ascii_downcase) == "open"
+            and ((.labels // []) | any((type == "object" and .name == "Josh") or . == "Josh"))
+          )
+        )
+      | map(
+          "- "
+          + (
+              if (.repository.full_name? // "") != "" then "\(.repository.full_name)#\(.number)"
+              elif ((.repository_url? // "") | test("/repos/[^/]+/[^/]+$")) then "\(.repository_url | sub("^.*/repos/"; ""))#\(.number)"
+              else "#\(.number)"
+              end
+            )
+          + " \"\(.title // "")\""
+        )
+      | join("\n")
+    ' 2>/dev/null)"; then
+      echo "ERROR: could not parse blocking dependencies for $FORMATTED_ISSUE (fail closed, web-jam-tools#1460)." >&2
+      exit 1
+    fi
+    if [ -n "$OPEN_JOSH_BLOCKED" ]; then
+      echo "ERROR: refusing --part-of on $FORMATTED_ISSUE because it blocks open 'Josh' issue(s) (web-jam-tools#1460):" >&2
+      printf '%s\n' "$OPEN_JOSH_BLOCKED" | sed 's/^/         /' >&2
+      echo "       A PR for $FORMATTED_ISSUE must close it on merge (omit --part-of) so it is not left open for Josh to close by hand." >&2
+      exit 1
+    fi
   fi
 
   # --- query parent Epic if this issue is closing ---

@@ -687,6 +687,8 @@ async function makeMockGh(
     issueTitle?: string;
     issueLabels?: string[];
     failLabelsFetch?: boolean;
+    blockingJson?: string;
+    blockingFailure?: string;
     parentInfo?: string;
     parentFailure?: string;
     failStatusMutation?: boolean;
@@ -720,7 +722,13 @@ LABELS_EOF
   done
 fi
 if [ "$1" = "api" ]; then
-  if [[ "\${2:-}" == *"/parent"* ]]; then
+  if [[ "\${2:-}" == *"/dependencies/blocking"* ]]; then
+    ${
+    options.blockingFailure
+      ? `echo "${options.blockingFailure}" >&2; exit 1`
+      : `cat <<'BLOCKING_EOF'\n${options.blockingJson ?? "[]"}\nBLOCKING_EOF\nexit 0`
+  }
+  elif [[ "\${2:-}" == *"/parent"* ]]; then
     ${
     options.parentInfo
       ? `echo -e "${options.parentInfo}"; exit 0`
@@ -1366,6 +1374,8 @@ async function makeMockGhWithArgCapture(
     labelFailure?: boolean;
     initialLabels?: string[];
     issueLabels?: string[];
+    blockingJson?: string;
+    blockingFailure?: string;
     author?: string;
     parentInfo?: string;
     parentFailure?: string;
@@ -1408,7 +1418,13 @@ if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
   done
 fi
 if [ "$1" = "api" ]; then
-  if [[ "\${2:-}" == *"/parent"* ]]; then
+  if [[ "\${2:-}" == *"/dependencies/blocking"* ]]; then
+    ${
+    options.blockingFailure
+      ? `echo "${options.blockingFailure}" >&2; exit 1`
+      : `cat <<'BLOCKING_EOF'\n${options.blockingJson ?? "[]"}\nBLOCKING_EOF\nexit 0`
+  }
+  elif [[ "\${2:-}" == *"/parent"* ]]; then
     ${
     options.parentInfo
       ? `echo -e "${options.parentInfo}"; exit 0`
@@ -1477,6 +1493,8 @@ async function withModelLabelFixture(
     labelFailure?: boolean;
     initialLabels?: string[];
     issueLabels?: string[];
+    blockingJson?: string;
+    blockingFailure?: string;
     author?: string;
     parentInfo?: string;
     parentFailure?: string;
@@ -2389,5 +2407,139 @@ Deno.test("version check also refuses version/bump lines in --update mode, --tes
     assertMatch(screenshotsRes.stderr, /--screenshots mentions the repository's version/);
   } finally {
     await Deno.remove(dir, { recursive: true });
+  }
+});
+
+// --- Pair rule tests (web-jam-tools#1460) ---
+
+Deno.test("pair rule: refuses --part-of when issue blocks an open Josh issue (web-jam-tools#1460)", async () => {
+  await withModelLabelFixture(
+    async ({ repo, env, invocations }) => {
+      const res = await runScriptWithoutDryRun(
+        repo,
+        [...baseArgs({ author: "agy — Gemini Hydrogen" }), "--issue", "1320", "--part-of"],
+        env,
+      );
+      assertEquals(res.code, 1);
+      assertMatch(res.stderr, /refusing --part-of on #1320 because it blocks open 'Josh' issue/);
+      assertStringIncludes(
+        res.stderr,
+        'WebJamApps/web-jam-tools#1321 "Manual verification: install and test"',
+      );
+      const calls = await invocations();
+      assertEquals(calls.some((c) => c[0] === "pr" && c[1] === "create"), false);
+      assertEquals(calls.some((c) => c[0] === "api" && c[1] === "graphql"), false);
+    },
+    {
+      author: "agy — Gemini Hydrogen",
+      blockingJson: JSON.stringify([
+        {
+          number: 1321,
+          state: "open",
+          title: "Manual verification: install and test",
+          labels: [{ name: "Josh" }],
+          repository_url: "https://api.github.com/repos/WebJamApps/web-jam-tools",
+        },
+      ]),
+    },
+  );
+});
+
+Deno.test("pair rule: accepts Closes when issue blocks an open Josh issue (web-jam-tools#1460)", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    issueTitle: "scripts/install-hooks: link hook script",
+    blockingJson: JSON.stringify([
+      {
+        number: 1321,
+        state: "open",
+        title: "Manual verification: install and test",
+        labels: [{ name: "Josh" }],
+        repository_url: "https://api.github.com/repos/WebJamApps/web-jam-tools",
+      },
+    ]),
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const dir = await makeFixtureRepo();
+  try {
+    const res = await runScript(dir, [...baseArgs(), "--issue", "1320"], env);
+    assertEquals(res.code, 0, res.stderr);
+    assertMatch(res.stdout, /Closes #1320/);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+    await Deno.remove(mockGhDir, { recursive: true });
+  }
+});
+
+Deno.test("pair rule: accepts --part-of when issue blocks nothing (web-jam-tools#1460)", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    blockingJson: "[]",
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const dir = await makeFixtureRepo();
+  try {
+    const res = await runScript(dir, [...baseArgs(), "--issue", "1320", "--part-of"], env);
+    assertEquals(res.code, 0, res.stderr);
+    assertMatch(res.stdout, /Part of #1320/);
+    assertNotMatch(res.stdout, /Closes #1320/);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+    await Deno.remove(mockGhDir, { recursive: true });
+  }
+});
+
+Deno.test("pair rule: accepts --part-of when blocked issues are closed or lack the Josh label (web-jam-tools#1460)", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    blockingJson: JSON.stringify([
+      {
+        number: 1321,
+        state: "closed",
+        title: "Manual verification: already closed",
+        labels: [{ name: "Josh" }],
+      },
+      {
+        number: 1322,
+        state: "open",
+        title: "Follow-up agent coding task",
+        labels: [{ name: "Hydrogen" }],
+      },
+    ]),
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const dir = await makeFixtureRepo();
+  try {
+    const res = await runScript(dir, [...baseArgs(), "--issue", "1320", "--part-of"], env);
+    assertEquals(res.code, 0, res.stderr);
+    assertMatch(res.stdout, /Part of #1320/);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+    await Deno.remove(mockGhDir, { recursive: true });
+  }
+});
+
+Deno.test("pair rule: fails closed on --part-of when blocking lookup errors or returns malformed JSON (web-jam-tools#1460)", async () => {
+  for (
+    const opts of [
+      { blockingFailure: "gh: API rate limit exceeded (HTTP 403)" },
+      { blockingJson: '{"message":"bad gateway"}' },
+      { blockingJson: "" },
+    ]
+  ) {
+    const mockGhDir = await makeMockGh({
+      ownerRepo: "WebJamApps/web-jam-tools",
+      ...opts,
+    });
+    const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+    const dir = await makeFixtureRepo();
+    try {
+      const res = await runScript(dir, [...baseArgs(), "--issue", "1320", "--part-of"], env);
+      assertEquals(res.code, 1);
+      assertMatch(res.stderr, /#1320/);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+      await Deno.remove(mockGhDir, { recursive: true });
+    }
   }
 });
