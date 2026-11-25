@@ -844,3 +844,54 @@ Deno.test("edit-issue: refuses unsafe Priority targets before any call", async (
     assertEquals(calls, []);
   }
 });
+
+Deno.test("edit-issue: setPriority accepts both new I_ and legacy MDU6 node IDs and refuses invalid responses (#1443)", async () => {
+  const acceptedIds = [
+    "I_kwDODU1wBs8AAAABXhgg4w",
+    "MDU6SXNzdWUxNjEzNDY2MTU3",
+    "MDU6SXNzdWUxMg==",
+  ];
+  const refusedAnswers = [
+    "",
+    "null",
+    "gh: Not Found (HTTP 404)",
+    "I_",
+    "MDU6",
+    "MDU6A",
+    "MDU6AB=",
+  ];
+
+  for (const nodeId of acceptedIds) {
+    const { calls, deps } = priorityDeps("High");
+    const runner = deps.runCmd;
+    deps.runCmd = (cmd) => {
+      if (cmd.at(-1) === ".node_id") {
+        calls.push(cmd);
+        return Promise.resolve({ code: 0, stdout: `${nodeId}\n`, stderr: "" });
+      }
+      return runner(cmd);
+    };
+    const result = await capturedRun([...PRIORITY_BASE, "--priority", "High"], deps);
+    assertEquals(result.code, 0, result.errors.join("\n"));
+    assertEquals(calls.length, 3);
+    assertEquals(calls[1].slice(0, 4), ["gh", "api", "graphql", "-f"]);
+    assertStringIncludes(calls[1][4], `issueId: "${nodeId}"`);
+  }
+
+  for (const answer of refusedAnswers) {
+    const { calls, deps } = priorityDeps("High");
+    const runner = deps.runCmd;
+    deps.runCmd = (cmd) => {
+      if (cmd.at(-1) === ".node_id") {
+        calls.push(cmd);
+        return Promise.resolve({ code: 0, stdout: answer, stderr: "" });
+      }
+      return runner(cmd);
+    };
+    const result = await capturedRun([...PRIORITY_BASE, "--priority", "High"], deps);
+    assertEquals(result.code, 1);
+    assertStringIncludes(result.errors.join("\n"), "could not resolve the issue node ID");
+    assertEquals(calls.length, 1);
+    assertEquals(calls.some((cmd) => cmd[2] === "graphql"), false);
+  }
+});

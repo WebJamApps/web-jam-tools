@@ -116,6 +116,21 @@ export interface Deps {
 const USAGE =
   "usage: edit-issue --repo <owner/repo> --issue <n> [--priority Urgent|High|Medium|Low] [--author <tool — model>] [gh issue edit flags...] [--dry-run]\n  Outside Codex, --author is required whenever the body is replaced (--body, -b, --body-file or -F, in any form). Codex looks up the running model.";
 
+const NEW_ISSUE_NODE_ID_RE = /^I_[A-Za-z0-9_-]+$/;
+const LEGACY_ISSUE_NODE_ID_RE =
+  /^MDU6(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})$/;
+
+/** Validate next-gen (`I_...`) or structurally valid Base64 legacy (`MDU6...`) issue node IDs. */
+function isValidIssueNodeId(nodeId: string): boolean {
+  if (NEW_ISSUE_NODE_ID_RE.test(nodeId)) return true;
+  if (!LEGACY_ISSUE_NODE_ID_RE.test(nodeId)) return false;
+  try {
+    return atob(nodeId).length > 3;
+  } catch {
+    return false;
+  }
+}
+
 /** Set the native field and refuse success until REST confirms the requested level. */
 async function setPriority(opts: Options, deps: Deps): Promise<void> {
   const target = `${opts.repo}#${opts.issue}`;
@@ -124,7 +139,8 @@ async function setPriority(opts: Options, deps: Deps): Promise<void> {
   const call = (cmd: string[]) => runWithRetry(deps.runCmd, cmd, { sleep: deps.sleep });
   try {
     const node = await call(["gh", "api", endpoint, "--jq", ".node_id"]);
-    if (node.code !== 0 || !/^I_[A-Za-z0-9_-]+$/.test(node.stdout.trim())) {
+    const nodeId = node.stdout.trim();
+    if (node.code !== 0 || !isValidIssueNodeId(nodeId)) {
       throw new Error("could not resolve the issue node ID");
     }
     const spec = PRIORITY_MAP[opts.priority!.toLowerCase()];
@@ -133,7 +149,7 @@ async function setPriority(opts: Options, deps: Deps): Promise<void> {
       "api",
       "graphql",
       "-f",
-      `query=${priorityMutation(node.stdout.trim(), spec.node_id)}`,
+      `query=${priorityMutation(nodeId, spec.node_id)}`,
     ]);
     if (mutation.code !== 0) throw new Error("field call failed");
     const response = JSON.parse(mutation.stdout);
