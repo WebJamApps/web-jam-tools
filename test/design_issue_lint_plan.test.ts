@@ -2409,3 +2409,218 @@ Deno.test("Appendix D several designs, row 13: lint renders one plan table with 
     await Deno.remove(r.root, { recursive: true });
   }
 });
+
+// --- Appendix D — Case Lists: Retiring code (web-jam-tools#1526) ---
+
+Deno.test("Retiring code Case 1: retiring row naming removed key and package passes", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "model/outreach: retire the server's reply scan",
+      closes: "removes REPLY_SORTER_API_KEY and the sorter package; tests pass",
+    }),
+  ]);
+  assertEquals(findRule(validate(doc), "retiring-row-missing-cleanup"), []);
+});
+
+Deno.test("Retiring code Case 2: retiring row naming nothing it removes fails and names the row", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "model/outreach: retire the server's reply scan",
+      closes: 'builds "The reply scan" as written; `deno task test` passes',
+    }),
+  ]);
+  const hits = findRule(validate(doc), "retiring-row-missing-cleanup");
+  assertEquals(hits.length, 1);
+  assertEquals(hits[0].column, "Closes when");
+  assertStringIncludes(hits[0].message, "Row 2");
+  assertStringIncludes(hits[0].message, "model/outreach: retire the server's reply scan");
+});
+
+Deno.test('Retiring code Case 3: retiring row reading "nothing else to remove" passes', () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "scripts: remove the old backup script",
+      closes: "`nothing else to remove`; `deno task test` passes",
+    }),
+  ]);
+  assertEquals(findRule(validate(doc), "retiring-row-missing-cleanup"), []);
+});
+
+Deno.test("Retiring code Case 4: delete row with no cleanup named fails and names the row", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "hooks: delete the unused reminder hook",
+      tests: "Unit tests verify the hook is unregistered",
+      closes: "—",
+    }),
+  ]);
+  const hits = findRule(validate(doc), "retiring-row-missing-cleanup");
+  assertEquals(hits.length, 1);
+  assertStringIncludes(hits[0].message, "Row 2");
+  assertStringIncludes(hits[0].message, "hooks: delete the unused reminder hook");
+});
+
+Deno.test("Retiring code Case 5: drop row naming the index it removes passes", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "db: drop the legacy venues collection",
+      closes: "drops `venues` collection and `venues_legacy_idx` index; `npm test` passes",
+    }),
+  ]);
+  assertEquals(findRule(validate(doc), "retiring-row-missing-cleanup"), []);
+});
+
+Deno.test("Retiring code Case 6: non-retiring row passes without cleanup text", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "JaMmusic: add the admin menu",
+      closes: 'builds "The admin menu" as written',
+    }),
+  ]);
+  assertEquals(findRule(validate(doc), "retiring-row-missing-cleanup"), []);
+});
+
+Deno.test('Retiring code: quoting a heading containing "Retiring" or mentioning package.json does not bypass the check', () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "scripts: retire the legacy sync command",
+      tests: "Unit tests check `package.json` script registration",
+      closes: 'builds "Retiring code" as written',
+    }),
+  ]);
+  const hits = findRule(validate(doc), "retiring-row-missing-cleanup");
+  assertEquals(hits.length, 1);
+});
+
+Deno.test("Retiring code: cleanup named in Tests cell passes, while compound non-retiring verbs are not misread", () => {
+  const docWithTestsCleanup = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "outreach: remove legacy reply sorter client",
+      tests: "Tests prove REPLY_SORTER_API_KEY and `reply-sorter` package are removed",
+      closes: 'builds "The reply sorter" as written',
+    }),
+    childRow({
+      title: "ui: add drag-and-drop venue ordering",
+      closes: 'builds "Ordering UI" as written',
+    }),
+  ]);
+  assertEquals(findRule(validate(docWithTestsCleanup), "retiring-row-missing-cleanup"), []);
+});
+
+Deno.test("Retiring code: prose removal verbs and generic nouns without named items fail", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "model/outreach: retire the server's reply scan",
+      closes: "the reply scan is removed; deno task test passes",
+    }),
+    childRow({
+      title: "hooks: delete the unused reminder hook",
+      tests: "Unit tests verify the hook is deleted",
+      closes: "—",
+    }),
+    childRow({
+      title: "scripts: remove the old backup script",
+      closes: "the script is gone and nothing calls it",
+    }),
+    childRow({
+      title: "model/outreach: retire the server's reply scan",
+      tests: "Tests cover the settings page",
+      closes: "—",
+    }),
+    childRow({
+      title: "db: drop the legacy venues collection",
+      closes: "the venues index page still loads",
+    }),
+  ]);
+  const hits = findRule(validate(doc), "retiring-row-missing-cleanup");
+  assertEquals(hits.length, 5);
+});
+
+Deno.test("Retiring code: backticked packages, paths, and settings pass while backticked commands alone fail", () => {
+  const passingDoc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "scripts: remove the old backup script",
+      tests: "Tests confirm `scripts/backup.sh` and `backupEnabled` are removed",
+      closes: "`deno task test` passes",
+    }),
+    childRow({
+      title: "outreach: retire sorter package",
+      closes: "removes `@webjam/sorter`",
+    }),
+  ]);
+  assertEquals(findRule(validate(passingDoc), "retiring-row-missing-cleanup"), []);
+
+  const commandOnlyDoc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "scripts: remove the old backup script",
+      tests: "`npm test` and `deno task check` pass",
+      closes: "script is `deleted`",
+    }),
+  ]);
+  assertEquals(findRule(validate(commandOnlyDoc), "retiring-row-missing-cleanup").length, 1);
+});
+
+Deno.test("Retiring code: backticked tokens without removal in the same clause fail", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "model/outreach: retire the server's reply scan",
+      tests: "New cases in `test/outreach_reply.test.ts` pass",
+      closes: "—",
+    }),
+    childRow({
+      title: "model/outreach: retire the server's reply scan",
+      closes: "`design:lint-plan` passes",
+    }),
+    childRow({
+      title: "routes: drop the delete-many routes",
+      tests: "Vitest cases with `gig:announce` granted",
+      closes: "—",
+    }),
+    childRow({
+      title: "hooks: delete the unused reminder hook",
+      closes: "CI passes on `web-jam-tools`",
+    }),
+    childRow({
+      title: "hooks: delete the unused reminder hook",
+      tests: "New cases in `test/outreach_reply.test.ts` pass; old hook is deleted",
+      closes: "—",
+    }),
+  ]);
+  assertEquals(findRule(validate(doc), "retiring-row-missing-cleanup").length, 5);
+});
+
+Deno.test("Retiring code: hyphenated non-retiring titles pass without cleanup text", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "ui: add a drop-down venue filter",
+      closes: 'builds "Drop-down filter" as written',
+    }),
+    childRow({
+      title: "ui: add a drop-in admin panel",
+      closes: 'builds "Admin panel" as written',
+    }),
+    childRow({
+      title: "ui: add a remove-gig button",
+      closes: 'builds "Remove-gig button" as written',
+    }),
+    childRow({
+      title: "routes: stop serving delete-many routes",
+      tests: "Vitest cases with `gig:announce` granted",
+      closes: 'builds "Stop serving routes" as written',
+    }),
+  ]);
+  assertEquals(findRule(validate(doc), "retiring-row-missing-cleanup"), []);
+});

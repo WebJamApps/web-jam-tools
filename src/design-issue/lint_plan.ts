@@ -185,6 +185,108 @@ const TESTS_INSUFFICIENT_VALUES = new Set([
 
 const PERSONAL_NAME_PREFIX = /^josh\s*[-:—]\s?/i;
 
+const RETIRING_TITLE_VERB =
+  /(?<![a-zA-Z-])(?:retire[sd]?|retiring|remove[sd]?|removing|delete[sd]?|deleting|drop(?:s|ped|ping)?)(?![\w-])/i;
+
+const CLAUSE_REMOVAL_VERB =
+  /(?<![a-zA-Z-])(?:retire[sd]?|retiring|remove[sd]?|removing|delete[sd]?|deleting|drop(?:s|ped|ping)?|uninstall(?:s|ed|ing)?|unset(?:s|ting)?|prune[sd]?|pruning|strip(?:s|ped|ping)?|revoke[sd]?|revoking|gone)(?![\w-])/i;
+
+const NOTHING_ELSE_TO_REMOVE = /\bnothing\s+else\s+to\s+remove\b/i;
+
+const UPPER_SNAKE_KEY = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/;
+
+const IGNORED_BACKTICK_TOKENS = new Set([
+  "deno",
+  "npm",
+  "npx",
+  "yarn",
+  "pnpm",
+  "bun",
+  "node",
+  "git",
+  "gh",
+  "bash",
+  "sh",
+  "zsh",
+  "curl",
+  "docker",
+  "heroku",
+  "atlas",
+  "gcloud",
+  "make",
+  "pytest",
+  "vitest",
+  "jest",
+  "eslint",
+  "prettier",
+  "tsc",
+  "rledger",
+  "semgrep",
+  "trivy",
+  "gitleaks",
+  "shellcheck",
+  "package.json",
+  "deno.json",
+  "package-lock.json",
+  "deno.lock",
+  "test",
+  "tests",
+  "unit",
+  "pass",
+  "passes",
+  "passed",
+  "fail",
+  "fails",
+  "failed",
+  "remove",
+  "removes",
+  "removed",
+  "removing",
+  "retire",
+  "retires",
+  "retired",
+  "retiring",
+  "delete",
+  "deletes",
+  "deleted",
+  "deleting",
+  "drop",
+  "drops",
+  "dropped",
+  "dropping",
+  "gone",
+  "absent",
+  "none",
+  "nothing",
+  "n/a",
+  "true",
+  "false",
+  "null",
+  "undefined",
+  "dev",
+  "main",
+  "settings",
+  "setting",
+  "keys",
+  "key",
+  "index",
+  "indexes",
+  "packages",
+  "package",
+  "callers",
+  "caller",
+  "collection",
+  "collections",
+  "hook",
+  "hooks",
+  "script",
+  "scripts",
+  "page",
+  "pages",
+  "cron",
+  "crons",
+]);
+
 const REVIEW_KEYWORDS = [
   /\bchrome\b/i,
   /\breview\b/i,
@@ -501,6 +603,7 @@ export function validatePlanTable(
     );
     checkTests(row, violations);
     checkTitlePersonalName(row, violations);
+    checkRetiringCodeRow(row, rows, violations);
     const rowHeadings = matchedDoc && options.designHeadingsByDoc
       ? options.designHeadingsByDoc.get(matchedDoc.absPath)
       : resolvedDesignDocs.length > 0 && !matchedDoc
@@ -669,6 +772,80 @@ function checkTitlePersonalName(row: PlanTableRow, violations: PlanTableViolatio
         `ownership belongs to the Josh label, not the title`,
     });
   }
+}
+
+function isNamedCleanupToken(rawToken: string): boolean {
+  const token = rawToken.trim();
+  if (!token || /\s/.test(token)) return false;
+  if (token.startsWith("-")) return false;
+  if (IGNORED_BACKTICK_TOKENS.has(token.toLowerCase())) return false;
+  return /[a-zA-Z]/.test(token) && /^[a-zA-Z0-9_@./:+-]+$/.test(token);
+}
+
+function clauseNamesRemovedItem(clause: string): boolean {
+  // Strip backticked spans, double-quoted heading names (e.g. `"Retiring code"`), and
+  // `package.json`/`deno.json` references so both the removal word and any plain UPPER_SNAKE
+  // key must appear in the clause prose itself rather than inside quotes or commands.
+  const plain = clause
+    .replace(/`[^`]*`/g, " ")
+    .replace(/"[^"]*"/g, " ")
+    .replace(/\b(?:package|deno)\.json\b/gi, " ")
+    .replace(/\*/g, "");
+
+  if (!CLAUSE_REMOVAL_VERB.test(plain)) return false;
+  if (UPPER_SNAKE_KEY.test(plain)) return true;
+
+  for (const match of clause.matchAll(/`([^`]+)`/g)) {
+    if (isNamedCleanupToken(match[1])) return true;
+  }
+  return false;
+}
+
+function hasNamedRetiringCleanup(rawCells: readonly string[]): boolean {
+  for (const cell of rawCells) {
+    const trimmed = cell.trim();
+    if (!trimmed) continue;
+
+    // Allow `"nothing else to remove"` even when wrapped in backticks or emphasis markers.
+    if (NOTHING_ELSE_TO_REMOVE.test(stripMdMarkers(trimmed))) return true;
+
+    // Split each cell independently on `;`, newlines, or sentence ends so a named token
+    // (e.g. a test file or task) passes only when the same clause says it is removed.
+    for (const clause of trimmed.split(/(?:;|\n|\.(?=\s|$)|[!?]+(?=\s|$))+/)) {
+      if (clauseNamesRemovedItem(clause)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Checks whether a retiring plan row (whose title says retire, remove, delete, or drop) names the
+ * settings, keys, packages, jobs, callers, or indexes it removes, or explicitly reads
+ * "nothing else to remove" (`"Retiring code"`, web-jam-tools#1526).
+ */
+export function checkRetiringCodeRow(
+  row: PlanTableRow,
+  allRows: readonly PlanTableRow[],
+  violations: PlanTableViolation[],
+): void {
+  if (isEpicRow(row, allRows as PlanTableRow[])) return;
+
+  const title = stripMdMarkers(row.cells[COL_TITLE]);
+  if (!RETIRING_TITLE_VERB.test(title)) return;
+
+  const rawScopeCells = [row.cells[COL_TESTS], row.cells[COL_CLOSES]]
+    .filter((c) => !isMissingValue(c));
+  if (hasNamedRetiringCleanup(rawScopeCells)) return;
+
+  const rowNum = stripMdMarkers(row.cells[COL_NUM]).trim() || String(allRows.indexOf(row) + 1);
+  violations.push({
+    rule: "retiring-row-missing-cleanup",
+    line: row.line,
+    column: "Closes when",
+    message:
+      `Row ${rowNum} ("${title}") retires code without naming the settings, keys, packages, or ` +
+      `cleanup it removes (or reading "nothing else to remove")`,
+  });
 }
 
 /** A row is "paired" when another row sharing the same `Epic / child of` value (i.e. the same
@@ -1855,6 +2032,7 @@ Validates the Gate 2 plan table's cell values in a design document:
   - unknown model tiers (against skills/fix-labels/labels.yaml)
   - unknown repos (against ACTIVE_REPOS in src/shared/repos.ts)
   - personal-name title prefixes ("Josh:", "Josh -", ...)
+  - retiring rows (titles with retire/remove/delete/drop) without cleanup scope or "nothing else to remove"
   - out-of-range priorities (Urgent/High/Medium/Low only)
   - a Josh-labeled manual row with no paired agent row
   - a composite Josh-labeled manual row (doc review + live walkthrough)
