@@ -389,6 +389,9 @@ Every design document states, for each mechanism it designs, how it works on Cla
 | Premise | Proof | Proved |
 |---|---|---|
 | Codex CLI is installed | Verified | ${TODAY} |
+
+## Where Things Live
+- \`~/.agents/skills\` — Codex skill symlink directory
 `;
   const result = lintDesignDoc(excerptDoc, "codex-integration-design.md");
   const bothSurfacesViolations = result.violations.filter(
@@ -966,7 +969,9 @@ Deno.test(
   async () => {
     await withTempDesignRoot((root, otherDocPath) => {
       const pointerLine = `See \`${otherDocPath}\` ("${COPIED_LINE}") for the rule.`;
-      const doc = buildCompliantDesignDoc(pointerLine);
+      const doc = `${
+        buildCompliantDesignDoc(pointerLine)
+      }\n## Where Things Live\n- \`${otherDocPath}\` — referenced design document\n`;
       const result = lintDesignDoc(doc, "checked-design.md", { dropboxDir: root });
       assertEquals(result.valid, true);
     });

@@ -1460,6 +1460,11 @@ export function lintDesignDoc(
     );
   }
 
+  // 10. Body-path check ("Paths the design names"): every path named in the body outside
+  // fenced code blocks, the revision table, Load-bearing Premises, Appendix* sections, and
+  // "Where Things Live" itself must be covered by "Where Things Live".
+  violations.push(...validateBodyPathsListedInWhereThingsLive(lines));
+
   // 11. Check for copied text of 12 or more consecutive words from another design document's body
   // ("One document owns each rule", web-jam-tools#1636) when the design-documents root option is
   // supplied.
@@ -1473,6 +1478,192 @@ export function lintDesignDoc(
     valid: violations.length === 0,
     violations,
   };
+}
+
+function hasSpaceOutsideAnglePlaceholders(token: string): boolean {
+  let i = 0;
+  while (i < token.length) {
+    if (token[i] === "<") {
+      const closeIdx = token.indexOf(">", i + 1);
+      if (closeIdx !== -1) {
+        i = closeIdx + 1;
+        continue;
+      }
+    }
+    if (/\s/.test(token[i])) {
+      return true;
+    }
+    i++;
+  }
+  return false;
+}
+
+function isDesignBodyPathToken(token: string): boolean {
+  if (hasSpaceOutsideAnglePlaceholders(token)) {
+    return false;
+  }
+  if (token.startsWith("~/")) {
+    return token.length > 2;
+  }
+  if (token.startsWith("/")) {
+    return token.indexOf("/", 1) > 1;
+  }
+  return false;
+}
+
+function extractBacktickCodeTokens(line: string): string[] {
+  const ranges = computeBacktickSpanRanges(line);
+  const tokens: string[] = [];
+  for (const { start, end } of ranges) {
+    const rawSpan = line.slice(start, end);
+    let runLen = 0;
+    while (runLen < rawSpan.length && rawSpan[runLen] === "`") {
+      runLen++;
+    }
+    if (runLen > 0 && rawSpan.length >= runLen * 2) {
+      tokens.push(rawSpan.slice(runLen, rawSpan.length - runLen));
+    }
+  }
+  return tokens;
+}
+
+function stripOneTrailingSlash(pathStr: string): string {
+  return pathStr.length > 1 && pathStr.endsWith("/") ? pathStr.slice(0, -1) : pathStr;
+}
+
+function isBodyPathCovered(bodyPath: string, whereThingsLiveTokens: string[]): boolean {
+  const normBody = stripOneTrailingSlash(bodyPath);
+  for (const entry of whereThingsLiveTokens) {
+    const angleIdx = entry.indexOf("<");
+    if (angleIdx !== -1) {
+      const prefix = entry.slice(0, angleIdx);
+      const folder = stripOneTrailingSlash(prefix);
+      if (
+        folder.length > 0 &&
+        (normBody === folder || normBody.startsWith(folder === "/" ? "/" : `${folder}/`))
+      ) {
+        return true;
+      }
+      if (prefix.length > 0 && !prefix.endsWith("/") && normBody.startsWith(prefix)) {
+        return true;
+      }
+      continue;
+    }
+
+    const normEntry = stripOneTrailingSlash(entry);
+    if (
+      normBody === normEntry ||
+      normBody.startsWith(normEntry === "/" ? "/" : `${normEntry}/`)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Validates that every backtick-quoted path named in the document body is covered by an entry
+ * in the "Where Things Live" section. Excludes fenced code blocks, the revision table,
+ * Load-bearing Premises, any Appendix section, and "Where Things Live" itself.
+ */
+export function validateBodyPathsListedInWhereThingsLive(lines: string[]): LintViolation[] {
+  const whereThingsLiveTokens: string[] = [];
+  const bodyPathOccurrences: Array<{ line: number; lineContent: string; token: string }> = [];
+
+  let openFence: { char: "`" | "~"; length: number } | null = null;
+  type ExcludedSectionKind = "load-bearing" | "appendix" | "where-things-live";
+  let excludedSection: { kind: ExcludedSectionKind; level: number } | null = null;
+  let revisionSectionLevel: number | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNum = i + 1;
+    const trimmed = line.trim();
+
+    if (openFence === null) {
+      const fenceOpen = line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
+      if (fenceOpen) {
+        const fenceRun = fenceOpen[1];
+        const infoString = fenceOpen[2];
+        const fenceChar = fenceRun[0] as "`" | "~";
+        if (fenceChar === "~" || !infoString.includes("`")) {
+          openFence = { char: fenceChar, length: fenceRun.length };
+          continue;
+        }
+      }
+    } else {
+      const closeMatch = line.match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+      if (
+        closeMatch &&
+        closeMatch[1][0] === openFence.char &&
+        closeMatch[1].length >= openFence.length
+      ) {
+        openFence = null;
+      }
+      continue;
+    }
+
+    const headingMatch = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const headingText = headingMatch[2].replace(/\s+#+\s*$/, "").trim();
+
+      if (excludedSection !== null && level <= excludedSection.level) {
+        excludedSection = null;
+      }
+      if (revisionSectionLevel !== null && level <= revisionSectionLevel) {
+        revisionSectionLevel = null;
+      }
+
+      if (/^load-bearing\s+premises\b/i.test(headingText)) {
+        excludedSection = { kind: "load-bearing", level };
+      } else if (/^appendix\b/i.test(headingText)) {
+        excludedSection = { kind: "appendix", level };
+      } else if (/^["']?where\s+things\s+live["']?\b/i.test(headingText)) {
+        excludedSection = { kind: "where-things-live", level };
+      } else if (/^revision\s+history\b/i.test(headingText)) {
+        revisionSectionLevel = level;
+      }
+      continue;
+    }
+
+    if (excludedSection?.kind === "where-things-live") {
+      for (const token of extractBacktickCodeTokens(line)) {
+        if (isDesignBodyPathToken(token)) {
+          whereThingsLiveTokens.push(token);
+        }
+      }
+      continue;
+    }
+
+    if (excludedSection !== null) {
+      continue;
+    }
+
+    if (revisionSectionLevel !== null && trimmed.startsWith("|")) {
+      continue;
+    }
+
+    for (const token of extractBacktickCodeTokens(line)) {
+      if (isDesignBodyPathToken(token)) {
+        bodyPathOccurrences.push({ line: lineNum, lineContent: line, token });
+      }
+    }
+  }
+
+  const violations: LintViolation[] = [];
+  for (const occ of bodyPathOccurrences) {
+    if (!isBodyPathCovered(occ.token, whereThingsLiveTokens)) {
+      violations.push({
+        rule: "body-path-missing-from-where-things-live",
+        line: occ.line,
+        lineContent: occ.lineContent,
+        message:
+          `Line ${occ.line}: path "${occ.token}" named in the design body is not covered by "Where Things Live"`,
+      });
+    }
+  }
+  return violations;
 }
 
 /**
@@ -1548,6 +1739,7 @@ Checks a design document against the skill's body rules:
     exactly match a stored Gate 1 row. An unreadable record refuses the check.
   - Fails if the document names a target issue it was invoked on but carries no verbatim
     blockquote of that issue's directive lines.
+  - Fails if the document's body names a path not covered by "Where Things Live".
   - Fails if the document's body shares a run of 12 or more consecutive words with another design
     document's body. When another design document cannot be read, refuses naming it.
 
