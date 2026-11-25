@@ -140,6 +140,8 @@ export interface WriteTargetCheck {
   determinable: boolean;
   target?: string;
   targets?: string[];
+  /** Paths whose directory entry the call replaces (`sed -i`, `mv`): a symlink there is replaced. */
+  replacedEntries?: string[];
   note?: string;
 }
 
@@ -312,7 +314,8 @@ export function checkBashCommandTarget(
 
   const writes = analyzeBashWrites(command, { cwd, home });
   const targets = [...writes.targets, ...writes.unknownFiles];
-  if (targets.length === 0) {
+  const replacedEntries = writes.replacedEntries;
+  if (targets.length === 0 && replacedEntries.length === 0) {
     if (writes.unknownDirectory) {
       return {
         determinable: false,
@@ -323,8 +326,9 @@ export function checkBashCommandTarget(
   }
   return {
     determinable: true,
-    target: targets[0],
+    target: targets[0] ?? replacedEntries[0],
     targets,
+    replacedEntries,
     note: writes.unknownFiles.length
       ? "A write whose file cannot be named: run the same command again with its file paths written out."
       : undefined,
@@ -997,8 +1001,11 @@ export interface PathRepo {
   repo: string | null;
 }
 
-/** Finds the repository an absolute path belongs to. */
-export type RepoLookup = (path: string) => PathRepo;
+/**
+ * Finds the repository an absolute path belongs to. With `replacesEntry`, the write replaces the
+ * directory entry at `path` (`sed -i`, `mv`), so a symlink there is judged where it sits.
+ */
+export type RepoLookup = (path: string, replacesEntry?: boolean) => PathRepo;
 
 /** `owner/name` in lower case from a GitHub remote URL, or null for any other URL. */
 export function parseGitHubRepo(url: string): string | null {
@@ -1055,13 +1062,28 @@ export function writeDestination(path: string): string | null {
 }
 
 /**
+ * The real folder holding the directory entry at `path`, for a write that replaces that entry
+ * rather than writing through it: the folders above it are resolved through their symlinks, and
+ * the entry itself is not followed. A path ending in "/", "." or ".." names a folder, which is
+ * resolved whole. Null when it cannot be verified, as for {@link writeDestination}.
+ */
+export function entryFolder(path: string): string | null {
+  const cut = path.lastIndexOf("/");
+  const name = path.slice(cut + 1);
+  if (cut < 0 || !name || name === "." || name === "..") return writeDestination(path);
+  return writeDestination(path.slice(0, cut) || "/");
+}
+
+/**
  * The live lookup: asks git about the nearest existing directory of the write's real destination
  * ({@link writeDestination}), so a symlink is judged by where it points and a file about to be
- * created by the folder it will land in. A destination that cannot be verified is reported as a
+ * created by the folder it will land in. For a write that replaces the entry (`replacesEntry`), the
+ * folder holding the entry is asked instead ({@link entryFolder}), so replacing a symlink is judged
+ * by the repository the link sits in. A destination that cannot be verified is reported as a
  * working tree with no known origin, which no task grant covers.
  */
-export function gitRepoOfPath(path: string): PathRepo {
-  const destination = writeDestination(path);
+export function gitRepoOfPath(path: string, replacesEntry = false): PathRepo {
+  const destination = replacesEntry ? entryFolder(path) : writeDestination(path);
   if (destination === null) return { inTree: true, repo: null };
   let dir = destination;
   for (;;) {
@@ -1084,13 +1106,18 @@ export function gitRepoOfPath(path: string): PathRepo {
 /**
  * True when every written path inside a git working tree belongs to `repo`. A path outside any
  * working tree (a comment file under /tmp) is not a repository edit; a working tree whose origin
- * cannot be read is not known to be `repo`, so it fails closed.
+ * cannot be read is not known to be `repo`, so it fails closed. `replacedEntries` are judged by
+ * the folder holding each entry, since the write replaces a symlink there rather than following it.
  */
-function writesStayIn(repo: string, targets: readonly string[], repoOf: RepoLookup): boolean {
-  return targets.every((target) => {
-    const where = repoOf(target);
-    return !where.inTree || where.repo === repo;
-  });
+function writesStayIn(
+  repo: string,
+  targets: readonly string[],
+  repoOf: RepoLookup,
+  replacedEntries: readonly string[] = [],
+): boolean {
+  const stays = (where: PathRepo) => !where.inTree || where.repo === repo;
+  return targets.every((target) => stays(repoOf(target))) &&
+    replacedEntries.every((entry) => stays(repoOf(entry, true)));
 }
 
 /**
@@ -1124,8 +1151,9 @@ function fixPrCallRepo(
 }
 
 /**
- * `targets` are the absolute paths the call writes, and `repoOf` finds each one's repository: a
- * typed task grant covers only edits in the repository of the issue or pull request Josh named.
+ * `targets` are the absolute paths the call writes through, `replacedEntries` those whose directory
+ * entry it replaces, and `repoOf` finds each one's repository: a typed task grant covers only edits
+ * in the repository of the issue or pull request Josh named.
  */
 export function decideMainThreadEdit(
   transcriptPath: string,
@@ -1133,6 +1161,7 @@ export function decideMainThreadEdit(
   lookupLabels: LabelLookup,
   targets: readonly string[] = [],
   repoOf: RepoLookup = gitRepoOfPath,
+  replacedEntries: readonly string[] = [],
 ): GateDecision {
   const raw = transcriptPath ? read(transcriptPath) : null;
   if (raw === null) {
@@ -1150,7 +1179,9 @@ export function decideMainThreadEdit(
   if (!isFableModel(info.model)) return allow("main");
   if (fableEditApprovalActive(entries)) return allow("main");
   const repos = taskGrantRepos(entries, lookupLabels, repoOf);
-  if (repos.some((repo) => writesStayIn(repo, targets, repoOf))) return allow("main");
+  if (repos.some((repo) => writesStayIn(repo, targets, repoOf, replacedEntries))) {
+    return allow("main");
+  }
   return deny(
     "main",
     repos.length === 0
@@ -1162,8 +1193,8 @@ export function decideMainThreadEdit(
 }
 
 /**
- * `targets` and `repoOf` bind a typed `/fix-pr` call's Fable helper to that pull request's
- * repository, as for the main thread.
+ * `targets`, `replacedEntries` and `repoOf` bind a typed `/fix-pr` call's Fable helper to that pull
+ * request's repository, as for the main thread.
  */
 export function decideSubagentEdit(
   agentId: string,
@@ -1171,6 +1202,7 @@ export function decideSubagentEdit(
   read: ReadText,
   targets: readonly string[] = [],
   repoOf: RepoLookup = gitRepoOfPath,
+  replacedEntries: readonly string[] = [],
 ): GateDecision {
   const files = resolveSessionFiles(transcriptPath);
   if (!files) {
@@ -1206,7 +1238,7 @@ export function decideSubagentEdit(
       );
     }
     const repo = fixPrCallRepo(activeCall, repoOf);
-    if (repo && writesStayIn(repo, targets, repoOf)) return allow("subagent");
+    if (repo && writesStayIn(repo, targets, repoOf, replacedEntries)) return allow("subagent");
     return deny(
       "subagent",
       `This Fable helper works on a pull request in ${
@@ -1265,17 +1297,34 @@ export function decide(
       ? payload.transcript_path
       : "";
     const cwd = typeof payload.cwd === "string" ? payload.cwd : "";
+    const absolute = (target: string) =>
+      target.startsWith("/") || !cwd ? target : `${cwd}/${target}`;
     const targets = (targetCheck.targets ?? (targetCheck.target ? [targetCheck.target] : []))
-      .map((target) => target.startsWith("/") || !cwd ? target : `${cwd}/${target}`);
+      .map(absolute);
+    const replacedEntries = (targetCheck.replacedEntries ?? []).map(absolute);
     let decision: GateDecision;
     if (agentId && payload.permission_mode === "auto") {
-      decision = decideSubagentEdit(agentId, transcriptPath, read, targets, repoOf);
+      decision = decideSubagentEdit(
+        agentId,
+        transcriptPath,
+        read,
+        targets,
+        repoOf,
+        replacedEntries,
+      );
     } else if (agentId) {
       // A subagent call outside auto mode keeps its exemption. The shell hook exits before calling this
       // module in that case; the branch keeps decide() total.
       return allow("subagent");
     } else {
-      decision = decideMainThreadEdit(transcriptPath, read, lookupLabels, targets, repoOf);
+      decision = decideMainThreadEdit(
+        transcriptPath,
+        read,
+        lookupLabels,
+        targets,
+        repoOf,
+        replacedEntries,
+      );
     }
 
     if (decision.decision === "deny") {

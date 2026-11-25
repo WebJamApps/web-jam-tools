@@ -25,6 +25,14 @@
  *     file. Other script writes retain their folder as an explicitly unnamed destination.
  * `cd <dir>` earlier in the command moves the working directory later targets resolve against.
  *
+ * Writes through a file and writes that replace its directory entry are kept apart, because a
+ * symlink is judged differently by each. A redirect, `tee`, `cp`, `truncate`, `dd` and a script's
+ * open-and-write write through a link to the file it points at (`targets`). `sed -i` (unless
+ * `--follow-symlinks`), `perl -i`, `mv`, `install`, `cp --remove-destination` and a script's
+ * `rename` replace the link itself in the folder that holds it (`replacedEntries`). A destination
+ * of `mv`, `install` or `cp --remove-destination` without `-T` lands inside it instead when it is a
+ * directory, which only the filesystem can tell at the time, so it is listed both ways.
+ *
  * Known gaps (allowed, on purpose or for now):
  *   - a script file run by an interpreter (`python3 fix.py`, `deno run x.ts`, `node x.js`): its code is
  *     not read.
@@ -208,6 +216,7 @@ export function scriptWriteTargets(
   home: string,
   invocation?: InterpreterInvocation,
   unknown?: (cwd: string | null) => void,
+  replaced?: (path: string) => void,
 ): string[] {
   const targets: string[] = [];
   const tokens = scriptTokens(code);
@@ -243,7 +252,10 @@ export function scriptWriteTargets(
         }
       }
       const resolved = literal !== null ? resolvePath(literal, cwd, home) : null;
-      if (resolved) targets.push(resolved);
+      // A rename moves the named entry itself, a symlink included, never the file it points at.
+      if (resolved && replaced && /^(?:Deno\.)?rename(?:Sync)?\(/.test(match[0])) {
+        replaced(resolved);
+      } else if (resolved) targets.push(resolved);
       else if (unknown) unknown(cwd);
       else if (cwd !== null) targets.push(cwd);
     }
@@ -392,8 +404,13 @@ function inlineCode(name: string, args: string[]): string | null {
 
 interface ArgvResult {
   targets: string[];
+  /** Files whose directory entry the command replaces rather than writes through. */
+  entries?: string[];
   nested?: string;
 }
+
+/** `-T` / `--no-target-directory`: the destination is never a folder to land inside. */
+const NO_TARGET_DIRECTORY = /^(?:--no-target-directory|-[A-Za-z]*T[A-Za-z]*)$/;
 
 /** Targets named by one resolved argv (wrappers already peeled). */
 function argvTargets(
@@ -401,6 +418,7 @@ function argvTargets(
   cwd: string | null,
   home: string,
   unknown: (cwd: string | null) => void,
+  replaced: (path: string) => void,
 ): ArgvResult {
   let i = 0;
   while (i < argv.length && ASSIGN_RE.test(argv[i])) i++;
@@ -420,6 +438,7 @@ function argvTargets(
       home,
       readInterpreterScript(argv) ?? undefined,
       unknown,
+      replaced,
     );
 
   switch (name) {
@@ -427,15 +446,19 @@ function argvTargets(
       return { targets: [] };
     case "tee":
       return { targets: resolveAll(nonOptionArgs(args)) };
-    case "sed":
-      return { targets: resolveAll(sedInPlaceFiles(args)) };
+    case "sed": {
+      // GNU sed writes a new file and renames it over the name given, replacing a symlink there
+      // unless --follow-symlinks asks it to edit the file the link points at.
+      const files = resolveAll(sedInPlaceFiles(args));
+      return args.includes("--follow-symlinks")
+        ? { targets: files }
+        : { targets: [], entries: files };
+    }
     case "perl": {
       const code = inlineCode(name, args);
       return {
-        targets: [
-          ...resolveAll(perlInPlaceFiles(args)),
-          ...(code ? scriptTargets(code) : []),
-        ],
+        targets: code ? scriptTargets(code) : [],
+        entries: resolveAll(perlInPlaceFiles(args)),
       };
     }
     case "cp":
@@ -448,7 +471,16 @@ function argvTargets(
         return { targets: dir ? resolveAll([dir]) : [] };
       }
       const positional = nonOptionArgs(args, new Set(["-S", "--suffix", "-m", "-o", "-g"]));
-      return { targets: positional.length >= 2 ? resolveAll(positional.slice(-1)) : [] };
+      const destination = positional.length >= 2 ? resolveAll(positional.slice(-1)) : [];
+      // mv renames over the destination and install removes it first, so a symlink there is
+      // replaced; plain cp opens it and writes through to the file it points at.
+      if (name === "cp" && !args.includes("--remove-destination")) {
+        return { targets: destination };
+      }
+      return {
+        targets: args.some((a) => NO_TARGET_DIRECTORY.test(a)) ? [] : destination,
+        entries: destination,
+      };
     }
     case "truncate":
       return { targets: resolveAll(nonOptionArgs(args, new Set(["-s", "-r"]))) };
@@ -496,7 +528,10 @@ function argvTargets(
 }
 
 export interface BashWriteAnalysis {
+  /** Files written through their path: a symlink there leads to the file it points at. */
   targets: string[];
+  /** Files whose directory entry is replaced: a symlink there is itself replaced. */
+  replacedEntries: string[];
   unknownFiles: string[];
   unknownDirectory: boolean;
 }
@@ -507,23 +542,32 @@ export function analyzeBashWrites(
   opts: WriteTargetOptions,
   depth = 0,
 ): BashWriteAnalysis {
-  const analysis: BashWriteAnalysis = { targets: [], unknownFiles: [], unknownDirectory: false };
+  const analysis: BashWriteAnalysis = {
+    targets: [],
+    replacedEntries: [],
+    unknownFiles: [],
+    unknownDirectory: false,
+  };
   if (depth > MAX_DEPTH) return analysis;
   const { home } = opts;
   const unknown = (cwd: string | null) => {
     if (cwd === null) analysis.unknownDirectory = true;
     else analysis.unknownFiles.push(cwd);
   };
+  const replaced = (path: string) => analysis.replacedEntries.push(path);
   const nested = (text: string, cwd: string | null) => {
     const result = analyzeBashWrites(text, { cwd, home }, depth + 1);
     analysis.targets.push(...result.targets);
+    analysis.replacedEntries.push(...result.replacedEntries);
     analysis.unknownFiles.push(...result.unknownFiles);
     analysis.unknownDirectory ||= result.unknownDirectory;
   };
   for (const part of commandPartsInFolders(command, opts.cwd, home)) {
     const { cwd } = part;
     if (part.script) {
-      analysis.targets.push(...scriptWriteTargets(part.text, cwd, home, part.invocation, unknown));
+      analysis.targets.push(
+        ...scriptWriteTargets(part.text, cwd, home, part.invocation, unknown, replaced),
+      );
       continue;
     }
     const segment = part.text;
@@ -540,21 +584,26 @@ export function analyzeBashWrites(
       nested(resolution.command, cwd);
       continue;
     }
-    const result = argvTargets(resolution.argv, cwd, home, unknown);
+    const result = argvTargets(resolution.argv, cwd, home, unknown, replaced);
     analysis.targets.push(...result.targets);
+    analysis.replacedEntries.push(...result.entries ?? []);
     if (result.nested) {
       nested(result.nested, cwd);
     }
   }
   analysis.targets = [...new Set(analysis.targets)];
+  analysis.replacedEntries = [...new Set(analysis.replacedEntries)];
   analysis.unknownFiles = [...new Set(analysis.unknownFiles)];
   return analysis;
 }
 
-/** The CLI's legacy path list includes the folder of a script whose file cannot be named. */
+/**
+ * Every path the command writes, through it or by replacing it. The CLI's legacy path list also
+ * includes the folder of a script whose file cannot be named.
+ */
 export function bashWriteTargets(command: string, opts: WriteTargetOptions, depth = 0): string[] {
   const result = analyzeBashWrites(command, opts, depth);
-  return [...new Set([...result.targets, ...result.unknownFiles])];
+  return [...new Set([...result.targets, ...result.replacedEntries, ...result.unknownFiles])];
 }
 
 if (import.meta.main) {

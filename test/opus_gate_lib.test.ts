@@ -14,6 +14,7 @@ import {
   decide as decideWithSwitch,
   decideMainThreadEdit,
   decideSubagentEdit,
+  entryFolder,
   fableEditApprovalActive,
   findSpawningHumanPrompt,
   gitRepoOfPath,
@@ -1014,11 +1015,31 @@ Deno.test("decide: a task grant judges a write by where it lands through symlink
     await Deno.symlink(`${root}/music/src`, `${root}/tools/music-dir`);
     await Deno.symlink(`${root}/music/src/missing.ts`, `${root}/tools/dangling.ts`);
     await Deno.symlink("../music/src/b.ts", `${root}/tools/relative-to-music.ts`);
+    await Deno.symlink(`${root}/tools/src/a.ts`, `${root}/music/src/to-tools.ts`);
 
     assertEquals(gitRepoOfPath(`${root}/tools/to-music.ts`), {
       inTree: true,
       repo: "webjamapps/jammusic",
     });
+    // Replacing the entry judges the link by the folder holding it, not by where it points.
+    assertEquals(gitRepoOfPath(`${root}/music/src/to-tools.ts`, true), {
+      inTree: true,
+      repo: "webjamapps/jammusic",
+    });
+    assertEquals(gitRepoOfPath(`${root}/music/src/to-tools.ts`), {
+      inTree: true,
+      repo: "webjamapps/web-jam-tools",
+    });
+    assertEquals(gitRepoOfPath(`${root}/tools/dangling.ts`, true), {
+      inTree: true,
+      repo: "webjamapps/web-jam-tools",
+    });
+    assertEquals(
+      entryFolder(`${root}/tools/music-dir/x.ts`),
+      `${Deno.realPathSync(root)}/music/src`,
+    );
+    assertEquals(entryFolder(`${root}/tools/music-dir/..`), `${Deno.realPathSync(root)}/music`);
+    assertEquals(entryFolder("relative/path.ts"), null);
     assertEquals(gitRepoOfPath(`${root}/tools/dangling.ts`), { inTree: true, repo: null });
     assertEquals(gitRepoOfPath("relative/path.ts"), { inTree: true, repo: null });
     assertEquals(
@@ -1042,6 +1063,22 @@ Deno.test("decide: a task grant judges a write by where it lands through symlink
       assertEquals(run({ command: "printf x > to-tools.ts" }, "Bash"), "allow", task);
       // The Bash reader keeps the "..", so it is resolved after the directory link, as written.
       assertEquals(run({ command: "printf x > music-dir/../c.ts" }, "Bash"), "deny", task);
+      // sed -i, perl -i and mv -T replace a link in the folder holding it; a redirect writes
+      // through it.
+      const inMusic = `${root}/music/src/to-tools.ts`;
+      assertEquals(run({ command: `sed -i s/a/b/ ${inMusic}` }, "Bash"), "deny", task);
+      assertEquals(run({ command: `perl -pi -e s/a/b/ ${inMusic}` }, "Bash"), "deny", task);
+      assertEquals(run({ command: `mv -T src/a.ts ${inMusic}` }, "Bash"), "deny", task);
+      assertEquals(run({ command: `printf x > ${inMusic}` }, "Bash"), "allow", task);
+      assertEquals(run({ command: "sed -i s/a/b/ to-music.ts" }, "Bash"), "allow", task);
+      assertEquals(run({ command: "mv -T src/a.ts to-music.ts" }, "Bash"), "allow", task);
+      assertEquals(
+        run({ command: "sed --follow-symlinks -i s/a/b/ to-music.ts" }, "Bash"),
+        "deny",
+        task,
+      );
+      // Without -T the destination may be a folder to land inside, so both readings must stay.
+      assertEquals(run({ command: "mv src/a.ts to-music.ts" }, "Bash"), "deny", task);
     }
   } finally {
     await Deno.remove(root, { recursive: true });

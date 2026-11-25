@@ -184,6 +184,7 @@ export async function verifyFolderRow(
     const row = folderCases(repo, scratch, home)[index];
     assertEquals(analyzeBashWrites(row.command, { cwd: row.cwd, home }), {
       targets: row.targets,
+      replacedEntries: [],
       unknownFiles: row.unknownFiles ?? [],
       unknownDirectory: row.unknownDirectory ?? false,
     }, row.name);

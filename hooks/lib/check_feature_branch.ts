@@ -59,7 +59,7 @@ export function checkFeatureBranch(raw: unknown): void {
       return;
     }
     const writes = analyzeBashWrites(input.command, { cwd, home: Deno.env.get("HOME") ?? "" });
-    targets = writes.targets;
+    targets = [...writes.targets, ...writes.replacedEntries];
     if (writes.unknownDirectory || writes.unknownFiles.length > 0) {
       notes.push("the working directory or file of a write could not be determined");
     }

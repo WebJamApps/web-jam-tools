@@ -22,6 +22,7 @@ Deno.test("subshell cd does not persist into the following command (web-jam-tool
 Deno.test("cd || exit/return resolves following writes to cd target; non-exiting || goes unknown", () => {
   assertEquals(analyzeBashWrites("cd /repo || exit 1; echo x > f", { cwd: "/w", home: HOME }), {
     targets: ["/repo/f"],
+    replacedEntries: [],
     unknownFiles: [],
     unknownDirectory: false,
   });
@@ -29,12 +30,14 @@ Deno.test("cd || exit/return resolves following writes to cd target; non-exiting
     analyzeBashWrites("cd /repo || { echo no; exit 1; }\necho x > f", { cwd: "/w", home: HOME }),
     {
       targets: ["/repo/f"],
+      replacedEntries: [],
       unknownFiles: [],
       unknownDirectory: false,
     },
   );
   assertEquals(analyzeBashWrites("cd /repo || echo no; echo x > f", { cwd: "/w", home: HOME }), {
     targets: [],
+    replacedEntries: [],
     unknownFiles: [],
     unknownDirectory: true,
   });
@@ -45,6 +48,7 @@ Deno.test("Root cause 2: a heredoc keeps its own unknown cwd despite a later rep
     "S=/tmp/scratch/memsim; cd $S && python3 - <<'EOF'\np = 'out.txt'\nopen(p,'w').write('x')\nEOF\ncd /repo && deno task memory-index --dir $S";
   assertEquals(analyzeBashWrites(command, { cwd: "/tmp/scratch", home: HOME }), {
     targets: [],
+    replacedEntries: [],
     unknownFiles: [],
     unknownDirectory: true,
   });
@@ -59,6 +63,7 @@ Deno.test("third root cause: unresolved cd clears cwd; literal and function-body
     }),
     {
       targets: [],
+      replacedEntries: [],
       unknownFiles: [],
       unknownDirectory: true,
     },
@@ -218,6 +223,47 @@ Deno.test("bashWriteTargets: in-place editors, copies, moves and patches", () =>
   assertEquals(targets("git apply fix.diff"), [CWD]);
   assertEquals(targets("git -c core.x=y -C /other apply fix.diff"), ["/other"]);
   assertEquals(targets("git apply --check fix.diff"), []);
+});
+
+Deno.test("analyzeBashWrites: a write that replaces the entry is kept apart from one written through it", () => {
+  const split = (command: string) => {
+    const { targets, replacedEntries } = analyzeBashWrites(command, { cwd: CWD, home: HOME });
+    return { targets, replacedEntries };
+  };
+  const through = (...targets: string[]) => ({ targets, replacedEntries: [] });
+  const replaced = (...replacedEntries: string[]) => ({ targets: [], replacedEntries });
+  const either = (path: string) => ({ targets: [path], replacedEntries: [path] });
+
+  assertEquals(split("sed -i 's/a/b/' link.ts"), replaced("/repo/link.ts"));
+  assertEquals(split("sed --follow-symlinks -i 's/a/b/' link.ts"), through("/repo/link.ts"));
+  assertEquals(split("perl -pi -e 's/a/b/' a.ts"), replaced("/repo/a.ts"));
+  assertEquals(split("perl -i -e 'open(F, \">o\")' a.ts"), {
+    targets: ["/repo/o"],
+    replacedEntries: ["/repo/a.ts"],
+  });
+  // A destination may be a folder the file lands inside, unless -T says it is not.
+  assertEquals(split("mv a b"), either("/repo/b"));
+  assertEquals(split("install -m 755 a b"), either("/repo/b"));
+  assertEquals(split("cp --remove-destination a b"), either("/repo/b"));
+  assertEquals(split("mv -T a b"), replaced("/repo/b"));
+  assertEquals(split("mv -fT a b"), replaced("/repo/b"));
+  assertEquals(split("cp --no-target-directory --remove-destination a b"), replaced("/repo/b"));
+  assertEquals(split("mv -t dest a"), through("/repo/dest"));
+  assertEquals(split("cp a b"), through("/repo/b"));
+  assertEquals(
+    split("printf x > link.ts; tee t < x; truncate -s 0 u"),
+    through(
+      "/repo/link.ts",
+      "/repo/t",
+      "/repo/u",
+    ),
+  );
+  assertEquals(split(`node -e "fs.renameSync('old', x)"`), replaced("/repo/old"));
+  assertEquals(split(`deno eval "Deno.renameSync('old', x)"`), replaced("/repo/old"));
+  assertEquals(split(`bash -c "sed -i s/a/b/ n.ts"`), replaced("/repo/n.ts"));
+  // A path written through and replaced in one command is listed both ways.
+  assertEquals(split("echo x > f; sed -i s/a/b/ f"), either("/repo/f"));
+  assertEquals(targets("echo x > f; sed -i s/a/b/ g"), ["/repo/f", "/repo/g"]);
 });
 
 Deno.test("bashWriteTargets: interpreters, nesting, wrappers and cd", () => {

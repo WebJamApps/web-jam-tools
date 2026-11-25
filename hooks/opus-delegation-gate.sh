@@ -87,13 +87,15 @@ fi
 cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 
 # Prints "true" when a write to a path (relative to the payload cwd) lands inside a git working tree.
-# The path is judged where the write really lands, as writeDestination in hooks/lib/opus_gate.ts
+# The path is judged where the write really lands, as gitRepoOfPath in hooks/lib/opus_gate.ts
 # judges it: each symlink is followed before any later "..", and a path that does not exist yet is
-# judged by its nearest existing ancestor directory. A destination that cannot be verified (a
-# relative path with no cwd, a dangling symlink along the way, or one realpath cannot read) also
-# prints "true", so the gate itself decides rather than this early exit.
+# judged by its nearest existing ancestor directory. With a second argument "entry", the write
+# replaces the path's own directory entry (sed -i, mv), so only the folders above it are resolved
+# and a symlink there is judged by the folder holding it (entryFolder). A destination that cannot
+# be verified (a relative path with no cwd, a dangling symlink along the way, or one realpath
+# cannot read) also prints "true", so the gate itself decides rather than this early exit.
 in_git_tree() {
-  local resolved_path="$1" dir parent prefix="" part
+  local resolved_path="$1" mode="${2:-}" dir parent prefix="" part name
   local -a parts
   if [[ "$resolved_path" != /* ]] && [ -n "$cwd" ]; then
     resolved_path="$cwd/$resolved_path"
@@ -101,6 +103,13 @@ in_git_tree() {
   if [[ "$resolved_path" != /* ]]; then
     echo true
     return
+  fi
+  if [ "$mode" = "entry" ]; then
+    name="${resolved_path##*/}"
+    if [ -n "$name" ] && [ "$name" != "." ] && [ "$name" != ".." ]; then
+      resolved_path="${resolved_path%/*}"
+      resolved_path="${resolved_path:-/}"
+    fi
   fi
   IFS=/ read -r -a parts <<<"$resolved_path"
   for part in "${parts[@]}"; do
@@ -160,13 +169,14 @@ if [ "$tool_name" = "Bash" ]; then
     jq -cn '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:"Opus delegation gate: write targets could not be determined; proceeding by workflow default."}}'
     exit 0
   fi
-  while IFS= read -r candidate; do
+  # Each path carries how it is written: "through" follows a symlink there, "entry" replaces it.
+  while IFS=$'\t' read -r mode candidate; do
     [ -z "$candidate" ] && continue
-    if [ "$(in_git_tree "$candidate")" = "true" ]; then
+    if [ "$(in_git_tree "$candidate" "$mode")" = "true" ]; then
       target_path="$candidate"
       break
     fi
-  done < <(printf '%s' "$write_analysis" | jq -r '.targets[], .unknownFiles[]')
+  done < <(printf '%s' "$write_analysis" | jq -r '(.targets[], .unknownFiles[] | "through\t" + .), (.replacedEntries[]? | "entry\t" + .)')
   if [ -z "$target_path" ]; then
     if [ "$(printf '%s' "$write_analysis" | jq -r '.unknownDirectory')" = "true" ]; then
       jq -cn '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:"Opus delegation gate: the working directory of a Bash write could not be determined; proceeding. If this is a Fable session editing work Josh has not chosen Fable for, hand it to Opus or a cheaper model."}}'

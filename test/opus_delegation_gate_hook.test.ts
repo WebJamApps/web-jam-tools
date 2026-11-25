@@ -817,7 +817,7 @@ Deno.test("task grants through the shell: a typed task edits its own repository,
   }
 });
 
-Deno.test("task grants through the shell: a write is judged where it lands through symlinks, even from outside any working tree", async () => {
+Deno.test("task grants through the shell: a write is judged where it lands through symlinks, even from outside any working tree, and replacing a link by the folder holding it", async () => {
   const root = await Deno.makeTempDir({ prefix: "opus-gate-symlinks-" });
   try {
     for (
@@ -842,6 +842,10 @@ Deno.test("task grants through the shell: a write is judged where it lands throu
     await Deno.symlink(`${root}/music/src/b.ts`, `${root}/outside/to-music.ts`);
     await Deno.symlink(`${root}/tools/src/a.ts`, `${root}/outside/to-tools.ts`);
     await Deno.symlink(`${root}/music/src/missing.ts`, `${root}/outside/dangling.ts`);
+    // Links kept in a repository that point outside any working tree.
+    await Deno.writeTextFile(`${root}/outside/target.txt`, "");
+    await Deno.symlink(`${root}/outside/target.txt`, `${root}/music/src/to-outside.txt`);
+    await Deno.symlink(`${root}/outside/target.txt`, `${root}/tools/src/to-outside.txt`);
 
     const lines = [
       userTurn("/fix-pr https://github.com/WebJamApps/web-jam-tools/pull/5"),
@@ -871,6 +875,20 @@ Deno.test("task grants through the shell: a write is judged where it lands throu
       assertAllowed(await bash(`printf x > ${root}/outside/to-tools.ts`));
       assertAllowed(await write(`${root}/outside/plain.txt`));
       assertAllowed(await bash("printf x > src/new.ts"));
+
+      // Replacing a link changes the repository holding it, wherever the link points.
+      const musicLink = `${root}/music/src/to-outside.txt`;
+      assertDenied((await bash(`sed -i 's/a/b/' ${musicLink}`)).stdout);
+      assertDenied((await bash(`perl -pi -e 's/a/b/' ${musicLink}`)).stdout);
+      assertDenied((await bash(`mv ${root}/outside/plain.txt ${musicLink}`)).stdout);
+      assertAllowed(await bash("sed -i 's/a/b/' src/to-outside.txt"));
+      assertAllowed(await bash(`sed -i 's/a/b/' ${root}/outside/to-music.ts`));
+      // Writing through the same links lands where they point.
+      assertAllowed(await bash(`printf x > ${musicLink}`));
+      assertAllowed(await bash(`sed --follow-symlinks -i 's/a/b/' ${musicLink}`));
+      assertDenied(
+        (await bash(`sed --follow-symlinks -i 's/a/b/' ${root}/outside/to-music.ts`)).stdout,
+      );
     });
   } finally {
     await Deno.remove(root, { recursive: true });
