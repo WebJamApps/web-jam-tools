@@ -538,7 +538,7 @@ else
       exit 1
     fi
     rm -f "$BLOCKING_ERR"
-    MODEL_LABELS_FILE="${MODEL_LABELS_JSON_PATH:-$SIGNING_SCRIPT_DIR/../skills/fix-labels/model-labels.json}"
+    MODEL_LABELS_FILE="$SIGNING_SCRIPT_DIR/../skills/fix-labels/model-labels.json"
     MODEL_LABELS_JQ_FILTER='.modelLabels | if (type == "array" and length > 0 and all(.[]; type == "string" and length > 0)) then . else error("invalid modelLabels") end'
     if [ ! -r "$MODEL_LABELS_FILE" ] || ! MODEL_LABELS_ARRAY="$(jq -cer "$MODEL_LABELS_JQ_FILTER" "$MODEL_LABELS_FILE" 2>/dev/null)"; then
       echo "ERROR: could not read model labels from $MODEL_LABELS_FILE while checking $FORMATTED_ISSUE (fail closed, web-jam-tools#1460)." >&2

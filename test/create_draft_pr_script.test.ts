@@ -2653,31 +2653,58 @@ Deno.test("pair rule: accepts --part-of, --local-step, and --no-close for every 
     }
   }
 
-  // Unreadable or malformed model-labels.json fails closed rather than dropping label checks.
-  const badDir = await Deno.makeTempDir({ prefix: "bad-model-labels-" });
-  try {
-    const malformedPath = `${badDir}/malformed.json`;
-    await Deno.writeTextFile(malformedPath, '{"modelLabels": []}');
-    for (const badPath of [`${badDir}/missing.json`, malformedPath]) {
-      const mockGhDir = await makeMockGh({
-        ownerRepo: "WebJamApps/web-jam-tools",
-        blockingJson: "[]",
-      });
-      const env = {
-        PATH: `${mockGhDir}:${Deno.env.get("PATH")}`,
-        MODEL_LABELS_JSON_PATH: badPath,
-      };
-      const dir = await makeFixtureRepo();
-      try {
-        const res = await runScript(dir, [...baseArgs(), "--issue", "1320", "--part-of"], env);
-        assertEquals(res.code, 1);
-        assertStringIncludes(res.stderr, badPath);
-      } finally {
-        await Deno.remove(dir, { recursive: true });
-        await Deno.remove(mockGhDir, { recursive: true });
+  // Unreadable or malformed model-labels.json fails closed: copy scripts/create-draft-pr.sh
+  // into a temporary tree with missing or empty model-labels.json and run that copy directly.
+  const repoRoot = new URL("..", import.meta.url).pathname;
+  for (const mode of ["missing", "empty"] as const) {
+    const tempTree = await Deno.makeTempDir({ prefix: `create-draft-pr-labels-${mode}-` });
+    const mockGhDir = await makeMockGh({
+      ownerRepo: "WebJamApps/web-jam-tools",
+      blockingJson: "[]",
+    });
+    const dir = await makeFixtureRepo();
+    try {
+      await Deno.mkdir(`${tempTree}/scripts`, { recursive: true });
+      const scriptCopy = `${tempTree}/scripts/create-draft-pr.sh`;
+      await Deno.copyFile(SCRIPT_PATH, scriptCopy);
+      await Deno.chmod(scriptCopy, 0o755);
+      for await (const entry of Deno.readDir(`${repoRoot}/scripts`)) {
+        if (entry.name === "create-draft-pr.sh") continue;
+        await Deno.symlink(
+          `${repoRoot}/scripts/${entry.name}`,
+          `${tempTree}/scripts/${entry.name}`,
+        );
       }
+      await Deno.symlink(`${repoRoot}/src`, `${tempTree}/src`);
+      await Deno.symlink(`${repoRoot}/hooks`, `${tempTree}/hooks`);
+      await Deno.symlink(`${repoRoot}/deno.json`, `${tempTree}/deno.json`);
+      if (mode === "empty") {
+        await Deno.mkdir(`${tempTree}/skills/fix-labels`, { recursive: true });
+        await Deno.writeTextFile(
+          `${tempTree}/skills/fix-labels/model-labels.json`,
+          '{"modelLabels": []}',
+        );
+      }
+
+      const result = await new Deno.Command("bash", {
+        args: [scriptCopy, ...baseArgs(), "--issue", "1320", "--part-of"],
+        cwd: dir,
+        env: {
+          PATH: `${mockGhDir}:${Deno.env.get("PATH")}`,
+          CODEX_THREAD_ID: "",
+          FORCED_PR_AUTHOR: "",
+        },
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      assertEquals(result.code, 1);
+      const stderr = new TextDecoder().decode(result.stderr);
+      assertStringIncludes(stderr, tempTree);
+      assertStringIncludes(stderr, "skills/fix-labels/model-labels.json");
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+      await Deno.remove(mockGhDir, { recursive: true });
+      await Deno.remove(tempTree, { recursive: true });
     }
-  } finally {
-    await Deno.remove(badDir, { recursive: true });
   }
 });
