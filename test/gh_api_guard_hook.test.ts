@@ -401,10 +401,40 @@ Deno.test("gh api conservatively falls back on substitutions, malformed syntax a
   assertEquals(checkGhApi('bash -lc "echo hello"'), "allow");
   assertEquals(checkGhApi("env -u"), "allow");
   assertEquals(checkGhApi('bash -lc "gh api repos/o/r -f title=test"'), "ask");
-  // gh's {owner}/{repo} placeholders: the shared splitter cuts at the brace, so the text decides.
+  // gh's {owner}/{repo}/{branch} placeholders reach the positional reader as one endpoint.
   assertEquals(checkGhApi("gh api repos/{owner}/{repo}/issues -f title=test"), "ask");
   assertEquals(checkGhApi("gh api repos/{owner}/{repo}/issues/1/labels"), "allow");
+  assertEquals(checkGhApi("gh api repos/{owner}/{repo}/branches/{branch}"), "allow");
   assertEquals(checkGhApi("gh api repos/${OWNER}/r/issues -f title=test"), "ask");
+  assertEquals(
+    ghApiVerdict("gh api repos/{owner}/{repo}/issues/9/dependencies/blocked_by -F issue_id=1"),
+    { decision: "deny", link: "block-issue" },
+  );
+  // Other unquoted braces inside a word (brace expansion) still take the text fallback.
+  assertEquals(
+    ghApiVerdict("gh api -X POST repos/o/r/issues/{1,2}/dependencies/blocked_by -F issue_id=1"),
+    { decision: "deny", link: "block-issue" },
+  );
+});
+
+Deno.test("quoted JSON examples are data and never send a command to the text fallback", () => {
+  for (
+    const cmd of [
+      `printf '%s\\n' '{"note":"gh api --method DELETE repos/o/r/issues/1"}'`,
+      `printf '%s' '{"example":"gh api -X POST repos/o/r/issues/1/dependencies/blocked_by"}'`,
+      `echo "{\\"method\\":\\"DELETE\\",\\"cmd\\":\\"gh api repos/o/r\\"}"`,
+      `gh api repos/o/r/issues --jq '.[] | {number, title}'`,
+      `gh issue view 1 --json body --jq '{body}' # gh api -X DELETE repos/o/r`,
+    ]
+  ) assertEquals(ghApiVerdict(cmd), { decision: "allow" }, cmd);
+  // A real write that reads its JSON body from a quoted example is still judged as a write.
+  assertEquals(
+    ghApiVerdict(
+      `echo '{"issue_id":1}' | gh api repos/o/r/issues/9/dependencies/blocked_by --input -`,
+    ),
+    { decision: "deny", link: "block-issue" },
+  );
+  assertEquals(checkGhApi(`gh api repos/o/r/issues -X POST --input - <<< '{"title":"x"}'`), "ask");
 });
 
 Deno.test("gh api CLI accepts the alternate payload and runner refuses malformed input", async () => {

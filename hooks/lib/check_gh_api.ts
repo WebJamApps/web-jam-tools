@@ -55,14 +55,37 @@ function hasExecutableExpansion(segment: string): boolean {
   return false;
 }
 
-// The shared splitter cuts a word at a brace, so `repos/{owner}/{repo}/...` (gh's own
-// placeholders) would never reach the guard whole. Such a command takes the text fallback.
-function hasBraceInWord(command: string): boolean {
-  return /\{\S|\S\}/.test(command.replace(/\$\{[^}]*\}/g, ""));
+// The shared splitter cuts an unquoted word at a brace. gh's own endpoint placeholders,
+// `repos/{owner}/{repo}/...`, are rewritten to plain words first so the endpoint reaches
+// the guard whole. Any other unquoted brace inside a word (brace expansion such as
+// `issues/{1,2}`, or `xargs -I{}`) takes the text fallback. Quoted text, such as a JSON
+// example, is data and never triggers the fallback.
+const GH_PLACEHOLDER = /\{(owner|repo|branch)\}/g;
+
+function hasBraceInWord(segment: string): boolean {
+  let quote = "";
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i];
+    if (ch === "\\" && quote !== "'") {
+      i++;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = "";
+    } else if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === "$" && segment[i + 1] === "{") {
+      const close = segment.indexOf("}", i);
+      if (close < 0) return true;
+      i = close;
+    } else if (ch === "{" && i + 1 < segment.length && !/\s/.test(segment[i + 1])) return true;
+    else if (ch === "}" && i > 0 && !/[\s;]/.test(segment[i - 1])) return true;
+  }
+  return false;
 }
 
-function apiCalls(command: string, depth = 0): string[][] {
+function apiCalls(rawCommand: string, depth = 0): string[][] {
   if (depth > MAX_WRAPPER_RECURSION_DEPTH) throw new Error("Wrapper recursion limit");
+  const command = rawCommand.replace(GH_PLACEHOLDER, "_$1_");
   if (hasBraceInWord(command)) throw new Error("Brace inside a word");
   const { segments, unterminated } = splitOnOperators(command);
   if (unterminated) throw new Error("Unterminated shell syntax");
