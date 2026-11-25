@@ -2570,3 +2570,57 @@ Deno.test("Retiring code: backticked packages, paths, and settings pass while ba
   ]);
   assertEquals(findRule(validate(commandOnlyDoc), "retiring-row-missing-cleanup").length, 1);
 });
+
+Deno.test("Retiring code: backticked tokens without removal in the same clause fail", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "model/outreach: retire the server's reply scan",
+      tests: "New cases in `test/outreach_reply.test.ts` pass",
+      closes: "—",
+    }),
+    childRow({
+      title: "model/outreach: retire the server's reply scan",
+      closes: "`design:lint-plan` passes",
+    }),
+    childRow({
+      title: "routes: drop the delete-many routes",
+      tests: "Vitest cases with `gig:announce` granted",
+      closes: "—",
+    }),
+    childRow({
+      title: "hooks: delete the unused reminder hook",
+      closes: "CI passes on `web-jam-tools`",
+    }),
+    childRow({
+      title: "hooks: delete the unused reminder hook",
+      tests: "New cases in `test/outreach_reply.test.ts` pass; old hook is deleted",
+      closes: "—",
+    }),
+  ]);
+  assertEquals(findRule(validate(doc), "retiring-row-missing-cleanup").length, 5);
+});
+
+Deno.test("Retiring code: hyphenated non-retiring titles pass without cleanup text", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "ui: add a drop-down venue filter",
+      closes: 'builds "Drop-down filter" as written',
+    }),
+    childRow({
+      title: "ui: add a drop-in admin panel",
+      closes: 'builds "Admin panel" as written',
+    }),
+    childRow({
+      title: "ui: add a remove-gig button",
+      closes: 'builds "Remove-gig button" as written',
+    }),
+    childRow({
+      title: "routes: stop serving delete-many routes",
+      tests: "Vitest cases with `gig:announce` granted",
+      closes: 'builds "Stop serving routes" as written',
+    }),
+  ]);
+  assertEquals(findRule(validate(doc), "retiring-row-missing-cleanup"), []);
+});

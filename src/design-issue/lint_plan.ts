@@ -186,7 +186,10 @@ const TESTS_INSUFFICIENT_VALUES = new Set([
 const PERSONAL_NAME_PREFIX = /^josh\s*[-:—]\s?/i;
 
 const RETIRING_TITLE_VERB =
-  /(?<![a-zA-Z-])(?:retire[sd]?|retiring|remove[sd]?|removing|delete[sd]?|deleting|drop(?:s|ped|ping)?)\b/i;
+  /(?<![a-zA-Z-])(?:retire[sd]?|retiring|remove[sd]?|removing|delete[sd]?|deleting|drop(?:s|ped|ping)?)(?![\w-])/i;
+
+const CLAUSE_REMOVAL_VERB =
+  /(?<![a-zA-Z-])(?:retire[sd]?|retiring|remove[sd]?|removing|delete[sd]?|deleting|drop(?:s|ped|ping)?|uninstall(?:s|ed|ing)?|unset(?:s|ting)?|prune[sd]?|pruning|strip(?:s|ped|ping)?|revoke[sd]?|revoking|gone)(?![\w-])/i;
 
 const NOTHING_ELSE_TO_REMOVE = /\bnothing\s+else\s+to\s+remove\b/i;
 
@@ -779,28 +782,40 @@ function isNamedCleanupToken(rawToken: string): boolean {
   return /[a-zA-Z]/.test(token) && /^[a-zA-Z0-9_@./:+-]+$/.test(token);
 }
 
-function hasNamedRetiringCleanup(rawCells: readonly string[]): boolean {
-  const combinedRaw = rawCells.join(" ").trim();
-  if (!combinedRaw) return false;
-
-  // Allow `"nothing else to remove"` even when wrapped in backticks or emphasis markers.
-  if (NOTHING_ELSE_TO_REMOVE.test(stripMdMarkers(combinedRaw))) return true;
-
-  // Pass backticked identifiers (package, path, setting, collection, or index names),
-  // ignoring backticked commands (which contain whitespace or name CLI tools) and generic nouns.
-  for (const match of combinedRaw.matchAll(/`([^`]+)`/g)) {
-    if (isNamedCleanupToken(match[1])) return true;
-  }
-
+function clauseNamesRemovedItem(clause: string): boolean {
   // Strip backticked spans, double-quoted heading names (e.g. `"Retiring code"`), and
-  // `package.json`/`deno.json` references so only explicit UPPER_SNAKE keys count in plain text.
-  const plain = combinedRaw
+  // `package.json`/`deno.json` references so both the removal word and any plain UPPER_SNAKE
+  // key must appear in the clause prose itself rather than inside quotes or commands.
+  const plain = clause
     .replace(/`[^`]*`/g, " ")
     .replace(/"[^"]*"/g, " ")
     .replace(/\b(?:package|deno)\.json\b/gi, " ")
     .replace(/\*/g, "");
 
-  return UPPER_SNAKE_KEY.test(plain);
+  if (!CLAUSE_REMOVAL_VERB.test(plain)) return false;
+  if (UPPER_SNAKE_KEY.test(plain)) return true;
+
+  for (const match of clause.matchAll(/`([^`]+)`/g)) {
+    if (isNamedCleanupToken(match[1])) return true;
+  }
+  return false;
+}
+
+function hasNamedRetiringCleanup(rawCells: readonly string[]): boolean {
+  for (const cell of rawCells) {
+    const trimmed = cell.trim();
+    if (!trimmed) continue;
+
+    // Allow `"nothing else to remove"` even when wrapped in backticks or emphasis markers.
+    if (NOTHING_ELSE_TO_REMOVE.test(stripMdMarkers(trimmed))) return true;
+
+    // Split each cell independently on `;`, newlines, or sentence ends so a named token
+    // (e.g. a test file or task) passes only when the same clause says it is removed.
+    for (const clause of trimmed.split(/(?:;|\n|\.(?=\s|$)|[!?]+(?=\s|$))+/)) {
+      if (clauseNamesRemovedItem(clause)) return true;
+    }
+  }
+  return false;
 }
 
 /**
