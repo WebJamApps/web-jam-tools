@@ -17,7 +17,7 @@ import {
 } from "./pitch.ts";
 import { publishAndOpenReport } from "./publish.ts";
 import { executeLinkGig } from "./venue_link.ts";
-import { executeVenueHold } from "./cooldown.ts";
+import { executeClearVenueHold, executeVenueHold, parseHoldField } from "./cooldown.ts";
 import { Gate2ReviewSession, isExplicitWholeBatchApproval } from "./gate2.ts";
 import {
   BatchDispatchError,
@@ -346,6 +346,43 @@ export async function runBookGigCli(
     return {
       mode: "hold",
       holdResult,
+      candidates: [],
+      density: { count: 0, isSparse: false },
+      pitches: [],
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Mode: Clear Venue Hold Field (--clear-hold <venueId|venueName> --field <field>)
+  // -------------------------------------------------------------------------
+  if (parsed.mode === "clear-hold") {
+    console.log(`\n======================================================`);
+    console.log(`  🧹 book-gig: Clear Venue Hold Date`);
+    console.log(`======================================================`);
+    const venueQuery = parsed.holdVenue;
+    if (!venueQuery) {
+      console.error("Error: Missing required venue identifier for --clear-hold.");
+      console.error(
+        'Usage: deno task book-gig --clear-hold "<venueId|venueName>" --field <resumeBooking|bookedThrough>',
+      );
+      throw new Error("Missing venue identifier for --clear-hold");
+    }
+    const validField = parseHoldField(parsed.clearHoldField);
+    console.log(`Target Venue: "${venueQuery}"`);
+    console.log(`Clear Field:  ${validField}`);
+    console.log(`------------------------------------------------------\n`);
+
+    const clearHoldResult = await executeClearVenueHold(venueQuery, validField, {}, fetchFn);
+    console.log(`[book-gig] ${clearHoldResult.message}`);
+    console.log(`  • Venue ID:         ${clearHoldResult.venueId}`);
+    console.log(`  • Cleared Field:    ${clearHoldResult.clearedField}`);
+    if (clearHoldResult.previousValue) {
+      console.log(`  • Previous Value:   ${clearHoldResult.previousValue}`);
+    }
+
+    return {
+      mode: "clear-hold",
+      clearHoldResult,
       candidates: [],
       density: { count: 0, isSparse: false },
       pitches: [],

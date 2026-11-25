@@ -53,6 +53,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   let explicitVenue: string | undefined;
   let holdUntil: string | undefined;
   let bookedThroughDate: string | undefined;
+  let clearHoldField: string | undefined;
   const tweaks: VenueTweak[] = [];
   let currentTweakVenue: string | undefined;
   let currentCustomBody: string | undefined;
@@ -182,6 +183,24 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       mode = "hold";
       const eqIdx = arg.indexOf("=");
       holdVenue = arg.slice(eqIdx + 1).trim();
+    } else if (lower === "--clear-hold") {
+      mode = "clear-hold";
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        holdVenue = args[i].trim();
+      }
+    } else if (lower.startsWith("--clear-hold=")) {
+      mode = "clear-hold";
+      const eqIdx = arg.indexOf("=");
+      holdVenue = arg.slice(eqIdx + 1).trim();
+    } else if (lower === "--field") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        clearHoldField = args[i].trim();
+      }
+    } else if (lower.startsWith("--field=")) {
+      const eqIdx = arg.indexOf("=");
+      clearHoldField = arg.slice(eqIdx + 1).trim();
     } else if (lower === "--venue") {
       if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
         i++;
@@ -300,10 +319,19 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
     mode = "hold";
   }
 
-  if (mode === "hold") {
+  if (mode === "hold" || mode === "clear-hold") {
     holdVenue = holdVenue || explicitVenue;
     if (!holdVenue && positionalArgs.length > 0) {
       holdVenue = positionalArgs.join(" ").trim();
+    }
+    if (mode === "clear-hold") {
+      return {
+        mode: "clear-hold",
+        holdVenue,
+        clearHoldField,
+        noOpen: resNoOpen,
+        rawArgs,
+      };
     }
     return {
       mode: "hold",

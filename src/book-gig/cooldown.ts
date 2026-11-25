@@ -2,7 +2,7 @@
 
 import { type BackendConfigOptions, buildHeaders, resolveBackendConfig } from "./outreach_api.ts";
 import { normalizeVenueName } from "./venue_link.ts";
-import type { VenueHoldResult } from "./types.ts";
+import type { ClearVenueHoldResult, HoldField, VenueHoldResult } from "./types.ts";
 
 export interface HoldVenueRecord {
   _id?: unknown;
@@ -206,6 +206,71 @@ export function formatCandidatesList(candidates: HoldVenueRecord[]): string {
 }
 
 /**
+ * Validates and returns a supported venue hold field name (`resumeBooking` or `bookedThrough`).
+ */
+export function parseHoldField(field: string | undefined): HoldField {
+  const trimmed = (field || "").trim();
+  if (!trimmed) {
+    throw new Error(
+      "Missing required --field for --clear-hold. Specify --field resumeBooking or --field bookedThrough.",
+    );
+  }
+  if (trimmed === "resumeBooking" || trimmed === "bookedThrough") {
+    return trimmed;
+  }
+  throw new Error(
+    `Invalid hold field "${trimmed}". Expected "resumeBooking" or "bookedThrough".`,
+  );
+}
+
+async function fetchAndResolveHoldVenue(
+  venueQuery: string,
+  options: BackendConfigOptions,
+  fetchFn: typeof fetch,
+): Promise<{
+  baseUrl: string;
+  headers: Record<string, string>;
+  targetVenue: HoldVenueRecord;
+  targetVenueId: string;
+}> {
+  const { baseUrl, token } = await resolveBackendConfig(options);
+  const headers = buildHeaders(token);
+
+  const venueRes = await fetchFn(`${baseUrl}/venue`, { headers });
+  if (!venueRes.ok) {
+    throw new Error(`Failed to fetch venues: HTTP ${venueRes.status} ${venueRes.statusText}`);
+  }
+
+  const rawData = await venueRes.json();
+  let venues: HoldVenueRecord[] = [];
+  if (Array.isArray(rawData)) {
+    venues = rawData as HoldVenueRecord[];
+  } else if (rawData && typeof rawData === "object") {
+    const obj = rawData as Record<string, unknown>;
+    venues = (obj.venues ?? obj.data ?? []) as HoldVenueRecord[];
+  }
+
+  const resolution = resolveHoldVenue(venueQuery, venues);
+  if (!resolution.success) {
+    if (resolution.candidates && resolution.candidates.length > 0) {
+      const formatted = formatCandidatesList(resolution.candidates);
+      throw new Error(
+        `${resolution.error}\n${formatted}\nPlease specify exact venue ID or full name.`,
+      );
+    }
+    throw new Error(resolution.error);
+  }
+
+  const targetVenue = resolution.venue;
+  return {
+    baseUrl,
+    headers,
+    targetVenue,
+    targetVenueId: String(targetVenue._id),
+  };
+}
+
+/**
  * Sets seasonal cooldown hold or booked-through dates on a target venue via PATCH /venue/:id.
  * If only untilDate is provided, writes ONLY resumeBooking (at UTC 00:00:00.000Z).
  * If only bookedThroughDate is provided, writes ONLY bookedThrough (at UTC 23:59:59.999Z).
@@ -245,40 +310,13 @@ export async function executeVenueHold(
     bookedThrough = parseBookedThroughDate(bookedThroughDateStr);
   }
 
-  const { baseUrl, token } = await resolveBackendConfig(options);
-  const headers = buildHeaders(token);
+  const { baseUrl, headers, targetVenue, targetVenueId } = await fetchAndResolveHoldVenue(
+    venueQuery,
+    options,
+    fetchFn,
+  );
 
-  // 1. Fetch live venues
-  const venueRes = await fetchFn(`${baseUrl}/venue`, { headers });
-  if (!venueRes.ok) {
-    throw new Error(`Failed to fetch venues: HTTP ${venueRes.status} ${venueRes.statusText}`);
-  }
-
-  const rawData = await venueRes.json();
-  let venues: HoldVenueRecord[] = [];
-  if (Array.isArray(rawData)) {
-    venues = rawData as HoldVenueRecord[];
-  } else if (rawData && typeof rawData === "object") {
-    const obj = rawData as Record<string, unknown>;
-    venues = (obj.venues ?? obj.data ?? []) as HoldVenueRecord[];
-  }
-
-  // 2. Resolve target venue
-  const resolution = resolveHoldVenue(venueQuery, venues);
-  if (!resolution.success) {
-    if (resolution.candidates && resolution.candidates.length > 0) {
-      const formatted = formatCandidatesList(resolution.candidates);
-      throw new Error(
-        `${resolution.error}\n${formatted}\nPlease specify exact venue ID or full name.`,
-      );
-    }
-    throw new Error(resolution.error);
-  }
-
-  const targetVenue = resolution.venue;
-  const targetVenueId = String(targetVenue._id);
-
-  // 3. Update venue via PATCH /venue/:id
+  // Update venue via PATCH /venue/:id
   const patchUrl = `${baseUrl}/venue/${targetVenueId}`;
   const payload: Record<string, string> = {};
   if (resumeBooking) {
@@ -317,6 +355,72 @@ export async function executeVenueHold(
     resumeBooking,
     bookedThrough,
     eligibleDate,
+    message,
+  };
+}
+
+/**
+ * Clears a named hold field (`resumeBooking` or `bookedThrough`) on a target venue via PATCH /venue/:id.
+ */
+export async function executeClearVenueHold(
+  venueQuery: string,
+  field: string | undefined,
+  options: BackendConfigOptions = {},
+  fetchFn: typeof fetch = fetch,
+): Promise<ClearVenueHoldResult> {
+  if (!venueQuery || !venueQuery.trim()) {
+    throw new Error("Missing required venue identifier for --clear-hold.");
+  }
+
+  const validField = parseHoldField(field);
+  const { baseUrl, headers, targetVenue, targetVenueId } = await fetchAndResolveHoldVenue(
+    venueQuery,
+    options,
+    fetchFn,
+  );
+
+  const previousRaw = targetVenue[validField];
+  const previousValue = previousRaw !== undefined && previousRaw !== null && previousRaw !== ""
+    ? String(previousRaw)
+    : undefined;
+
+  const patchUrl = `${baseUrl}/venue/${targetVenueId}`;
+  const patchRes = await fetchFn(patchUrl, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({ [validField]: null }),
+  });
+
+  if (!patchRes.ok) {
+    const errText = await patchRes.text();
+    throw new Error(
+      `Failed to clear ${validField} on venue ${targetVenueId}: HTTP ${patchRes.status} ${errText}`,
+    );
+  }
+
+  const patchText = await patchRes.text();
+  let parsedPatch: unknown;
+  try {
+    parsedPatch = JSON.parse(patchText);
+  } catch {
+    throw new Error(
+      `Failed to clear ${validField} on venue ${targetVenueId}: unparseable response from PATCH /venue/${targetVenueId}.`,
+    );
+  }
+  if (!parsedPatch || typeof parsedPatch !== "object" || Array.isArray(parsedPatch)) {
+    throw new Error(
+      `Failed to clear ${validField} on venue ${targetVenueId}: unexpected response payload from PATCH /venue/${targetVenueId}.`,
+    );
+  }
+
+  const venueName = targetVenue.name || venueQuery;
+  const message = `Cleared ${validField} on "${venueName}".`;
+
+  return {
+    venueId: targetVenueId,
+    venueName,
+    clearedField: validField,
+    previousValue,
     message,
   };
 }

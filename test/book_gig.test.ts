@@ -3510,7 +3510,7 @@ Deno.test("formatMonthYear & formatMonthDay: correctly formats dates for badges"
   assertEquals(formatMonthDay("2026-10-10"), "Oct 10");
 });
 
-Deno.test("identifyCandidateBadge: identifies Contact Hold for future resumeBooking and Booked Through (#879, #1196)", () => {
+Deno.test("identifyCandidateBadge: identifies Don't contact until for future resumeBooking and Calendar full through for bookedThrough (#879, #990, #1196)", () => {
   const refDate = new Date("2026-10-01T00:00:00.000Z");
 
   const venue: CandidateVenue = {
@@ -3520,7 +3520,7 @@ Deno.test("identifyCandidateBadge: identifies Contact Hold for future resumeBook
   };
 
   const badge = identifyCandidateBadge(venue, refDate);
-  assertEquals(badge.badge, "Contact Hold: Until Jan 2027");
+  assertEquals(badge.badge, "Don't contact until 1 Jan 2027 (resumeBooking)");
   assertEquals(badge.cssClass, "badge-seasonal-hold");
   assertEquals(badge.isExcluded, true);
 
@@ -3531,7 +3531,7 @@ Deno.test("identifyCandidateBadge: identifies Contact Hold for future resumeBook
     bookedThrough: "2027-02-15",
   };
   const badgeBt = identifyCandidateBadge(venueBt, refDate);
-  assertEquals(badgeBt.badge, "Booked Through: Feb 2027");
+  assertEquals(badgeBt.badge, "Calendar full through 15 Feb 2027 (bookedThrough)");
   assertEquals(badgeBt.cssClass, "badge-seasonal-hold");
   assertEquals(badgeBt.isExcluded, true);
 
@@ -3843,9 +3843,9 @@ Deno.test("filterAndRankCandidates: populates granular status badges and reasoni
   assertEquals(filtered.length, 7);
 
   const hold = filtered.find((v) => v._id === "v1")!;
-  assertEquals(hold.statusBadge, "Contact Hold: Until Jan 2027");
+  assertEquals(hold.statusBadge, "Don't contact until 1 Jan 2027 (resumeBooking)");
   assertEquals(hold.isExcluded, true);
-  assertEquals(hold.reason?.exclusionReason, "Contact Hold: Until Jan 2027");
+  assertEquals(hold.reason?.exclusionReason, "Don't contact until 1 Jan 2027 (resumeBooking)");
 
   const spacing = filtered.find((v) => v._id === "v2")!;
   assertEquals(spacing.statusBadge, "Gig Spacing: Nov 20 Show");
@@ -3954,14 +3954,14 @@ Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in te
   // 1. Terminal candidate table (uncolored check)
   const terminalPlain = renderCandidateTable(candidates, { color: false, referenceDate: refDate });
   assertStringIncludes(terminalPlain, "Spacing Status");
-  assertStringIncludes(terminalPlain, "Contact Hold: Until Jan 2027");
+  assertStringIncludes(terminalPlain, "Don't contact until 1 Jan 2027 (resumeBooking)");
   assertStringIncludes(terminalPlain, "Gig Spacing: Nov 20 Show");
   assertStringIncludes(terminalPlain, "Direct Chat Active");
   assertStringIncludes(terminalPlain, "Cooldown Active: Sent Sep 28");
 
   // 2. Terminal candidate table (colored check)
   const terminalColored = renderCandidateTable(candidates, { color: true, referenceDate: refDate });
-  assertStringIncludes(terminalColored, "Contact Hold: Until Jan 2027");
+  assertStringIncludes(terminalColored, "Don't contact until 1 Jan 2027 (resumeBooking)");
   assertStringIncludes(terminalColored, "\x1b[36m"); // Cyan
   assertStringIncludes(terminalColored, "Gig Spacing: Nov 20 Show");
   assertStringIncludes(terminalColored, "\x1b[31m"); // Red
@@ -3995,7 +3995,7 @@ Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in te
 
   // Status badges and CSS classes in HTML
   assertStringIncludes(html, "badge-seasonal-hold");
-  assertStringIncludes(html, "Contact Hold: Until Jan 2027");
+  assertStringIncludes(html, "Don&#039;t contact until 1 Jan 2027 (resumeBooking)");
   assertStringIncludes(html, "badge-gig-spacing");
   assertStringIncludes(html, "Gig Spacing: Nov 20 Show");
   assertStringIncludes(html, "badge-direct-chat");
@@ -4215,7 +4215,7 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   assert(seasonalHold !== undefined);
   assertEquals(seasonalHold.isExcluded, true);
   const seasonalBadge = identifyCandidateBadge(seasonalHold);
-  assertStringIncludes(seasonalBadge.badge, "Contact Hold: Until Jan 2027");
+  assertStringIncludes(seasonalBadge.badge, "Don't contact until 1 Jan 2027 (resumeBooking)");
   assertEquals(seasonalBadge.cssClass, "badge-seasonal-hold");
   assertEquals(seasonalBadge.isExcluded, true);
 
@@ -4259,7 +4259,7 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   const renderedTable = renderCandidateTable(candidates, { color: false });
   assertStringIncludes(renderedTable, "Returning · Last: Jun 15");
   assertStringIncludes(renderedTable, "no gigs yet");
-  assertStringIncludes(renderedTable, "Contact Hold: Until Jan 2027");
+  assertStringIncludes(renderedTable, "Don't contact until 1 Jan 2027 (resumeBooking)");
   assertStringIncludes(renderedTable, "Direct Chat Active");
   assertStringIncludes(renderedTable, "Gig Spacing: Nov 20 Show");
   assertStringIncludes(renderedTable, "Cooldown Active: Sent");
@@ -4835,7 +4835,7 @@ Deno.test("reconciliation & 7 exclusion reasons: accounts for every backend venu
   assertEquals(isPitchableCandidate(seasonalHold), false);
   assertEquals(seasonalHold.isExcluded, true);
   assertEquals(seasonalHold.exclusionReason, "seasonal-hold");
-  assertStringIncludes(seasonalHold.statusBadge!, "Contact Hold");
+  assertStringIncludes(seasonalHold.statusBadge!, "Don't contact until");
 
   const gigSpacing = candidates.find((c) => c._id === "v-gig-spacing")!;
   assertEquals(isPitchableCandidate(gigSpacing), false);
@@ -4902,7 +4902,7 @@ Deno.test("reconciliation & 7 exclusion reasons: accounts for every backend venu
   assertStringIncludes(excludedTable, "Out of State");
   assertStringIncludes(excludedTable, "Outside Target Area");
   assertStringIncludes(excludedTable, "No Booking Email");
-  assertStringIncludes(excludedTable, "Contact Hold: Until Apr 2027");
+  assertStringIncludes(excludedTable, "Don't contact until 1 Apr 2027 (resumeBooking)");
   assertStringIncludes(excludedTable, "Gig Spacing: Nov 15 Show");
   assertStringIncludes(excludedTable, "Direct Chat Active");
   assertStringIncludes(excludedTable, "Cooldown Active: Sent Oct 14");
@@ -5733,7 +5733,7 @@ Deno.test("formatExcludedAuditSummary: files a venue by its recorded exclusion r
       "  • Seasonal Holds (3):",
       "    - Badge Only Brewing (Feb 2027)",
       "    - Durty Bull Brewing Company (Jan 2027)",
-      "    - Old Send Hall (Jan 2027)",
+      "    - Old Send Hall (Don't contact until 15 Jan 2027 (resumeBooking))",
       "  • Outside Target Area (1):",
       "    - Far Away Tavern (Asheville, NC)",
     ].join("\n"),
@@ -6448,4 +6448,75 @@ Deno.test("renderDarkHtml: synthesizes batches in run data when result.batchDisp
   assertEquals(extracted.batches[0].requested, 2);
   assertEquals(extracted.batches[0].sent, 1);
   assertEquals(extracted.batches[0].skippedVenueIds, ["venue-2"]);
+});
+
+Deno.test("identifyCandidateBadge & formatExcludedAuditSummary: names resumeBooking vs bookedThrough and stored date (#990)", () => {
+  const refDate = new Date("2026-09-13T12:00:00.000Z");
+  const janWeekend = { start: "2027-01-08", end: "2027-01-10" };
+
+  // 1. Future resumeBooking compared against today (nowMs), even when bookedThrough is before target weekend
+  const martins: CandidateVenue = {
+    _id: "v-martins",
+    name: "Martin's Downtown Bar & Grill",
+    city: "Roanoke",
+    usState: "VA",
+    email: "booking@martins.com",
+    resumeBooking: "2027-01-01T00:00:00.000Z",
+    bookedThrough: "2026-12-31T23:59:59.999Z",
+  };
+  const martinsBadge = identifyCandidateBadge(martins, refDate, janWeekend);
+  assertEquals(martinsBadge.isExcluded, true);
+  assertEquals(martinsBadge.cssClass, "badge-seasonal-hold");
+  assertEquals(martinsBadge.badge, "Don't contact until 1 Jan 2027 (resumeBooking)");
+
+  // 2. bookedThrough on or after target weekend start compared against weekendStartMs
+  const fullCalendar: CandidateVenue = {
+    _id: "v-full",
+    name: "Blue Ridge Taproom",
+    city: "Roanoke",
+    usState: "VA",
+    email: "booking@blueridge.com",
+    bookedThrough: "2027-01-08T23:59:59.999Z",
+  };
+  const fullBadge = identifyCandidateBadge(fullCalendar, refDate, janWeekend);
+  assertEquals(fullBadge.isExcluded, true);
+  assertEquals(fullBadge.cssClass, "badge-seasonal-hold");
+  assertEquals(fullBadge.badge, "Calendar full through 8 Jan 2027 (bookedThrough)");
+
+  // 3. bookedThrough before target weekend start is NOT excluded (comparison unchanged)
+  const earlierCalendar: CandidateVenue = {
+    _id: "v-early",
+    name: "Olde Salem Brewing",
+    city: "Salem",
+    usState: "VA",
+    email: "booking@oldesalem.com",
+    bookedThrough: "2026-12-31T23:59:59.999Z",
+  };
+  const earlyBadge = identifyCandidateBadge(earlierCalendar, refDate, janWeekend);
+  assertEquals(earlyBadge.isExcluded, false);
+  assertEquals(earlyBadge.badge, "New");
+
+  // 4. Table & audit summary preserve full field-naming exclusion messages
+  const table = renderCandidateTable([martins, fullCalendar], {
+    color: false,
+    referenceDate: refDate,
+  });
+  assertStringIncludes(table, "Don't contact until 1 Jan 2027 (resumeBooking)");
+  assertStringIncludes(table, "Calendar full through 8 Jan 2027 (bookedThrough)");
+
+  const summary = formatExcludedAuditSummary(
+    [
+      { ...martins, isExcluded: true, statusBadge: martinsBadge.badge },
+      { ...fullCalendar, isExcluded: true, statusBadge: fullBadge.badge },
+    ],
+    refDate,
+  );
+  assertStringIncludes(
+    summary,
+    "- Martin's Downtown Bar & Grill (Don't contact until 1 Jan 2027 (resumeBooking))",
+  );
+  assertStringIncludes(
+    summary,
+    "- Blue Ridge Taproom (Calendar full through 8 Jan 2027 (bookedThrough))",
+  );
 });

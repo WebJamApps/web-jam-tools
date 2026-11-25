@@ -144,7 +144,7 @@ export async function fetchCandidates(
           if (v.resumeBooking) {
             const rbDate = new Date(v.resumeBooking);
             if (!Number.isNaN(rbDate.getTime()) && rbDate.getTime() > nowMs) {
-              const holdBadge = `Contact Hold: Until ${formatMonthYear(rbDate)}`;
+              const holdBadge = formatResumeBookingBadge(rbDate);
               candidates.push({
                 ...v,
                 isExcluded: true,
@@ -167,7 +167,7 @@ export async function fetchCandidates(
           if (v.bookedThrough) {
             const btDate = new Date(v.bookedThrough);
             if (!Number.isNaN(btDate.getTime()) && btDate.getTime() >= weekendStartMs) {
-              const bookedBadge = `Booked Through: ${formatMonthYear(btDate)}`;
+              const bookedBadge = formatBookedThroughBadge(btDate);
               candidates.push({
                 ...v,
                 isExcluded: true,
@@ -473,6 +473,56 @@ export function formatMonthDayYear(d: string | Date): string {
   return String(d);
 }
 
+/**
+ * Format a Date or ISO string as "D MMM YYYY", e.g. "1 Jan 2027", "31 Dec 2026".
+ */
+export function formatDayMonthYear(d: string | Date): string {
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  if (typeof d === "string") {
+    const trimmed = d.trim();
+    if (/^\d{1,2}\s+[A-Za-z]{3}\s+\d{4}$/.test(trimmed)) return trimmed;
+    const match = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (match) {
+      const year = match[1];
+      const monthIdx = parseInt(match[2], 10) - 1;
+      const day = parseInt(match[3], 10);
+      if (months[monthIdx]) return `${day} ${months[monthIdx]} ${year}`;
+    }
+    const parsed = new Date(trimmed);
+    if (!Number.isNaN(parsed.getTime())) {
+      return `${parsed.getUTCDate()} ${months[parsed.getUTCMonth()]} ${parsed.getUTCFullYear()}`;
+    }
+    return trimmed;
+  }
+  if (d instanceof Date && !Number.isNaN(d.getTime())) {
+    return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  }
+  return String(d);
+}
+
+/** Format a resumeBooking exclusion badge naming the field and stored date. */
+export function formatResumeBookingBadge(d: string | Date): string {
+  return `Don't contact until ${formatDayMonthYear(d)} (resumeBooking)`;
+}
+
+/** Format a bookedThrough exclusion badge naming the field and stored date. */
+export function formatBookedThroughBadge(d: string | Date): string {
+  return `Calendar full through ${formatDayMonthYear(d)} (bookedThrough)`;
+}
+
 export function badgeCssToExclusionReason(cssClass: string): ExclusionReason | undefined {
   switch (cssClass) {
     case "badge-seasonal-hold":
@@ -519,7 +569,8 @@ export function identifyCandidateBadge(
     const sb = v.statusBadge;
     if (
       sb.includes("Seasonal Hold") || sb.includes("Hold:") ||
-      sb.includes("Booked Through:") || sb.includes("Contact Hold:")
+      sb.includes("Booked Through:") || sb.includes("Contact Hold:") ||
+      sb.includes("Don't contact until") || sb.includes("Calendar full through")
     ) {
       return { badge: sb, cssClass: "badge-seasonal-hold", isExcluded: true };
     }
@@ -583,7 +634,7 @@ export function identifyCandidateBadge(
       : resumeBookingVal;
     if (!Number.isNaN(rDate.getTime()) && rDate.getTime() > nowMs) {
       return {
-        badge: `Contact Hold: Until ${formatMonthYear(rDate)}`,
+        badge: formatResumeBookingBadge(rDate),
         cssClass: "badge-seasonal-hold",
         isExcluded: true,
       };
@@ -599,7 +650,7 @@ export function identifyCandidateBadge(
     const comparisonMs = targetWeekendStartMs ?? nowMs;
     if (!Number.isNaN(btDate.getTime()) && btDate.getTime() >= comparisonMs) {
       return {
-        badge: `Booked Through: ${formatMonthYear(btDate)}`,
+        badge: formatBookedThroughBadge(btDate),
         cssClass: "badge-seasonal-hold",
         isExcluded: true,
       };
@@ -965,13 +1016,13 @@ export function renderCandidateTable(
 
   const lines: string[] = [];
   lines.push(
-    `┌─────┬──────────────────────────┬──────────────────┬──────────────────┬────────────────┬──────────────────────────┬────────────────────────────────┐`,
+    `┌─────┬──────────────────────────┬──────────────────┬──────────────────┬────────────────┬──────────────────────────┬────────────────────────────────────────────────────┐`,
   );
   lines.push(
-    `│ #   │ Venue Name               │ Location         │ Contact          │ Phone          │ Email                    │ Spacing Status                 │`,
+    `│ #   │ Venue Name               │ Location         │ Contact          │ Phone          │ Email                    │ Spacing Status                                     │`,
   );
   lines.push(
-    `├─────┼──────────────────────────┼──────────────────┼──────────────────┼────────────────┼──────────────────────────┼────────────────────────────────┤`,
+    `├─────┼──────────────────────────┼──────────────────┼──────────────────┼────────────────┼──────────────────────────┼────────────────────────────────────────────────────┤`,
   );
 
   candidates.forEach((c, idx) => {
@@ -996,7 +1047,7 @@ export function renderCandidateTable(
     }
 
     let badgeCol: string;
-    const colWidth = 30;
+    const colWidth = 50;
     if (useColor) {
       let colorCode = "\x1b[32m"; // default green
       if (badgeInfo.cssClass === "badge-seasonal-hold") colorCode = "\x1b[36m"; // cyan
@@ -1020,7 +1071,7 @@ export function renderCandidateTable(
   });
 
   lines.push(
-    `└─────┴──────────────────────────┴──────────────────┴──────────────────┴────────────────┴──────────────────────────┴────────────────────────────────┘`,
+    `└─────┴──────────────────────────┴──────────────────┴──────────────────┴────────────────┴──────────────────────────┴────────────────────────────────────────────────────┘`,
   );
 
   return lines.join("\n");
@@ -1140,6 +1191,8 @@ const BADGE_CATEGORY: Array<[string, string]> = [
   ["Hold:", "Seasonal Holds"],
   ["Booked Through:", "Seasonal Holds"],
   ["Contact Hold:", "Seasonal Holds"],
+  ["Don't contact until", "Seasonal Holds"],
+  ["Calendar full through", "Seasonal Holds"],
   ["Direct Chat", "Direct Chat Active"],
   ["No Booking Email", "No Booking Email"],
   ["Outside Target Area", "Outside Target Area"],
@@ -1227,7 +1280,9 @@ function classifyExcludedCandidate(
   // 3. Seasonal Holds
   if (category === "Seasonal Holds") {
     let detail = "";
-    if (badge.includes("Seasonal Hold:")) {
+    if (badge.includes("Don't contact until") || badge.includes("Calendar full through")) {
+      detail = badge.replace(/^\[?/, "").replace(/\]?$/, "").trim();
+    } else if (badge.includes("Seasonal Hold:")) {
       detail = badge.replace(/^\[?Seasonal Hold:\s*/i, "").replace(/\]?$/, "").trim();
     } else if (badge.includes("Booked Through:")) {
       detail = badge.replace(/^\[?Booked Through:\s*/i, "").replace(/\]?$/, "").trim();
@@ -1235,10 +1290,10 @@ function classifyExcludedCandidate(
       detail = badge.replace(/^\[?Contact Hold:\s*(?:Until\s*)?/i, "").replace(/\]?$/, "").trim();
     } else if (c.resumeBooking || c.reason?.resumeBooking) {
       const d = c.resumeBooking || c.reason?.resumeBooking;
-      detail = formatMonthYear(d!);
+      detail = formatResumeBookingBadge(d!);
     } else if (c.bookedThrough || c.reason?.bookedThrough) {
       const d = c.bookedThrough || c.reason?.bookedThrough;
-      detail = `Booked through ${formatMonthYear(d!)}`;
+      detail = formatBookedThroughBadge(d!);
     } else {
       detail = "Seasonal Hold";
     }
