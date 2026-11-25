@@ -1498,7 +1498,7 @@ function hasSpaceOutsideAnglePlaceholders(token: string): boolean {
   return false;
 }
 
-function isDesignBodyPathToken(token: string): boolean {
+function isWhereThingsLivePathToken(token: string): boolean {
   if (hasSpaceOutsideAnglePlaceholders(token)) {
     return false;
   }
@@ -1506,9 +1506,19 @@ function isDesignBodyPathToken(token: string): boolean {
     return token.length > 2;
   }
   if (token.startsWith("/")) {
-    return token.indexOf("/", 1) > 1;
+    return token.length > 1 && token[1] !== "/";
   }
   return false;
+}
+
+function isDesignBodyPathToken(token: string): boolean {
+  if (!isWhereThingsLivePathToken(token)) {
+    return false;
+  }
+  if (token.startsWith("~/")) {
+    return true;
+  }
+  return token.indexOf("/", 1) > 1;
 }
 
 function extractBacktickCodeTokens(line: string): string[] {
@@ -1531,120 +1541,245 @@ function stripOneTrailingSlash(pathStr: string): string {
   return pathStr.length > 1 && pathStr.endsWith("/") ? pathStr.slice(0, -1) : pathStr;
 }
 
+function coversPath(coveredRoot: string, normBodyPath: string): boolean {
+  if (coveredRoot === "/") {
+    return normBodyPath === "/" || normBodyPath.startsWith("/");
+  }
+  return normBodyPath === coveredRoot || normBodyPath.startsWith(`${coveredRoot}/`);
+}
+
 function isBodyPathCovered(bodyPath: string, whereThingsLiveTokens: string[]): boolean {
   const normBody = stripOneTrailingSlash(bodyPath);
   for (const entry of whereThingsLiveTokens) {
     const angleIdx = entry.indexOf("<");
-    if (angleIdx !== -1) {
-      const prefix = entry.slice(0, angleIdx);
-      const folder = stripOneTrailingSlash(prefix);
-      if (
-        folder.length > 0 &&
-        (normBody === folder || normBody.startsWith(folder === "/" ? "/" : `${folder}/`))
-      ) {
-        return true;
-      }
-      if (prefix.length > 0 && !prefix.endsWith("/") && normBody.startsWith(prefix)) {
-        return true;
-      }
-      continue;
-    }
-
-    const normEntry = stripOneTrailingSlash(entry);
-    if (
-      normBody === normEntry ||
-      normBody.startsWith(normEntry === "/" ? "/" : `${normEntry}/`)
-    ) {
+    const rawRoot = angleIdx !== -1 ? entry.slice(0, angleIdx) : entry;
+    const coveredRoot = stripOneTrailingSlash(rawRoot);
+    if (coveredRoot.length > 0 && coversPath(coveredRoot, normBody)) {
       return true;
     }
   }
   return false;
 }
 
+interface OpenFenceState {
+  char: "`" | "~";
+  length: number;
+  quoteDepth: number;
+  listIndent: number;
+}
+
+function peelBlockQuotes(
+  line: string,
+  maxQuotes?: number,
+): { quoteDepth: number; content: string } {
+  let rest = line;
+  let quoteDepth = 0;
+  while (maxQuotes === undefined || quoteDepth < maxQuotes) {
+    const match = rest.match(/^\s{0,3}>(?: ?)(.*)$/);
+    if (!match) break;
+    quoteDepth++;
+    rest = match[1];
+  }
+  return { quoteDepth, content: rest };
+}
+
+function columnWidth(text: string): number {
+  let cols = 0;
+  for (const ch of text) {
+    if (ch === "\t") {
+      cols += 4 - (cols % 4);
+    } else {
+      cols++;
+    }
+  }
+  return cols;
+}
+
+function leadingIndentWidth(text: string): number {
+  let indent = 0;
+  for (const ch of text) {
+    if (ch === " ") {
+      indent++;
+    } else if (ch === "\t") {
+      indent += 4 - (indent % 4);
+    } else {
+      break;
+    }
+  }
+  return indent;
+}
+
+function stripIndentColumns(text: string, maxCols: number): string {
+  if (maxCols <= 0) return text;
+  let cols = 0;
+  let idx = 0;
+  while (idx < text.length && cols < maxCols) {
+    const ch = text[idx];
+    if (ch === " ") {
+      cols++;
+      idx++;
+    } else if (ch === "\t") {
+      const step = 4 - (cols % 4);
+      if (cols + step <= maxCols) {
+        cols += step;
+        idx++;
+      } else {
+        const remainSpaces = " ".repeat(cols + step - maxCols);
+        return remainSpaces + text.slice(idx + 1);
+      }
+    } else {
+      break;
+    }
+  }
+  return text.slice(idx);
+}
+
+function parseOpeningFence(text: string): { char: "`" | "~"; length: number } | null {
+  const match = text.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
+  if (!match) return null;
+  const fenceRun = match[1];
+  const infoString = match[2];
+  const fenceChar = fenceRun[0] as "`" | "~";
+  if (fenceChar === "`" && infoString.includes("`")) {
+    return null;
+  }
+  return { char: fenceChar, length: fenceRun.length };
+}
+
 /**
  * Validates that every backtick-quoted path named in the document body is covered by an entry
- * in the "Where Things Live" section. Excludes fenced code blocks, the revision table,
- * Load-bearing Premises, any Appendix section, and "Where Things Live" itself.
+ * in the "Where Things Live" section. Excludes fenced code blocks (including inside Markdown
+ * block quotes and list containers), the revision table, Load-bearing Premises, any Appendix
+ * section, and "Where Things Live" itself.
  */
 export function validateBodyPathsListedInWhereThingsLive(lines: string[]): LintViolation[] {
   const whereThingsLiveTokens: string[] = [];
   const bodyPathOccurrences: Array<{ line: number; lineContent: string; token: string }> = [];
 
-  let openFence: { char: "`" | "~"; length: number } | null = null;
-  type ExcludedSectionKind = "load-bearing" | "appendix" | "where-things-live";
-  let excludedSection: { kind: ExcludedSectionKind; level: number } | null = null;
-  let revisionSectionLevel: number | null = null;
+  let openFence: OpenFenceState | null = null;
+  const listIndentByDepth = new Map<number, number>();
+  let loadBearingLevel: number | null = null;
+  let appendixLevel: number | null = null;
+  let whereThingsLiveLevel: number | null = null;
+  let revisionLevel: number | null = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const lineNum = i + 1;
-    const trimmed = line.trim();
 
-    if (openFence === null) {
-      const fenceOpen = line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
-      if (fenceOpen) {
-        const fenceRun = fenceOpen[1];
-        const infoString = fenceOpen[2];
-        const fenceChar = fenceRun[0] as "`" | "~";
-        if (fenceChar === "~" || !infoString.includes("`")) {
-          openFence = { char: fenceChar, length: fenceRun.length };
+    if (openFence !== null) {
+      const peeled = peelBlockQuotes(line, openFence.quoteDepth);
+      if (peeled.quoteDepth < openFence.quoteDepth) {
+        openFence = null;
+      } else {
+        const isBlank = !/\S/.test(peeled.content);
+        if (
+          !isBlank &&
+          openFence.listIndent > 0 &&
+          leadingIndentWidth(peeled.content) < openFence.listIndent
+        ) {
+          openFence = null;
+        } else {
+          const inner = stripIndentColumns(peeled.content, openFence.listIndent);
+          const closeMatch = inner.match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+          if (
+            closeMatch &&
+            closeMatch[1][0] === openFence.char &&
+            closeMatch[1].length >= openFence.length
+          ) {
+            openFence = null;
+          }
           continue;
         }
       }
+    }
+
+    const { quoteDepth, content } = peelBlockQuotes(line);
+    const isBlank = !/\S/.test(content);
+    const indent = leadingIndentWidth(content);
+    const activeListIndent = listIndentByDepth.get(quoteDepth) ?? 0;
+
+    if (!isBlank && indent < activeListIndent) {
+      listIndentByDepth.delete(quoteDepth);
+    }
+
+    const listMarkerMatch = content.match(/^(\s{0,3}(?:[-+*]|\d{1,9}[.)])\s+)(.*)$/);
+    if (listMarkerMatch) {
+      const markerIndent = columnWidth(listMarkerMatch[1]);
+      listIndentByDepth.set(quoteDepth, markerIndent);
+      const markerFence = parseOpeningFence(listMarkerMatch[2]);
+      if (markerFence) {
+        openFence = { ...markerFence, quoteDepth, listIndent: markerIndent };
+        continue;
+      }
     } else {
-      const closeMatch = line.match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
-      if (
-        closeMatch &&
-        closeMatch[1][0] === openFence.char &&
-        closeMatch[1].length >= openFence.length
-      ) {
-        openFence = null;
+      const containerIndent = listIndentByDepth.get(quoteDepth) ?? 0;
+      const fenceCandidate = containerIndent > 0 && indent >= containerIndent
+        ? stripIndentColumns(content, containerIndent)
+        : content;
+      const fence = parseOpeningFence(fenceCandidate);
+      if (fence) {
+        openFence = {
+          ...fence,
+          quoteDepth,
+          listIndent: indent >= containerIndent ? containerIndent : 0,
+        };
+        continue;
       }
+    }
+
+    if (quoteDepth === 0) {
+      const headingMatch = content.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*$/);
+      if (headingMatch) {
+        const level = headingMatch[1].length;
+        const headingText = headingMatch[2].replace(/\s+#+\s*$/, "").trim();
+
+        if (loadBearingLevel !== null && level <= loadBearingLevel) loadBearingLevel = null;
+        if (appendixLevel !== null && level <= appendixLevel) appendixLevel = null;
+        if (whereThingsLiveLevel !== null && level <= whereThingsLiveLevel) {
+          whereThingsLiveLevel = null;
+        }
+        if (revisionLevel !== null && level <= revisionLevel) revisionLevel = null;
+
+        if (loadBearingLevel === null && appendixLevel === null) {
+          if (/^load-bearing\s+premises\b/i.test(headingText)) {
+            loadBearingLevel = level;
+          } else if (/^appendix\b/i.test(headingText)) {
+            appendixLevel = level;
+          } else if (
+            whereThingsLiveLevel === null &&
+            /^["']?where\s+things\s+live["']?\b/i.test(headingText)
+          ) {
+            whereThingsLiveLevel = level;
+          } else if (
+            whereThingsLiveLevel === null &&
+            revisionLevel === null &&
+            /^revision\s+history\b/i.test(headingText)
+          ) {
+            revisionLevel = level;
+          }
+        }
+      }
+    }
+
+    if (loadBearingLevel !== null || appendixLevel !== null) {
       continue;
     }
 
-    const headingMatch = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*$/);
-    if (headingMatch) {
-      const level = headingMatch[1].length;
-      const headingText = headingMatch[2].replace(/\s+#+\s*$/, "").trim();
-
-      if (excludedSection !== null && level <= excludedSection.level) {
-        excludedSection = null;
-      }
-      if (revisionSectionLevel !== null && level <= revisionSectionLevel) {
-        revisionSectionLevel = null;
-      }
-
-      if (/^load-bearing\s+premises\b/i.test(headingText)) {
-        excludedSection = { kind: "load-bearing", level };
-      } else if (/^appendix\b/i.test(headingText)) {
-        excludedSection = { kind: "appendix", level };
-      } else if (/^["']?where\s+things\s+live["']?\b/i.test(headingText)) {
-        excludedSection = { kind: "where-things-live", level };
-      } else if (/^revision\s+history\b/i.test(headingText)) {
-        revisionSectionLevel = level;
-      }
-      continue;
-    }
-
-    if (excludedSection?.kind === "where-things-live") {
-      for (const token of extractBacktickCodeTokens(line)) {
-        if (isDesignBodyPathToken(token)) {
+    if (whereThingsLiveLevel !== null) {
+      for (const token of extractBacktickCodeTokens(content)) {
+        if (isWhereThingsLivePathToken(token)) {
           whereThingsLiveTokens.push(token);
         }
       }
       continue;
     }
 
-    if (excludedSection !== null) {
+    if (quoteDepth === 0 && revisionLevel !== null && content.trim().startsWith("|")) {
       continue;
     }
 
-    if (revisionSectionLevel !== null && trimmed.startsWith("|")) {
-      continue;
-    }
-
-    for (const token of extractBacktickCodeTokens(line)) {
+    for (const token of extractBacktickCodeTokens(content)) {
       if (isDesignBodyPathToken(token)) {
         bodyPathOccurrences.push({ line: lineNum, lineContent: line, token });
       }

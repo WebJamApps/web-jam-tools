@@ -291,3 +291,87 @@ Deno.test("body paths skips revision table and Appendix sections", () => {
   assertEquals(result.valid, true);
   assertEquals(result.violations.length, 0);
 });
+
+Deno.test("body paths: single-segment directory in Where Things Live covers child files and respects directory boundaries", () => {
+  const coveredDoc = buildDoc({
+    body: "Reads `/etc/wsl.conf` on boot.",
+    whereThingsLive: "- `/etc` — system config directory",
+  });
+  assertEquals(lintDesignDoc(coveredDoc, "test.md").valid, true);
+
+  const siblingDoc = buildDoc({
+    body: "Reads `/etcetera/wsl.conf` on boot.",
+    whereThingsLive: "- `/etc` — system config directory",
+  });
+  const siblingResult = lintDesignDoc(siblingDoc, "test.md");
+  assertEquals(siblingResult.valid, false);
+  assertEquals(siblingResult.violations.length, 1);
+  assertStringIncludes(siblingResult.violations[0].message, "/etcetera/wsl.conf");
+});
+
+Deno.test("body paths: placeholder prefix enforces directory boundary instead of raw prefix", () => {
+  const doc = buildDoc({
+    body: "Reads `/var/log/run-other/output.log`.",
+    whereThingsLive: "- `/var/log/run-<id>/output.log` — per-run output",
+  });
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, false);
+  const violations = result.violations.filter((v) =>
+    v.rule === "body-path-missing-from-where-things-live"
+  );
+  assertEquals(violations.length, 1);
+  assertStringIncludes(violations[0].message, "/var/log/run-other/output.log");
+});
+
+Deno.test("body paths: paths in ordinary heading lines are checked while nested Where Things Live in Appendix cannot grant coverage or end Appendix exclusion", () => {
+  const missingHeadingPath = buildDoc({
+    body: "### Writing `~/.claude/state/run-state.json`\n\nNormal prose.",
+    whereThingsLive: null,
+    appendix:
+      "### Where Things Live\n\n- `~/.claude/state/run-state.json` — example only\n\n### Later Subsection\n\nMentions `/etc/still-appendix.conf`.",
+  });
+  const res = lintDesignDoc(missingHeadingPath, "test.md");
+  assertEquals(res.valid, false);
+  const violations = res.violations.filter((v) =>
+    v.rule === "body-path-missing-from-where-things-live"
+  );
+  assertEquals(violations.length, 1);
+  assertStringIncludes(violations[0].message, "~/.claude/state/run-state.json");
+
+  const coveredHeadingPath = buildDoc({
+    body: "### Writing `~/.claude/state/run-state.json`\n\nNormal prose.",
+    whereThingsLive: "- `~/.claude/state/run-state.json` — run state file",
+    appendix: "### Subsection\n\nMentions `/etc/still-appendix.conf`.",
+  });
+  assertEquals(lintDesignDoc(coveredHeadingPath, "test.md").valid, true);
+});
+
+Deno.test("body paths: quoted fenced examples are excluded and CommonMark blockquote boundaries end the fence before ordinary prose", () => {
+  const closedInQuote = buildDoc({
+    body: "> ```bash\n> cat `/etc/inside-quoted-fence.conf`\n> ```\n\nClean body prose.",
+    whereThingsLive: null,
+  });
+  assertEquals(lintDesignDoc(closedInQuote, "test.md").valid, true);
+
+  const example128Like = buildDoc({
+    body:
+      "> ```\n> `/etc/inside-quoted-fence.conf`\n\nOrdinary prose after quote mentions `/etc/outside-quote-prose.conf`.",
+    whereThingsLive: null,
+  });
+  const res = lintDesignDoc(example128Like, "test.md");
+  assertEquals(res.valid, false);
+  const violations = res.violations.filter((v) =>
+    v.rule === "body-path-missing-from-where-things-live"
+  );
+  assertEquals(violations.length, 1);
+  assertStringIncludes(violations[0].message, "/etc/outside-quote-prose.conf");
+});
+
+Deno.test("body paths: list-indented fenced blocks are excluded while following body prose is checked", () => {
+  const doc = buildDoc({
+    body:
+      "- Example step:\n  ```bash\n  cat `/etc/in-list-fence.conf`\n  ```\n\nBody step reads `/etc/after-list.conf`.",
+    whereThingsLive: "- `/etc/after-list.conf` — runtime config",
+  });
+  assertEquals(lintDesignDoc(doc, "test.md").valid, true);
+});
