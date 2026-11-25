@@ -126,8 +126,8 @@ For UI-visible changes, pass `--screenshots "..."` (omit the flag otherwise).
   - **An Epic's child:** `Closes #N` for the child it finishes, with `Part of #<Epic>` for the parent Epic (automatically resolved from GitHub parent links).
   - **No issue:** No issue line (dependency updates, cleanup cuts).
   **Issues labeled `Josh` are manual human steps / verification runs and must never be auto-closed by an agent PR (`create-draft-pr.sh` refuses `Closes #N` on `Josh`-labeled issues and requires `--part-of`, `--local-step`, or `--no-close`, web-jam-tools#848; the label inspection fails closed if `gh` queries fail).** Pass `--no-close` (and optional `--no-close-reason` /
-  `--no-close-reason-file`) when the PR must not close the issue on merge per the rule
-  in `docs/cross-ai-rules.md`. (`--closes` is a deprecated no-op, still accepted.)
+  `--no-close-reason-file`) when the PR must not close the issue on merge per the rules
+  under "Rules moved from docs/cross-ai-rules.md" below. (`--closes` is a deprecated no-op, still accepted.)
 - `--screenshots` is for UI-visible changes only; omit the flag to omit the section.
 
 ## PR body formatting (do this every time)
