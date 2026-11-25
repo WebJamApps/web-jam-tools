@@ -17,12 +17,46 @@ const SHIM_PATH = new URL("../hooks/agy-hook-shim.sh", import.meta.url).pathname
 
 async function runHook(
   payload: { tool_name?: string; command?: string },
+  hookPath = HOOK_PATH,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const input = JSON.stringify({
     tool_name: payload.tool_name ?? "Bash",
     tool_input: payload.command ? { command: payload.command } : undefined,
   });
-  return await runPayload(input);
+  return await runPayload(input, [hookPath]);
+}
+
+const CHECKOUT_DENO_JSON = new URL("../deno.json", import.meta.url).pathname;
+const CHECKOUT_HOOKS_DIR = new URL("../hooks", import.meta.url).pathname;
+
+// Copies hooks/ into its own temporary directory, writes a deno.json ending in a
+// conflict marker at the root of that copy, hands the copied guard's path to `run`,
+// then checks the checkout's own deno.json holds the bytes it held before. No test
+// writes the checkout's own file, so another Deno process started in this checkout
+// during the run, such as a second test run beside this one, never meets a broken file.
+async function withBrokenDenoJsonHooksCopy(
+  run: (copiedHookPath: string) => Promise<void>,
+): Promise<void> {
+  const before = await Deno.readFile(CHECKOUT_DENO_JSON);
+  const dir = await Deno.makeTempDir({ prefix: "hooks-broken-deno-json-" });
+  try {
+    const copy = await new Deno.Command("cp", {
+      args: ["-R", CHECKOUT_HOOKS_DIR, `${dir}/hooks`],
+    }).output();
+    assertEquals(copy.code, 0, new TextDecoder().decode(copy.stderr));
+    await Deno.writeTextFile(
+      `${dir}/deno.json`,
+      new TextDecoder().decode(before) + "<<<<<<< HEAD\n",
+    );
+    await run(`${dir}/hooks/block-irreversible-operations.sh`);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+  assertEquals(
+    await Deno.readFile(CHECKOUT_DENO_JSON),
+    before,
+    "the checkout's own deno.json must hold the same bytes after the run",
+  );
 }
 
 async function runPayload(
@@ -401,16 +435,10 @@ Deno.test("an unterminated quote fails CLOSED (blocked)", async () => {
 // that assertion is now wrong on purpose: a repo-config parse error must no
 // longer be fatal to this guard.
 Deno.test("web-jam-tools#714: deno.json holding conflict markers does not deadlock the guard — an ordinary command still evaluates and passes through", async () => {
-  const denoJsonPath = new URL("../deno.json", import.meta.url).pathname;
-  const backupPath = denoJsonPath + ".t714-backup";
-
-  try {
-    await Deno.copyFile(denoJsonPath, backupPath);
-    // Simulate a rebase conflict landing on the version line — the exact
-    // shape described in the issue's "How to test locally" repro.
-    await Deno.writeTextFile(denoJsonPath, "<<<<<<< HEAD\n", { append: true });
-
-    const res = await runHook({ command: "git status" });
+  // A rebase conflict landing on the version line, simulated on a copy of hooks/
+  // so the checkout's own deno.json is never written.
+  await withBrokenDenoJsonHooksCopy(async (copiedHook) => {
+    const res = await runHook({ command: "git status" }, copiedHook);
 
     // An ordinary, non-irreversible command must pass through cleanly —
     // NOT be refused with "guard could not evaluate the command".
@@ -424,21 +452,12 @@ Deno.test("web-jam-tools#714: deno.json holding conflict markers does not deadlo
       false,
       `guard must not fail closed on a repo-config parse error, got: ${res.stderr}`,
     );
-  } finally {
-    await Deno.copyFile(backupPath, denoJsonPath);
-    await Deno.remove(backupPath);
-  }
+  });
 });
 
 Deno.test("web-jam-tools#714: an irreversible command is still blocked while deno.json holds conflict markers", async () => {
-  const denoJsonPath = new URL("../deno.json", import.meta.url).pathname;
-  const backupPath = denoJsonPath + ".t714-backup2";
-
-  try {
-    await Deno.copyFile(denoJsonPath, backupPath);
-    await Deno.writeTextFile(denoJsonPath, "<<<<<<< HEAD\n", { append: true });
-
-    const res = await runHook({ command: "gh repo delete owner/repo" });
+  await withBrokenDenoJsonHooksCopy(async (copiedHook) => {
+    const res = await runHook({ command: "gh repo delete owner/repo" }, copiedHook);
 
     assertEquals(
       res.code,
@@ -446,10 +465,7 @@ Deno.test("web-jam-tools#714: an irreversible command is still blocked while den
       `expected the real deny-list match to still block, got: ${res.stderr}`,
     );
     assertEquals(res.stderr.includes("BLOCKED (irreversible operation guard)"), true);
-  } finally {
-    await Deno.copyFile(backupPath, denoJsonPath);
-    await Deno.remove(backupPath);
-  }
+  });
 });
 
 // --- genuine evaluation failures (NOT a repo-config parse error) must still fail closed ---

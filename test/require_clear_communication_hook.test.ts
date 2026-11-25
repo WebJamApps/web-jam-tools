@@ -21,10 +21,10 @@ interface RunResult {
   stderr: string;
 }
 
-async function runHook(transcriptPath: string): Promise<RunResult> {
+async function runHook(transcriptPath: string, scriptPath = SCRIPT_PATH): Promise<RunResult> {
   const input = JSON.stringify({ transcript_path: transcriptPath });
   const cmd = new Deno.Command("bash", {
-    args: [SCRIPT_PATH],
+    args: [scriptPath],
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -62,6 +62,39 @@ function assistantText(
       content: [{ type: "text", text }],
     },
   };
+}
+
+const CHECKOUT_DENO_JSON = new URL("../deno.json", import.meta.url).pathname;
+const CHECKOUT_HOOKS_DIR = new URL("../hooks", import.meta.url).pathname;
+
+// Copies hooks/ into its own temporary directory, writes a deno.json ending in a
+// conflict marker at the root of that copy, hands the copied hook's path to `run`,
+// then checks the checkout's own deno.json holds the bytes it held before. No test
+// writes the checkout's own file, so another Deno process started in this checkout
+// during the run, such as a second test run beside this one, never meets a broken file.
+async function withBrokenDenoJsonHooksCopy(
+  run: (copiedHookPath: string) => Promise<void>,
+): Promise<void> {
+  const before = await Deno.readFile(CHECKOUT_DENO_JSON);
+  const dir = await Deno.makeTempDir({ prefix: "hooks-broken-deno-json-" });
+  try {
+    const copy = await new Deno.Command("cp", {
+      args: ["-R", CHECKOUT_HOOKS_DIR, `${dir}/hooks`],
+    }).output();
+    assertEquals(copy.code, 0, new TextDecoder().decode(copy.stderr));
+    await Deno.writeTextFile(
+      `${dir}/deno.json`,
+      new TextDecoder().decode(before) + "<<<<<<< HEAD\n",
+    );
+    await run(`${dir}/hooks/require-clear-communication.sh`);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+  assertEquals(
+    await Deno.readFile(CHECKOUT_DENO_JSON),
+    before,
+    "the checkout's own deno.json must hold the same bytes after the run",
+  );
 }
 
 async function withFixtureTranscript(
@@ -596,19 +629,14 @@ Deno.test("current turn contains entry with text block and trailing tool_use blo
 // Prove that holds even while the repo deno.json is unparseable.
 
 Deno.test("web-jam-tools#714: still detects a violation while deno.json holds conflict markers", async () => {
-  const denoJsonPath = new URL("../deno.json", import.meta.url).pathname;
-  const backupPath = denoJsonPath + ".t714-backup";
   const entries = [
     userTurn("what should I do"),
     assistantText("Should I dispatch the Sonnet agent now? Should I also open the issue?"),
   ];
 
-  try {
-    await Deno.copyFile(denoJsonPath, backupPath);
-    await Deno.writeTextFile(denoJsonPath, "<<<<<<< HEAD\n", { append: true });
-
+  await withBrokenDenoJsonHooksCopy(async (copiedHook) => {
     await withFixtureTranscript(entries, async (path) => {
-      const res = await runHook(path);
+      const res = await runHook(path, copiedHook);
       assertEquals(
         res.code,
         2,
@@ -616,32 +644,22 @@ Deno.test("web-jam-tools#714: still detects a violation while deno.json holds co
       );
       assertBlocked(res.stderr);
     });
-  } finally {
-    await Deno.copyFile(backupPath, denoJsonPath);
-    await Deno.remove(backupPath);
-  }
+  });
 });
 
 Deno.test("web-jam-tools#714: a clean reply still passes through while deno.json holds conflict markers", async () => {
-  const denoJsonPath = new URL("../deno.json", import.meta.url).pathname;
-  const backupPath = denoJsonPath + ".t714-backup2";
   const entries = [
     userTurn("what should I do"),
     assistantText("Done — everything is green."),
   ];
 
-  try {
-    await Deno.copyFile(denoJsonPath, backupPath);
-    await Deno.writeTextFile(denoJsonPath, "<<<<<<< HEAD\n", { append: true });
-
+  await withBrokenDenoJsonHooksCopy(async (copiedHook) => {
     await withFixtureTranscript(entries, async (path) => {
-      const res = await runHook(path);
+      const res = await runHook(path, copiedHook);
       assertEquals(res.code, 0, res.stderr);
+      assertEquals(res.stdout.trim(), "");
     });
-  } finally {
-    await Deno.copyFile(backupPath, denoJsonPath);
-    await Deno.remove(backupPath);
-  }
+  });
 });
 
 // --- Codex Stop payload tests (web-jam-tools#1139) ---
