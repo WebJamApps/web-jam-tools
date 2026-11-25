@@ -126,8 +126,8 @@ For UI-visible changes, pass `--screenshots "..."` (omit the flag otherwise).
   - **An Epic's child:** `Closes #N` for the child it finishes, with `Part of #<Epic>` for the parent Epic (automatically resolved from GitHub parent links).
   - **No issue:** No issue line (dependency updates, cleanup cuts).
   **Issues labeled `Josh` are manual human steps / verification runs and must never be auto-closed by an agent PR (`create-draft-pr.sh` refuses `Closes #N` on `Josh`-labeled issues and requires `--part-of`, `--local-step`, or `--no-close`, web-jam-tools#848; the label inspection fails closed if `gh` queries fail).** Pass `--no-close` (and optional `--no-close-reason` /
-  `--no-close-reason-file`) when the PR must not close the issue on merge per the rule
-  in `docs/cross-ai-rules.md`. (`--closes` is a deprecated no-op, still accepted.)
+  `--no-close-reason-file`) when the PR must not close the issue on merge per the rules
+  under "Rules moved from docs/cross-ai-rules.md" below. (`--closes` is a deprecated no-op, still accepted.)
 - `--screenshots` is for UI-visible changes only; omit the flag to omit the section.
 
 ## PR body formatting (do this every time)
@@ -245,6 +245,63 @@ the same next version — re-read `origin/dev` and take the next free one when C
 gate complains.
 
 **How to apply:** Bump once when the PR's first commit lands. On later pushes to the same branch/PR, leave the version unchanged (the hook reminder is satisfied by the already-bumped version). Only bump again for a genuinely separate PR. If a PR has already over-bumped, reset it to a single bump (correcting an unmerged version is fine — not a published downgrade). Relates to the never-commit-to-dev and git-feature-branch-and-semver rules.
+
+## Rules moved from docs/cross-ai-rules.md
+
+These rules moved here word for word from `docs/cross-ai-rules.md`; they apply only to this skill's work.
+
+- **MULTI-REPO ISSUES STAY OPEN UNTIL ALL REPOS ARE COMPLETE:** When an issue explicitly covers
+  multiple repositories (e.g. "all 8 active github repos"), no single PR in one repository may pass
+  `--closes` or claim the issue is completed. PRs in individual repos must use `--part-of` so the
+  tracking issue remains OPEN until the final repository's PR is merged.
+
+- **A PR FOR A HOOK ISSUE NEVER CLOSES THE ISSUE.** Replaced by the canonical design document
+  `/home/joshua/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md`
+  (revision 2.14.0) in the sections "Manual Steps & Runbooks" and "How a pull request names its issue".
+  Hooks, skills and scripts are links into the canonical clone and close on merge once dev is pulled,
+  unless an installer write or laptop step is required, in which case the PR passes `--local-step`
+  (`Part of #N (local step after merge)`).
+
+## FE/BE COUPLING (web-jam-tools#240 "dispatching to sub-agents  -  part two improvements")
+
+### Backward-compat / expand-contract rule
+
+A back-end change to a shared contract (a required field, a validation rule, a request/response
+shape that a front-end consumes) MUST be additive/non-breaking until the front-end ships — enforce
+the breaking part in a LATER change.
+
+Right order for the venue example:
+
+1. BE accepts venues without an address (unchanged/additive).
+2. FE is updated to collect/require the address.
+3. THEN BE enforces the address as required.
+
+Enforcing the new required field before the FE sends it is exactly what broke prod — never skip
+straight to step 3.
+
+### Coupling record convention
+
+When work has coupled BE + FE halves, cross-reference them with a `FE-couples: <repo>#NNN` line in
+the issue/PR bodies — bidirectional, each half names the other (the FE issue/PR gets a matching
+pointer back to the BE one).
+
+### Coupling-override convention
+
+A coupled BE PR that is genuinely safe to ship alone (backward-compatible per the expand-contract
+rule above, or behind a flag) carries a `Coupling-override: <reason>` line in the PR body to pass
+the merge gate. Example:
+
+```
+Coupling-override: additive only — address stays optional until JaMmusic#NNN ships
+```
+
+### Merge gate (summary)
+
+A coupled BE change must reach `main` via a `dev→main` PR; a required status check verifies the FE
+half is merged to the FE repo's `main` (≈ deployed, given auto-deploy fan-out) OR a valid
+`Coupling-override:` line is present. Direct CLI pushes to `main` stay fine for UNcoupled changes.
+The enforcement Action itself lives in the web-jam-back repo (a separate build, out of scope here) —
+this section is the canonical rule text and conventions that Action enforces.
 
 ## Description Detail & Triggers
 

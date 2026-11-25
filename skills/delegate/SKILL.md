@@ -156,7 +156,7 @@ the subagent has to self-police.
 > The coupled BE change must reach `main` via a `dev→main` PR (the merge-gate
 > check blocks direct promotion until FE #NNN is merged to its `main`).
 
-See `docs/cross-ai-rules.md` § FE/BE COUPLING for the full rule (backward-compat/
+See `skills/draft-pr/SKILL.md` § FE/BE COUPLING for the full rule (backward-compat/
 expand-contract, the `FE-couples:`/`Coupling-override:` conventions, and the
 merge gate) — this is the decision point where a parent session must catch it,
 before either lane is sent off.
@@ -284,7 +284,7 @@ so skip the whole mechanism.
 
 If the change touches a shared BE/FE contract (a required field, a validation
 rule, or a request/response shape a front-end consumes), it must stay
-additive/non-breaking until the front-end ships — see `docs/cross-ai-rules.md`
+additive/non-breaking until the front-end ships — see `skills/draft-pr/SKILL.md`
 § FE/BE COUPLING for the full expand-contract rule and the venue-address
 example of what breaks when it's skipped.
 

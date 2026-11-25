@@ -19,9 +19,9 @@ rules and do not reconstruct them from memory or from this file.
   at, tier order across model labels, how work hands off, and where Josh approves.
 - [docs/cross-ai-rules.md](docs/cross-ai-rules.md) — cross-AI operational rules (voice rules, file
   placement, protected files, canonical task queues, memory hygiene) that apply to every AI on the
-  team. Its **FE/BE COUPLING** section covers the backward-compat/expand-contract rule for shared
-  BE/FE contracts and the `FE-couples:`/`Coupling-override:` conventions — read it before shipping a
-  front-end half of coupled work.
+  team. The **FE/BE COUPLING** rules (backward-compat/expand-contract for shared BE/FE contracts,
+  the `FE-couples:`/`Coupling-override:` conventions) now live in `skills/draft-pr/SKILL.md` — read
+  them before shipping a front-end half of coupled work.
 - [docs/playwright-mcp.md](docs/playwright-mcp.md) — setup and operational guidelines for using
   Playwright MCP server (`@playwright/mcp`) to debug production websites.
 - [docs/agy-hooks.md](docs/agy-hooks.md) — the agy (Antigravity/Flash) PreToolUse/PostToolUse hook

@@ -1,7 +1,8 @@
 // hook_issue_pr_no_close_rule.test.ts — web-jam-tools#662, web-jam-tools#1614
 //
-// Asserts that docs/cross-ai-rules.md and skills/draft-pr/SKILL.md point to the canonical
-// design document for hook issue PR closing behavior and local-step requirements.
+// Asserts that skills/draft-pr/SKILL.md (which holds the hook issue rule moved from
+// docs/cross-ai-rules.md) points to the canonical design document for hook issue PR closing
+// behavior and local-step requirements.
 
 import { assert, assertFalse, assertStringIncludes } from "@std/assert";
 
@@ -17,8 +18,8 @@ Deno.test("docs/cross-ai-rules.md exists and can be read", async () => {
   assert(content.length > 0, "docs/cross-ai-rules.md is empty");
 });
 
-Deno.test("docs/cross-ai-rules.md points to canonical design for hook issue PR closing behavior", async () => {
-  const rawContent = await Deno.readTextFile(CROSS_AI_RULES_PATH);
+Deno.test("skills/draft-pr/SKILL.md carries the hook issue rule and points to the canonical design", async () => {
+  const rawContent = await Deno.readTextFile(DRAFT_PR_SKILL_PATH);
   const normalized = normalizeWhitespace(rawContent);
 
   // Rule heading
