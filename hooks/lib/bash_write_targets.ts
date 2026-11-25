@@ -29,9 +29,11 @@
  * symlink is judged differently by each. A redirect, `tee`, `cp`, `truncate`, `dd` and a script's
  * open-and-write write through a link to the file it points at (`targets`). `sed -i` (unless
  * `--follow-symlinks`), `perl -i`, `mv`, `install`, `cp --remove-destination` and a script's
- * `rename` replace the link itself in the folder that holds it (`replacedEntries`). A destination
- * of `mv`, `install` or `cp --remove-destination` without `-T` lands inside it instead when it is a
- * directory, which only the filesystem can tell at the time, so it is listed both ways.
+ * `rename` replace the link itself in the folder that holds it (`replacedEntries`). A move (`mv`, a
+ * script's `rename`) changes the entries at both ends, so its sources are replaced entries too. A
+ * destination of `cp`, `mv` or `install` that is a directory when the command is read (a link to
+ * one included), or named by `-t`, gains a new entry inside it instead, so it is written through;
+ * `-T` rules that out. Only when the filesystem cannot say is a destination listed both ways.
  *
  * Known gaps (allowed, on purpose or for now):
  *   - a script file run by an interpreter (`python3 fix.py`, `deno run x.ts`, `node x.js`): its code is
@@ -227,37 +229,55 @@ export function scriptWriteTargets(
       ? variable.start < before ? variable.path : null
       : scriptPath(expression, invocation);
   };
+  /** The call's arguments from just after its "(": each a top-level comma-separated expression. */
+  const callArguments = (start: number, count: number) => {
+    const args: ScriptToken[][] = [[]];
+    let nesting = 0;
+    for (const token of tokens.filter((token) => token.start >= start)) {
+      if (nesting === 0 && [")", ";"].includes(token.text)) break;
+      if (nesting === 0 && token.text === ",") {
+        if (args.length === count) break;
+        args.push([]);
+        continue;
+      }
+      if (["(", "["].includes(token.text)) nesting++;
+      if ([")", "]"].includes(token.text)) nesting--;
+      args.at(-1)!.push(token);
+    }
+    return args;
+  };
+  const record = (literal: string | null, entry: boolean) => {
+    const resolved = literal !== null ? resolvePath(literal, cwd, home) : null;
+    if (resolved && entry && replaced) replaced(resolved);
+    else if (resolved) targets.push(resolved);
+    else if (unknown) unknown(cwd);
+    else if (cwd !== null) targets.push(cwd);
+  };
   for (const pattern of SCRIPT_WRITES) {
     pattern.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(code))) {
       // A write-looking string/comment is data, not a call.
       if (!tokens.some((token) => token.start === match!.index)) continue;
+      const argumentsStart = match.index + match[0].indexOf("(") + 1;
+      // A rename moves both named entries themselves, a symlink included, never the file it points
+      // at: the source's entry is removed and the destination's is replaced.
+      if (/^(?:Deno\.)?rename(?:Sync)?\(/.test(match[0])) {
+        const [source = [], destination = []] = callArguments(argumentsStart, 2);
+        record(expressionPath(source, match.index), true);
+        record(expressionPath(destination, match.index), true);
+        continue;
+      }
       let literal: string | null = match[2] ?? null;
       if (literal === null && pattern !== SCRIPT_WRITES[2]) {
         if (pattern === SCRIPT_WRITES[1]) {
           const receiver = match[0].slice(0, match[0].indexOf(".write_"));
           literal = expressionPath(scriptTokens(receiver), match.index);
         } else {
-          const start = match.index + match[0].indexOf("(") + 1;
-          const expression: ScriptToken[] = [];
-          let nesting = 0;
-          for (const token of tokens.filter((token) => token.start >= start)) {
-            if (nesting === 0 && [",", ")", ";"].includes(token.text)) break;
-            if (["(", "["].includes(token.text)) nesting++;
-            if ([")", "]"].includes(token.text)) nesting--;
-            expression.push(token);
-          }
-          literal = expressionPath(expression, match.index);
+          literal = expressionPath(callArguments(argumentsStart, 1)[0], match.index);
         }
       }
-      const resolved = literal !== null ? resolvePath(literal, cwd, home) : null;
-      // A rename moves the named entry itself, a symlink included, never the file it points at.
-      if (resolved && replaced && /^(?:Deno\.)?rename(?:Sync)?\(/.test(match[0])) {
-        replaced(resolved);
-      } else if (resolved) targets.push(resolved);
-      else if (unknown) unknown(cwd);
-      else if (cwd !== null) targets.push(cwd);
+      record(literal, false);
     }
   }
   return [...new Set(targets)];
@@ -409,8 +429,188 @@ interface ArgvResult {
   nested?: string;
 }
 
-/** `-T` / `--no-target-directory`: the destination is never a folder to land inside. */
-const NO_TARGET_DIRECTORY = /^(?:--no-target-directory|-[A-Za-z]*T[A-Za-z]*)$/;
+/**
+ * The GNU long options of `cp`, `mv` and `install`, each with whether it takes its value from the
+ * next argument when no `=` is given. getopt accepts any unambiguous prefix of a long option, so a
+ * prefix is matched against the whole list for that command.
+ */
+const LONG_OPTIONS: Record<string, Record<string, boolean>> = {
+  cp: Object.fromEntries([
+    ...[
+      "archive",
+      "attributes-only",
+      "backup",
+      "context",
+      "copy-contents",
+      "debug",
+      "dereference",
+      "force",
+      "help",
+      "interactive",
+      "keep-directory-symlink",
+      "link",
+      "no-clobber",
+      "no-dereference",
+      "no-target-directory",
+      "one-file-system",
+      "parents",
+      "preserve",
+      "recursive",
+      "reflink",
+      "remove-destination",
+      "strip-trailing-slashes",
+      "symbolic-link",
+      "update",
+      "verbose",
+      "version",
+    ].map((option) => [option, false]),
+    ...["no-preserve", "sparse", "suffix", "target-directory"].map((option) => [option, true]),
+  ]),
+  mv: Object.fromEntries([
+    ...[
+      "backup",
+      "context",
+      "debug",
+      "exchange",
+      "force",
+      "help",
+      "interactive",
+      "no-clobber",
+      "no-copy",
+      "no-target-directory",
+      "strip-trailing-slashes",
+      "update",
+      "verbose",
+      "version",
+    ].map((option) => [option, false]),
+    ...["suffix", "target-directory"].map((option) => [option, true]),
+  ]),
+  install: Object.fromEntries([
+    ...[
+      "backup",
+      "compare",
+      "context",
+      "debug",
+      "directory",
+      "help",
+      "no-target-directory",
+      "preserve-context",
+      "preserve-timestamps",
+      "strip",
+      "verbose",
+      "version",
+    ].map((option) => [option, false]),
+    ...["group", "mode", "owner", "strip-program", "suffix", "target-directory"].map((
+      option,
+    ) => [option, true]),
+  ]),
+};
+
+/** Short options of `cp`, `mv` and `install` that take a value, attached or in the next argument. */
+const SHORT_VALUE_OPTIONS: Record<string, string> = { cp: "St", mv: "St", install: "Stmog" };
+
+interface CopyMoveCommand {
+  operands: string[];
+  targetDirectory?: string;
+  noTargetDirectory: boolean;
+  removeDestination: boolean;
+  exchange: boolean;
+}
+
+/**
+ * Reads a `cp`, `mv` or `install` argv the way getopt does, so an operand or an option's value
+ * (`-S -T`, `-- -T`, `--suffix=--remove-destination`) never sets a mode flag.
+ */
+function parseCopyMove(name: string, args: string[]): CopyMoveCommand {
+  const longs = LONG_OPTIONS[name];
+  const shortValues = SHORT_VALUE_OPTIONS[name];
+  const parsed: CopyMoveCommand = {
+    operands: [],
+    noTargetDirectory: false,
+    removeDestination: false,
+    exchange: false,
+  };
+  const set = (option: string, value?: string) => {
+    if (option === "T" || option === "no-target-directory") parsed.noTargetDirectory = true;
+    else if (option === "t" || option === "target-directory") parsed.targetDirectory = value;
+    else if (option === "remove-destination") parsed.removeDestination = true;
+    else if (option === "exchange") parsed.exchange = true;
+  };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--") {
+      parsed.operands.push(...args.slice(i + 1));
+      break;
+    }
+    if (a.startsWith("--")) {
+      const eq = a.indexOf("=");
+      const given = eq < 0 ? a.slice(2) : a.slice(2, eq);
+      const matches = Object.keys(longs).filter((option) => option.startsWith(given));
+      const option = matches.includes(given) ? given : matches.length === 1 ? matches[0] : null;
+      if (option === null) continue;
+      set(option, eq >= 0 ? a.slice(eq + 1) : longs[option] ? args[++i] : undefined);
+      continue;
+    }
+    if (a.startsWith("-") && a !== "-") {
+      for (let j = 1; j < a.length; j++) {
+        if (shortValues.includes(a[j])) {
+          set(a[j], j + 1 < a.length ? a.slice(j + 1) : args[++i]);
+          break;
+        }
+        set(a[j]);
+      }
+      continue;
+    }
+    parsed.operands.push(a);
+  }
+  return parsed;
+}
+
+/**
+ * Whether a destination is a folder the command lands inside: true for a directory (a symlink to
+ * one included, since cp, mv and install follow it), false for anything else or nothing there, and
+ * null when the filesystem cannot say.
+ */
+function isDirectoryNow(path: string): boolean | null {
+  try {
+    return Deno.statSync(path).isDirectory;
+  } catch (error) {
+    return error instanceof Deno.errors.NotFound || error instanceof Deno.errors.NotADirectory
+      ? false
+      : null;
+  }
+}
+
+/**
+ * `cp`, `mv` and `install`. A destination folder (`-t`, or a last operand that is a directory and
+ * not ruled out by `-T`) gains a new entry inside the folder it resolves to, so it is written
+ * through. Otherwise the destination's own entry is written: through it by plain `cp`, replacing it
+ * by `mv`, `install` and `cp --remove-destination`. A move also removes each source's entry, so
+ * those are replaced entries too. When the filesystem cannot say whether the destination is a
+ * folder, it is listed both ways.
+ */
+function copyMoveTargets(
+  name: string,
+  args: string[],
+  resolveAll: (paths: string[]) => string[],
+): ArgvResult {
+  const parsed = parseCopyMove(name, args);
+  const toFolder = parsed.targetDirectory !== undefined;
+  const sources = toFolder ? parsed.operands : parsed.operands.slice(0, -1);
+  const destinationWord = toFolder ? parsed.targetDirectory : parsed.operands.at(-1);
+  if (destinationWord === undefined || sources.length === 0) return { targets: [] };
+  const movedSources = name === "mv" ? resolveAll(sources) : [];
+  const [destination] = resolveAll([destinationWord]);
+  if (destination === undefined) return { targets: [], entries: movedSources };
+  const replaces = name !== "cp" || parsed.removeDestination;
+  const folder = toFolder ? true : parsed.noTargetDirectory ? false : isDirectoryNow(destination);
+  // An exchange swaps the destination's own entry, a folder included.
+  const entryReplaced = replaces && (folder !== true || parsed.exchange);
+  return {
+    targets: folder !== false || !replaces ? [destination] : [],
+    entries: [...(entryReplaced ? [destination] : []), ...movedSources],
+  };
+}
 
 /** Targets named by one resolved argv (wrappers already peeled). */
 function argvTargets(
@@ -463,25 +663,8 @@ function argvTargets(
     }
     case "cp":
     case "mv":
-    case "install": {
-      const targetFlag = args.findIndex((a) => a === "-t" || a.startsWith("--target-directory"));
-      if (targetFlag >= 0) {
-        const flag = args[targetFlag];
-        const dir = flag.includes("=") ? flag.slice(flag.indexOf("=") + 1) : args[targetFlag + 1];
-        return { targets: dir ? resolveAll([dir]) : [] };
-      }
-      const positional = nonOptionArgs(args, new Set(["-S", "--suffix", "-m", "-o", "-g"]));
-      const destination = positional.length >= 2 ? resolveAll(positional.slice(-1)) : [];
-      // mv renames over the destination and install removes it first, so a symlink there is
-      // replaced; plain cp opens it and writes through to the file it points at.
-      if (name === "cp" && !args.includes("--remove-destination")) {
-        return { targets: destination };
-      }
-      return {
-        targets: args.some((a) => NO_TARGET_DIRECTORY.test(a)) ? [] : destination,
-        entries: destination,
-      };
-    }
+    case "install":
+      return copyMoveTargets(name, args, resolveAll);
     case "truncate":
       return { targets: resolveAll(nonOptionArgs(args, new Set(["-s", "-r"]))) };
     case "dd":

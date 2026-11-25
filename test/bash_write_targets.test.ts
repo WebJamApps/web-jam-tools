@@ -210,7 +210,7 @@ Deno.test("bashWriteTargets: in-place editors, copies, moves and patches", () =>
   assertEquals(targets("perl -MFile::Spec -ne 'print' a.ts"), []);
   assertEquals(targets("perl -e 'open(F, \">o\")'"), ["/repo/o"]);
   assertEquals(targets("cp -r a b/c"), ["/repo/b/c"]);
-  assertEquals(targets("mv -t dest a b"), ["/repo/dest"]);
+  assertEquals(targets("mv -t dest a b"), ["/repo/dest", "/repo/a", "/repo/b"]);
   assertEquals(targets("install --target-directory=/tmp/d a"), ["/tmp/d"]);
   assertEquals(targets("install -m 755 a /usr/local/bin/a"), ["/usr/local/bin/a"]);
   assertEquals(targets("cp onlyone"), []);
@@ -241,15 +241,25 @@ Deno.test("analyzeBashWrites: a write that replaces the entry is kept apart from
     targets: ["/repo/o"],
     replacedEntries: ["/repo/a.ts"],
   });
-  // A destination may be a folder the file lands inside, unless -T says it is not.
-  assertEquals(split("mv a b"), either("/repo/b"));
-  assertEquals(split("install -m 755 a b"), either("/repo/b"));
-  assertEquals(split("cp --remove-destination a b"), either("/repo/b"));
-  assertEquals(split("mv -T a b"), replaced("/repo/b"));
-  assertEquals(split("mv -fT a b"), replaced("/repo/b"));
+  // A destination that is not a folder has its own entry replaced; a move removes its sources too.
+  assertEquals(split("mv a b"), replaced("/repo/b", "/repo/a"));
+  assertEquals(split("install -m 755 a b"), replaced("/repo/b"));
+  assertEquals(split("cp --remove-destination a b"), replaced("/repo/b"));
+  assertEquals(split("mv -T a b"), replaced("/repo/b", "/repo/a"));
+  assertEquals(split("mv -fT a b"), replaced("/repo/b", "/repo/a"));
   assertEquals(split("cp --no-target-directory --remove-destination a b"), replaced("/repo/b"));
-  assertEquals(split("mv -t dest a"), through("/repo/dest"));
+  assertEquals(split("mv -t dest a"), { targets: ["/repo/dest"], replacedEntries: ["/repo/a"] });
   assertEquals(split("cp a b"), through("/repo/b"));
+  // Mode flags come from parsed options, never from an operand or an option's value.
+  assertEquals(split("cp -S --remove-destination a b"), through("/repo/b"));
+  assertEquals(split("cp --suffix=--remove-destination a b"), through("/repo/b"));
+  assertEquals(split("cp -- a --remove-destination"), through("/repo/--remove-destination"));
+  assertEquals(split("cp --remove-d a b"), replaced("/repo/b"));
+  assertEquals(split("mv -S -T a b"), replaced("/repo/b", "/repo/a"));
+  assertEquals(split("mv -- -T b"), replaced("/repo/b", "/repo/-T"));
+  assertEquals(split("install -m -T a b"), replaced("/repo/b"));
+  assertEquals(split("mv -fta dest"), { targets: ["/repo/a"], replacedEntries: ["/repo/dest"] });
+  assertEquals(split("mv --target=d a"), { targets: ["/repo/d"], replacedEntries: ["/repo/a"] });
   assertEquals(
     split("printf x > link.ts; tee t < x; truncate -s 0 u"),
     through(
@@ -258,12 +268,63 @@ Deno.test("analyzeBashWrites: a write that replaces the entry is kept apart from
       "/repo/u",
     ),
   );
-  assertEquals(split(`node -e "fs.renameSync('old', x)"`), replaced("/repo/old"));
-  assertEquals(split(`deno eval "Deno.renameSync('old', x)"`), replaced("/repo/old"));
+  // A script rename replaces both entries; an unnamed one keeps its folder as unknown.
+  assertEquals(split(`node -e "fs.renameSync('old', 'new')"`), replaced("/repo/old", "/repo/new"));
+  assertEquals(
+    split(`deno eval "Deno.renameSync('old', 'sub/new')"`),
+    replaced("/repo/old", "/repo/sub/new"),
+  );
+  assertEquals(
+    analyzeBashWrites(`node -e "fs.renameSync('old', x)"`, { cwd: CWD, home: HOME }),
+    { targets: [], replacedEntries: ["/repo/old"], unknownFiles: [CWD], unknownDirectory: false },
+  );
   assertEquals(split(`bash -c "sed -i s/a/b/ n.ts"`), replaced("/repo/n.ts"));
   // A path written through and replaced in one command is listed both ways.
   assertEquals(split("echo x > f; sed -i s/a/b/ f"), either("/repo/f"));
   assertEquals(targets("echo x > f; sed -i s/a/b/ g"), ["/repo/f", "/repo/g"]);
+});
+
+Deno.test("analyzeBashWrites: a destination is a folder only when the filesystem says so (symlink to a file, to a folder)", async () => {
+  const root = await Deno.makeTempDir({ prefix: "bash-write-dest-" });
+  try {
+    await Deno.mkdir(`${root}/dir`);
+    await Deno.writeTextFile(`${root}/file`, "");
+    await Deno.symlink(`${root}/file`, `${root}/to-file`);
+    await Deno.symlink(`${root}/dir`, `${root}/to-dir`);
+    const split = (command: string) => {
+      const { targets, replacedEntries } = analyzeBashWrites(command, { cwd: root, home: HOME });
+      return { targets, replacedEntries };
+    };
+    for (const name of ["mv", "install", "cp --remove-destination"]) {
+      const moved = name === "mv" ? [`${root}/a`] : [];
+      // A link to a file is itself replaced, never written through.
+      assertEquals(split(`${name} a to-file`), {
+        targets: [],
+        replacedEntries: [`${root}/to-file`, ...moved],
+      }, name);
+      // A link to a folder (or the folder) gains a new entry inside the folder it points to.
+      assertEquals(split(`${name} a to-dir`), {
+        targets: [`${root}/to-dir`],
+        replacedEntries: moved,
+      });
+      assertEquals(split(`${name} a dir`), { targets: [`${root}/dir`], replacedEntries: moved });
+      // -T names the link's own entry even when it points to a folder.
+      assertEquals(split(`${name} -T a to-dir`), {
+        targets: [],
+        replacedEntries: [`${root}/to-dir`, ...moved],
+      }, name);
+    }
+    // Plain cp writes through the link either way.
+    assertEquals(split("cp a to-file"), { targets: [`${root}/to-file`], replacedEntries: [] });
+    assertEquals(split("cp a to-dir"), { targets: [`${root}/to-dir`], replacedEntries: [] });
+    // An exchange swaps the destination entry, a folder included.
+    assertEquals(split("mv --exchange a to-dir"), {
+      targets: [`${root}/to-dir`],
+      replacedEntries: [`${root}/to-dir`, `${root}/a`],
+    });
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
 });
 
 Deno.test("bashWriteTargets: interpreters, nesting, wrappers and cd", () => {

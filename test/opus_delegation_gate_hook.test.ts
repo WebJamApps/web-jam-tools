@@ -846,6 +846,8 @@ Deno.test("task grants through the shell: a write is judged where it lands throu
     await Deno.writeTextFile(`${root}/outside/target.txt`, "");
     await Deno.symlink(`${root}/outside/target.txt`, `${root}/music/src/to-outside.txt`);
     await Deno.symlink(`${root}/outside/target.txt`, `${root}/tools/src/to-outside.txt`);
+    // A link kept in the task's repository that points to a regular file in another repository.
+    await Deno.symlink(`${root}/music/src/b.ts`, `${root}/tools/src/to-music.ts`);
 
     const lines = [
       userTurn("/fix-pr https://github.com/WebJamApps/web-jam-tools/pull/5"),
@@ -889,6 +891,34 @@ Deno.test("task grants through the shell: a write is judged where it lands throu
       assertDenied(
         (await bash(`sed --follow-symlinks -i 's/a/b/' ${root}/outside/to-music.ts`)).stdout,
       );
+
+      // A move changes the entries at both ends, so each must stay in the task's repository.
+      const musicFile = `${root}/music/src/b.ts`;
+      assertAllowed(await bash("mv src/a.ts src/a2.ts"));
+      assertDenied((await bash(`mv src/a.ts ${root}/music/src/new.ts`)).stdout);
+      assertDenied((await bash(`mv ${musicFile} src/b.ts`)).stdout);
+      assertDenied((await bash(`mv -t src ${musicFile}`)).stdout);
+      assertAllowed(await bash(`mv ${root}/outside/plain.txt src/plain.txt`));
+      const rename = (from: string, to: string) =>
+        bash(`node -e "require('fs').renameSync('${from}', '${to}')"`);
+      assertAllowed(await rename("src/a.ts", "src/a2.ts"));
+      assertDenied((await rename("src/a.ts", `${root}/music/src/new.ts`)).stdout);
+      assertDenied((await rename(musicFile, "src/b.ts")).stdout);
+      assertDenied(
+        (await bash(`deno eval "Deno.renameSync('${musicFile}', 'src/b.ts')"`)).stdout,
+      );
+
+      // The destination check follows the operation: a link to a regular file is itself replaced,
+      // and a link to a folder gains a new entry inside the folder it points to unless -T.
+      for (
+        const command of ["mv src/a.ts", "install src/a.ts", "cp --remove-destination src/a.ts"]
+      ) {
+        assertAllowed(await bash(`${command} src/to-music.ts`));
+        assertDenied((await bash(`${command} music-dir`)).stdout);
+        assertAllowed(await bash(`${command.replace(" ", " -T ")} music-dir`));
+      }
+      // Plain cp writes through a link to a file, into the repository it points to.
+      assertDenied((await bash("cp src/a.ts src/to-music.ts")).stdout);
     });
   } finally {
     await Deno.remove(root, { recursive: true });
