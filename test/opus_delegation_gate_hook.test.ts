@@ -851,6 +851,9 @@ Deno.test("task grants through the shell: a write is judged where it lands throu
     // A folder in the task's repository whose existing child entry links into another repository.
     await Deno.mkdir(`${root}/tools/drop`);
     await Deno.symlink(`${root}/music/src/b.ts`, `${root}/tools/drop/a.ts`);
+    // A folder in the task's repository whose "src" subfolder links into another repository.
+    await Deno.mkdir(`${root}/tools/drop2`);
+    await Deno.symlink(`${root}/music/src`, `${root}/tools/drop2/src`);
 
     const lines = [
       userTurn("/fix-pr https://github.com/WebJamApps/web-jam-tools/pull/5"),
@@ -932,6 +935,12 @@ Deno.test("task grants through the shell: a write is judged where it lands throu
       for (const command of ["mv", "install", "cp --remove-destination"]) {
         assertAllowed(await bash(`${command} src/a.ts drop`));
       }
+      // GNU cp --parents keeps the nested source path beneath the folder, so drop/src/a.ts (new,
+      // in this repository) is written rather than drop/a.ts, and drop2/src/a.ts lands through
+      // drop2's link into the other repository. Without --parents the two layouts swap.
+      assertAllowed(await bash("cp --parents src/a.ts drop"));
+      assertDenied((await bash("cp --parents src/a.ts drop2")).stdout);
+      assertAllowed(await bash("cp src/a.ts drop2"));
     });
   } finally {
     await Deno.remove(root, { recursive: true });

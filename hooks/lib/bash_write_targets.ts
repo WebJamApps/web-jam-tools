@@ -515,6 +515,8 @@ interface CopyMoveCommand {
   noTargetDirectory: boolean;
   removeDestination: boolean;
   exchange: boolean;
+  /** GNU `cp --parents`: each source keeps its whole path beneath the destination folder. */
+  parents: boolean;
 }
 
 /**
@@ -529,12 +531,14 @@ function parseCopyMove(name: string, args: string[]): CopyMoveCommand {
     noTargetDirectory: false,
     removeDestination: false,
     exchange: false,
+    parents: false,
   };
   const set = (option: string, value?: string) => {
     if (option === "T" || option === "no-target-directory") parsed.noTargetDirectory = true;
     else if (option === "t" || option === "target-directory") parsed.targetDirectory = value;
     else if (option === "remove-destination") parsed.removeDestination = true;
     else if (option === "exchange") parsed.exchange = true;
+    else if (option === "parents") parsed.parents = true;
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -583,7 +587,8 @@ function isDirectoryNow(path: string): boolean | null {
 
 /**
  * `cp`, `mv` and `install`. Into a destination folder (`-t`, or a last operand that is a directory
- * and not ruled out by `-T`) each source writes the child entry `<folder>/<its name>`: through it by
+ * and not ruled out by `-T`) each source writes the child entry `<folder>/<its name>` (with
+ * `cp --parents`, `<folder>/<its whole path>`): through it by
  * plain `cp`, replacing it by `mv`, `install` and `cp --remove-destination`. Otherwise the
  * destination's own entry is written the same way. A move also removes each source's entry, so
  * those are replaced entries too. When the filesystem cannot say whether the destination is a
@@ -604,15 +609,17 @@ function copyMoveTargets(
   if (destination === undefined) return { targets: [], entries: movedSources };
   const replaces = name !== "cp" || parsed.removeDestination;
   const folder = toFolder ? true : parsed.noTargetDirectory ? false : isDirectoryNow(destination);
-  // Inside a folder each source lands at <folder>/<its name>, an entry that may already be a
-  // symlink elsewhere. A name that is not literal leaves only the folder itself known.
+  // Inside a folder each source lands at <folder>/<its name>, or <folder>/<its whole path> with
+  // `cp --parents`: an entry that may already be a symlink elsewhere. A name that is not literal
+  // leaves only the folder itself known.
   const folderPath = destination.replace(/\/+$/, "") || "/";
   const inside: Required<Pick<ArgvResult, "targets" | "entries">> = { targets: [], entries: [] };
   for (const source of sources) {
-    const base = source.replace(/\/+$/, "").split("/").pop() ?? "";
-    if (!base || base === "." || base === ".." || /[$`*?[\]{}]/.test(base)) {
+    const trimmed = source.replace(/\/+$/, "");
+    const child = parsed.parents ? trimmed.replace(/^\/+/, "") : trimmed.split("/").pop() ?? "";
+    if (!child || child === "." || child === ".." || /[$`*?[\]{}]/.test(child)) {
       inside.targets.push(destination);
-    } else (replaces ? inside.entries : inside.targets).push(`${folderPath}/${base}`);
+    } else (replaces ? inside.entries : inside.targets).push(`${folderPath}/${child}`);
   }
   // An exchange swaps the destination's own entry, a folder included.
   if (parsed.exchange) inside.entries.push(destination);

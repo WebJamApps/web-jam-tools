@@ -262,6 +262,19 @@ Deno.test("analyzeBashWrites: a write that replaces the entry is kept apart from
   assertEquals(split("mv --target=d a"), replaced("/repo/d/a", "/repo/a"));
   // A source whose name is not literal leaves only the folder known; a trailing slash is dropped.
   assertEquals(split("cp -t dest $F sub/x/"), through("/repo/dest", "/repo/dest/x"));
+  // GNU cp --parents keeps each source's whole path beneath the folder; without it, only the name.
+  assertEquals(split("cp -t dest src/x/a.ts"), through("/repo/dest/a.ts"));
+  assertEquals(split("cp --parents -t dest src/x/a.ts"), through("/repo/dest/src/x/a.ts"));
+  assertEquals(split("cp --parents -t dest /abs/a.ts"), through("/repo/dest/abs/a.ts"));
+  assertEquals(
+    split("cp --parent --remove-destination -t dest src/x/a.ts"),
+    replaced("/repo/dest/src/x/a.ts"),
+  );
+  // mv has no --parents, so the word is not one of its options.
+  assertEquals(
+    split("mv --parents -t dest src/x/a.ts"),
+    replaced("/repo/dest/a.ts", "/repo/src/x/a.ts"),
+  );
   assertEquals(
     split("printf x > link.ts; tee t < x; truncate -s 0 u"),
     through(
