@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # PreToolUse (Bash): when the command is a real `git push`, inject a
-# non-blocking reminder to bump the semver version field (package.json /
-# deno.json) — UNLESS the branch has already bumped it since its
-# merge-base with origin/dev, in which case emit a confirmation instead:
-# a second bump on the same PR is a defect, not a to-do. See memory
+# non-blocking reminder to bump package.json's semver version field —
+# UNLESS the branch has already bumped it since its merge-base with
+# origin/dev, in which case emit a confirmation instead: a second bump on
+# the same PR is a defect, not a to-do. See memory
 # git-feature-branch-and-semver. Reminder only — never blocks the push,
 # never exits non-zero (web-jam-tools#648).
+#
+# A repository with a deno.json at its root (web-jam-tools) is skipped
+# silently: its deno.json version is not bumped per PR, per "The version
+# check" in pr-review-self-posting-design-2026-08-22.md (web-jam-tools#1954).
 #
 # Push detection (item 5, web-jam-tools#648): the old `case "$cmd" in
 # *"git push"*)` matched the substring anywhere in the command text,
@@ -130,7 +134,7 @@ done <<<"$segments"
 
 [ "$is_push" != true ] && exit 0
 
-REMINDER='{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"SEMVER REMINDER: before pushing, bump the version field (package.json / deno.json) — patch=fix, minor=feature, major=breaking. Rule: git-feature-branch-and-semver."}}'
+REMINDER='{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"SEMVER REMINDER: before pushing, bump the version field in package.json — patch=fix, minor=feature, major=breaking. Rule: git-feature-branch-and-semver."}}'
 
 remind() {
   printf '%s' "$REMINDER"
@@ -143,6 +147,9 @@ remind() {
 top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || true
 [ -z "$top" ] && remind # cwd is not a git repo -> fail open
 
+# deno.json at the root (web-jam-tools): no per-PR version bump -> nothing to say.
+[ -f "$top/deno.json" ] && exit 0
+
 # Detached HEAD -> indeterminate (no branch to compare) -> fail open.
 branch=$(git -C "$top" symbolic-ref --short -q HEAD 2>/dev/null) || true
 [ -z "$branch" ] && remind
@@ -154,13 +161,8 @@ git -C "$top" rev-parse --verify -q origin/dev >/dev/null 2>&1 || remind
 mergebase=$(git -C "$top" merge-base HEAD origin/dev 2>/dev/null) || true
 [ -z "$mergebase" ] && remind
 
-versionfile=""
-if [ -f "$top/deno.json" ]; then
-  versionfile="deno.json"
-elif [ -f "$top/package.json" ]; then
-  versionfile="package.json"
-fi
-[ -z "$versionfile" ] && remind # no version file -> fail open
+versionfile="package.json"
+[ -f "$top/$versionfile" ] || remind # no version file -> fail open
 
 old_version=$(git -C "$top" show "$mergebase:$versionfile" 2>/dev/null |
   jq -r '.version // empty' 2>/dev/null) || true

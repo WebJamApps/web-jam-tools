@@ -2648,3 +2648,35 @@ Deno.test("fix-pr rule check fails when the guard on unpublished local commits i
   assert(unguarded !== FIX_PR_TEXT, "fixture must actually drop the guard");
   assertThrows(() => assertFixPrSkillRules(unguarded), Error, "unpublished local commits");
 });
+
+// web-jam-tools#1954: "The version check" in pr-review-self-posting-design-2026-08-22.md —
+// web-jam-tools has no per-PR deno.json version bump; the one-bump rule is package.json's.
+Deno.test("no skill or rule tells an agent to bump deno.json per PR in web-jam-tools", async () => {
+  const files = [
+    "skills/draft-pr/SKILL.md",
+    "skills/delegate/SKILL.md",
+    "skills/pr-review/SKILL.md",
+    "docs/cross-ai-rules.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+  ];
+  const stale = [
+    /bump the version once in `deno\.json`/,
+    /`deno\.json` for\s+web-jam-tools, `package\.json`/,
+    /\(or `deno\.json` for web-jam-tools\) by hand/,
+    /each bump `deno\.json`\/`package\.json`/,
+    /Always bump `deno\.json`/,
+    /bump the semver `version` on push/,
+  ];
+  for (const file of files) {
+    const text = await Deno.readTextFile(file);
+    for (const pattern of stale) assert(!pattern.test(text), `${file} still says ${pattern}`);
+  }
+  const draftPr = await Deno.readTextFile("skills/draft-pr/SKILL.md");
+  assertStringIncludes(draftPr, "**`web-jam-tools` has no per-PR version bump:**");
+  const delegate = await Deno.readTextFile("skills/delegate/SKILL.md");
+  assertStringIncludes(
+    delegate,
+    'web-jam-tools has no per-PR bump: leave\n  `deno.json`\'s `"version"` untouched.',
+  );
+});

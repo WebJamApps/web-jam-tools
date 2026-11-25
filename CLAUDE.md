@@ -15,7 +15,7 @@ documentation across the WebJamApps workspace. This file orients Claude
 ## Hard rules
 
 - **Never merge to `dev` or `main`.** A human reviewer is the mandatory gatekeeper (per AGENTS.md).
-- **Always start on a feature branch off `dev`** before editing code, and bump the semver `version` on push (enforced by `~/.claude/hooks/`).
+- **Always start on a feature branch off `dev`** before editing code. Do not bump `deno.json`'s `version` on PR branches here (see AGENTS.md, "PR version-bump convention").
 - **JS/TS is Deno, not Node.** All TypeScript lives under `src/` + `test/` and runs on Deno (`deno task ...`); there is no `package.json` or `node_modules`. Python (`scripts/`) is unchanged.
 
 ## Layout

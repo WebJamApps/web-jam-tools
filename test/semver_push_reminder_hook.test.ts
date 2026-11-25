@@ -10,7 +10,8 @@
 // already differs from its merge-base with origin/dev gets a confirmation
 // instead of the reminder (re-bumping is a defect, not a to-do), and every
 // indeterminate case (no cwd, not a repo, no origin/dev ref, detached HEAD,
-// no version file) falls open to the reminder. It also narrowed push
+// no package.json) falls open to the reminder. web-jam-tools#1954: a repository
+// with a deno.json at its root (web-jam-tools) is skipped silently. It also narrowed push
 // detection so a `git push` substring inside a heredoc body or a quoted
 // argument no longer fires. These cases need a REAL throwaway git repo (with
 // a real bare "remote" standing in for origin) per case — never the real
@@ -55,13 +56,13 @@ async function run(cmd: string, args: string[]): Promise<void> {
 
 /**
  * Builds a throwaway repo + bare "remote" pair: a `dev` branch with a
- * committed `deno.json` at the given version, fetched into the working
+ * committed version file (`package.json` unless `file` says `deno.json`) at the given version, fetched into the working
  * repo's `origin/dev`, then checked out onto a feature branch. Callers then
  * optionally bump the version on the feature branch before invoking the
  * hook. Cleans up both dirs when `fn` returns or throws.
  */
 async function withFeatureBranch(
-  opts: { initialVersion: string; bumpTo?: string },
+  opts: { initialVersion: string; bumpTo?: string; file?: "package.json" | "deno.json" },
   fn: (dir: string) => Promise<void>,
 ): Promise<void> {
   const remoteDir = await Deno.makeTempDir();
@@ -72,7 +73,7 @@ async function withFeatureBranch(
     await run("git", ["-C", dir, "config", "user.email", "test@example.invalid"]);
     await run("git", ["-C", dir, "config", "user.name", "Test"]);
     await Deno.writeTextFile(
-      `${dir}/deno.json`,
+      `${dir}/${opts.file ?? "package.json"}`,
       JSON.stringify({ version: opts.initialVersion }),
     );
     await run("git", ["-C", dir, "add", "-A"]);
@@ -83,7 +84,7 @@ async function withFeatureBranch(
     await run("git", ["-C", dir, "checkout", "-q", "-b", "feat"]);
     if (opts.bumpTo) {
       await Deno.writeTextFile(
-        `${dir}/deno.json`,
+        `${dir}/${opts.file ?? "package.json"}`,
         JSON.stringify({ version: opts.bumpTo }),
       );
       await run("git", ["-C", dir, "commit", "-q", "-am", "bump"]);
@@ -163,6 +164,26 @@ Deno.test("already-bumped feature branch emits a confirmation, not the reminder"
   );
 });
 
+// --- web-jam-tools#1954: a deno.json repository (web-jam-tools) has no per-PR version bump ---
+
+Deno.test("a deno.json repository gets no reminder and no confirmation, bumped or not, detached or not", async () => {
+  for (const bumpTo of [undefined, "1.0.1"]) {
+    await withFeatureBranch({ initialVersion: "1.0.0", bumpTo, file: "deno.json" }, async (dir) => {
+      assertEquals(await runHook("git push origin HEAD", dir), { code: 0, stdout: "" });
+      await run("git", ["-C", dir, "checkout", "-q", "--detach"]);
+      assertEquals(await runHook("git push origin HEAD", dir), { code: 0, stdout: "" });
+    });
+  }
+});
+
+Deno.test("the reminder names package.json only", async () => {
+  await withFeatureBranch({ initialVersion: "1.0.0" }, async (dir) => {
+    const res = await runHook("git push origin HEAD", dir);
+    assertStringIncludes(res.stdout, "package.json");
+    assert(!res.stdout.includes("deno.json"), res.stdout);
+  });
+});
+
 // --- #648: fail-open cases (indeterminate -> reminder, exit 0 always) ---
 
 Deno.test("no cwd in payload falls open to the reminder", async () => {
@@ -197,7 +218,7 @@ Deno.test("missing origin/dev ref falls open to the reminder", async () => {
     await run("git", ["-C", dir, "init", "-q", "-b", "feat"]);
     await run("git", ["-C", dir, "config", "user.email", "test@example.invalid"]);
     await run("git", ["-C", dir, "config", "user.name", "Test"]);
-    await Deno.writeTextFile(`${dir}/deno.json`, JSON.stringify({ version: "1.0.0" }));
+    await Deno.writeTextFile(`${dir}/package.json`, JSON.stringify({ version: "1.0.0" }));
     await run("git", ["-C", dir, "add", "-A"]);
     await run("git", ["-C", dir, "commit", "-q", "-m", "init"]);
     const res = await runHook("git push origin HEAD", dir);
@@ -208,7 +229,7 @@ Deno.test("missing origin/dev ref falls open to the reminder", async () => {
   }
 });
 
-Deno.test("no deno.json/package.json anywhere falls open to the reminder", async () => {
+Deno.test("no package.json anywhere falls open to the reminder", async () => {
   const remoteDir = await Deno.makeTempDir();
   const dir = await Deno.makeTempDir();
   try {
