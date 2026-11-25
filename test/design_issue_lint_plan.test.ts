@@ -2409,3 +2409,108 @@ Deno.test("Appendix D several designs, row 13: lint renders one plan table with 
     await Deno.remove(r.root, { recursive: true });
   }
 });
+
+// --- Appendix D — Case Lists: Retiring code (web-jam-tools#1526) ---
+
+Deno.test("Retiring code Case 1: retiring row naming removed key and package passes", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "model/outreach: retire the server's reply scan",
+      closes: "removes REPLY_SORTER_API_KEY and the sorter package; tests pass",
+    }),
+  ]);
+  assertEquals(findRule(validate(doc), "retiring-row-missing-cleanup"), []);
+});
+
+Deno.test("Retiring code Case 2: retiring row naming nothing it removes fails and names the row", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "model/outreach: retire the server's reply scan",
+      closes: 'builds "The reply scan" as written; `deno task test` passes',
+    }),
+  ]);
+  const hits = findRule(validate(doc), "retiring-row-missing-cleanup");
+  assertEquals(hits.length, 1);
+  assertEquals(hits[0].column, "Closes when");
+  assertStringIncludes(hits[0].message, "Row 2");
+  assertStringIncludes(hits[0].message, "model/outreach: retire the server's reply scan");
+});
+
+Deno.test('Retiring code Case 3: retiring row reading "nothing else to remove" passes', () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "scripts: remove the old backup script",
+      closes: "`nothing else to remove`; `deno task test` passes",
+    }),
+  ]);
+  assertEquals(findRule(validate(doc), "retiring-row-missing-cleanup"), []);
+});
+
+Deno.test("Retiring code Case 4: delete row with no cleanup named fails and names the row", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "hooks: delete the unused reminder hook",
+      tests: "Unit tests verify the hook is unregistered",
+      closes: "—",
+    }),
+  ]);
+  const hits = findRule(validate(doc), "retiring-row-missing-cleanup");
+  assertEquals(hits.length, 1);
+  assertStringIncludes(hits[0].message, "Row 2");
+  assertStringIncludes(hits[0].message, "hooks: delete the unused reminder hook");
+});
+
+Deno.test("Retiring code Case 5: drop row naming the index it removes passes", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "db: drop the legacy venues collection",
+      closes: "drops venues collection and the index it removes; `npm test` passes",
+    }),
+  ]);
+  assertEquals(findRule(validate(doc), "retiring-row-missing-cleanup"), []);
+});
+
+Deno.test("Retiring code Case 6: non-retiring row passes without cleanup text", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "JaMmusic: add the admin menu",
+      closes: 'builds "The admin menu" as written',
+    }),
+  ]);
+  assertEquals(findRule(validate(doc), "retiring-row-missing-cleanup"), []);
+});
+
+Deno.test('Retiring code: quoting a heading containing "Retiring" or mentioning package.json does not bypass the check', () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "scripts: retire the legacy sync command",
+      tests: "Unit tests check package.json script registration",
+      closes: 'builds "Retiring code" as written',
+    }),
+  ]);
+  const hits = findRule(validate(doc), "retiring-row-missing-cleanup");
+  assertEquals(hits.length, 1);
+});
+
+Deno.test("Retiring code: cleanup named in Tests cell passes, while compound non-retiring verbs are not misread", () => {
+  const docWithTestsCleanup = planTableDoc([
+    EPIC_ROW,
+    childRow({
+      title: "outreach: remove legacy reply sorter client",
+      tests: "Tests prove REPLY_SORTER_API_KEY and sorter package are removed",
+      closes: 'builds "The reply sorter" as written',
+    }),
+    childRow({
+      title: "ui: add drag-and-drop venue ordering",
+      closes: 'builds "Ordering UI" as written',
+    }),
+  ]);
+  assertEquals(findRule(validate(docWithTestsCleanup), "retiring-row-missing-cleanup"), []);
+});

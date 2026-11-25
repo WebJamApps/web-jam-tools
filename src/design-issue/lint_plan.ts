@@ -185,6 +185,20 @@ const TESTS_INSUFFICIENT_VALUES = new Set([
 
 const PERSONAL_NAME_PREFIX = /^josh\s*[-:—]\s?/i;
 
+const RETIRING_TITLE_VERB =
+  /(?<![a-zA-Z-])(?:retire[sd]?|retiring|remove[sd]?|removing|delete[sd]?|deleting|drop(?:s|ped|ping)?)\b/i;
+
+const NOTHING_ELSE_TO_REMOVE = /\bnothing\s+else\s+to\s+remove\b/i;
+
+const RETIRING_CLEANUP_INDICATORS = [
+  /\b(?:retire[sd]?|retiring|remove[sd]?|removing|delete[sd]?|deleting|drop(?:s|ped|ping)?|uninstall(?:s|ed|ing)?|prune[sd]?|pruning|strip(?:s|ped|ping)?|revoke[sd]?|revoking|clean(?:s|ed|ing)?\s+up|absent|gone)\b/i,
+  /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/,
+  /\b(?:packages?|dependenc(?:y|ies)|settings?|keys?|secrets?|tokens?|crons?|scheduled\s+jobs?|callers?|index(?:es|ed)?)\b/i,
+];
+
+const EMPTY_CLEANUP_PHRASE =
+  /^(?:nothing(?:\s+(?:it\s+removes|removed))?)$|\b(?:retires?|removes?|deletes?|drops?)\s+nothing\b/i;
+
 const REVIEW_KEYWORDS = [
   /\bchrome\b/i,
   /\breview\b/i,
@@ -501,6 +515,7 @@ export function validatePlanTable(
     );
     checkTests(row, violations);
     checkTitlePersonalName(row, violations);
+    checkRetiringCodeRow(row, rows, violations);
     const rowHeadings = matchedDoc && options.designHeadingsByDoc
       ? options.designHeadingsByDoc.get(matchedDoc.absPath)
       : resolvedDesignDocs.length > 0 && !matchedDoc
@@ -669,6 +684,58 @@ function checkTitlePersonalName(row: PlanTableRow, violations: PlanTableViolatio
         `ownership belongs to the Josh label, not the title`,
     });
   }
+}
+
+/**
+ * Checks whether a retiring plan row (whose title says retire, remove, delete, or drop) names the
+ * settings, keys, packages, jobs, callers, or indexes it removes, or explicitly reads
+ * "nothing else to remove" (`"Retiring code"`, web-jam-tools#1526).
+ */
+export function checkRetiringCodeRow(
+  row: PlanTableRow,
+  allRows: readonly PlanTableRow[],
+  violations: PlanTableViolation[],
+): void {
+  if (isEpicRow(row, allRows as PlanTableRow[])) return;
+
+  const title = stripMdMarkers(row.cells[COL_TITLE]);
+  if (!RETIRING_TITLE_VERB.test(title)) return;
+
+  const rowNum = stripMdMarkers(row.cells[COL_NUM]).trim() || String(allRows.indexOf(row) + 1);
+  const scopeParts = [row.cells[COL_TESTS], row.cells[COL_CLOSES]]
+    .filter((c) => !isMissingValue(c))
+    .map((c) => stripMdMarkers(c).replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const combinedScope = scopeParts.join(" ").trim();
+
+  if (NOTHING_ELSE_TO_REMOVE.test(combinedScope)) return;
+
+  if (combinedScope && !EMPTY_CLEANUP_PHRASE.test(combinedScope)) {
+    // Strip double-quoted design heading names (e.g. `"Retiring code"`) and `.json` filenames
+    // so quoting a heading or `package.json` cannot falsely satisfy cleanup naming.
+    const unquoted = combinedScope
+      .replace(/"[^"]*"/g, " ")
+      .replace(/\b(?:package|deno)\.json\b/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (
+      unquoted &&
+      !EMPTY_CLEANUP_PHRASE.test(unquoted) &&
+      RETIRING_CLEANUP_INDICATORS.some((re) => re.test(unquoted))
+    ) {
+      return;
+    }
+  }
+
+  violations.push({
+    rule: "retiring-row-missing-cleanup",
+    line: row.line,
+    column: "Closes when",
+    message:
+      `Row ${rowNum} ("${title}") retires code without naming the settings, keys, packages, or ` +
+      `cleanup it removes (or reading "nothing else to remove")`,
+  });
 }
 
 /** A row is "paired" when another row sharing the same `Epic / child of` value (i.e. the same
@@ -1855,6 +1922,7 @@ Validates the Gate 2 plan table's cell values in a design document:
   - unknown model tiers (against skills/fix-labels/labels.yaml)
   - unknown repos (against ACTIVE_REPOS in src/shared/repos.ts)
   - personal-name title prefixes ("Josh:", "Josh -", ...)
+  - retiring rows (titles with retire/remove/delete/drop) without cleanup scope or "nothing else to remove"
   - out-of-range priorities (Urgent/High/Medium/Low only)
   - a Josh-labeled manual row with no paired agent row
   - a composite Josh-labeled manual row (doc review + live walkthrough)
