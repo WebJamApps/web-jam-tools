@@ -1,6 +1,7 @@
 // src/accounting/entry.ts
-// Create entries, write and read them in the Beancount books rustledger keeps (web-jam-tools#1865),
-// and keep the journal reader and writer that import and month close use until web-jam-tools#1866.
+// Create entries, and write and read them in the Beancount books rustledger keeps
+// (web-jam-tools#1865). Import and month close update the same books through updateBooks
+// (web-jam-tools#1866).
 
 import * as path from "@std/path";
 import { Posting, Transaction } from "./types.ts";
@@ -12,15 +13,6 @@ export function assertBeancountTarget(target: string, command: string): void {
   if (path.extname(target) !== ".beancount") {
     throw new Error(
       `${command} works on the year's Beancount books; '${target}' is not a .beancount file.`,
-    );
-  }
-}
-
-/** Import and month close keep the journal format until web-jam-tools#1866 moves them. */
-export function assertJournalTarget(target: string, command: string): void {
-  if (path.extname(target) === ".beancount") {
-    throw new Error(
-      `${command} still writes the year's .journal file; it refuses the Beancount books '${target}' and wrote nothing.`,
     );
   }
 }
@@ -212,7 +204,7 @@ async function replaceFileAtomically(target: string, content: string): Promise<v
  * act on that one ledger. The ledger the link names must itself be a .beancount file, and a link
  * to a ledger that does not exist is refused.
  */
-async function resolveBooksTarget(booksPath: string): Promise<string> {
+async function resolveBooksTarget(booksPath: string, command: string): Promise<string> {
   let info: Deno.FileInfo;
   try {
     info = await Deno.lstat(booksPath);
@@ -229,7 +221,7 @@ async function resolveBooksTarget(booksPath: string): Promise<string> {
       `The books at ${booksPath} are a link to a ledger that does not exist; nothing was written.`,
     );
   }
-  assertBeancountTarget(resolved, "accounting:entry");
+  assertBeancountTarget(resolved, command);
   return resolved;
 }
 
@@ -248,75 +240,62 @@ export async function appendEntryToBooks(booksPath: string, tx: Transaction): Pr
   assertCalendarDate(tx.date);
   const formatted = formatBeancountTransaction(tx);
 
-  const target = await resolveBooksTarget(booksPath);
+  await updateBooks(booksPath, "accounting:entry", async (books) => {
+    const existing = await readBooksOrEmpty(books.target);
+    const opens = openLinesFor(existing, tx.postings.map((p) => p.account), tx.date.slice(0, 4));
+    await books.replace(appendBlock(existing, opens + formatted));
+  });
+}
+
+/** `open` lines, dated January 1 of `year`, for each account the books do not open yet. */
+export function openLinesFor(existing: string, accounts: string[], year: string): string {
+  const opened = openedAccounts(existing);
+  const lines = [...new Set(accounts)]
+    .filter((account) => !opened.has(account))
+    .map((account) => `${year}-01-01 open ${account} ${BOOKS_COMMODITY}`);
+  return lines.length > 0 ? lines.join("\n") + "\n\n" : "";
+}
+
+/** The books with `block` appended after one blank line. */
+export function appendBlock(existing: string, block: string): string {
+  const prefix = existing.length === 0
+    ? ""
+    : existing.endsWith("\n\n")
+    ? ""
+    : existing.endsWith("\n")
+    ? "\n"
+    : "\n\n";
+  return existing + prefix + block;
+}
+
+/** The books, held under the lock, as `updateBooks` hands them to a change. */
+export interface LockedBooks {
+  /** The ledger file itself: a link's target when the books path is a symbolic link. */
+  target: string;
+  /** Replaces the books whole, owner-only, by a rename, so a cut-short write leaves them as they were. */
+  replace(content: string): Promise<void>;
+}
+
+/**
+ * Runs `change` with the year's books under an exclusive lock on their directory, so two
+ * commands updating the books at once each keep their change. Locking the directory leaves no lock
+ * file beside the books, and the operating system releases the lock when the process ends.
+ */
+export async function updateBooks<T>(
+  booksPath: string,
+  command: string,
+  change: (books: LockedBooks) => Promise<T>,
+): Promise<T> {
+  const target = await resolveBooksTarget(booksPath, command);
   const booksDir = path.dirname(target);
   await Deno.mkdir(booksDir, { recursive: true });
   const lock = await Deno.open(booksDir, { read: true });
   try {
     await lock.lock(true);
-    const existing = await readBooksOrEmpty(target);
-    const opened = openedAccounts(existing);
-    const openLines = [...new Set(tx.postings.map((p) => p.account))]
-      .filter((account) => !opened.has(account))
-      .map((account) => `${tx.date.slice(0, 4)}-01-01 open ${account} ${BOOKS_COMMODITY}`);
-
-    const block = (openLines.length > 0 ? openLines.join("\n") + "\n\n" : "") + formatted;
-    const prefix = existing.length === 0
-      ? ""
-      : existing.endsWith("\n\n")
-      ? ""
-      : existing.endsWith("\n")
-      ? "\n"
-      : "\n\n";
-
-    await replaceFileAtomically(target, existing + prefix + block);
+    return await change({ target, replace: (content) => replaceFileAtomically(target, content) });
   } finally {
     lock.close();
   }
-}
-
-// ---- Journal (import and month close, until web-jam-tools#1866) ----
-
-export function formatAmount(amount: number, commodity = "$"): string {
-  const sign = amount < 0 ? "-" : "";
-  const absVal = Math.abs(amount).toFixed(2);
-  return `${commodity}${sign}${absVal}`;
-}
-
-export function formatPosting(p: Posting): string {
-  const commodity = p.commodity || "$";
-  const amountStr = `${commodity}${p.amount.toFixed(2)}`;
-  if (p.balanceAssertion !== undefined) {
-    const assertStr = `${commodity}${p.balanceAssertion.toFixed(2)}`;
-    return `    ${p.account.padEnd(34)}  ${amountStr} = ${assertStr}`;
-  }
-  return `    ${p.account.padEnd(34)}  ${amountStr}`;
-}
-
-export function formatTransaction(tx: Transaction): string {
-  const parts: string[] = [];
-  const statusStr = tx.status ? ` ${tx.status}` : "";
-  const codeStr = tx.code ? ` (${tx.code})` : "";
-  parts.push(`${tx.date}${statusStr}${codeStr} ${tx.description}`);
-
-  // Format metadata tags as comments
-  if (tx.tags) {
-    for (const [key, val] of Object.entries(tx.tags)) {
-      if (val && val.trim() !== "") {
-        parts.push(`    ; ${key}: ${val.trim()}`);
-      }
-    }
-  }
-
-  if (tx.comment && tx.comment.trim() !== "") {
-    parts.push(`    ; ${tx.comment.trim()}`);
-  }
-
-  for (const p of tx.postings) {
-    parts.push(formatPosting(p));
-  }
-
-  return parts.join("\n") + "\n";
 }
 
 export interface CreateEntryParams {
@@ -381,102 +360,4 @@ export function createEntry(params: CreateEntryParams): Transaction {
     postings,
     tags,
   };
-}
-
-export async function appendEntryToJournal(journalPath: string, tx: Transaction): Promise<void> {
-  const formatted = formatTransaction(tx);
-  const dir = path.dirname(journalPath);
-  await Deno.mkdir(dir, { recursive: true });
-
-  let existing = "";
-  try {
-    existing = await Deno.readTextFile(journalPath);
-  } catch (_err) {
-    // File may not exist yet
-    existing = "";
-  }
-
-  const prefix = existing.length > 0 && !existing.endsWith("\n\n")
-    ? (existing.endsWith("\n") ? "\n" : "\n\n")
-    : "";
-
-  await Deno.writeTextFile(journalPath, existing + prefix + formatted);
-}
-
-export function parseJournal(content: string): Transaction[] {
-  const transactions: Transaction[] = [];
-  const lines = content.split(/\r?\n/);
-
-  let currentTx: Partial<Transaction> | null = null;
-  const dateRegex = /^(\d{4}-\d{2}-\d{2})(?:\s+([*!]))?(?:\s+\(([^)]+)\))?\s+(.+)$/;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    if (trimmed === "" || trimmed.startsWith("#")) {
-      continue;
-    }
-
-    const headerMatch = line.match(dateRegex);
-    if (headerMatch && !line.startsWith(" ") && !line.startsWith("\t")) {
-      if (currentTx && currentTx.date && currentTx.postings && currentTx.postings.length > 0) {
-        transactions.push(currentTx as Transaction);
-      }
-      currentTx = {
-        date: headerMatch[1],
-        status: (headerMatch[2] as "*" | "!") || undefined,
-        code: headerMatch[3] || undefined,
-        description: headerMatch[4].trim(),
-        postings: [],
-        tags: {},
-      };
-      continue;
-    }
-
-    if (currentTx && (line.startsWith(" ") || line.startsWith("\t"))) {
-      // Metadata comment or tag
-      if (trimmed.startsWith(";")) {
-        const commentBody = trimmed.slice(1).trim();
-        const tagMatch = commentBody.match(/^([a-zA-Z0-9_-]+)\s*:\s*(.*)$/);
-        if (tagMatch) {
-          currentTx.tags = currentTx.tags || {};
-          currentTx.tags[tagMatch[1]] = tagMatch[2].trim();
-        } else {
-          currentTx.comment = (currentTx.comment ? currentTx.comment + "; " : "") + commentBody;
-        }
-        continue;
-      }
-
-      // Posting line
-      // Matches: Account:Name    [$]Amount [= [$]Assertion]
-      const postingMatch = trimmed.match(
-        /^([a-zA-Z0-9:_ -]+?)\s{2,}([-+]?\$?[-+]?[0-9,]+(?:\.[0-9]+)?)(?:\s*=\s*([\$]?[-+]?[0-9,]+(?:\.[0-9]+)?))?$/,
-      );
-      if (postingMatch) {
-        const account = postingMatch[1].trim();
-        const rawAmount = postingMatch[2].replace(/[$,]/g, "");
-        const amount = parseFloat(rawAmount);
-
-        let balanceAssertion: number | undefined;
-        if (postingMatch[3]) {
-          const rawAssertion = postingMatch[3].replace(/[$,]/g, "");
-          balanceAssertion = parseFloat(rawAssertion);
-        }
-
-        currentTx.postings = currentTx.postings || [];
-        currentTx.postings.push({
-          account,
-          amount,
-          balanceAssertion,
-        });
-      }
-    }
-  }
-
-  if (currentTx && currentTx.date && currentTx.postings && currentTx.postings.length > 0) {
-    transactions.push(currentTx as Transaction);
-  }
-
-  return transactions;
 }

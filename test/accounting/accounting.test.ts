@@ -1,7 +1,7 @@
 // test/accounting/accounting.test.ts
-// Tests for Web Jam LLC's books (web-jam-tools#1764): entries, receipts and the check in rustledger's
-// Beancount books (web-jam-tools#1865), and import and month close on the journal file until
-// web-jam-tools#1866. Every figure here is made up.
+// Tests for Web Jam LLC's books (web-jam-tools#1764), all in rustledger's Beancount books: entries,
+// receipts and the check (web-jam-tools#1865), and the import of clean CSVs and the month close
+// (web-jam-tools#1866). Every figure here is made up.
 
 import {
   assert,
@@ -11,33 +11,20 @@ import {
   assertThrows,
 } from "@std/assert";
 import * as path from "@std/path";
-import { getDefaultBooksPath, getDefaultJournalPath, runCli } from "../../src/accounting/cli.ts";
+import { getDefaultBooksPath, runCli } from "../../src/accounting/cli.ts";
 import { closeMonth } from "../../src/accounting/close_month.ts";
-import {
-  convertBankFile,
-  detectBankFormat,
-  normalizeOfxDate,
-  normalizeQifDate,
-  parseOfx,
-  parseQif,
-} from "../../src/accounting/convert.ts";
 import {
   appendEntryToBooks,
   assertBeancountAccount,
   assertCalendarDate,
   createEntry,
   formatBeancountTransaction,
-  formatTransaction,
   parseBeancount,
 } from "../../src/accounting/entry.ts";
 import { importStatement } from "../../src/accounting/import.ts";
 import { fileReceipt, receiptMetadataLine } from "../../src/accounting/receipt.ts";
-import { checkBooks, verifyJournalBalances } from "../../src/accounting/verify.ts";
+import { checkBooks } from "../../src/accounting/verify.ts";
 import { installSkills } from "../../src/install-skills/lib.ts";
-
-const FIXTURES_DIR = path.resolve(
-  new URL("./fixtures", import.meta.url).pathname,
-);
 
 const INSTALL_RUSTLEDGER = path.resolve(
   new URL("../../scripts/install-rustledger.sh", import.meta.url).pathname,
@@ -96,268 +83,6 @@ async function withEnv<T>(
   }
 }
 
-Deno.test("detectBankFormat identifies OFX, QIF, and CSV correctly", () => {
-  assertEquals(detectBankFormat("<OFX><STMTTRN></STMTTRN></OFX>"), "ofx");
-  assertEquals(detectBankFormat("OFXHEADER:100\nDATA:OFXSGML\n"), "ofx");
-  assertEquals(detectBankFormat("!Type:Bank\nD01/10/2026\nT100.00\n^\n"), "qif");
-  assertEquals(detectBankFormat("date,description,amount,id\n2026-01-10,Test,10.00,1\n"), "csv");
-  assertEquals(detectBankFormat("just some random text"), "unknown");
-});
-
-Deno.test("normalizeOfxDate and normalizeQifDate handle various date formats", () => {
-  assertEquals(normalizeOfxDate("20260110120000[-5:EST]"), "2026-01-10");
-  assertEquals(normalizeOfxDate("20261125"), "2026-11-25");
-
-  assertEquals(normalizeQifDate("01/10/2026"), "2026-01-10");
-  assertEquals(normalizeQifDate("1/5/2026"), "2026-01-05");
-  assertEquals(normalizeQifDate("11/10'26"), "2026-11-10");
-  assertEquals(normalizeQifDate("2026-01-10"), "2026-01-10");
-});
-
-Deno.test("parseOfx extracts transactions from QFX/OFX fixture", async () => {
-  const content = await Deno.readTextFile(path.join(FIXTURES_DIR, "sample-bank.qfx"));
-  const txs = parseOfx(content);
-
-  assertEquals(txs.length, 3);
-  assertEquals(txs[0].date, "2026-01-10");
-  assertEquals(txs[0].amount, 250.00);
-  assertEquals(txs[0].payee, "Floyd Country Store");
-  assertEquals(txs[0].id, "TXN20260110001");
-  assertEquals(txs[0].memo, "Performance Pay");
-
-  assertEquals(txs[1].date, "2026-01-15");
-  assertEquals(txs[1].amount, -22.86);
-  assertEquals(txs[1].payee, "Penn Station");
-  assertEquals(txs[1].id, "TXN20260115002");
-
-  assertEquals(txs[2].date, "2026-01-20");
-  assertEquals(txs[2].amount, -50.00);
-  assertEquals(txs[2].payee, "State Corporation Commission");
-  assertEquals(txs[2].id, "TXN20260120003");
-});
-
-Deno.test("parseQif extracts transactions from QIF fixture", async () => {
-  const content = await Deno.readTextFile(path.join(FIXTURES_DIR, "sample-card.qif"));
-  const txs = parseQif(content);
-
-  assertEquals(txs.length, 2);
-  assertEquals(txs[0].date, "2026-01-18");
-  assertEquals(txs[0].amount, -29.00);
-  assertEquals(txs[0].payee, "OpenAI");
-  assertEquals(txs[0].id, "TXN20260118001");
-
-  assertEquals(txs[1].date, "2026-01-25");
-  assertEquals(txs[1].amount, -15.50);
-  assertEquals(txs[1].payee, "Office Depot");
-  assertEquals(txs[1].id, "TXN20260125002");
-});
-
-Deno.test("convertBankFile translates QFX to CSV correctly", async () => {
-  const tempDir = await Deno.makeTempDir({ prefix: "accounting-test-convert-" });
-  try {
-    const qfxPath = path.join(FIXTURES_DIR, "sample-bank.qfx");
-    const outCsvPath = path.join(tempDir, "converted.csv");
-
-    const result = await convertBankFile({
-      inputPath: qfxPath,
-      outputPath: outCsvPath,
-    });
-
-    assertEquals(result.count, 3);
-    const written = await Deno.readTextFile(outCsvPath);
-    assertStringIncludes(written, "date,description,amount,id,memo");
-    assertStringIncludes(written, "2026-01-10,Floyd Country Store,250.00,TXN20260110001");
-    assertStringIncludes(written, "2026-01-15,Penn Station,-22.86,TXN20260115002");
-    assertStringIncludes(written, "2026-01-20,State Corporation Commission,-50.00,TXN20260120003");
-  } finally {
-    await Deno.remove(tempDir, { recursive: true });
-  }
-});
-
-Deno.test("convertBankFile throws on unsupported file format", async () => {
-  const tempDir = await Deno.makeTempDir({ prefix: "accounting-test-unsupported-" });
-  try {
-    const invalidPath = path.join(tempDir, "bad.txt");
-    await Deno.writeTextFile(invalidPath, "completely unknown file content");
-
-    await assertRejects(
-      async () => {
-        await convertBankFile({ inputPath: invalidPath });
-      },
-      Error,
-      "Unsupported bank file format",
-    );
-  } finally {
-    await Deno.remove(tempDir, { recursive: true });
-  }
-});
-
-Deno.test("The tests prove that a converted file imports, and a second import adds nothing", async () => {
-  const tempDir = await Deno.makeTempDir({ prefix: "accounting-test-import-" });
-  try {
-    const qfxPath = path.join(FIXTURES_DIR, "sample-bank.qfx");
-    const rulesPath = path.join(FIXTURES_DIR, "sample-rules.rules");
-    const csvPath = path.join(tempDir, "statement.csv");
-    const journalPath = path.join(tempDir, "2026.journal");
-
-    // 1. Convert QFX bank file to CSV
-    const convertRes = await convertBankFile({
-      inputPath: qfxPath,
-      outputPath: csvPath,
-    });
-    assertEquals(convertRes.count, 3);
-
-    // 2. First import of converted file into the journal
-    const importRes1 = await importStatement({
-      statementPath: csvPath,
-      journalPath,
-      rulesPath,
-      account: "Assets:Checking:Truist",
-    });
-
-    assertEquals(importRes1.importedCount, 3);
-    assertEquals(importRes1.skippedCount, 0);
-
-    const journalAfterImport1 = await Deno.readTextFile(journalPath);
-    assertStringIncludes(journalAfterImport1, "2026-01-10 (TXN20260110001) Floyd Country Store");
-    assertStringIncludes(journalAfterImport1, "Income:Performance");
-    assertStringIncludes(journalAfterImport1, "Assets:Checking:Truist");
-    assertStringIncludes(journalAfterImport1, "2026-01-15 (TXN20260115002) Penn Station");
-    assertStringIncludes(journalAfterImport1, "Expenses:Meals");
-    assertStringIncludes(
-      journalAfterImport1,
-      "2026-01-20 (TXN20260120003) State Corporation Commission",
-    );
-    assertStringIncludes(journalAfterImport1, "Expenses:RegistrationFees");
-
-    // 3. Second import of the identical statement file adds NOTHING (idempotent / duplicate prevention)
-    const importRes2 = await importStatement({
-      statementPath: csvPath,
-      journalPath,
-      rulesPath,
-      account: "Assets:Checking:Truist",
-    });
-
-    assertEquals(importRes2.importedCount, 0);
-    assertEquals(importRes2.skippedCount, 3);
-
-    const journalAfterImport2 = await Deno.readTextFile(journalPath);
-    assertEquals(
-      journalAfterImport2,
-      journalAfterImport1,
-      "Second import must leave journal completely unmodified",
-    );
-  } finally {
-    await Deno.remove(tempDir, { recursive: true });
-  }
-});
-
-Deno.test("The tests prove that a closed month stops a later edit that changes its balance", async () => {
-  const tempDir = await Deno.makeTempDir({ prefix: "accounting-test-close-" });
-  try {
-    const journalPath = path.join(tempDir, "2026.journal");
-
-    // Seed an initial opening balance and transactions in January 2026
-    // Starting balance: $1000.00
-    // Income: +$250.00
-    // Meals: -$22.86
-    // Registration: -$50.00
-    // Expected checking balance at month-end: 1000 + 250 - 22.86 - 50 = $1177.14
-    const initialJournal = `2026-01-01 * Opening Balance
-    Assets:Checking:Truist               $1000.00
-    Equity:OpeningBalances              $-1000.00
-
-2026-01-10 (TXN001) Floyd Country Store
-    ; id: TXN001
-    Income:Performance                   $-250.00
-    Assets:Checking:Truist                $250.00
-
-2026-01-15 (TXN002) Penn Station
-    ; id: TXN002
-    Expenses:Meals                        $22.86
-    Assets:Checking:Truist               $-22.86
-
-2026-01-20 (TXN003) State Corporation Commission
-    ; id: TXN003
-    Expenses:RegistrationFees             $50.00
-    Assets:Checking:Truist               $-50.00
-`;
-
-    await Deno.writeTextFile(journalPath, initialJournal);
-
-    // Initial journal is valid
-    const preVerify = verifyJournalBalances(initialJournal);
-    assertEquals(preVerify.valid, true);
-    assertEquals(preVerify.errors.length, 0);
-
-    // Close month 2026-01 asserting bank statement balance of $1177.14
-    const closeRes = await closeMonth({
-      year: 2026,
-      month: 1,
-      balances: {
-        "Assets:Checking:Truist": 1177.14,
-      },
-      journalPath,
-      booksDir: tempDir,
-    });
-
-    assertEquals(closeRes.closeDate, "2026-01-31");
-    assertEquals(closeRes.balances["Assets:Checking:Truist"], 1177.14);
-
-    // Verify snapshot and reports exist
-    const snapshotContent = await Deno.readTextFile(closeRes.snapshotPath);
-    assertStringIncludes(snapshotContent, "Close Month 2026-01");
-    assertStringIncludes(snapshotContent, "Assets:Checking:Truist");
-    assertStringIncludes(snapshotContent, "$0.00 = $1177.14");
-
-    const bsReport = await Deno.readTextFile(
-      path.join(tempDir, "closed", "2026-01", "balance-sheet.txt"),
-    );
-    assertStringIncludes(bsReport, "Assets:Checking:Truist");
-    assertStringIncludes(bsReport, "$1177.14");
-
-    const isReport = await Deno.readTextFile(
-      path.join(tempDir, "closed", "2026-01", "income-statement.txt"),
-    );
-    assertStringIncludes(isReport, "Income:Performance");
-    assertStringIncludes(isReport, "$250.00");
-
-    // Closed journal verifies cleanly
-    const closedJournal = await Deno.readTextFile(journalPath);
-    const postCloseVerify = verifyJournalBalances(closedJournal);
-    assertEquals(postCloseVerify.valid, true);
-    assertEquals(postCloseVerify.assertionsChecked, 1);
-
-    // NOW TEST THE TAMPER / LATER EDIT BEHAVIOR:
-    // A later edit alters an earlier transaction in the closed month (e.g. changing -$22.86 to -$50.00)
-    const tamperedJournal = closedJournal.replace("$-22.86", "$-50.00").replace("$22.86", "$50.00");
-    const tamperedVerify = verifyJournalBalances(tamperedJournal);
-
-    assertEquals(
-      tamperedVerify.valid,
-      false,
-      "Verification must FAIL when a closed month's transaction is edited",
-    );
-    assertEquals(tamperedVerify.errors.length > 0, true);
-    assertStringIncludes(
-      tamperedVerify.errors[0],
-      "Balance assertion failed for 'Assets:Checking:Truist'",
-    );
-    assertStringIncludes(tamperedVerify.errors[0], "expected $1177.14");
-
-    // Also verify inserting a new transaction in the closed month fails assertion
-    const insertedTxJournal = closedJournal.replace(
-      "2026-01-31 * Close Month",
-      `2026-01-28 Sneaky Charge\n    Expenses:Supplies                     $30.00\n    Assets:Checking:Truist               $-30.00\n\n2026-01-31 * Close Month`,
-    );
-    const insertedVerify = verifyJournalBalances(insertedTxJournal);
-    assertEquals(insertedVerify.valid, false);
-    assertStringIncludes(insertedVerify.errors[0], "Balance assertion failed");
-  } finally {
-    await Deno.remove(tempDir, { recursive: true });
-  }
-});
-
 Deno.test("createEntry handles personal crossing (contributions & draws) and tags", () => {
   // 1. Standard meal expense with attendees
   const mealTx = createEntry({
@@ -371,15 +96,15 @@ Deno.test("createEntry handles personal crossing (contributions & draws) and tag
     receipt: "receipts/2026/2026-11-10-penn-station.pdf",
   });
 
-  const formattedMeal = formatTransaction(mealTx);
-  assertStringIncludes(formattedMeal, "2026-11-10 Penn Station");
-  assertStringIncludes(formattedMeal, "; purpose: Lunch meeting");
-  assertStringIncludes(formattedMeal, "; attendees: Josh, Maria");
-  assertStringIncludes(formattedMeal, "; receipt: receipts/2026/2026-11-10-penn-station.pdf");
+  const formattedMeal = formatBeancountTransaction(mealTx);
+  assertStringIncludes(formattedMeal, '2026-11-10 * "Penn Station"');
+  assertStringIncludes(formattedMeal, 'purpose: "Lunch meeting"');
+  assertStringIncludes(formattedMeal, 'attendees: "Josh, Maria"');
+  assertStringIncludes(formattedMeal, 'receipt: "receipts/2026/2026-11-10-penn-station.pdf"');
   assertStringIncludes(formattedMeal, "Expenses:Meals");
-  assertStringIncludes(formattedMeal, "$22.86");
+  assertStringIncludes(formattedMeal, " 22.86 USD");
   assertStringIncludes(formattedMeal, "Liabilities:CreditCard");
-  assertStringIncludes(formattedMeal, "$-22.86");
+  assertStringIncludes(formattedMeal, "-22.86 USD");
 
   // 2. Business expense paid personally by owner -> Owner contribution
   const contribTx = createEntry({
@@ -390,12 +115,12 @@ Deno.test("createEntry handles personal crossing (contributions & draws) and tag
     owner: "Josh",
     purpose: "Printer paper",
   });
-  const formattedContrib = formatTransaction(contribTx);
-  assertStringIncludes(formattedContrib, "; owner: Josh");
+  const formattedContrib = formatBeancountTransaction(contribTx);
+  assertStringIncludes(formattedContrib, 'owner: "Josh"');
   assertStringIncludes(formattedContrib, "Expenses:Supplies");
-  assertStringIncludes(formattedContrib, "$15.00");
+  assertStringIncludes(formattedContrib, " 15.00 USD");
   assertStringIncludes(formattedContrib, "Equity:OwnerContributions:Josh");
-  assertStringIncludes(formattedContrib, "$-15.00");
+  assertStringIncludes(formattedContrib, "-15.00 USD");
 
   // 3. Personal purchase paid from business account -> Owner draw (never expense)
   const drawTx = createEntry({
@@ -407,11 +132,11 @@ Deno.test("createEntry handles personal crossing (contributions & draws) and tag
     owner: "Maria",
     isDraw: true,
   });
-  const formattedDraw = formatTransaction(drawTx);
+  const formattedDraw = formatBeancountTransaction(drawTx);
   assertStringIncludes(formattedDraw, "Equity:OwnerDraws:Maria");
-  assertStringIncludes(formattedDraw, "$40.00");
+  assertStringIncludes(formattedDraw, " 40.00 USD");
   assertStringIncludes(formattedDraw, "Assets:Checking:Truist");
-  assertStringIncludes(formattedDraw, "$-40.00");
+  assertStringIncludes(formattedDraw, "-40.00 USD");
 });
 
 Deno.test("fileReceipt files PDF from inbox/ into receipts/<year>/", async () => {
@@ -503,20 +228,6 @@ Deno.test("accounting CLI runs subcommands cleanly", async () => {
       () => runCli(["verify", "--books", booksPath]),
     );
     assertEquals(verifyExit, 0);
-
-    // 5. convert subcommand
-    const qfxPath = path.join(FIXTURES_DIR, "sample-bank.qfx");
-    const outCsv = path.join(tempDir, "converted.csv");
-    const convertExit = await runCli([
-      "convert",
-      "--input",
-      qfxPath,
-      "--output",
-      outCsv,
-    ]);
-    assertEquals(convertExit, 0);
-    const convertedContent = await Deno.readTextFile(outCsv);
-    assertStringIncludes(convertedContent, "TXN20260110001");
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }
@@ -811,72 +522,6 @@ Deno.test("entry and verify use the year's .beancount books and refuse any other
   }
 });
 
-Deno.test("import and month close keep their .journal defaults and refuse explicit Beancount books, leaving them intact", async () => {
-  const home = await Deno.makeTempDir({ prefix: "accounting-test-legacy-" });
-  try {
-    await withEnv({ HOME: home }, async () => {
-      const statement = path.join(home, "statement.csv");
-      await Deno.writeTextFile(
-        statement,
-        "Date,Description,Amount,Id\n2026-01-10,Made-up Deposit,100.00,T1\n",
-      );
-
-      // Import with no --journal writes the year's .journal file.
-      const journal = getDefaultJournalPath();
-      assertEquals(path.extname(journal), ".journal");
-      assertEquals(
-        await runCli(["import", "--statement", statement, "--account", "Assets:Checking:Truist"]),
-        0,
-      );
-      assertStringIncludes(await Deno.readTextFile(journal), "Made-up Deposit");
-
-      // Month close with no --journal works on the same year's .journal file.
-      const year = String(new Date().getFullYear());
-      const closeArgs = ["close-month", "--year", year, "--month", "1"];
-      const journalBeforeClose = await Deno.readTextFile(journal);
-      assertEquals(
-        await runCli([...closeArgs, "--balance", "Assets:Checking:Truist=100.00"]),
-        0,
-      );
-      assert((await Deno.readTextFile(journal)).length > journalBeforeClose.length);
-
-      // An explicit Beancount target is refused before anything is written.
-      const books = path.join(home, "2026.beancount");
-      const original = "2026-01-01 open Expenses:Meals USD\n";
-      await Deno.writeTextFile(books, original);
-      assertEquals(
-        await runCli(["import", "--statement", statement, "--journal", books]),
-        1,
-      );
-      assertEquals(
-        await runCli([
-          ...closeArgs,
-          "--balance",
-          "Assets:Checking:Truist=100.00",
-          "--journal",
-          books,
-        ]),
-        1,
-      );
-      assertEquals(await Deno.readTextFile(books), original);
-      await assertRejects(
-        () => importStatement({ statementPath: statement, journalPath: books }),
-        Error,
-        "refuses the Beancount books",
-      );
-      await assertRejects(
-        () =>
-          closeMonth({ year: 2026, month: 1, balances: { "Assets:Cash": 1 }, journalPath: books }),
-        Error,
-        "refuses the Beancount books",
-      );
-      assertEquals(await Deno.readTextFile(books), original);
-    });
-  } finally {
-    await Deno.remove(home, { recursive: true });
-  }
-});
-
 const ACCOUNTING_CLI = path.resolve(
   new URL("../../src/accounting/cli.ts", import.meta.url).pathname,
 );
@@ -1114,27 +759,338 @@ Deno.test("an entry with a date that is not a real calendar date is refused and 
   }
 });
 
-Deno.test("import and month close refuse --books, write nothing, and leave the default journal uncreated", async () => {
-  const home = await Deno.makeTempDir({ prefix: "accounting-test-books-flag-" });
-  try {
-    await withEnv({ HOME: home }, async () => {
-      const statement = path.join(home, "statement.csv");
-      await Deno.writeTextFile(
-        statement,
-        "Date,Description,Amount,Id\n2026-01-10,Made-up Deposit,100.00,T1\n",
-      );
-      const books = path.join(home, "2026.beancount");
-      const original = "2026-01-01 open Assets:Checking:Truist USD\n";
-      await Deno.writeTextFile(books, original);
+// ---- Import of clean CSVs and the month close in rustledger (web-jam-tools#1866) ----
 
+const IMPORTERS_TOML = `[[importers]]
+name = "truist-checking"
+account = "Assets:Checking:Truist"
+date_column = "date"
+narration_column = "description"
+amount_column = "amount"
+default_expense = "Expenses:Uncategorized"
+default_income = "Income:Uncategorized"
+mappings = { "PENN STATION" = "Expenses:Meals" }
+`;
+
+const BASE_BOOKS = `option "operating_currency" "USD"
+
+2026-01-01 open Assets:Checking:Truist USD
+`;
+
+/** The download cleaner's clean CSV: date, description, amount and the bank's line id. */
+function cleanCsv(lines: string[]): string {
+  return ["date,description,amount,id", ...lines].join("\n") + "\n";
+}
+
+const MARCH = [
+  "2026-03-04,PENN STATION 123,-22.86,T1",
+  "2026-03-05,MADE-UP CLIENT PAYMENT,200.00,T2",
+  "2026-03-31,GITHUB,-4.00,T3",
+];
+
+/** A books folder holding the year's books and importers.toml, removed after `fn`. */
+async function withBooksFolder(
+  fn: (dir: string, books: string, config: string) => Promise<void>,
+): Promise<void> {
+  const dir = await Deno.makeTempDir({ prefix: "accounting-test-import-" });
+  try {
+    const books = path.join(dir, "2026.beancount");
+    const config = path.join(dir, "importers.toml");
+    await Deno.writeTextFile(books, BASE_BOOKS);
+    await Deno.writeTextFile(config, IMPORTERS_TOML);
+    await fn(dir, books, config);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+}
+
+/** Candidate books are always removed: none is left beside the books. */
+async function assertNoCandidates(dir: string): Promise<void> {
+  for await (const entry of Deno.readDir(dir)) {
+    assert(!entry.name.includes(".candidate."), `left behind: ${entry.name}`);
+    assert(!entry.name.endsWith(".tmp"), `left behind: ${entry.name}`);
+  }
+}
+
+Deno.test("a clean CSV imports through its importers.toml profile, and the same file again adds nothing", async () => {
+  await withBooksFolder(async (dir, books, config) => {
+    const rledger = await rledgerPath();
+    const csv = path.join(dir, "march.csv");
+    await Deno.writeTextFile(csv, cleanCsv(MARCH));
+    const options = {
+      csvPath: csv,
+      booksPath: books,
+      configPath: config,
+      importer: "truist-checking",
+      rledger,
+    };
+
+    const first = await importStatement(options);
+    assertEquals(first.importedCount, 3);
+    assertEquals(first.openedAccounts.sort(), [
+      "Expenses:Meals",
+      "Expenses:Uncategorized",
+      "Income:Uncategorized",
+    ]);
+    const afterFirst = await Deno.readTextFile(books);
+    assert(afterFirst.startsWith(BASE_BOOKS), "the import only appends");
+    assertStringIncludes(afterFirst, '2026-03-04 * "PENN STATION 123"');
+    assertStringIncludes(afterFirst, "Expenses:Meals");
+    assertStringIncludes(afterFirst, "2026-01-01 open Expenses:Meals USD");
+    assertEquals((await checkBooks(books, { rledger })).outcome, "pass");
+
+    // The same file again: every line is already in the books, so nothing is written.
+    const repeat = await importStatement(options);
+    assertEquals(repeat.importedCount, 0);
+    assertEquals(await Deno.readTextFile(books), afterFirst);
+
+    // A later download with one new line imports that line alone.
+    await Deno.writeTextFile(csv, cleanCsv([...MARCH, "2026-04-02,OFFICE DEPOT,-9.10,T4"]));
+    const later = await importStatement(options);
+    assertEquals(later.importedCount, 1);
+    assertStringIncludes(later.extracted, "OFFICE DEPOT");
+    assertEquals((await checkBooks(books, { rledger })).outcome, "pass");
+
+    // A dry run reports and writes nothing.
+    await Deno.writeTextFile(csv, cleanCsv(["2026-04-03,STAPLES,-1.00,T5"]));
+    const beforeDry = await Deno.readTextFile(books);
+    assertEquals((await importStatement({ ...options, dryRun: true })).importedCount, 1);
+    assertEquals(await Deno.readTextFile(books), beforeDry);
+    await assertNoCandidates(dir);
+  });
+});
+
+Deno.test("the import refuses a missing rledger, an unreadable importers.toml or an unknown profile, leaving the books intact", async () => {
+  await withBooksFolder(async (dir, books, config) => {
+    const rledger = await rledgerPath();
+    const csv = path.join(dir, "march.csv");
+    await Deno.writeTextFile(csv, cleanCsv(MARCH));
+    const base = {
+      csvPath: csv,
+      booksPath: books,
+      configPath: config,
+      importer: "truist-checking",
+      rledger,
+    };
+
+    await assertRejects(
+      () => importStatement({ ...base, rledger: path.join(dir, "no-such-rledger") }),
+      Error,
+      "not installed or not on PATH",
+    );
+    await assertRejects(
+      () => importStatement({ ...base, configPath: path.join(dir, "missing.toml") }),
+      Error,
+      "rledger extract refused",
+    );
+    await assertRejects(
+      () => importStatement({ ...base, importer: "no-such-profile" }),
+      Error,
+      "no-such-profile",
+    );
+    // Books that cannot be read: the import cannot tell what is already in them.
+    await assertRejects(
+      () => importStatement({ ...base, booksPath: path.join(dir, "2027.beancount") }),
+      Error,
+      "Cannot read the books",
+    );
+    // A .journal target is refused before anything runs.
+    await assertRejects(
+      () => importStatement({ ...base, booksPath: path.join(dir, "2026.journal") }),
+      Error,
+      "is not a .beancount file",
+    );
+
+    assertEquals(await Deno.readTextFile(books), BASE_BOOKS);
+    await assertRejects(() => Deno.stat(path.join(dir, "2027.beancount")), Deno.errors.NotFound);
+    await assertNoCandidates(dir);
+  });
+});
+
+Deno.test("the import refuses lines that would leave the books failing rledger check", async () => {
+  await withBooksFolder(async (dir, books, config) => {
+    const rledger = await rledgerPath();
+    // The checking account closes before the statement's lines, so the check would fail.
+    const closed = BASE_BOOKS + "\n2026-02-01 close Assets:Checking:Truist\n";
+    await Deno.writeTextFile(books, closed);
+    const csv = path.join(dir, "march.csv");
+    await Deno.writeTextFile(csv, cleanCsv(MARCH));
+    await assertRejects(
+      () =>
+        importStatement({
+          csvPath: csv,
+          booksPath: books,
+          configPath: config,
+          importer: "truist-checking",
+          rledger,
+        }),
+      Error,
+      "rledger check found errors",
+    );
+    assertEquals(await Deno.readTextFile(books), closed);
+    await assertNoCandidates(dir);
+  });
+});
+
+Deno.test("the month close counts a last-day posting, publishes a dated copy and reports, and a later edit fails the check", async () => {
+  await withBooksFolder(async (dir, books, config) => {
+    const rledger = await rledgerPath();
+    const csv = path.join(dir, "march.csv");
+    // An April line is in the books too; the March close must not count it.
+    await Deno.writeTextFile(csv, cleanCsv([...MARCH, "2026-04-02,OFFICE DEPOT,-9.10,T4"]));
+    await importStatement({
+      csvPath: csv,
+      booksPath: books,
+      configPath: config,
+      importer: "truist-checking",
+      rledger,
+    });
+    const imported = await Deno.readTextFile(books);
+    const closedDir = path.join(dir, "closed", "2026-03");
+
+    // A statement balance that leaves out the March 31 purchase does not match: refused, nothing written.
+    await assertRejects(
+      () =>
+        closeMonth({
+          year: 2026,
+          month: 3,
+          balances: { "Assets:Checking:Truist": 177.14 },
+          booksPath: books,
+          rledger,
+        }),
+      Error,
+      "rledger check found errors",
+    );
+    assertEquals(await Deno.readTextFile(books), imported);
+    await assertRejects(() => Deno.stat(closedDir), Deno.errors.NotFound);
+
+    // The real statement balance counts the last-day posting: 200.00 - 22.86 - 4.00.
+    const result = await closeMonth({
+      year: 2026,
+      month: 3,
+      balances: { "Assets:Checking:Truist": 173.14 },
+      booksPath: books,
+      rledger,
+    });
+    assertEquals(result.balanceDate, "2026-04-01");
+    const closedBooks = await Deno.readTextFile(books);
+    assertStringIncludes(closedBooks, "2026-04-01 balance Assets:Checking:Truist 173.14 USD");
+    assertEquals((await checkBooks(books, { rledger })).outcome, "pass");
+
+    // The dated copy is the closed books; the reports cover March only.
+    assertEquals(result.snapshotPath, path.join(closedDir, "2026.beancount"));
+    assertEquals(await Deno.readTextFile(result.snapshotPath), closedBooks);
+    const [balanceSheet, incomeStatement] = await Promise.all(
+      result.reportPaths.map((p) => Deno.readTextFile(p)),
+    );
+    assertStringIncludes(balanceSheet, "Assets:Checking:Truist");
+    assertStringIncludes(balanceSheet, "173.14 USD");
+    assertStringIncludes(incomeStatement, "Expenses:Meals");
+    assertStringIncludes(incomeStatement, "22.86 USD");
+    assert(!incomeStatement.includes("9.10"), "the April purchase is outside the March statement");
+
+    // An earlier edit that changes March's totals now fails rledger check.
+    await Deno.writeTextFile(books, closedBooks.replace("-22.86 USD", "-21.86 USD"));
+    const afterEdit = await checkBooks(books, { rledger });
+    assertEquals(afterEdit.outcome, "fail");
+    assertStringIncludes(afterEdit.message, "Balance failed for Assets:Checking:Truist");
+
+    // Closing the same month again is refused.
+    await Deno.writeTextFile(books, closedBooks);
+    await assertRejects(
+      () =>
+        closeMonth({
+          year: 2026,
+          month: 3,
+          balances: { "Assets:Checking:Truist": 173.14 },
+          booksPath: books,
+          rledger,
+        }),
+      Error,
+      "already closed",
+    );
+    assertEquals(await Deno.readTextFile(books), closedBooks);
+    await assertNoCandidates(dir);
+  });
+});
+
+Deno.test("the month close refuses a missing rledger and invalid input, leaving the books and closed/ untouched", async () => {
+  await withBooksFolder(async (dir, books) => {
+    const rledger = await rledgerPath();
+    const base = {
+      year: 2026,
+      month: 3,
+      balances: { "Assets:Checking:Truist": 0 },
+      booksPath: books,
+      rledger,
+    };
+    await assertRejects(
+      () => closeMonth({ ...base, rledger: path.join(dir, "no-such-rledger") }),
+      Error,
+      "not installed or not on PATH",
+    );
+    await assertRejects(() => closeMonth({ ...base, month: 13 }), Error, "not a month");
+    await assertRejects(
+      () => closeMonth({ ...base, balances: { "assets:checking": 1 } }),
+      Error,
+      "not a Beancount account name",
+    );
+    await assertRejects(() => closeMonth({ ...base, balances: {} }), Error, "No statement balance");
+    await assertRejects(
+      () => closeMonth({ ...base, booksPath: path.join(dir, "2026.journal") }),
+      Error,
+      "is not a .beancount file",
+    );
+    assertEquals(await Deno.readTextFile(books), BASE_BOOKS);
+    await assertRejects(() => Deno.stat(path.join(dir, "closed")), Deno.errors.NotFound);
+
+    // A December close dates its balance lines January 1 of the next year.
+    const december = await closeMonth({ ...base, month: 12, dryRun: true });
+    assertEquals(december.balanceDate, "2027-01-01");
+    assertEquals(await Deno.readTextFile(books), BASE_BOOKS);
+    await assertNoCandidates(dir);
+  });
+});
+
+Deno.test("the import and close-month commands read importers.toml beside the books and run rledger from PATH", async () => {
+  await withBooksFolder(async (dir, books) => {
+    const rledger = await rledgerDir();
+    const csv = path.join(dir, "march.csv");
+    await Deno.writeTextFile(csv, cleanCsv(MARCH));
+    await withEnv({ PATH: `${rledger}:${Deno.env.get("PATH") ?? ""}` }, async () => {
+      // Run from a folder holding a different importers.toml: the books' own one is used.
+      const elsewhere = await Deno.makeTempDir({ prefix: "accounting-test-cwd-" });
+      const cwd = Deno.cwd();
+      try {
+        await Deno.writeTextFile(path.join(elsewhere, "importers.toml"), "not toml [[[");
+        Deno.chdir(elsewhere);
+        assertEquals(
+          await runCli([
+            "import",
+            "--statement",
+            csv,
+            "--importer",
+            "truist-checking",
+            "--books",
+            books,
+          ]),
+          0,
+        );
+      } finally {
+        Deno.chdir(cwd);
+        await Deno.remove(elsewhere, { recursive: true });
+      }
+      assertStringIncludes(await Deno.readTextFile(books), "PENN STATION 123");
+
+      assertEquals(await runCli(["import", "--statement", csv, "--books", books]), 1);
       assertEquals(
         await runCli([
           "import",
           "--statement",
-          statement,
-          "--account",
-          "Assets:Checking:Truist",
-          "--books",
+          csv,
+          "--importer",
+          "truist-checking",
+          "--journal",
           books,
         ]),
         1,
@@ -1145,19 +1101,18 @@ Deno.test("import and month close refuse --books, write nothing, and leave the d
           "--year",
           "2026",
           "--month",
-          "1",
+          "3",
           "--balance",
-          "Assets:Checking:Truist=100.00",
+          "Assets:Checking:Truist=173.14",
           "--books",
           books,
         ]),
-        1,
+        0,
       );
-      assertEquals(await Deno.readTextFile(books), original);
-      await assertRejects(() => Deno.stat(getDefaultJournalPath()), Deno.errors.NotFound);
-      await assertRejects(() => Deno.stat(getDefaultJournalPath(2026)), Deno.errors.NotFound);
+      assertStringIncludes(
+        await Deno.readTextFile(books),
+        "2026-04-01 balance Assets:Checking:Truist 173.14 USD",
+      );
     });
-  } finally {
-    await Deno.remove(home, { recursive: true });
-  }
+  });
 });

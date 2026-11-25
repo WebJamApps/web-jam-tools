@@ -1,10 +1,13 @@
 // src/accounting/import.ts
-// Reconcile and import statement transactions into the journal with duplicate prevention (web-jam-tools#1764).
+// Import a clean CSV into the year's Beancount books through `rledger extract` (web-jam-tools#1866),
+// as "Each month" in "The accounting skill" of web-jam-music-media-design.md sets out: the books'
+// own importers.toml named with --config, the account's profile with --importer, and the year's
+// books with --existing, so a line already in the books is skipped.
 
-import * as path from "@std/path";
-import { assertJournalTarget, parseJournal } from "./entry.ts";
-import { AccountRule, BankTransaction, ImportOptions, ImportResult, Transaction } from "./types.ts";
+import { appendBlock, assertBeancountTarget, openLinesFor, updateBooks } from "./entry.ts";
+import { RledgerUnavailable, runRledger, withCheckedCandidate } from "./verify.ts";
 
+/** Splits CSV text into rows, keeping quoted commas and line breaks; the mileage log reads with it. */
 export function parseCsvRows(csvContent: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
@@ -39,259 +42,95 @@ export function parseCsvRows(csvContent: string): string[][] {
   return rows;
 }
 
-export function parseStatementCsv(csvContent: string): BankTransaction[] {
-  const rows = parseCsvRows(csvContent);
-  if (rows.length === 0) return [];
-
-  const header = rows[0].map((h) => h.trim().toLowerCase());
-  const dateIdx = header.findIndex((h) => h === "date" || h.includes("posted"));
-  const descIdx = header.findIndex((h) =>
-    h === "description" || h === "payee" || h === "name" || h === "memo"
-  );
-  const amtIdx = header.findIndex((h) => h === "amount");
-  const idIdx = header.findIndex((h) =>
-    h === "id" || h === "fitid" || h === "transactionid" || h === "ref"
-  );
-  const memoIdx = header.findIndex((h) => h === "memo" && h !== header[descIdx]);
-
-  if (dateIdx === -1 || amtIdx === -1) {
-    throw new Error("CSV statement missing required 'date' or 'amount' columns");
-  }
-
-  const transactions: BankTransaction[] = [];
-
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    if (row.length <= dateIdx || row.length <= amtIdx) continue;
-
-    const date = row[dateIdx].trim();
-    const rawAmt = row[amtIdx].replace(/[$,]/g, "").trim();
-    if (!date || !rawAmt) continue;
-
-    const amount = parseFloat(rawAmt);
-    const payee = descIdx !== -1 && row[descIdx]
-      ? row[descIdx].trim().replace(/\s*\r?\n\s*/g, " ")
-      : "Unknown Payee";
-    const memo = memoIdx !== -1 && row[memoIdx]
-      ? row[memoIdx].trim().replace(/\s*\r?\n\s*/g, " ")
-      : undefined;
-    const id = idIdx !== -1 && row[idIdx] && row[idIdx].trim() !== ""
-      ? row[idIdx].trim()
-      : `${date}_${amount}_${payee.replace(/\s+/g, "")}`;
-
-    transactions.push({
-      date,
-      amount,
-      payee,
-      memo,
-      id,
-    });
-  }
-
-  return transactions;
+export interface ImportOptions {
+  /** The clean CSV the download cleaner wrote. */
+  csvPath: string;
+  /** The year's Beancount books; they must already exist. */
+  booksPath: string;
+  /** The books' own importers.toml. */
+  configPath: string;
+  /** The account's profile in importers.toml. */
+  importer: string;
+  /** The rustledger program; `rledger` on PATH unless a test names another. */
+  rledger?: string;
+  /** Report what would be imported and write nothing. */
+  dryRun?: boolean;
 }
 
-export function extractExistingIds(journalContent: string): Set<string> {
-  const ids = new Set<string>();
-  const parsedTxs = parseJournal(journalContent);
-
-  for (const tx of parsedTxs) {
-    if (tx.code) ids.add(tx.code);
-    if (tx.tags && tx.tags["id"]) ids.add(tx.tags["id"]);
-    if (tx.tags && tx.tags["fitid"]) ids.add(tx.tags["fitid"]);
-
-    // Also track date + description + amount signature as fallback
-    for (const p of tx.postings) {
-      ids.add(`${tx.date}_${p.amount}_${tx.description.replace(/\s+/g, "")}`);
-    }
-  }
-
-  return ids;
+export interface ImportResult {
+  /** How many transactions were written, or would be on a dry run. */
+  importedCount: number;
+  /** The Beancount text of those transactions, as rustledger extracted them. */
+  extracted: string;
+  /** Accounts opened so the imported transactions pass the check. */
+  openedAccounts: string[];
 }
 
-export function loadAccountRules(rulesText?: string): AccountRule[] {
-  const rules: AccountRule[] = [];
-  if (!rulesText) return rules;
+const TRANSACTION_HEADER = /^\d{4}-\d{2}-\d{2}\s+[*!]\s/;
+const POSTING_ACCOUNT = /^\s+((?:Assets|Liabilities|Equity|Income|Expenses):\S+)/;
 
-  const lines = rulesText.split(/\r?\n/);
-  let currentPattern: string | null = null;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";")) continue;
-
-    // Check for indented directive following "if <pattern>"
-    if ((line.startsWith(" ") || line.startsWith("\t")) && currentPattern) {
-      const accMatch = trimmed.match(/^account[12]?\s+([A-Za-z0-9:_ -]+)$/i);
-      if (accMatch) {
-        rules.push({
-          pattern: currentPattern,
-          category: accMatch[1].trim(),
-        });
-        currentPattern = null;
-        continue;
-      }
-    }
-
-    // Single-line format: if <pattern> account2 <category>
-    const singleLineMatch = trimmed.match(
-      /^if(?:\s+%description)?\s+(.+?)\s+account[12]?\s+([A-Za-z0-9:_ -]+)$/i,
-    );
-    if (singleLineMatch) {
-      rules.push({
-        pattern: singleLineMatch[1].trim().toLowerCase(),
-        category: singleLineMatch[2].trim(),
-      });
-      currentPattern = null;
-      continue;
-    }
-
-    // Multi-line header: if <pattern>
-    const ifMatch = trimmed.match(/^if(?:\s+%description)?\s+(.+)$/i);
-    if (ifMatch) {
-      currentPattern = ifMatch[1].trim().toLowerCase();
-      continue;
-    }
-  }
-
-  return rules;
-}
-
-export function categorizeTransaction(
-  payee: string,
-  amount: number,
-  rules: AccountRule[] = [],
-): string {
-  const lower = payee.toLowerCase();
-  for (const rule of rules) {
-    if (rule.pattern && lower.includes(rule.pattern.toLowerCase())) {
-      return rule.category;
-    }
-  }
-
-  // Built-in rule defaults
-  if (lower.includes("penn station") || lower.includes("restaurant") || lower.includes("cafe")) {
-    return "Expenses:Meals";
-  }
-  if (
-    lower.includes("github") || lower.includes("anthropic") || lower.includes("openai") ||
-    lower.includes("google")
-  ) {
-    return "Expenses:Software";
-  }
-  if (lower.includes("office depot") || lower.includes("staples")) {
-    return "Expenses:Supplies";
-  }
-  if (lower.includes("state corp") || lower.includes("scc")) {
-    return "Expenses:RegistrationFees";
-  }
-
-  return amount >= 0 ? "Income:Uncategorized" : "Expenses:Uncategorized";
-}
-
+/**
+ * Imports one clean CSV. Three outcomes, per the issue: a line not in the books is imported with
+ * its profile's category; a line already there, matched by `--existing`, is skipped, so running the
+ * same file again adds nothing; and when `rledger` cannot run, `importers.toml` cannot be read, the
+ * profile is not found, or the books with the new lines would fail `rledger check`, it refuses and
+ * the books are left as they were. The extracted lines are staged and checked before they are
+ * appended, under the books' lock.
+ */
 export async function importStatement(options: ImportOptions): Promise<ImportResult> {
-  assertJournalTarget(options.journalPath, "accounting:import");
-  const statementContent = await Deno.readTextFile(options.statementPath);
-  const bankTxs = parseStatementCsv(statementContent);
+  assertBeancountTarget(options.booksPath, "accounting:import");
+  const rledger = options.rledger ?? "rledger";
 
-  let journalContent = "";
-  try {
-    journalContent = await Deno.readTextFile(options.journalPath);
-  } catch (_err) {
-    journalContent = "";
-  }
-
-  let rules: AccountRule[] = [];
-  if (options.rulesPath) {
+  return await updateBooks(options.booksPath, "accounting:import", async (books) => {
+    let existing: string;
     try {
-      const rulesText = await Deno.readTextFile(options.rulesPath);
-      rules = loadAccountRules(rulesText);
-    } catch (_err) {
-      // rule file optional
-    }
-  }
-
-  const existingIds = extractExistingIds(journalContent);
-  const account = options.account || "Assets:Checking:Truist";
-
-  const newTransactions: Transaction[] = [];
-  let skippedCount = 0;
-
-  for (const btx of bankTxs) {
-    // Duplicate check
-    const sig = `${btx.date}_${btx.amount}_${btx.payee.replace(/\s+/g, "")}`;
-    // Bank IDs distinguish otherwise identical transactions; id-less rows use
-    // the signature generated by parseStatementCsv as their fallback ID.
-    if (existingIds.has(btx.id)) {
-      skippedCount++;
-      continue;
+      existing = await Deno.readTextFile(books.target);
+    } catch (err) {
+      throw new Error(
+        `Cannot read the books at ${books.target}, so the import cannot tell what is already in them: ${
+          err instanceof Error ? err.message : String(err)
+        }. Nothing was written.`,
+      );
     }
 
-    const category = categorizeTransaction(btx.payee, btx.amount, rules);
-
-    // Double-entry balancing:
-    // If bank amount is negative (-22.86): checking/card was decreased by 22.86, expense is +22.86
-    // If bank amount is positive (+200.00): checking was increased by 200.00, income is -200.00
-    const tx: Transaction = {
-      date: btx.date,
-      code: btx.id,
-      description: btx.payee,
-      postings: [
-        {
-          account: category,
-          amount: -btx.amount,
-        },
-        {
-          account,
-          amount: btx.amount,
-        },
-      ],
-      tags: {
-        id: btx.id,
-      },
-    };
-
-    if (btx.memo) {
-      tx.tags["memo"] = btx.memo;
-    }
-
-    newTransactions.push(tx);
-    existingIds.add(btx.id);
-    existingIds.add(sig);
-  }
-
-  if (newTransactions.length > 0 && !options.dryRun) {
-    const linesToAdd: string[] = [];
-    for (const tx of newTransactions) {
-      const parts: string[] = [];
-      const codeStr = tx.code ? ` (${tx.code})` : "";
-      parts.push(`${tx.date}${codeStr} ${tx.description}`);
-      for (const [k, v] of Object.entries(tx.tags)) {
-        parts.push(`    ; ${k}: ${v}`);
+    let run;
+    try {
+      run = await runRledger(rledger, [
+        "extract",
+        "--config",
+        options.configPath,
+        "--importer",
+        options.importer,
+        "--existing",
+        books.target,
+        options.csvPath,
+      ]);
+    } catch (err) {
+      if (err instanceof RledgerUnavailable) {
+        throw new Error(`${err.message}, so nothing was imported and the books were not changed.`);
       }
-      for (const p of tx.postings) {
-        const amtStr = `$${p.amount.toFixed(2)}`;
-        parts.push(`    ${p.account.padEnd(34)}  ${amtStr}`);
-      }
-      linesToAdd.push(parts.join("\n"));
+      throw err;
+    }
+    if (run.code !== 0) {
+      throw new Error(
+        `rledger extract refused (exit ${run.code}), so nothing was imported and the books were not changed:\n${run.stderr.trim()}`,
+      );
     }
 
-    const dir = path.dirname(options.journalPath);
-    await Deno.mkdir(dir, { recursive: true });
+    const extracted = run.stdout.trim() ? run.stdout.trimEnd() + "\n" : "";
+    const lines = extracted.split("\n");
+    const importedCount = lines.filter((line) => TRANSACTION_HEADER.test(line)).length;
+    if (importedCount === 0) return { importedCount: 0, extracted: "", openedAccounts: [] };
 
-    const prefix = journalContent.length > 0 && !journalContent.endsWith("\n\n")
-      ? (journalContent.endsWith("\n") ? "\n" : "\n\n")
-      : "";
+    const accounts = lines.flatMap((line) => POSTING_ACCOUNT.exec(line)?.[1] ?? []);
+    const year = lines.find((line) => TRANSACTION_HEADER.test(line))!.slice(0, 4);
+    const opens = openLinesFor(existing, accounts, year);
+    const candidate = appendBlock(existing, opens + extracted);
+    const openedAccounts = opens.split("\n").filter(Boolean).map((line) => line.split(/\s+/)[2]);
 
-    await Deno.writeTextFile(
-      options.journalPath,
-      journalContent + prefix + linesToAdd.join("\n\n") + "\n",
-    );
-  }
-
-  return {
-    importedCount: newTransactions.length,
-    skippedCount,
-    transactions: newTransactions,
-  };
+    await withCheckedCandidate(books.target, candidate, rledger, async () => {
+      if (!options.dryRun) await books.replace(candidate);
+    });
+    return { importedCount, extracted, openedAccounts };
+  });
 }

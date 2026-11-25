@@ -1,14 +1,13 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.78.2",
+  "version": "1.79.0",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
     "accounting:entry": "deno run --allow-env=HOME --allow-read=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-write=.,$HOME/Dropbox/web-jam-llms/financial/books src/accounting/cli.ts entry",
     "accounting:receipt": "deno run --allow-env=HOME --allow-read=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-write=.,$HOME/Dropbox/web-jam-llms/financial/books src/accounting/cli.ts receipt",
-    "accounting:convert": "deno run --allow-env=HOME --allow-read=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-write=.,$HOME/Dropbox/web-jam-llms/financial/books src/accounting/cli.ts convert",
-    "accounting:import": "deno run --allow-env=HOME --allow-read=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-write=.,$HOME/Dropbox/web-jam-llms/financial/books src/accounting/cli.ts import",
-    "accounting:close-month": "deno run --allow-env=HOME --allow-read=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-write=.,$HOME/Dropbox/web-jam-llms/financial/books src/accounting/cli.ts close-month",
+    "accounting:import": "deno run --allow-env=HOME --allow-read=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-write=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-run=rledger src/accounting/cli.ts import",
+    "accounting:close-month": "deno run --allow-env=HOME --allow-read=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-write=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-run=rledger src/accounting/cli.ts close-month",
     "accounting:verify": "deno run --allow-env=HOME --allow-read=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-write=.,$HOME/Dropbox/web-jam-llms/financial/books --allow-run=rledger src/accounting/cli.ts verify",
     "accounting:return-figures": "deno run --allow-env=HOME --allow-read=$HOME/Dropbox/financial-private/tax --allow-write=$HOME/Dropbox/web-jam-llms/financial/books --allow-run=pdftotext src/accounting/return_figures.ts",
     "accounting:clean-download": "deno run --allow-env=HOME --allow-read=$HOME/Dropbox/financial-private/downloads --allow-write=$HOME/Dropbox/web-jam-llms/financial/books src/accounting/clean_download.ts",
