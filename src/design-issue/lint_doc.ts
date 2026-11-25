@@ -1551,14 +1551,15 @@ function coversPath(coveredRoot: string, normBodyPath: string): boolean {
 function isBodyPathCovered(bodyPath: string, whereThingsLiveTokens: string[]): boolean {
   const normBody = stripOneTrailingSlash(bodyPath);
   for (const entry of whereThingsLiveTokens) {
-    if (normBody === stripOneTrailingSlash(entry)) {
+    if (coversPath(stripOneTrailingSlash(entry), normBody)) {
       return true;
     }
     const angleIdx = entry.indexOf("<");
-    const rawRoot = angleIdx !== -1 ? entry.slice(0, angleIdx) : entry;
-    const coveredRoot = stripOneTrailingSlash(rawRoot);
-    if (coveredRoot.length > 0 && coversPath(coveredRoot, normBody)) {
-      return true;
+    if (angleIdx !== -1) {
+      const coveredRoot = stripOneTrailingSlash(entry.slice(0, angleIdx));
+      if (coveredRoot.length > 0 && coversPath(coveredRoot, normBody)) {
+        return true;
+      }
     }
   }
   return false;
