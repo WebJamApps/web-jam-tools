@@ -657,6 +657,7 @@ Deno.test("web-jam-tools#714: a clean reply still passes through while deno.json
     await withFixtureTranscript(entries, async (path) => {
       const res = await runHook(path, copiedHook);
       assertEquals(res.code, 0, res.stderr);
+      assertEquals(res.stdout.trim(), "");
     });
   });
 });
