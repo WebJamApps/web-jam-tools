@@ -1551,6 +1551,9 @@ function coversPath(coveredRoot: string, normBodyPath: string): boolean {
 function isBodyPathCovered(bodyPath: string, whereThingsLiveTokens: string[]): boolean {
   const normBody = stripOneTrailingSlash(bodyPath);
   for (const entry of whereThingsLiveTokens) {
+    if (normBody === stripOneTrailingSlash(entry)) {
+      return true;
+    }
     const angleIdx = entry.indexOf("<");
     const rawRoot = angleIdx !== -1 ? entry.slice(0, angleIdx) : entry;
     const coveredRoot = stripOneTrailingSlash(rawRoot);

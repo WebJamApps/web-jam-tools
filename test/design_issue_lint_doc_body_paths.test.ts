@@ -323,6 +323,21 @@ Deno.test("body paths: placeholder prefix enforces directory boundary instead of
   assertStringIncludes(violations[0].message, "/var/log/run-other/output.log");
 });
 
+Deno.test("body paths: mid-name placeholder listed verbatim in Where Things Live covers exact body match", () => {
+  const doc = buildDoc({
+    body:
+      "Writes `/var/log/run-<id>/output.log` and checks out `/tmp/fix-pr-<number>/` in `/tmp/agy-worktrees/<Repo>-<branch>`.",
+    whereThingsLive: [
+      "- `/var/log/run-<id>/output.log` — per-run output",
+      "- `/tmp/fix-pr-<number>` — throwaway fix worktree",
+      "- `/tmp/agy-worktrees/<Repo>-<branch>` — issue worktree",
+    ].join("\n"),
+  });
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, true);
+  assertEquals(result.violations.length, 0);
+});
+
 Deno.test("body paths: paths in ordinary heading lines are checked while nested Where Things Live in Appendix cannot grant coverage or end Appendix exclusion", () => {
   const missingHeadingPath = buildDoc({
     body: "### Writing `~/.claude/state/run-state.json`\n\nNormal prose.",
