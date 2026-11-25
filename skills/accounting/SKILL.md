@@ -130,23 +130,20 @@ Check the year's books with `deno task accounting:verify`, which runs `rledger c
 
 ## Monthly Routine: Bank Import & Close
 
-1. **Clean downloads (Josh, in his own terminal)**: Josh downloads the month's file for each of the
-   two business accounts into the private downloads folder named in the design's "What never
-   reaches an agent", and runs `deno task accounting:clean-download <file>` on each, outside every
-   agent and never through Claude Code's `!`. It writes the clean CSV
-   (`date,description,amount,id`) into `statements/<year>/`. An agent never opens a download as it
-   was produced. Where an account offers neither CSV nor the Quicken or QuickBooks format, Josh
-   types its lines from the statement.
+1. **Clean downloads (Josh, in his own terminal)**: Josh gets each business account's statement
+   file and runs `deno task accounting:clean-download <file>` on it himself, as "Each month" and
+   "What never reaches an agent" in the design set out. The clean CSV
+   (`date,description,amount,id`) lands in `statements/<year>/`; an agent never opens a download as
+   it was produced. An account with no downloadable file is typed in by Josh.
 2. **Import**: Import each clean file into the year's books with its account's profile from
    `importers.toml`:
    ```sh
    deno task accounting:import --statement statements/<year>/<file>.csv --importer <profile>
    ```
-   It runs `rledger extract`, naming the books' own `importers.toml` with `--config` (or the file
-   named with `--config`), the profile with `--importer`, and the year's books with `--existing`,
-   so a line already in the books is skipped and the same file run again adds nothing. Without
-   `--config`, an `importers.toml` in whatever folder the command runs from would be read instead,
-   which is why the command always names the books' own file.
+   It runs `rledger extract` with `--config` pointing at the books' own `importers.toml` (or the
+   file named with `--config`), `--importer` naming the profile, and `--existing` naming the
+   year's books. Lines the books already hold are left out, so running a file twice adds nothing.
+   Why `--config` is always passed is explained under "Each month" in the design.
    - The profile's `mappings` give each line its category, matched on the description; a line no
      mapping places lands in its `default_expense` or `default_income` account. Ask Josh about
      any line the profile cannot place.
