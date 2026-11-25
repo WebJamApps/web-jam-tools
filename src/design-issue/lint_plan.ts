@@ -190,14 +190,99 @@ const RETIRING_TITLE_VERB =
 
 const NOTHING_ELSE_TO_REMOVE = /\bnothing\s+else\s+to\s+remove\b/i;
 
-const RETIRING_CLEANUP_INDICATORS = [
-  /\b(?:retire[sd]?|retiring|remove[sd]?|removing|delete[sd]?|deleting|drop(?:s|ped|ping)?|uninstall(?:s|ed|ing)?|prune[sd]?|pruning|strip(?:s|ped|ping)?|revoke[sd]?|revoking|clean(?:s|ed|ing)?\s+up|absent|gone)\b/i,
-  /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/,
-  /\b(?:packages?|dependenc(?:y|ies)|settings?|keys?|secrets?|tokens?|crons?|scheduled\s+jobs?|callers?|index(?:es|ed)?)\b/i,
-];
+const UPPER_SNAKE_KEY = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/;
 
-const EMPTY_CLEANUP_PHRASE =
-  /^(?:nothing(?:\s+(?:it\s+removes|removed))?)$|\b(?:retires?|removes?|deletes?|drops?)\s+nothing\b/i;
+const IGNORED_BACKTICK_TOKENS = new Set([
+  "deno",
+  "npm",
+  "npx",
+  "yarn",
+  "pnpm",
+  "bun",
+  "node",
+  "git",
+  "gh",
+  "bash",
+  "sh",
+  "zsh",
+  "curl",
+  "docker",
+  "heroku",
+  "atlas",
+  "gcloud",
+  "make",
+  "pytest",
+  "vitest",
+  "jest",
+  "eslint",
+  "prettier",
+  "tsc",
+  "rledger",
+  "semgrep",
+  "trivy",
+  "gitleaks",
+  "shellcheck",
+  "package.json",
+  "deno.json",
+  "package-lock.json",
+  "deno.lock",
+  "test",
+  "tests",
+  "unit",
+  "pass",
+  "passes",
+  "passed",
+  "fail",
+  "fails",
+  "failed",
+  "remove",
+  "removes",
+  "removed",
+  "removing",
+  "retire",
+  "retires",
+  "retired",
+  "retiring",
+  "delete",
+  "deletes",
+  "deleted",
+  "deleting",
+  "drop",
+  "drops",
+  "dropped",
+  "dropping",
+  "gone",
+  "absent",
+  "none",
+  "nothing",
+  "n/a",
+  "true",
+  "false",
+  "null",
+  "undefined",
+  "dev",
+  "main",
+  "settings",
+  "setting",
+  "keys",
+  "key",
+  "index",
+  "indexes",
+  "packages",
+  "package",
+  "callers",
+  "caller",
+  "collection",
+  "collections",
+  "hook",
+  "hooks",
+  "script",
+  "scripts",
+  "page",
+  "pages",
+  "cron",
+  "crons",
+]);
 
 const REVIEW_KEYWORDS = [
   /\bchrome\b/i,
@@ -686,6 +771,38 @@ function checkTitlePersonalName(row: PlanTableRow, violations: PlanTableViolatio
   }
 }
 
+function isNamedCleanupToken(rawToken: string): boolean {
+  const token = rawToken.trim();
+  if (!token || /\s/.test(token)) return false;
+  if (token.startsWith("-")) return false;
+  if (IGNORED_BACKTICK_TOKENS.has(token.toLowerCase())) return false;
+  return /[a-zA-Z]/.test(token) && /^[a-zA-Z0-9_@./:+-]+$/.test(token);
+}
+
+function hasNamedRetiringCleanup(rawCells: readonly string[]): boolean {
+  const combinedRaw = rawCells.join(" ").trim();
+  if (!combinedRaw) return false;
+
+  // Allow `"nothing else to remove"` even when wrapped in backticks or emphasis markers.
+  if (NOTHING_ELSE_TO_REMOVE.test(stripMdMarkers(combinedRaw))) return true;
+
+  // Pass backticked identifiers (package, path, setting, collection, or index names),
+  // ignoring backticked commands (which contain whitespace or name CLI tools) and generic nouns.
+  for (const match of combinedRaw.matchAll(/`([^`]+)`/g)) {
+    if (isNamedCleanupToken(match[1])) return true;
+  }
+
+  // Strip backticked spans, double-quoted heading names (e.g. `"Retiring code"`), and
+  // `package.json`/`deno.json` references so only explicit UPPER_SNAKE keys count in plain text.
+  const plain = combinedRaw
+    .replace(/`[^`]*`/g, " ")
+    .replace(/"[^"]*"/g, " ")
+    .replace(/\b(?:package|deno)\.json\b/gi, " ")
+    .replace(/\*/g, "");
+
+  return UPPER_SNAKE_KEY.test(plain);
+}
+
 /**
  * Checks whether a retiring plan row (whose title says retire, remove, delete, or drop) names the
  * settings, keys, packages, jobs, callers, or indexes it removes, or explicitly reads
@@ -701,33 +818,11 @@ export function checkRetiringCodeRow(
   const title = stripMdMarkers(row.cells[COL_TITLE]);
   if (!RETIRING_TITLE_VERB.test(title)) return;
 
+  const rawScopeCells = [row.cells[COL_TESTS], row.cells[COL_CLOSES]]
+    .filter((c) => !isMissingValue(c));
+  if (hasNamedRetiringCleanup(rawScopeCells)) return;
+
   const rowNum = stripMdMarkers(row.cells[COL_NUM]).trim() || String(allRows.indexOf(row) + 1);
-  const scopeParts = [row.cells[COL_TESTS], row.cells[COL_CLOSES]]
-    .filter((c) => !isMissingValue(c))
-    .map((c) => stripMdMarkers(c).replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-  const combinedScope = scopeParts.join(" ").trim();
-
-  if (NOTHING_ELSE_TO_REMOVE.test(combinedScope)) return;
-
-  if (combinedScope && !EMPTY_CLEANUP_PHRASE.test(combinedScope)) {
-    // Strip double-quoted design heading names (e.g. `"Retiring code"`) and `.json` filenames
-    // so quoting a heading or `package.json` cannot falsely satisfy cleanup naming.
-    const unquoted = combinedScope
-      .replace(/"[^"]*"/g, " ")
-      .replace(/\b(?:package|deno)\.json\b/gi, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (
-      unquoted &&
-      !EMPTY_CLEANUP_PHRASE.test(unquoted) &&
-      RETIRING_CLEANUP_INDICATORS.some((re) => re.test(unquoted))
-    ) {
-      return;
-    }
-  }
-
   violations.push({
     rule: "retiring-row-missing-cleanup",
     line: row.line,
