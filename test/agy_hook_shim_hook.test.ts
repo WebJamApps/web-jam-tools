@@ -2031,3 +2031,51 @@ Deno.test("an Arguments field on a tool other than call_mcp_tool follows the who
     assertEquals(mediaResult.decision, "deny", mediaResult.reason);
   });
 });
+
+// --- the three whole-suite entry points keep live state off (hooks design, "Both surfaces") ---
+//
+// The agy invocation record and Josh's workflow switch and its log are live state, so no test
+// run may write them. Each entry point below must set AGY_HOOK_RECORD_PATH=off and point both
+// switch variables at a path that does not exist. Removing any one setting fails the test and
+// names the entry point.
+
+const SUITE_ENTRY_POINTS_ROOT = new URL("../", import.meta.url).pathname;
+
+async function suiteEntryPoints(): Promise<Array<{ name: string; command: string }>> {
+  const denoJson = JSON.parse(await Deno.readTextFile(`${SUITE_ENTRY_POINTS_ROOT}deno.json`));
+  const coverageCheck = await Deno.readTextFile(
+    `${SUITE_ENTRY_POINTS_ROOT}scripts/coverage-check.sh`,
+  );
+  const coverageCheckTestLine = coverageCheck.split("\n").find((line) =>
+    /^\s*[^#\s].*\bdeno test\b/.test(line)
+  );
+  return [
+    { name: "deno.json task test", command: String(denoJson.tasks?.test ?? "") },
+    { name: "deno.json task coverage", command: String(denoJson.tasks?.coverage ?? "") },
+    { name: "scripts/coverage-check.sh", command: coverageCheckTestLine ?? "" },
+  ];
+}
+
+Deno.test("suite entry points set AGY_HOOK_RECORD_PATH=off and point both workflow switch variables at a missing path", async () => {
+  for (const { name, command } of await suiteEntryPoints()) {
+    assert(command.length > 0, `${name}: no deno test command found`);
+    assert(
+      /\bAGY_HOOK_RECORD_PATH=off\b/.test(command),
+      `${name} must set AGY_HOOK_RECORD_PATH=off`,
+    );
+    for (const variable of ["WORKFLOW_SWITCH_PATH", "WORKFLOW_SWITCH_LOG_PATH"]) {
+      const value = new RegExp(`\\b${variable}=(\\S+)`).exec(command)?.[1]?.replace(
+        /^["']|["';]$/g,
+        "",
+      );
+      assert(value, `${name} must set ${variable} to a path that does not exist`);
+      let exists = true;
+      try {
+        await Deno.stat(value);
+      } catch (error) {
+        exists = !(error instanceof Deno.errors.NotFound);
+      }
+      assertEquals(exists, false, `${name} sets ${variable} to ${value}, which exists`);
+    }
+  }
+});

@@ -26,7 +26,11 @@ rm -rf cov_profile
 # failed` to stderr. A failing CI build therefore showed a bare "Test failed"
 # with no test name, and unrelated stderr `Download ...` lines directly above
 # it read as the cause. That cost a whole wrong root-cause diagnosis.
-deno test --allow-env --allow-run --allow-read --allow-write --coverage=cov_profile
+# No test writes the real agy invocation record or Josh's workflow switch and
+# its log (hooks design, "Both surfaces"): the record is off and both switch
+# paths point at a path that does not exist. A suite test holds all three entry
+# points to this.
+AGY_HOOK_RECORD_PATH=off WORKFLOW_SWITCH_PATH=/nonexistent/workflow-switch.json WORKFLOW_SWITCH_LOG_PATH=/nonexistent/workflow-switch.log deno test --allow-env --allow-run --allow-read --allow-write --coverage=cov_profile
 report="$(deno coverage cov_profile 2>/dev/null)"
 echo "$report"
 
