@@ -25,6 +25,16 @@
  *     file. Other script writes retain their folder as an explicitly unnamed destination.
  * `cd <dir>` earlier in the command moves the working directory later targets resolve against.
  *
+ * Writes through a file and writes that replace its directory entry are kept apart, because a
+ * symlink is judged differently by each. A redirect, `tee`, `cp`, `truncate`, `dd` and a script's
+ * open-and-write write through a link to the file it points at (`targets`). `sed -i` (unless
+ * `--follow-symlinks`), `perl -i`, `mv`, `install`, `cp --remove-destination` and a script's
+ * `rename` replace the link itself in the folder that holds it (`replacedEntries`). A move (`mv`, a
+ * script's `rename`) changes the entries at both ends, so its sources are replaced entries too. A
+ * destination of `cp`, `mv` or `install` that is a directory when the command is read (a link to
+ * one included), or named by `-t`, is not itself written: each source's child entry inside it is,
+ * in the same way. `-T` rules that out. Only when the filesystem cannot say are both listed.
+ *
  * Known gaps (allowed, on purpose or for now):
  *   - a script file run by an interpreter (`python3 fix.py`, `deno run x.ts`, `node x.js`): its code is
  *     not read.
@@ -80,7 +90,13 @@ export interface WriteTargetOptions {
   home: string;
 }
 
-export const resolvePath = resolveCommandPath;
+/**
+ * A written file's absolute path with each ".." kept, so a guard that follows symlinks judges the
+ * file the kernel writes ("link/../a.ts" lands beside the link's target). A guard that wants a
+ * lexical path normalizes it itself, as check_feature_branch.ts does.
+ */
+export const resolvePath = (raw: string, cwd: string | null, home: string): string | null =>
+  resolveCommandPath(raw, cwd, home, true);
 
 interface ScriptToken {
   text: string;
@@ -202,6 +218,7 @@ export function scriptWriteTargets(
   home: string,
   invocation?: InterpreterInvocation,
   unknown?: (cwd: string | null) => void,
+  replaced?: (path: string) => void,
 ): string[] {
   const targets: string[] = [];
   const tokens = scriptTokens(code);
@@ -212,34 +229,55 @@ export function scriptWriteTargets(
       ? variable.start < before ? variable.path : null
       : scriptPath(expression, invocation);
   };
+  /** The call's arguments from just after its "(": each a top-level comma-separated expression. */
+  const callArguments = (start: number, count: number) => {
+    const args: ScriptToken[][] = [[]];
+    let nesting = 0;
+    for (const token of tokens.filter((token) => token.start >= start)) {
+      if (nesting === 0 && [")", ";"].includes(token.text)) break;
+      if (nesting === 0 && token.text === ",") {
+        if (args.length === count) break;
+        args.push([]);
+        continue;
+      }
+      if (["(", "["].includes(token.text)) nesting++;
+      if ([")", "]"].includes(token.text)) nesting--;
+      args.at(-1)!.push(token);
+    }
+    return args;
+  };
+  const record = (literal: string | null, entry: boolean) => {
+    const resolved = literal !== null ? resolvePath(literal, cwd, home) : null;
+    if (resolved && entry && replaced) replaced(resolved);
+    else if (resolved) targets.push(resolved);
+    else if (unknown) unknown(cwd);
+    else if (cwd !== null) targets.push(cwd);
+  };
   for (const pattern of SCRIPT_WRITES) {
     pattern.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(code))) {
       // A write-looking string/comment is data, not a call.
       if (!tokens.some((token) => token.start === match!.index)) continue;
+      const argumentsStart = match.index + match[0].indexOf("(") + 1;
+      // A rename moves both named entries themselves, a symlink included, never the file it points
+      // at: the source's entry is removed and the destination's is replaced.
+      if (/^(?:Deno\.)?rename(?:Sync)?\(/.test(match[0])) {
+        const [source = [], destination = []] = callArguments(argumentsStart, 2);
+        record(expressionPath(source, match.index), true);
+        record(expressionPath(destination, match.index), true);
+        continue;
+      }
       let literal: string | null = match[2] ?? null;
       if (literal === null && pattern !== SCRIPT_WRITES[2]) {
         if (pattern === SCRIPT_WRITES[1]) {
           const receiver = match[0].slice(0, match[0].indexOf(".write_"));
           literal = expressionPath(scriptTokens(receiver), match.index);
         } else {
-          const start = match.index + match[0].indexOf("(") + 1;
-          const expression: ScriptToken[] = [];
-          let nesting = 0;
-          for (const token of tokens.filter((token) => token.start >= start)) {
-            if (nesting === 0 && [",", ")", ";"].includes(token.text)) break;
-            if (["(", "["].includes(token.text)) nesting++;
-            if ([")", "]"].includes(token.text)) nesting--;
-            expression.push(token);
-          }
-          literal = expressionPath(expression, match.index);
+          literal = expressionPath(callArguments(argumentsStart, 1)[0], match.index);
         }
       }
-      const resolved = literal !== null ? resolvePath(literal, cwd, home) : null;
-      if (resolved) targets.push(resolved);
-      else if (unknown) unknown(cwd);
-      else if (cwd !== null) targets.push(cwd);
+      record(literal, false);
     }
   }
   return [...new Set(targets)];
@@ -386,7 +424,213 @@ function inlineCode(name: string, args: string[]): string | null {
 
 interface ArgvResult {
   targets: string[];
+  /** Files whose directory entry the command replaces rather than writes through. */
+  entries?: string[];
   nested?: string;
+}
+
+/**
+ * The GNU long options of `cp`, `mv` and `install`, each with whether it takes its value from the
+ * next argument when no `=` is given. getopt accepts any unambiguous prefix of a long option, so a
+ * prefix is matched against the whole list for that command.
+ */
+const LONG_OPTIONS: Record<string, Record<string, boolean>> = {
+  cp: Object.fromEntries([
+    ...[
+      "archive",
+      "attributes-only",
+      "backup",
+      "context",
+      "copy-contents",
+      "debug",
+      "dereference",
+      "force",
+      "help",
+      "interactive",
+      "keep-directory-symlink",
+      "link",
+      "no-clobber",
+      "no-dereference",
+      "no-target-directory",
+      "one-file-system",
+      "parents",
+      "preserve",
+      "recursive",
+      "reflink",
+      "remove-destination",
+      "strip-trailing-slashes",
+      "symbolic-link",
+      "update",
+      "verbose",
+      "version",
+    ].map((option) => [option, false]),
+    ...["no-preserve", "sparse", "suffix", "target-directory"].map((option) => [option, true]),
+  ]),
+  mv: Object.fromEntries([
+    ...[
+      "backup",
+      "context",
+      "debug",
+      "exchange",
+      "force",
+      "help",
+      "interactive",
+      "no-clobber",
+      "no-copy",
+      "no-target-directory",
+      "strip-trailing-slashes",
+      "update",
+      "verbose",
+      "version",
+    ].map((option) => [option, false]),
+    ...["suffix", "target-directory"].map((option) => [option, true]),
+  ]),
+  install: Object.fromEntries([
+    ...[
+      "backup",
+      "compare",
+      "context",
+      "debug",
+      "directory",
+      "help",
+      "no-target-directory",
+      "preserve-context",
+      "preserve-timestamps",
+      "strip",
+      "verbose",
+      "version",
+    ].map((option) => [option, false]),
+    ...["group", "mode", "owner", "strip-program", "suffix", "target-directory"].map((
+      option,
+    ) => [option, true]),
+  ]),
+};
+
+/** Short options of `cp`, `mv` and `install` that take a value, attached or in the next argument. */
+const SHORT_VALUE_OPTIONS: Record<string, string> = { cp: "St", mv: "St", install: "Stmog" };
+
+interface CopyMoveCommand {
+  operands: string[];
+  targetDirectory?: string;
+  noTargetDirectory: boolean;
+  removeDestination: boolean;
+  exchange: boolean;
+  /** GNU `cp --parents`: each source keeps its whole path beneath the destination folder. */
+  parents: boolean;
+}
+
+/**
+ * Reads a `cp`, `mv` or `install` argv the way getopt does, so an operand or an option's value
+ * (`-S -T`, `-- -T`, `--suffix=--remove-destination`) never sets a mode flag.
+ */
+function parseCopyMove(name: string, args: string[]): CopyMoveCommand {
+  const longs = LONG_OPTIONS[name];
+  const shortValues = SHORT_VALUE_OPTIONS[name];
+  const parsed: CopyMoveCommand = {
+    operands: [],
+    noTargetDirectory: false,
+    removeDestination: false,
+    exchange: false,
+    parents: false,
+  };
+  const set = (option: string, value?: string) => {
+    if (option === "T" || option === "no-target-directory") parsed.noTargetDirectory = true;
+    else if (option === "t" || option === "target-directory") parsed.targetDirectory = value;
+    else if (option === "remove-destination") parsed.removeDestination = true;
+    else if (option === "exchange") parsed.exchange = true;
+    else if (option === "parents") parsed.parents = true;
+  };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--") {
+      parsed.operands.push(...args.slice(i + 1));
+      break;
+    }
+    if (a.startsWith("--")) {
+      const eq = a.indexOf("=");
+      const given = eq < 0 ? a.slice(2) : a.slice(2, eq);
+      const matches = Object.keys(longs).filter((option) => option.startsWith(given));
+      const option = matches.includes(given) ? given : matches.length === 1 ? matches[0] : null;
+      if (option === null) continue;
+      set(option, eq >= 0 ? a.slice(eq + 1) : longs[option] ? args[++i] : undefined);
+      continue;
+    }
+    if (a.startsWith("-") && a !== "-") {
+      for (let j = 1; j < a.length; j++) {
+        if (shortValues.includes(a[j])) {
+          set(a[j], j + 1 < a.length ? a.slice(j + 1) : args[++i]);
+          break;
+        }
+        set(a[j]);
+      }
+      continue;
+    }
+    parsed.operands.push(a);
+  }
+  return parsed;
+}
+
+/**
+ * Whether a destination is a folder the command lands inside: true for a directory (a symlink to
+ * one included, since cp, mv and install follow it), false for anything else or nothing there, and
+ * null when the filesystem cannot say.
+ */
+function isDirectoryNow(path: string): boolean | null {
+  try {
+    return Deno.statSync(path).isDirectory;
+  } catch (error) {
+    return error instanceof Deno.errors.NotFound || error instanceof Deno.errors.NotADirectory
+      ? false
+      : null;
+  }
+}
+
+/**
+ * `cp`, `mv` and `install`. Into a destination folder (`-t`, or a last operand that is a directory
+ * and not ruled out by `-T`) each source writes the child entry `<folder>/<its name>` (with
+ * `cp --parents`, `<folder>/<its whole path>`): through it by
+ * plain `cp`, replacing it by `mv`, `install` and `cp --remove-destination`. Otherwise the
+ * destination's own entry is written the same way. A move also removes each source's entry, so
+ * those are replaced entries too. When the filesystem cannot say whether the destination is a
+ * folder, both readings are listed.
+ */
+function copyMoveTargets(
+  name: string,
+  args: string[],
+  resolveAll: (paths: string[]) => string[],
+): ArgvResult {
+  const parsed = parseCopyMove(name, args);
+  const toFolder = parsed.targetDirectory !== undefined;
+  const sources = toFolder ? parsed.operands : parsed.operands.slice(0, -1);
+  const destinationWord = toFolder ? parsed.targetDirectory : parsed.operands.at(-1);
+  if (destinationWord === undefined || sources.length === 0) return { targets: [] };
+  const movedSources = name === "mv" ? resolveAll(sources) : [];
+  const [destination] = resolveAll([destinationWord]);
+  if (destination === undefined) return { targets: [], entries: movedSources };
+  const replaces = name !== "cp" || parsed.removeDestination;
+  const folder = toFolder ? true : parsed.noTargetDirectory ? false : isDirectoryNow(destination);
+  // Inside a folder each source lands at <folder>/<its name>, or <folder>/<its whole path> with
+  // `cp --parents`: an entry that may already be a symlink elsewhere. A name that is not literal
+  // leaves only the folder itself known.
+  const folderPath = destination.replace(/\/+$/, "") || "/";
+  const inside: Required<Pick<ArgvResult, "targets" | "entries">> = { targets: [], entries: [] };
+  for (const source of sources) {
+    const trimmed = source.replace(/\/+$/, "");
+    const child = parsed.parents ? trimmed.replace(/^\/+/, "") : trimmed.split("/").pop() ?? "";
+    if (!child || child === "." || child === ".." || /[$`*?[\]{}]/.test(child)) {
+      inside.targets.push(destination);
+    } else (replaces ? inside.entries : inside.targets).push(`${folderPath}/${child}`);
+  }
+  // An exchange swaps the destination's own entry, a folder included.
+  if (parsed.exchange) inside.entries.push(destination);
+  const own = replaces
+    ? { targets: [], entries: [destination] }
+    : { targets: [destination], entries: [] };
+  const ways = folder === true ? [inside] : folder === false ? [own] : [inside, own];
+  return {
+    targets: [...new Set(ways.flatMap((way) => way.targets))],
+    entries: [...new Set([...ways.flatMap((way) => way.entries), ...movedSources])],
+  };
 }
 
 /** Targets named by one resolved argv (wrappers already peeled). */
@@ -395,6 +639,7 @@ function argvTargets(
   cwd: string | null,
   home: string,
   unknown: (cwd: string | null) => void,
+  replaced: (path: string) => void,
 ): ArgvResult {
   let i = 0;
   while (i < argv.length && ASSIGN_RE.test(argv[i])) i++;
@@ -414,6 +659,7 @@ function argvTargets(
       home,
       readInterpreterScript(argv) ?? undefined,
       unknown,
+      replaced,
     );
 
   switch (name) {
@@ -421,29 +667,25 @@ function argvTargets(
       return { targets: [] };
     case "tee":
       return { targets: resolveAll(nonOptionArgs(args)) };
-    case "sed":
-      return { targets: resolveAll(sedInPlaceFiles(args)) };
+    case "sed": {
+      // GNU sed writes a new file and renames it over the name given, replacing a symlink there
+      // unless --follow-symlinks asks it to edit the file the link points at.
+      const files = resolveAll(sedInPlaceFiles(args));
+      return args.includes("--follow-symlinks")
+        ? { targets: files }
+        : { targets: [], entries: files };
+    }
     case "perl": {
       const code = inlineCode(name, args);
       return {
-        targets: [
-          ...resolveAll(perlInPlaceFiles(args)),
-          ...(code ? scriptTargets(code) : []),
-        ],
+        targets: code ? scriptTargets(code) : [],
+        entries: resolveAll(perlInPlaceFiles(args)),
       };
     }
     case "cp":
     case "mv":
-    case "install": {
-      const targetFlag = args.findIndex((a) => a === "-t" || a.startsWith("--target-directory"));
-      if (targetFlag >= 0) {
-        const flag = args[targetFlag];
-        const dir = flag.includes("=") ? flag.slice(flag.indexOf("=") + 1) : args[targetFlag + 1];
-        return { targets: dir ? resolveAll([dir]) : [] };
-      }
-      const positional = nonOptionArgs(args, new Set(["-S", "--suffix", "-m", "-o", "-g"]));
-      return { targets: positional.length >= 2 ? resolveAll(positional.slice(-1)) : [] };
-    }
+    case "install":
+      return copyMoveTargets(name, args, resolveAll);
     case "truncate":
       return { targets: resolveAll(nonOptionArgs(args, new Set(["-s", "-r"]))) };
     case "dd":
@@ -490,7 +732,10 @@ function argvTargets(
 }
 
 export interface BashWriteAnalysis {
+  /** Files written through their path: a symlink there leads to the file it points at. */
   targets: string[];
+  /** Files whose directory entry is replaced: a symlink there is itself replaced. */
+  replacedEntries: string[];
   unknownFiles: string[];
   unknownDirectory: boolean;
 }
@@ -501,23 +746,32 @@ export function analyzeBashWrites(
   opts: WriteTargetOptions,
   depth = 0,
 ): BashWriteAnalysis {
-  const analysis: BashWriteAnalysis = { targets: [], unknownFiles: [], unknownDirectory: false };
+  const analysis: BashWriteAnalysis = {
+    targets: [],
+    replacedEntries: [],
+    unknownFiles: [],
+    unknownDirectory: false,
+  };
   if (depth > MAX_DEPTH) return analysis;
   const { home } = opts;
   const unknown = (cwd: string | null) => {
     if (cwd === null) analysis.unknownDirectory = true;
     else analysis.unknownFiles.push(cwd);
   };
+  const replaced = (path: string) => analysis.replacedEntries.push(path);
   const nested = (text: string, cwd: string | null) => {
     const result = analyzeBashWrites(text, { cwd, home }, depth + 1);
     analysis.targets.push(...result.targets);
+    analysis.replacedEntries.push(...result.replacedEntries);
     analysis.unknownFiles.push(...result.unknownFiles);
     analysis.unknownDirectory ||= result.unknownDirectory;
   };
   for (const part of commandPartsInFolders(command, opts.cwd, home)) {
     const { cwd } = part;
     if (part.script) {
-      analysis.targets.push(...scriptWriteTargets(part.text, cwd, home, part.invocation, unknown));
+      analysis.targets.push(
+        ...scriptWriteTargets(part.text, cwd, home, part.invocation, unknown, replaced),
+      );
       continue;
     }
     const segment = part.text;
@@ -534,21 +788,26 @@ export function analyzeBashWrites(
       nested(resolution.command, cwd);
       continue;
     }
-    const result = argvTargets(resolution.argv, cwd, home, unknown);
+    const result = argvTargets(resolution.argv, cwd, home, unknown, replaced);
     analysis.targets.push(...result.targets);
+    analysis.replacedEntries.push(...result.entries ?? []);
     if (result.nested) {
       nested(result.nested, cwd);
     }
   }
   analysis.targets = [...new Set(analysis.targets)];
+  analysis.replacedEntries = [...new Set(analysis.replacedEntries)];
   analysis.unknownFiles = [...new Set(analysis.unknownFiles)];
   return analysis;
 }
 
-/** The CLI's legacy path list includes the folder of a script whose file cannot be named. */
+/**
+ * Every path the command writes, through it or by replacing it. The CLI's legacy path list also
+ * includes the folder of a script whose file cannot be named.
+ */
 export function bashWriteTargets(command: string, opts: WriteTargetOptions, depth = 0): string[] {
   const result = analyzeBashWrites(command, opts, depth);
-  return [...new Set([...result.targets, ...result.unknownFiles])];
+  return [...new Set([...result.targets, ...result.replacedEntries, ...result.unknownFiles])];
 }
 
 if (import.meta.main) {

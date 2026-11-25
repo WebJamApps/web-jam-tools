@@ -614,8 +614,17 @@ export interface CommandPart {
   invocation?: InterpreterInvocation;
 }
 
-/** Resolve only literal shell paths, plus the existing HOME shorthand. */
-export function resolveCommandPath(raw: string, cwd: string | null, home: string): string | null {
+/**
+ * Resolve only literal shell paths, plus the existing HOME shorthand. `keepParents` leaves each ".."
+ * in place for a path a file is written to: the kernel resolves it after following the symlink
+ * before it, so collapsing it here could name a different file.
+ */
+export function resolveCommandPath(
+  raw: string,
+  cwd: string | null,
+  home: string,
+  keepParents = false,
+): string | null {
   let path = raw.replace(/^~(?=\/|$)/, home).replace(/^\$\{?HOME\}?(?=\/|$)/, home);
   if (!path || /[$`]/.test(path)) return null;
   if (!path.startsWith("/")) {
@@ -625,7 +634,7 @@ export function resolveCommandPath(raw: string, cwd: string | null, home: string
   const parts: string[] = [];
   for (const part of path.split("/")) {
     if (!part || part === ".") continue;
-    if (part === "..") parts.pop();
+    if (part === ".." && !keepParents) parts.pop();
     else parts.push(part);
   }
   return `/${parts.join("/")}`;

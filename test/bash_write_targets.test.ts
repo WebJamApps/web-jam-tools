@@ -22,6 +22,7 @@ Deno.test("subshell cd does not persist into the following command (web-jam-tool
 Deno.test("cd || exit/return resolves following writes to cd target; non-exiting || goes unknown", () => {
   assertEquals(analyzeBashWrites("cd /repo || exit 1; echo x > f", { cwd: "/w", home: HOME }), {
     targets: ["/repo/f"],
+    replacedEntries: [],
     unknownFiles: [],
     unknownDirectory: false,
   });
@@ -29,12 +30,14 @@ Deno.test("cd || exit/return resolves following writes to cd target; non-exiting
     analyzeBashWrites("cd /repo || { echo no; exit 1; }\necho x > f", { cwd: "/w", home: HOME }),
     {
       targets: ["/repo/f"],
+      replacedEntries: [],
       unknownFiles: [],
       unknownDirectory: false,
     },
   );
   assertEquals(analyzeBashWrites("cd /repo || echo no; echo x > f", { cwd: "/w", home: HOME }), {
     targets: [],
+    replacedEntries: [],
     unknownFiles: [],
     unknownDirectory: true,
   });
@@ -45,6 +48,7 @@ Deno.test("Root cause 2: a heredoc keeps its own unknown cwd despite a later rep
     "S=/tmp/scratch/memsim; cd $S && python3 - <<'EOF'\np = 'out.txt'\nopen(p,'w').write('x')\nEOF\ncd /repo && deno task memory-index --dir $S";
   assertEquals(analyzeBashWrites(command, { cwd: "/tmp/scratch", home: HOME }), {
     targets: [],
+    replacedEntries: [],
     unknownFiles: [],
     unknownDirectory: true,
   });
@@ -59,6 +63,7 @@ Deno.test("third root cause: unresolved cd clears cwd; literal and function-body
     }),
     {
       targets: [],
+      replacedEntries: [],
       unknownFiles: [],
       unknownDirectory: true,
     },
@@ -138,7 +143,8 @@ Deno.test("resolvePath: relative, absolute, ~, $HOME, dot segments, and unknown 
   assertEquals(resolvePath("~/notes.md", CWD, HOME), "/home/j/notes.md");
   assertEquals(resolvePath("${HOME}/a", CWD, HOME), "/home/j/a");
   assertEquals(resolvePath("$HOME", CWD, HOME), "/home/j");
-  assertEquals(resolvePath("./a/../b/./c", CWD, HOME), "/repo/b/c");
+  // A ".." is kept: the kernel resolves it after any symlink before it.
+  assertEquals(resolvePath("./a/../b/./c", CWD, HOME), "/repo/a/../b/c");
   assertEquals(resolvePath("$TMPDIR/x", CWD, HOME), null);
   assertEquals(resolvePath("$(pwd)/x", CWD, HOME), null);
   assertEquals(resolvePath("", CWD, HOME), null);
@@ -204,8 +210,8 @@ Deno.test("bashWriteTargets: in-place editors, copies, moves and patches", () =>
   assertEquals(targets("perl -MFile::Spec -ne 'print' a.ts"), []);
   assertEquals(targets("perl -e 'open(F, \">o\")'"), ["/repo/o"]);
   assertEquals(targets("cp -r a b/c"), ["/repo/b/c"]);
-  assertEquals(targets("mv -t dest a b"), ["/repo/dest"]);
-  assertEquals(targets("install --target-directory=/tmp/d a"), ["/tmp/d"]);
+  assertEquals(targets("mv -t dest a b"), ["/repo/dest/a", "/repo/dest/b", "/repo/a", "/repo/b"]);
+  assertEquals(targets("install --target-directory=/tmp/d a"), ["/tmp/d/a"]);
   assertEquals(targets("install -m 755 a /usr/local/bin/a"), ["/usr/local/bin/a"]);
   assertEquals(targets("cp onlyone"), []);
   assertEquals(targets("truncate -s 0 log.txt"), ["/repo/log.txt"]);
@@ -217,6 +223,126 @@ Deno.test("bashWriteTargets: in-place editors, copies, moves and patches", () =>
   assertEquals(targets("git apply fix.diff"), [CWD]);
   assertEquals(targets("git -c core.x=y -C /other apply fix.diff"), ["/other"]);
   assertEquals(targets("git apply --check fix.diff"), []);
+});
+
+Deno.test("analyzeBashWrites: a write that replaces the entry is kept apart from one written through it", () => {
+  const split = (command: string) => {
+    const { targets, replacedEntries } = analyzeBashWrites(command, { cwd: CWD, home: HOME });
+    return { targets, replacedEntries };
+  };
+  const through = (...targets: string[]) => ({ targets, replacedEntries: [] });
+  const replaced = (...replacedEntries: string[]) => ({ targets: [], replacedEntries });
+  const either = (path: string) => ({ targets: [path], replacedEntries: [path] });
+
+  assertEquals(split("sed -i 's/a/b/' link.ts"), replaced("/repo/link.ts"));
+  assertEquals(split("sed --follow-symlinks -i 's/a/b/' link.ts"), through("/repo/link.ts"));
+  assertEquals(split("perl -pi -e 's/a/b/' a.ts"), replaced("/repo/a.ts"));
+  assertEquals(split("perl -i -e 'open(F, \">o\")' a.ts"), {
+    targets: ["/repo/o"],
+    replacedEntries: ["/repo/a.ts"],
+  });
+  // A destination that is not a folder has its own entry replaced; a move removes its sources too.
+  assertEquals(split("mv a b"), replaced("/repo/b", "/repo/a"));
+  assertEquals(split("install -m 755 a b"), replaced("/repo/b"));
+  assertEquals(split("cp --remove-destination a b"), replaced("/repo/b"));
+  assertEquals(split("mv -T a b"), replaced("/repo/b", "/repo/a"));
+  assertEquals(split("mv -fT a b"), replaced("/repo/b", "/repo/a"));
+  assertEquals(split("cp --no-target-directory --remove-destination a b"), replaced("/repo/b"));
+  assertEquals(split("mv -t dest a"), replaced("/repo/dest/a", "/repo/a"));
+  assertEquals(split("cp a b"), through("/repo/b"));
+  // Mode flags come from parsed options, never from an operand or an option's value.
+  assertEquals(split("cp -S --remove-destination a b"), through("/repo/b"));
+  assertEquals(split("cp --suffix=--remove-destination a b"), through("/repo/b"));
+  assertEquals(split("cp -- a --remove-destination"), through("/repo/--remove-destination"));
+  assertEquals(split("cp --remove-d a b"), replaced("/repo/b"));
+  assertEquals(split("mv -S -T a b"), replaced("/repo/b", "/repo/a"));
+  assertEquals(split("mv -- -T b"), replaced("/repo/b", "/repo/-T"));
+  assertEquals(split("install -m -T a b"), replaced("/repo/b"));
+  assertEquals(split("mv -fta dest"), replaced("/repo/a/dest", "/repo/dest"));
+  assertEquals(split("mv --target=d a"), replaced("/repo/d/a", "/repo/a"));
+  // A source whose name is not literal leaves only the folder known; a trailing slash is dropped.
+  assertEquals(split("cp -t dest $F sub/x/"), through("/repo/dest", "/repo/dest/x"));
+  // GNU cp --parents keeps each source's whole path beneath the folder; without it, only the name.
+  assertEquals(split("cp -t dest src/x/a.ts"), through("/repo/dest/a.ts"));
+  assertEquals(split("cp --parents -t dest src/x/a.ts"), through("/repo/dest/src/x/a.ts"));
+  assertEquals(split("cp --parents -t dest /abs/a.ts"), through("/repo/dest/abs/a.ts"));
+  assertEquals(
+    split("cp --parent --remove-destination -t dest src/x/a.ts"),
+    replaced("/repo/dest/src/x/a.ts"),
+  );
+  // mv has no --parents, so the word is not one of its options.
+  assertEquals(
+    split("mv --parents -t dest src/x/a.ts"),
+    replaced("/repo/dest/a.ts", "/repo/src/x/a.ts"),
+  );
+  assertEquals(
+    split("printf x > link.ts; tee t < x; truncate -s 0 u"),
+    through(
+      "/repo/link.ts",
+      "/repo/t",
+      "/repo/u",
+    ),
+  );
+  // A script rename replaces both entries; an unnamed one keeps its folder as unknown.
+  assertEquals(split(`node -e "fs.renameSync('old', 'new')"`), replaced("/repo/old", "/repo/new"));
+  assertEquals(
+    split(`deno eval "Deno.renameSync('old', 'sub/new')"`),
+    replaced("/repo/old", "/repo/sub/new"),
+  );
+  assertEquals(
+    analyzeBashWrites(`node -e "fs.renameSync('old', x)"`, { cwd: CWD, home: HOME }),
+    { targets: [], replacedEntries: ["/repo/old"], unknownFiles: [CWD], unknownDirectory: false },
+  );
+  assertEquals(split(`bash -c "sed -i s/a/b/ n.ts"`), replaced("/repo/n.ts"));
+  // A path written through and replaced in one command is listed both ways.
+  assertEquals(split("echo x > f; sed -i s/a/b/ f"), either("/repo/f"));
+  assertEquals(targets("echo x > f; sed -i s/a/b/ g"), ["/repo/f", "/repo/g"]);
+});
+
+Deno.test("analyzeBashWrites: a destination is a folder only when the filesystem says so (symlink to a file, to a folder)", async () => {
+  const root = await Deno.makeTempDir({ prefix: "bash-write-dest-" });
+  try {
+    await Deno.mkdir(`${root}/dir`);
+    await Deno.writeTextFile(`${root}/file`, "");
+    await Deno.symlink(`${root}/file`, `${root}/to-file`);
+    await Deno.symlink(`${root}/dir`, `${root}/to-dir`);
+    const split = (command: string) => {
+      const { targets, replacedEntries } = analyzeBashWrites(command, { cwd: root, home: HOME });
+      return { targets, replacedEntries };
+    };
+    for (const name of ["mv", "install", "cp --remove-destination"]) {
+      const moved = name === "mv" ? [`${root}/a`] : [];
+      // A link to a file is itself replaced, never written through.
+      assertEquals(split(`${name} a to-file`), {
+        targets: [],
+        replacedEntries: [`${root}/to-file`, ...moved],
+      }, name);
+      // Into a link to a folder (or the folder) the source replaces its own child entry there.
+      assertEquals(split(`${name} a to-dir`), {
+        targets: [],
+        replacedEntries: [`${root}/to-dir/a`, ...moved],
+      }, name);
+      assertEquals(split(`${name} a dir`), {
+        targets: [],
+        replacedEntries: [`${root}/dir/a`, ...moved],
+      }, name);
+      // -T names the link's own entry even when it points to a folder.
+      assertEquals(split(`${name} -T a to-dir`), {
+        targets: [],
+        replacedEntries: [`${root}/to-dir`, ...moved],
+      }, name);
+    }
+    // Plain cp writes through the link to a file, and through the child entry inside a folder.
+    assertEquals(split("cp a to-file"), { targets: [`${root}/to-file`], replacedEntries: [] });
+    assertEquals(split("cp a to-dir"), { targets: [`${root}/to-dir/a`], replacedEntries: [] });
+    // An exchange swaps the destination entry, a folder included.
+    assertEquals(split("mv --exchange a to-dir"), {
+      targets: [],
+      replacedEntries: [`${root}/to-dir/a`, `${root}/to-dir`, `${root}/a`],
+    });
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
 });
 
 Deno.test("bashWriteTargets: interpreters, nesting, wrappers and cd", () => {
