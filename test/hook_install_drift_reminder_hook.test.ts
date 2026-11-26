@@ -1087,8 +1087,10 @@ interface InstallerArrays {
 
 /** An installer laid out like the real one: Claude Code arrays first, surface-only arrays after. */
 function installerFixture(a: InstallerArrays): string {
+  // An empty array is written "(" then ")" on the next line, as bash and the
+  // real installer write it.
   const multi = (name: string, items: string[] = []) =>
-    `${name}=(\n${items.map((i) => `  "${i}"`).join("\n")}\n)\n`;
+    `${name}=(\n${items.map((i) => `  "${i}"\n`).join("")})\n`;
   return `SESSION_START_HOOKS=(${["hook1.sh", ...(a.sessionStart ?? [])].join(" ")})\n` +
     `SESSION_END_HOOKS=(${(a.sessionEnd ?? []).join(" ")})\n` +
     `STOP_HOOKS=()\n` +
@@ -1300,6 +1302,26 @@ Deno.test("readInstallerHookArray anchors array names so STOP_HOOKS never reads 
   assertEquals(readInstallerHookArray(installer, "STOP_HOOKS"), ["stop-a.sh", "stop-b.sh"]);
   assertEquals(readInstallerHookArray(installer, "PRE_TOOL_USE_HOOKS"), ["claude.sh"]);
   assertEquals(readInstallerHookArray(installer, "SESSION_END_HOOKS"), []);
+});
+
+Deno.test("readInstallerHookArray stops an empty multi-line array at its own closing paren", () => {
+  const installer =
+    `POST_TOOL_USE_HOOKS=(\n)\nAGY_ONLY_PRE_TOOL_USE_HOOKS=(\n  ".*::agy-model-guard.sh"\n)\n` +
+    `CODEX_ONLY_PRE_TOOL_USE_HOOKS=(\n)\nPRE_TOOL_USE_HOOKS=(\n  "Bash::claude.sh"\n)\n`;
+  assertEquals(readInstallerHookArray(installer, "POST_TOOL_USE_HOOKS"), []);
+  assertEquals(readInstallerHookArray(installer, "AGY_ONLY_PRE_TOOL_USE_HOOKS"), [
+    "agy-model-guard.sh",
+  ]);
+  assertEquals(readInstallerHookArray(installer, "CODEX_ONLY_PRE_TOOL_USE_HOOKS"), []);
+  assert(!extractExpectedHooksFromInstaller(installer).has("agy-model-guard.sh"));
+  assertEquals([...extractSurfaceOnlyHooksFromInstaller(installer)], ["agy-model-guard.sh"]);
+});
+
+Deno.test("readInstallerHookArray reads arrays whose declaration line carries a trailing comment", () => {
+  const installer = `STOP_HOOKS=(stop-a.sh) # Stop event (Claude Code)\n` +
+    `PRE_TOOL_USE_HOOKS=( # matcher::script\n  "Bash::claude.sh"\n) # end\n`;
+  assertEquals(readInstallerHookArray(installer, "STOP_HOOKS"), ["stop-a.sh"]);
+  assertEquals(readInstallerHookArray(installer, "PRE_TOOL_USE_HOOKS"), ["claude.sh"]);
 });
 
 Deno.test("hooks/hook-install-drift-reminder.sh stays quiet end-to-end for a Codex-only hook", async () => {

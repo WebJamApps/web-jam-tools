@@ -345,11 +345,15 @@ export function readInstallerHookArray(
   installerContent: string,
   arrayName: string,
 ): string[] {
+  // The closing paren is matched at the start of a line, so an empty array
+  // written as "(" and ")" on two lines stops at its own ")" instead of
+  // running on into the next array. A trailing "# comment" is allowed on the
+  // opening line of a multi-line array and after a single-line array.
   const multi = installerContent.match(
-    new RegExp(`^${arrayName}=\\([ \\t]*\\n([\\s\\S]*?)\\n[ \\t]*\\)`, "m"),
+    new RegExp(`^${arrayName}=\\([ \\t]*(?:#[^\\n]*)?\\n([\\s\\S]*?)^[ \\t]*\\)`, "m"),
   );
   const single = multi ? null : installerContent.match(
-    new RegExp(`^${arrayName}=\\((.*)\\)[ \\t]*$`, "m"),
+    new RegExp(`^${arrayName}=\\((.*?)\\)[ \\t]*(?:#.*)?$`, "m"),
   );
   const body = multi?.[1] ?? single?.[1];
   if (body === undefined) return [];
