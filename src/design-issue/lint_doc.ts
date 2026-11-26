@@ -921,7 +921,6 @@ export function collectDocumentHeadings(lines: string[]): Map<string, Set<string
   const headings = new Map<string, Set<string>>();
   const usedSlugs = new Set<string>();
   let inCodeBlock = false;
-  let inAppendix = false;
 
   for (const line of lines) {
     if (/^\s*```/.test(line) || /^\s*~~~/.test(line)) {
@@ -933,31 +932,23 @@ export function collectDocumentHeadings(lines: string[]): Map<string, Set<string
     const match = line.match(/^\s*(#{2,4})\s+(.+?)\s*$/);
     if (!match) continue;
 
-    const level = match[1].length;
     const headingText = match[2].replace(/\s+#+\s*$/, "").trim();
     if (!headingText) continue;
 
-    if (level === 2) {
-      inAppendix = /\bappendix\b/i.test(headingText);
-    }
-
     const baseSlug = slugify(headingText) || "section";
+    let slug = baseSlug;
+    let counter = 2;
+    while (usedSlugs.has(slug)) {
+      slug = `${baseSlug}-${counter++}`;
+    }
+    usedSlugs.add(slug);
+
     let key = headings.get(headingText.toLowerCase());
     if (!key) {
       key = new Set<string>();
       headings.set(headingText.toLowerCase(), key);
     }
-    key.add(baseSlug);
-
-    if (level !== 3 || !inAppendix) {
-      let slug = baseSlug;
-      let counter = 2;
-      while (usedSlugs.has(slug)) {
-        slug = `${baseSlug}-${counter++}`;
-      }
-      usedSlugs.add(slug);
-      key.add(slug);
-    }
+    key.add(slug);
   }
 
   return headings;

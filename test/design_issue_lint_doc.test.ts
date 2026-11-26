@@ -1280,6 +1280,24 @@ Deno.test("History tables point at the body: 5-column and legacy revision-row ch
   );
   assertEquals(backtickHeading.valid, true, JSON.stringify(backtickHeading.violations));
 
+  // 5-column linking an appendix ### subsection matching rendered <details id="..."> passes
+  const appendixSubsectionLink = lintDesignDoc(
+    historyDoc({
+      extraHeadings: "\n## Appendix D — Case Lists\n\n### Model-label cases\n\nCases table.\n",
+      revisionSection: `## Revision History
+
+| Version | Date | Epic / Issue | Why | Added / Modified Requirements |
+|---|---|---|---|---|
+| 1.18.0 | ${TODAY} | [Issue](https://example.com/1) | Clarified model-label cases. | Modified: [Model-label cases](#model-label-cases) |`,
+    }),
+    "test.md",
+  );
+  assertEquals(
+    appendixSubsectionLink.valid,
+    true,
+    JSON.stringify(appendixSubsectionLink.violations),
+  );
+
   // 5-column unknown heading link -> fail naming 1.18.0 and No Such Section
   const unknownLink = lintDesignDoc(
     historyDoc({

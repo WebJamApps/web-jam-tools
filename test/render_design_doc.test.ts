@@ -1183,3 +1183,36 @@ H4 third.
   assertStringIncludes(mainContent, '<h4 id="shared-name-3">Shared Name</h4>');
   assertStringIncludes(html, 'href="#shared-name"');
 });
+
+Deno.test("renderDesignDoc assigns id anchors on appendix ### details in document order and auto-opens hash targets", () => {
+  const md = `# Appendix Anchors Test
+
+## Overview
+Body content.
+
+### Duplicate Cases
+Body subsection.
+
+## Appendix D — Case Lists
+
+### Model-label cases
+Cases list.
+
+### Duplicate Cases
+Appendix subsection.
+`;
+  const html = renderDesignDoc(md);
+  const mainContent = html.split("<main>")[1]?.split("</main>")[0] ?? "";
+
+  assertStringIncludes(mainContent, '<h3 id="duplicate-cases">Duplicate Cases</h3>');
+  assertStringIncludes(
+    mainContent,
+    '<details id="model-label-cases">\n  <summary>Model-label cases</summary>',
+  );
+  assertStringIncludes(
+    mainContent,
+    '<details id="duplicate-cases-2">\n  <summary>Duplicate Cases</summary>',
+  );
+  assertStringIncludes(html, "openDetailsForHash");
+  assertStringIncludes(html, 'window.addEventListener("hashchange", openDetailsForHash)');
+});

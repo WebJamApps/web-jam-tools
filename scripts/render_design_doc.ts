@@ -398,18 +398,18 @@ export function renderDesignDoc(
             `<h2 id="${slug}">${parseInlineMarkdown(text)}</h2>`,
           );
         } else if (level === 3) {
+          const slug = allocateSlug(text);
           if (inAppendix) {
             if (inAppendixDetails) {
               bodyHtmlParts.push(`</div>\n</details>`);
             }
             bodyHtmlParts.push(
-              `<details>\n  <summary>${
+              `<details id="${slug}">\n  <summary>${
                 parseInlineMarkdown(text)
               }</summary>\n  <div class="appendix-content">`,
             );
             inAppendixDetails = true;
           } else {
-            const slug = allocateSlug(text);
             bodyHtmlParts.push(`<h3 id="${slug}">${parseInlineMarkdown(text)}</h3>`);
           }
         } else if (level === 4) {
@@ -1067,6 +1067,25 @@ export function renderDesignDoc(
           render();
         })(tables[t]);
       }
+
+      function openDetailsForHash() {
+        var rawHash = window.location.hash ? window.location.hash.slice(1) : "";
+        if (!rawHash) return;
+        var id = rawHash;
+        try {
+          id = decodeURIComponent(rawHash);
+        } catch (_e) {
+          // Keep raw fragment when percent-decoding fails.
+        }
+        var target = document.getElementById(id);
+        if (!target) return;
+        var details = target.tagName === "DETAILS" ? target : target.closest("details");
+        if (details) {
+          details.open = true;
+        }
+      }
+      openDetailsForHash();
+      window.addEventListener("hashchange", openDetailsForHash);
     })();
   </script>
 </body>
