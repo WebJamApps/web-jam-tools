@@ -282,9 +282,9 @@ function scan(args: string): Scan {
     return refused(`'${tokens[at]}' is not a valid pull request number`);
   }
   const separator = tokens[at + 1]?.toLowerCase();
-  const listed = raw[at].endsWith(",")
-    ? BARE.test(tokens[at + 1] ?? "")
-    : (separator === "and" || separator === "&") && BARE.test(tokens[at + 2] ?? "");
+  // Either separator makes a list, including both together ("1937, and 1938").
+  const listed = (raw[at].endsWith(",") && BARE.test(tokens[at + 1] ?? "")) ||
+    ((separator === "and" || separator === "&") && BARE.test(tokens[at + 2] ?? ""));
   if (listed) return refused(NAMES_MORE_THAN_ONE);
   return {
     result: { ok: true, target: { kind: "pull-request", repo: null, number } },

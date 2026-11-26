@@ -688,6 +688,9 @@ Deno.test("target parser: pairwise and self-collision rules across the five key 
     ["for 1937 & 1938", MORE],
     ["#1937 and #1938", MORE],
     ["1937, #1938", MORE],
+    ["1937, and 1938", MORE],
+    ["for 1937, & #1938", MORE],
+    ["1937, and wait for CI", PR(1937)],
     ["1937 then 1938", PR(1937)],
     // An explicit source skips source 3, so prose digits never collide.
     ["1938 web-jam-tools#1937", PR(1937)],
