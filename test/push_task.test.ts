@@ -57,6 +57,7 @@ import {
   parseFixPrReference,
   type PullRequestRef,
   type PullRequestState,
+  readTypedSkillCall,
 } from "../hooks/lib/fix_run.ts";
 import { resolveFixRun } from "../scripts/push.ts";
 
@@ -1364,11 +1365,38 @@ Deno.test("deno.json grants push and fix-pr:resolve-target CircleCI's host and t
   const tasks = JSON.parse(await Deno.readTextFile(SHARED_CONFIG_PATH)).tasks;
   assertStringIncludes(tasks.push, "--allow-net=circleci.com ");
   assertStringIncludes(tasks.push, ",CIRCLECI_TOKEN ");
+  // Read-only: CircleCI's host, gh and git, the session variables, and the four session stores only.
   assertEquals(
     tasks["fix-pr:resolve-target"],
-    "deno run --allow-net=circleci.com --allow-env=CIRCLECI_TOKEN --allow-run=gh,git scripts/resolve-fix-pr-target.ts",
+    "bash -c 'exec deno run --allow-net=circleci.com --allow-run=gh,git " +
+      "--allow-env=CIRCLECI_TOKEN,CODEX_THREAD_ID,CODEX_HOME,HOME,USERPROFILE,CLAUDE_CODE_SESSION_ID," +
+      "AGY_HOOK_RECORD_PATH,AGY_CONVERSATION_ID,AGY_MODEL_NAME,AGY_TRANSCRIPT_PATH,WJT_SURFACE,WJT_UNATTENDED " +
+      '--allow-read="$HOME/.claude/projects","${CODEX_HOME:-$HOME/.codex}/sessions",' +
+      '"$HOME/.gemini/antigravity-cli/brain","${AGY_HOOK_RECORD_PATH:-/tmp/agy-hook-invocations.jsonl}" ' +
+      'scripts/resolve-fix-pr-target.ts "$@"\' fix-pr-resolve-target',
   );
+  for (const broad of ["--allow-write", "--allow-all", " -A ", "--allow-read ", "--allow-env "]) {
+    assertEquals(tasks["fix-pr:resolve-target"].includes(broad), false, broad);
+  }
 });
+
+async function runResolveTarget(
+  args: string[],
+  fixtureEnv: Record<string, string>,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const output = await new Deno.Command(Deno.execPath(), {
+    args: ["task", "-q", "--config", SHARED_CONFIG_PATH, "fix-pr:resolve-target", ...args],
+    env: { WJT_UNATTENDED: "", ...fixtureEnv },
+    stdin: "null",
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  return {
+    code: output.code,
+    stdout: new TextDecoder().decode(output.stdout),
+    stderr: new TextDecoder().decode(output.stderr),
+  };
+}
 
 const fixtureThread = "12345678-1234-5678-abcd-123456789abc";
 type Surface = "claude" | "agy" | "codex";
@@ -1382,7 +1410,7 @@ async function createFixFixture(surface: Surface) {
     ? `${codexHome}/sessions/rollout-${fixtureThread}.jsonl`
     : surface === "claude"
     ? `${userHome}/.claude/projects/probe/${fixtureThread}.jsonl`
-    : `${userHome}/.gemini/brain/${fixtureThread}/.system_generated/logs/transcript_full.jsonl`;
+    : `${userHome}/.gemini/antigravity-cli/brain/${fixtureThread}/.system_generated/logs/transcript_full.jsonl`;
   await Deno.mkdir(sessionPath.slice(0, sessionPath.lastIndexOf("/")), { recursive: true });
   await Deno.mkdir(toolsDir);
   const realGit = (Deno.env.get("PATH") ?? "").split(":").map((dir) => `${dir}/git`).find(
@@ -1492,7 +1520,7 @@ async function createFixFixture(surface: Surface) {
           modelName: "gemini-4-hydrogen-high",
         }) + "\n",
       );
-      const parent = `${userHome}/.gemini/brain/parent/.system_generated/subagents`;
+      const parent = `${userHome}/.gemini/antigravity-cli/brain/parent/.system_generated/subagents`;
       await Deno.mkdir(parent, { recursive: true });
       const childFile = `${parent}/${fixtureThread}.json`;
       if (helper) await Deno.writeTextFile(childFile, "{}");
@@ -1647,6 +1675,102 @@ for (const surface of ["claude", "agy", "codex"] as const) {
     }
   });
 }
+
+for (const surface of ["claude", "agy", "codex"] as const) {
+  Deno.test(`${surface}: real fix-pr:resolve-target --from-session verifies the typed call read-only`, async () => {
+    const fixture = await createFixFixture(surface);
+    try {
+      const args = ["--from-session", "--repo-dir", fixture.repoDir];
+      const resolved = { repo: targetRepo, number: 1318, branch: "probe-branch", build: null };
+      const cases: {
+        texts: string[];
+        ok?: boolean;
+        reason?: string;
+        helper?: boolean;
+        damaged?: boolean;
+        pr?: PullRequestState;
+        ghExit?: string;
+        unattended?: string;
+      }[] = [
+        { texts: [fixCall.text], ok: true },
+        { texts: ["/fix-pr 1318, bump version"], ok: true },
+        { texts: [fixCall.text, "also bump the version"], ok: true },
+        { texts: [fixCall.text, "/pr-review"], reason: "'pr-review', not fix-pr" },
+        { texts: ["/fix-pr JaMmusic#1318"], reason: "not this checkout's" },
+        {
+          texts: ["/fix-pr web-jam-tools#1318 and web-jam-tools#1322"],
+          reason: "more than one pull request",
+        },
+        { texts: [fixCall.text], helper: true, reason: "helper's turn" },
+        { texts: [fixCall.text], damaged: true, reason: "unreadable" },
+        { texts: [fixCall.text], pr: { ...targetPr, state: "MERGED" }, reason: "is MERGED" },
+        { texts: [fixCall.text], pr: { ...targetPr, isCrossRepository: true }, reason: "fork" },
+        { texts: [fixCall.text], pr: { ...targetPr, headRefName: "dev" }, reason: "protected" },
+        { texts: [fixCall.text], ghExit: "1", reason: "GitHub could not be read" },
+        { texts: [fixCall.text], unattended: "1", reason: "unattended" },
+      ];
+      for (const item of cases) {
+        await fixture.writeSession(item.texts, item.helper ?? false, item.damaged ?? false);
+        const result = await runResolveTarget(args, {
+          ...fixture.shellEnv,
+          PUSH_TEST_PR: JSON.stringify(item.pr ?? targetPr),
+          PUSH_TEST_GH_EXIT: item.ghExit ?? "0",
+          WJT_UNATTENDED: item.unattended ?? "",
+        });
+        const label = `${surface} ${JSON.stringify(item)}: ${result.stderr}`;
+        if (item.ok) {
+          assertEquals(result.code, 0, label);
+          assertEquals(JSON.parse(result.stdout), resolved, label);
+        } else {
+          assertEquals(result.code, 1, label);
+          assertEquals(result.stdout, "", label);
+          assertStringIncludes(result.stderr, `Refused: `, label);
+          assertStringIncludes(result.stderr, item.reason ?? "", label);
+        }
+      }
+      // Unable to determine: no session named in the environment refuses (fail closed).
+      await fixture.writeSession([fixCall.text]);
+      const unnamed = await runResolveTarget(args, {
+        ...fixture.shellEnv,
+        CODEX_THREAD_ID: "",
+        CLAUDE_CODE_SESSION_ID: "",
+        AGY_CONVERSATION_ID: "",
+        AGY_TRANSCRIPT_PATH: "",
+      });
+      assertEquals(unnamed.code, 1);
+      assertStringIncludes(unnamed.stderr, "no session is named");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+}
+
+Deno.test("agy: fix-pr:resolve-target cannot read a transcript outside its scoped session stores", async () => {
+  const fixture = await createFixFixture("agy");
+  try {
+    await fixture.writeSession([fixCall.text]);
+    // The same transcript and subagent layout, under a brain directory outside the scoped reads.
+    const outsideBrain = `${fixture.tempDir}/outside/brain`;
+    const transcript = `${outsideBrain}/${fixture.sessionPath.split("/brain/")[1]}`;
+    await Deno.mkdir(transcript.slice(0, transcript.lastIndexOf("/")), { recursive: true });
+    await Deno.mkdir(`${outsideBrain}/parent/.system_generated/subagents`, { recursive: true });
+    await Deno.copyFile(fixture.sessionPath, transcript);
+    const record = JSON.parse((await Deno.readTextFile(fixture.recordPath)).trim());
+    await Deno.writeTextFile(
+      fixture.recordPath,
+      JSON.stringify({ ...record, transcriptPath: transcript }) + "\n",
+    );
+    const env = { ...fixture.shellEnv, AGY_TRANSCRIPT_PATH: transcript };
+    // With unrestricted reads the call is there to find; the task's scoped reads cannot reach it.
+    const call = await readTypedSkillCall((name) => (env as Record<string, string>)[name]);
+    assertEquals(call?.name, "fix-pr");
+    const result = await runResolveTarget(["--from-session", "--repo-dir", fixture.repoDir], env);
+    assertEquals(result.code, 1, result.stderr);
+    assertStringIncludes(result.stderr, "Refused: no typed skill call could be read");
+  } finally {
+    await fixture.cleanup();
+  }
+});
 
 Deno.test("web-jam-tools#1916: closed 13-row case list for fix-pr/<number> throwaway branch and outside-run refusal", async () => {
   const pr1907Call = {
