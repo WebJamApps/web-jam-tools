@@ -149,12 +149,27 @@ Deno.test("citation-location: a citation inside a blockquote (verbatim quote) is
 
 Deno.test("citation-location: a citation inside the ## Revision History table is exempt", () => {
   const result = lintDesignDoc(
-    doc(`## Revision History
+    `# Title
+
+## Revision History
 
 | Version | Date | Epic / Issue | Summary |
 |---|---|---|---|
 | 1.0.0 | ${TODAY} | [some epic](https://github.com/WebJamApps/web-jam-tools/issues/1025) | web-jam-tools#1025 initial design in "What it is". |
-`),
+
+## What it is
+Text.
+
+## Both surfaces
+| Mechanism | Claude Code | agy | Codex |
+|---|---|---|---|
+| Runner | deno task | identical | identical |
+
+## Load-bearing premises
+| Premise | Proof | Proved |
+|---|---|---|
+| The runner exists as a deno task | Checked deno.json's tasks map | ${TODAY} |
+`,
     "test.md",
   );
   assertEquals(result.valid, true, JSON.stringify(citationViolations(result)));

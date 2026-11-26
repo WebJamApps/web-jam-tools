@@ -39,6 +39,10 @@ export interface LintDesignDocOptions {
   stateDir?: string;
   dropboxDir?: string;
   designDocsRoot?: string;
+  docDir?: string;
+  realPathImpl?: (targetPath: string) => string;
+  statImpl?: (targetPath: string) => Deno.FileInfo;
+  checkReadableImpl?: (targetPath: string) => void;
 }
 
 /**
@@ -1579,11 +1583,165 @@ function validateBothSurfacesSection(
  * 8. Fails if the document names a target issue it was invoked on but carries no verbatim
  *    blockquote of that issue's directive anywhere after naming it (web-jam-tools#815).
  * 9. Fails if a '## Revision History' table is present and lacks a 'Version' or 'Date' column, has
- *    no data rows, carries an unparseable version or date, or lists rows newest-first (web-jam-tools#892).
+ *    no data rows, carries an unparseable version or date, or lists rows newest-first (web-jam-tools#892);
+ *    or if '## Revision History' is present and is not the document's first section.
  * 10. Fails if the '## Load-bearing premises' table has no 'Proved' column, or a row's 'Proved'
  *     date is missing, malformed, or earlier than today without an exact stored-row match —
  *     matched by header name, never by position.
+ * 11. Fails if a Markdown image target naming a `.png`, `.jpg`, `.webp`, or `.svg` file in the
+ *     document's folder does not exist or cannot be read (failing closed, naming the path).
  */
+const ALLOWED_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".webp", ".svg"]);
+const MARKDOWN_IMAGE_REGEX = /!\[([^\]]*)\]\(([^)\r\n]+)\)/g;
+
+/**
+ * Returns true when character index `idx` falls inside a backtick inline code span on `line`.
+ */
+function isInsideBacktickCodeSpan(
+  idx: number,
+  exemptRanges: ExemptRange[],
+  line: string,
+): boolean {
+  return exemptRanges.some((r) => line[r.start] === "`" && idx >= r.start && idx < r.end);
+}
+
+/**
+ * Returns true when `rel` escapes a root folder (empty, ".", starts with "..", or absolute).
+ */
+function escapesFolder(rel: string): boolean {
+  return !rel || rel === "." || rel.startsWith("..") || path.isAbsolute(rel);
+}
+
+/**
+ * Validates Markdown image targets (`![alt](target)`) on a single non-fenced line against the
+ * rendered-page image rules: remote URIs, absolute paths, backslash paths, outside-folder paths,
+ * and non-image extensions are rendered as literal text and ignored; local `.png`/`.jpg`/`.webp`/
+ * `.svg` targets inside the document's folder must exist as readable regular files, failing
+ * closed when missing, non-file, or unreadable.
+ */
+function validateMarkdownImagesOnLine(
+  line: string,
+  lineNum: number,
+  exemptRanges: ExemptRange[],
+  docPath: string,
+  options: LintDesignDocOptions,
+): LintViolation[] {
+  const violations: LintViolation[] = [];
+  const regex = new RegExp(MARKDOWN_IMAGE_REGEX.source, "g");
+  let match: RegExpExecArray | null;
+
+  const realPath = options.realPathImpl ?? Deno.realPathSync;
+  const statSync = options.statImpl ?? Deno.statSync;
+  const checkReadable = options.checkReadableImpl ?? ((filePath: string) => {
+    const file = Deno.openSync(filePath, { read: true });
+    file.close();
+  });
+
+  while ((match = regex.exec(line)) !== null) {
+    if (
+      isEscapedAt(line, match.index) || isInsideBacktickCodeSpan(match.index, exemptRanges, line)
+    ) {
+      continue;
+    }
+
+    const target = match[2].trim();
+    if (
+      !target ||
+      /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(target) ||
+      target.startsWith("/") ||
+      target.includes("\\")
+    ) {
+      continue;
+    }
+
+    const ext = path.extname(target).toLowerCase();
+    if (!ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
+      continue;
+    }
+
+    const virtualBase = "/doc-root";
+    const virtualRel = path.relative(virtualBase, path.resolve(virtualBase, target));
+    if (escapesFolder(virtualRel)) {
+      continue;
+    }
+
+    const baseDir = options.docDir?.trim() ||
+      (docPath.trim() ? path.dirname(path.resolve(expandHome(docPath.trim()))) : "");
+    if (!baseDir) {
+      violations.push({
+        rule: "unreadable-image-file",
+        message: `Cannot verify image file "${target}" because the document directory is unknown.`,
+        line: lineNum,
+        lineContent: line,
+      });
+      continue;
+    }
+
+    const resolvedDocDir = path.resolve(baseDir);
+    const resolvedFile = path.resolve(resolvedDocDir, target);
+    const rel = path.relative(resolvedDocDir, resolvedFile);
+    if (escapesFolder(rel)) {
+      continue;
+    }
+
+    let realDocDir: string;
+    try {
+      realDocDir = realPath(resolvedDocDir);
+    } catch (err) {
+      violations.push({
+        rule: "unreadable-image-file",
+        message: `Cannot verify image file "${target}": unable to inspect document folder (${
+          err instanceof Error ? err.message : String(err)
+        }).`,
+        line: lineNum,
+        lineContent: line,
+      });
+      continue;
+    }
+
+    let realFile: string;
+    let stat: Deno.FileInfo;
+    try {
+      realFile = realPath(resolvedFile);
+      const realRel = path.relative(realDocDir, realFile);
+      if (escapesFolder(realRel)) {
+        continue;
+      }
+      stat = statSync(realFile);
+      if (!stat.isFile) {
+        violations.push({
+          rule: "missing-image-file",
+          message: `Design document image target "${target}" is not a file.`,
+          line: lineNum,
+          lineContent: line,
+        });
+        continue;
+      }
+      checkReadable(realFile);
+    } catch (err) {
+      if (err instanceof Deno.errors.NotFound) {
+        violations.push({
+          rule: "missing-image-file",
+          message: `Design document references missing image file "${target}".`,
+          line: lineNum,
+          lineContent: line,
+        });
+      } else {
+        violations.push({
+          rule: "unreadable-image-file",
+          message: `Cannot verify image file "${target}": ${
+            err instanceof Error ? err.message : String(err)
+          }.`,
+          line: lineNum,
+          lineContent: line,
+        });
+      }
+    }
+  }
+
+  return violations;
+}
+
 export function toLocalIsoDate(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -1624,6 +1782,9 @@ export function lintDesignDoc(
   let revisionHistoryHeadingFound = false;
   let revisionHistoryHeadingLineNum = 0;
   const revisionHistoryTableLines: Array<{ line: string; lineNum: number }> = [];
+  let sawDocumentTitle = false;
+  let firstPriorSection: { heading: string; line: number } | null = null;
+  let revisionHistoryNotFirstEmitted = false;
 
   // Patterns for rules
   const statusLineRegex =
@@ -1704,13 +1865,32 @@ export function lintDesignDoc(
 
     // Track the '## Revision History' section (web-jam-tools#892): on, from its heading, until the
     // next heading of any level (or end of document). Table rows collected while inside it are
-    // validated after this loop by validateRevisionHistoryTable.
+    // validated after this loop by validateRevisionHistoryTable. Also record whether any non-title
+    // section heading appears before '## Revision History' (web-jam-tools#1562).
     if (revisionHistoryHeadingRegex.test(line)) {
       revisionHistoryHeadingFound = true;
       revisionHistoryHeadingLineNum = lineNum;
       inRevisionHistorySection = true;
-    } else if (inRevisionHistorySection && anyHeadingRegex.test(line)) {
-      inRevisionHistorySection = false;
+      if (firstPriorSection !== null && !revisionHistoryNotFirstEmitted) {
+        violations.push({
+          rule: "revision-history-not-first-section",
+          message:
+            `Design document's '## Revision History' section must be its first section (directly under the title), not after '${firstPriorSection.heading}' (line ${firstPriorSection.line}).`,
+          line: lineNum,
+          lineContent: line,
+        });
+        revisionHistoryNotFirstEmitted = true;
+      }
+    } else if (anyHeadingRegex.test(line)) {
+      if (inRevisionHistorySection) {
+        inRevisionHistorySection = false;
+      }
+      const headingLevelMatch = line.match(/^\s*(#{1,6})\s+/);
+      if (!sawDocumentTitle && headingLevelMatch?.[1].length === 1) {
+        sawDocumentTitle = true;
+      } else if (!revisionHistoryHeadingFound && firstPriorSection === null) {
+        firstPriorSection = { heading: line.trim(), line: lineNum };
+      }
     } else if (inRevisionHistorySection && line.trim().startsWith("|")) {
       revisionHistoryTableLines.push({ line, lineNum });
     }
@@ -1839,6 +2019,11 @@ export function lintDesignDoc(
         });
       }
     }
+
+    // 6b. Local Markdown image existence & readability check ("The Rendered Page")
+    violations.push(
+      ...validateMarkdownImagesOnLine(line, lineNum, exemptRanges, docPath, options),
+    );
   }
 
   // 7. Check for Both surfaces section (web-jam-tools#1146)
@@ -2274,7 +2459,14 @@ export async function runLintDocCli(
   args: string[],
   options: Pick<
     LintDesignDocOptions,
-    "nowImpl" | "stateDir" | "dropboxDir" | "designDocsRoot"
+    | "nowImpl"
+    | "stateDir"
+    | "dropboxDir"
+    | "designDocsRoot"
+    | "docDir"
+    | "realPathImpl"
+    | "statImpl"
+    | "checkReadableImpl"
   > = {},
 ): Promise<number> {
   const flags = parseArgs(args, {
@@ -2306,12 +2498,15 @@ Checks a design document against the skill's body rules:
   - Fails if the "## Load-bearing premises" table has no "Proved" column, or a row's Proved date
     is missing or malformed; an earlier date passes only when the premise, proof and date
     exactly match a stored Gate 1 row. An unreadable record refuses the check.
+  - Fails if "## Revision History" is present and is not the document's first section.
   - Fails if the document names a target issue it was invoked on but carries no verbatim
     blockquote of that issue's directive lines.
   - Fails if the newest Revision History row lacks valid section links/headings or carries code-review
     tokens (backtick spans, repo paths, CLI long flags), or if new decision-record rows after the
     stored Gate 1 count fail to name an existing heading in double quotation marks.
   - Fails if the document's body names a path not covered by "Where Things Live".
+  - Fails if a local Markdown image file (.png, .jpg, .webp, .svg) does not exist or cannot be
+    read (failing closed, naming the path).
   - Fails if the document's body shares a run of 12 or more consecutive words with another design
     document's body. When another design document cannot be read, refuses naming it.
 

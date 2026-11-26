@@ -552,15 +552,15 @@ Deno.test("deno.json defines design:lint-doc task", async () => {
 Deno.test("AC7 & AC9: lintDesignDoc passes document with valid ## Revision History table", () => {
   const doc = `# Title
 
-## What it is
-Design content.
-
 ## Revision History
 
 | Version | Date | Epic / Issue | Summary |
 |---|---|---|---|
 | 1.0.0 | 2026-08-16 | [Issue 1](https://example.com/1) | Initial release |
 | 1.1.0 | 2026-09-02 | [Issue 2](https://example.com/2) | Added new features in "What it is" |
+
+## What it is
+Design content.
 
 ## Both surfaces
 Parity details across Claude Code, agy, and Codex.
@@ -596,14 +596,14 @@ Parity details across Claude Code, agy, and Codex.
 Deno.test("AC7: lintDesignDoc fails when Revision History table lacks Version column", () => {
   const doc = `# Title
 
-## What it is
-Content.
-
 ## Revision History
 
 | Date | Epic / Issue | Summary |
 |---|---|---|
 | 2026-08-16 | [Issue 1](https://example.com/1) | Initial |
+
+## What it is
+Content.
 
 ## Both surfaces
 Parity.
@@ -624,14 +624,14 @@ Parity.
 Deno.test("AC7: lintDesignDoc fails when Revision History table lacks Date column", () => {
   const doc = `# Title
 
-## What it is
-Content.
-
 ## Revision History
 
 | Version | Epic / Issue | Summary |
 |---|---|---|
 | 1.0.0 | [Issue 1](https://example.com/1) | Initial |
+
+## What it is
+Content.
 
 ## Both surfaces
 Parity.
@@ -652,13 +652,13 @@ Parity.
 Deno.test("AC7: lintDesignDoc fails when Revision History table has no data rows", () => {
   const doc = `# Title
 
-## What it is
-Content.
-
 ## Revision History
 
 | Version | Date | Summary |
 |---|---|---|
+
+## What it is
+Content.
 
 ## Both surfaces
 Parity.
@@ -679,14 +679,14 @@ Parity.
 Deno.test("AC7: lintDesignDoc fails when Revision History table carries unparseable version", () => {
   const doc = `# Title
 
-## What it is
-Content.
-
 ## Revision History
 
 | Version | Date | Summary |
 |---|---|---|
 | not-a-semver | 2026-08-16 | Initial |
+
+## What it is
+Content.
 
 ## Both surfaces
 Parity.
@@ -707,14 +707,14 @@ Parity.
 Deno.test("AC7: lintDesignDoc fails when Revision History table carries unparseable date", () => {
   const doc = `# Title
 
-## What it is
-Content.
-
 ## Revision History
 
 | Version | Date | Summary |
 |---|---|---|
 | 1.0.0 | August 16 2026 | Initial |
+
+## What it is
+Content.
 
 ## Both surfaces
 Parity.
@@ -735,15 +735,15 @@ Parity.
 Deno.test("AC7: lintDesignDoc fails when Revision History table lists rows newest-first", () => {
   const doc = `# Title
 
-## What it is
-Content.
-
 ## Revision History
 
 | Version | Date | Summary |
 |---|---|---|
 | 2.0.0 | 2026-09-02 | Major update |
 | 1.0.0 | 2026-08-16 | Initial |
+
+## What it is
+Content.
 
 ## Both surfaces
 Parity.
@@ -764,14 +764,14 @@ Parity.
 Deno.test("AC9: lintDesignDoc fails when banned prose appears inside Revision History summary cell", () => {
   const doc = `# Title
 
-## What it is
-Content.
-
 ## Revision History
 
 | Version | Date | Summary |
 |---|---|---|
 | 1.0.0 | 2026-08-16 | An earlier version said we would use MySQL. |
+
+## What it is
+Content.
 
 ## Both surfaces
 Parity.
@@ -1464,7 +1464,212 @@ Deno.test("History tables point at the body: unreadable Gate 1 record refuses na
       Error,
       recordPath,
     );
+// --- Revision table first-section rule (web-jam-tools#1562) ---
+
+Deno.test("revision-history-not-first-section: refuses Revision History after another section and accepts it first", async () => {
+  const afterOtherSection = `# Title
+
+## What it is
+Design content.
+
+## Revision History
+
+| Version | Date | Summary |
+|---|---|---|
+| 1.0.0 | ${TODAY} | Initial design |
+
+## Both surfaces
+| Mechanism | Claude Code | agy | Codex |
+|---|---|---|---|
+| Runner | deno task | identical | identical |
+
+## Load-bearing premises
+| Premise | Proof | Proved |
+|---|---|---|
+| File exists | Checked locally | ${TODAY} |
+`;
+  const refused = lintDesignDoc(afterOtherSection, "test.md");
+  assertEquals(refused.valid, false);
+  const violation = refused.violations.find((v) => v.rule === "revision-history-not-first-section");
+  assertEquals(Boolean(violation), true);
+  assertStringIncludes(violation!.message, "## What it is");
+  assertEquals(violation!.line, 6);
+
+  const withoutTitle = `## Overview
+Intro section.
+
+## Revision History
+
+| Version | Date | Summary |
+|---|---|---|
+| 1.0.0 | ${TODAY} | Initial design |
+
+## Both surfaces
+Parity details across Claude Code, agy, and Codex.
+
+## Load-bearing premises
+| Premise | Proof | Proved |
+|---|---|---|
+| File exists | Checked locally | ${TODAY} |
+`;
+  const refusedNoTitle = lintDesignDoc(withoutTitle, "test.md");
+  assertEquals(refusedNoTitle.valid, false);
+  assertEquals(
+    refusedNoTitle.violations.some((v) => v.rule === "revision-history-not-first-section"),
+    true,
+  );
+
+  const withIntroParagraphFirst = `# Title
+
+Short summary under the title before the first section heading.
+
+## Revision History
+
+| Version | Date | Summary |
+|---|---|---|
+| 1.0.0 | ${TODAY} | Initial design |
+
+## What it is
+Design content.
+
+## Both surfaces
+Parity details across Claude Code, agy, and Codex.
+
+## Load-bearing premises
+| Premise | Proof | Proved |
+|---|---|---|
+| File exists | Checked locally | ${TODAY} |
+`;
+  const allowedIntro = lintDesignDoc(withIntroParagraphFirst, "test.md");
+  assertEquals(allowedIntro.valid, true, JSON.stringify(allowedIntro.violations));
+
+  const tempDir = await Deno.makeTempDir({ prefix: "lint-doc-rev-order-" });
+  try {
+    const docPath = path.join(tempDir, "late-revision-design.md");
+    await Deno.writeTextFile(docPath, afterOtherSection);
+    const errors: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args.join(" "));
+    try {
+      const code = await runCli(["lint-doc", docPath]);
+      assertEquals(code, 1);
+    } finally {
+      console.error = origError;
+    }
+    assertStringIncludes(errors.join("\n"), "revision-history-not-first-section");
   } finally {
     await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+// --- Image file existence & three-outcome checks ("Images on the rendered page", web-jam-tools#1562) ---
+
+Deno.test("Images on the rendered page: accepts valid local images, ignores remote/outside/non-image/raw-html/code-quoted, refuses missing naming path, fails closed on error", async () => {
+  const rootDir = await Deno.makeTempDir({ prefix: "lint-doc-images-" });
+  const docDir = path.join(rootDir, "doc-folder");
+  const subImgDir = path.join(docDir, "img");
+  const otherDir = path.join(rootDir, "other");
+  await Deno.mkdir(subImgDir, { recursive: true });
+  await Deno.mkdir(otherDir, { recursive: true });
+
+  try {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    await Deno.writeFile(path.join(docDir, "gigs-gig-page-phone.png"), pngBytes);
+    await Deno.writeTextFile(
+      path.join(subImgDir, "diagram.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+    );
+    await Deno.writeFile(path.join(docDir, "photo.jpg"), pngBytes);
+    await Deno.writeFile(path.join(docDir, "pic.webp"), pngBytes);
+    await Deno.writeFile(path.join(otherDir, "a.png"), pngBytes);
+    await Deno.writeTextFile(path.join(docDir, "a.js"), "console.log(1);");
+    await Deno.symlink(path.join(otherDir, "a.png"), path.join(docDir, "escaped-link.png"));
+    await Deno.mkdir(path.join(docDir, "dir-not-file.png"));
+
+    const docPath = path.join(docDir, "feature-design.md");
+    const compliantBody = `![phone](gigs-gig-page-phone.png)
+
+![diagram](img/diagram.svg)
+
+![photo](photo.jpg)
+
+![pic](pic.webp)
+
+![remote](https://example.com/a.png)
+
+![outside](../other/a.png)
+
+![symlink](escaped-link.png)
+
+![script](a.js)
+
+<img src="gigs-gig-page-phone.png" onerror="alert(1)">
+
+![a "quoted" alt](gigs-gig-page-phone.png)
+
+Example inline code: \`![missing-in-code](does-not-exist.png)\`
+
+\`\`\`md
+![missing-in-fence](also-does-not-exist.png)
+\`\`\``;
+    const compliantDoc = buildCompliantDesignDoc(compliantBody);
+    await Deno.writeTextFile(docPath, compliantDoc);
+    const passResult = await lintDesignDocFile(docPath);
+    assertEquals(passResult.valid, true, JSON.stringify(passResult.violations));
+
+    // Condition holds (missing file): refuses and names `nope.png`
+    const missingDoc = buildCompliantDesignDoc("![missing](nope.png)");
+    await Deno.writeTextFile(docPath, missingDoc);
+    const missingResult = await lintDesignDocFile(docPath);
+    assertEquals(missingResult.valid, false);
+    const missingViolation = missingResult.violations.find((v) => v.rule === "missing-image-file");
+    assertEquals(Boolean(missingViolation), true);
+    assertStringIncludes(missingViolation!.message, "nope.png");
+
+    // CLI output also fails and names `nope.png`
+    const cliErrors: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => cliErrors.push(args.join(" "));
+    try {
+      const exitCode = await runCli(["lint-doc", docPath]);
+      assertEquals(exitCode, 1);
+    } finally {
+      console.error = origError;
+    }
+    assertStringIncludes(cliErrors.join("\n"), "nope.png");
+
+    // Non-file target (directory ending in .png): refuses and names path
+    const dirTargetDoc = buildCompliantDesignDoc("![dir](dir-not-file.png)");
+    const dirResult = lintDesignDoc(dirTargetDoc, docPath);
+    assertEquals(dirResult.valid, false);
+    assertStringIncludes(dirResult.violations[0].message, "dir-not-file.png");
+
+    // Third outcome (cannot verify / error reading path): fails closed, naming path
+    const unreadableResult = lintDesignDoc(
+      buildCompliantDesignDoc("![phone](gigs-gig-page-phone.png)"),
+      docPath,
+      {
+        checkReadableImpl: () => {
+          throw new Error("EIO: disk read failed");
+        },
+      },
+    );
+    assertEquals(unreadableResult.valid, false);
+    const unreadableViolation = unreadableResult.violations.find((v) =>
+      v.rule === "unreadable-image-file"
+    );
+    assertEquals(Boolean(unreadableViolation), true);
+    assertStringIncludes(unreadableViolation!.message, "gigs-gig-page-phone.png");
+    assertStringIncludes(unreadableViolation!.message, "EIO");
+
+    // Unknown document folder with local image reference: fails closed, naming path
+    const unknownDirResult = lintDesignDoc(
+      buildCompliantDesignDoc("![phone](gigs-gig-page-phone.png)"),
+      "",
+    );
+    assertEquals(unknownDirResult.valid, false);
+    assertStringIncludes(unknownDirResult.violations[0].message, "gigs-gig-page-phone.png");
+  } finally {
+    await Deno.remove(rootDir, { recursive: true });
   }
 });
