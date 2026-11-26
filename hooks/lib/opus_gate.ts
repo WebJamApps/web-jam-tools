@@ -60,6 +60,7 @@ import {
   type TranscriptEntry,
 } from "./select_transcript_entry.ts";
 import { slashCommandFromInvocationWrapper } from "./check_token_write_authorization.ts";
+import { fixPrInstructions, parseFixPrTarget } from "./fix_pr_target.ts";
 import { analyzeBashWrites } from "./bash_write_targets.ts";
 import { parseApplyPatchFilePaths } from "./parse_apply_patch.ts";
 import { checkAndConsumeWorkflowSwitch, type SwitchCheckResult } from "./workflow_switch.ts";
@@ -738,9 +739,11 @@ function newestTypedSkillCall(entries: readonly TranscriptEntry[]): TypedSkillCa
 }
 
 /**
- * Recognise the fix-pr target forms, without mistaking an issue URL or prose for a PR. `repo` is the
- * `owner/name` (lower case) a link or `Repo#N` names; null for a bare number, whose repository is the
- * one Josh typed the call in.
+ * Recognise the fix-pr target through the shared synchronous parser in `fix_pr_target.ts` (no `gh`
+ * or network call), so a CircleCI build or job link and a target anywhere in the call count as they
+ * do for `deno task push`. `repo` is the `owner/name` (lower case) a link or `Repo#N` names; null for
+ * a bare number or a CircleCI Checks link carrying no repository, whose repository is then the one
+ * Josh typed the call in.
  */
 function activeFixPrCall(entries: readonly TranscriptEntry[]):
   | (TypedSkillCall & {
@@ -750,20 +753,12 @@ function activeFixPrCall(entries: readonly TranscriptEntry[]):
   | null {
   const call = newestTypedSkillCall(entries);
   if (call?.command !== "fix-pr") return null;
-  const target = call.args.match(/^\S+/)?.[0] ?? "";
-  const ref = target.match(
-    /^(?:https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/|(?:([A-Za-z0-9_.-]+)\/)?([A-Za-z0-9_.-]+)#|#?)([1-9]\d*)$/,
-  );
-  if (!ref || !Number.isSafeInteger(Number(ref[5]))) return null;
-  const repo = ref[1]
-    ? `${ref[1]}/${ref[2]}`
-    : ref[4]
-    ? `${ref[3] ?? DEFAULT_OWNER}/${ref[4]}`
-    : null;
+  const parsed = parseFixPrTarget(call.args);
+  if (!parsed.ok) return null;
   return {
     ...call,
-    instructions: call.args.slice(target.length).trim(),
-    repo: repo?.toLowerCase() ?? null,
+    instructions: fixPrInstructions(call.args),
+    repo: parsed.target.repo?.toLowerCase() ?? null,
   };
 }
 

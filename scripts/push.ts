@@ -11,6 +11,10 @@
  * uses the typed authorization. The comment is validated and signed before pushing,
  * then posted through the shared post-pr-comment command only after a successful push.
  * Outside that run, force-with-lease still requires affirmative terminal confirmation.
+ * The typed call's target is found anywhere in its arguments by the shared parser in
+ * `hooks/lib/fix_pr_target.ts`; a CircleCI build or job link is resolved to its open pull request
+ * through CircleCI's API (`--allow-net=circleci.com`, optional `CIRCLECI_TOKEN`). A link the command
+ * cannot resolve gives no fix run.
  *
  * Refuses protected branches (dev, main), plain --force / -f, --delete / -d,
  * colon refspecs (:branch), and fails closed if the branch cannot be determined
@@ -21,10 +25,11 @@ import {
   checkFixRun,
   type FixRun,
   githubRepository,
-  parseFixPrReference,
   type PullRequestRef,
   type PullRequestState,
   readTypedSkillCall,
+  resolveFixPrTarget,
+  type TargetResolverDeps,
 } from "../hooks/lib/fix_run.ts";
 import { resolve } from "@std/path";
 import { signedFixComment } from "../src/shared/fix_comment.ts";
@@ -284,9 +289,14 @@ export interface FixRunDeps {
   readSkillCall?: () => Promise<CodexSkillCall | null>;
   runGit?: GitRunner;
   lookupPullRequest?: PullRequestLookup;
+  /** CircleCI and GitHub lookups that resolve a CircleCI build or job link to its pull request. */
+  targetResolver?: TargetResolverDeps;
 }
 
-/** Discovery failures are no approval; a verified call for a different branch is refused. */
+/**
+ * Discovery failures are no approval; a verified call for a different branch is refused. A CircleCI
+ * link the command cannot resolve to one open pull request gives no fix run.
+ */
 export async function resolveFixRun(
   branch: string | null,
   cwd?: string,
@@ -302,9 +312,11 @@ export async function resolveFixRun(
     );
     const repo = remote.code === 0 ? githubRepository(remote.stdout) : null;
     if (!repo) return { kind: "none" };
-    const ref = parseFixPrReference(call.arguments, repo);
-    const pr = ref ? await (deps.lookupPullRequest ?? lookupPullRequest)(ref) : null;
-    return checkFixRun(call, repo, branch, pr);
+    const resolution = await resolveFixPrTarget(call.arguments, repo, deps.targetResolver);
+    const pr = resolution.kind === "resolved"
+      ? await (deps.lookupPullRequest ?? lookupPullRequest)(resolution.ref)
+      : null;
+    return checkFixRun(call, repo, branch, pr, resolution);
   } catch {
     return { kind: "none" };
   }
