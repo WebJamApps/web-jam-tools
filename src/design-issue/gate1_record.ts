@@ -12,6 +12,7 @@ import {
   isTableSeparatorRow,
   isValidIsoDate,
   type LoadBearingPremisesTable,
+  readDecisionRecordDataRows,
   readLoadBearingPremisesTable,
   stripCellDecoration,
   toLocalIsoDate,
@@ -63,6 +64,7 @@ export interface Gate1Record {
   premiseRowsSource?: "approval" | "adoption"; // where premiseRows came from
   premiseRowsStoredAt?: string; // ISO 8601 timestamp the rows were stored
   premiseRowsAdoptionReply?: string; // Josh's reply verbatim, adoption only
+  decisionRowCount?: number; // number of decision-record data rows at last approval
   sweepNotes?: SweepNote[]; // Active sweep notes recorded for the current revision
   otherDesignSweep?: OtherDesignSweepResult; // Cross-design sweep recorded at Gate 1
 }
@@ -271,6 +273,11 @@ function premiseRowsForApproval(content: string): PremiseRow[] {
   return parsePremisesTable(content).rows;
 }
 
+/** Count of decision-record data rows in the document (0 when no decision record exists). */
+export function countDecisionRecordRows(content: string): number {
+  return readDecisionRecordDataRows(content.split(/\r?\n/)).length;
+}
+
 /** Strict reading for adoption: refuses a missing or malformed table or a bad Proved date. */
 function premiseRowsForAdoption(content: string, todayIso: string): PremiseRow[] {
   const parsed = parsePremisesTable(content);
@@ -371,6 +378,16 @@ async function readExistingRecord(recordPath: string): Promise<Gate1Record | nul
     );
   }
   const sweepNotes = (parsed as Gate1Record).sweepNotes;
+  const decisionRowCount = (parsed as Gate1Record).decisionRowCount;
+  if (
+    decisionRowCount !== undefined &&
+    (typeof decisionRowCount !== "number" || !Number.isInteger(decisionRowCount) ||
+      decisionRowCount < 0)
+  ) {
+    throw new Gate1RecordError(
+      `Cannot parse Gate 1 record at ${recordPath}: malformed decisionRowCount`,
+    );
+  }
   if (
     sweepNotes !== undefined &&
     (!Array.isArray(sweepNotes) ||
@@ -441,6 +458,9 @@ export async function openGate1Record(
     }
     if (existing?.premiseRowsAdoptionReply !== undefined) {
       record.premiseRowsAdoptionReply = existing.premiseRowsAdoptionReply;
+    }
+    if (existing?.decisionRowCount !== undefined) {
+      record.decisionRowCount = existing.decisionRowCount;
     }
     if (existing?.sweepNotes !== undefined && existing.sweepNotes.length > 0) {
       record.sweepNotes = existing.sweepNotes;
@@ -583,6 +603,7 @@ export async function approveGate1Record(
     current.premiseRows = premiseRowsForApproval(content);
     current.premiseRowsSource = "approval";
     current.premiseRowsStoredAt = current.approvedAt;
+    current.decisionRowCount = countDecisionRecordRows(content);
     delete current.premiseRowsAdoptionReply;
     // Clear active sweep notes after approval (the presented sweep snapshot stays in
     // otherDesignSweep) so a later revision must re-verify or re-note any hits in other designs.

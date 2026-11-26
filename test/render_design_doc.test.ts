@@ -845,16 +845,16 @@ Second instance
   const html = renderDesignDoc(md);
   const mainContent = html.split("<main>")[1]?.split("</main>")[0] ?? "";
 
-  // Slug deduplication: duplicate-1
+  // Slug deduplication: duplicate-2
   assertStringIncludes(html, 'href="#duplicate"');
-  assertStringIncludes(html, 'href="#duplicate-1"');
-  assertStringIncludes(mainContent, '<h2 id="duplicate-1">Duplicate</h2>');
+  assertStringIncludes(html, 'href="#duplicate-2"');
+  assertStringIncludes(mainContent, '<h2 id="duplicate-2">Duplicate</h2>');
 
   // Horizontal rule
   assertStringIncludes(mainContent, "<hr>");
 
   // Heading level 4
-  assertStringIncludes(mainContent, "<h4>Level 4 Heading</h4>");
+  assertStringIncludes(mainContent, '<h4 id="level-4-heading">Level 4 Heading</h4>');
 
   // Blockquote
   assertStringIncludes(
@@ -1143,4 +1143,43 @@ Deno.test("Gate 1 page renders otherDesignSweep with zero hits and omits it on p
     },
   });
   assertFalse(planHtml.includes("other-design-sweep"));
+});
+
+Deno.test("renderDesignDoc assigns deterministic id anchors on h2, h3, and h4 with -2, -3 deduplication across heading levels", () => {
+  const md = `# Anchors Test
+
+### History tables point at the body
+First instance.
+
+#### Sub check
+Sub details.
+
+### History tables point at the body
+Second instance.
+
+## Shared Name
+H2 first.
+
+### Shared Name
+H3 second.
+
+#### Shared Name
+H4 third.
+`;
+  const html = renderDesignDoc(md);
+  const mainContent = html.split("<main>")[1]?.split("</main>")[0] ?? "";
+
+  assertStringIncludes(
+    mainContent,
+    '<h3 id="history-tables-point-at-the-body">History tables point at the body</h3>',
+  );
+  assertStringIncludes(mainContent, '<h4 id="sub-check">Sub check</h4>');
+  assertStringIncludes(
+    mainContent,
+    '<h3 id="history-tables-point-at-the-body-2">History tables point at the body</h3>',
+  );
+  assertStringIncludes(mainContent, '<h2 id="shared-name">Shared Name</h2>');
+  assertStringIncludes(mainContent, '<h3 id="shared-name-2">Shared Name</h3>');
+  assertStringIncludes(mainContent, '<h4 id="shared-name-3">Shared Name</h4>');
+  assertStringIncludes(html, 'href="#shared-name"');
 });

@@ -1941,6 +1941,18 @@ export function assertDesignIssueRules(text: string): void {
     "skill must not restate the Priority level tests",
   );
 
+  // 5b. Step 6 shows the 5-column Revision History header and points to "History tables point at the body" (web-jam-tools#1448)
+  assertStringIncludes(
+    text,
+    "| Version | Date | Epic / Issue | Why | Added / Modified Requirements |",
+    "step 6 must show the 5-column Revision History header",
+  );
+  assertStringIncludes(
+    text,
+    '"History tables point at the body"',
+    'step 6 must point to "History tables point at the body"',
+  );
+
   // 6. Carries the rendered-page rule for the history tables and paging
   assertStringIncludes(
     text,

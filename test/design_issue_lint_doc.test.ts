@@ -560,7 +560,7 @@ Design content.
 | Version | Date | Epic / Issue | Summary |
 |---|---|---|---|
 | 1.0.0 | 2026-08-16 | [Issue 1](https://example.com/1) | Initial release |
-| 1.1.0 | 2026-09-02 | [Issue 2](https://example.com/2) | Added new features |
+| 1.1.0 | 2026-09-02 | [Issue 2](https://example.com/2) | Added new features in "What it is" |
 
 ## Both surfaces
 Parity details across Claude Code, agy, and Codex.
@@ -1108,3 +1108,345 @@ Deno.test(
     await passesAgainstOtherDoc("```text\nCode.\n```\n\n" + COPIED_LINE, false);
   },
 );
+
+// --- "History tables point at the body" Appendix D case list (web-jam-tools#1448) ---
+
+function historyDoc(options: {
+  revisionSection?: string;
+  extraHeadings?: string;
+  decisionHeading?: string;
+  decisionRows?: Array<{ id: number; outcome: string }>;
+}): string {
+  const rev = options.revisionSection ?? `## Revision History
+
+| Version | Date | Epic / Issue | Why | Added / Modified Requirements |
+|---|---|---|---|---|
+| 1.18.0 | ${TODAY} | [Issue](https://example.com/1) | Clarified approval rules. | Added: [The model-label rule](#the-model-label-rule) |`;
+
+  const decisionSection = options.decisionRows
+    ? `\n## ${
+      options.decisionHeading ?? "Appendix C — Decision Record"
+    }\n\n| # | Decision | Outcome |\n|---|---|---|\n${
+      options.decisionRows.map((r) => `| ${r.id} | Decision ${r.id} | ${r.outcome} |`).join("\n")
+    }\n`
+    : "";
+
+  return `# History Check Design
+
+${rev}
+
+## What it is
+
+Design body.
+
+### The model-label rule
+
+Model label requirements.
+${options.extraHeadings ?? ""}
+## Both surfaces
+
+Parity across Claude Code, agy, and Codex.
+
+## Load-bearing premises
+
+| Premise | Proof | Proved |
+|---|---|---|
+| Verified premise | Checked in test | ${TODAY} |
+${decisionSection}`;
+}
+
+function makeDecisionRows(
+  count: number,
+  row84Outcome?: string,
+): Array<{ id: number; outcome: string }> {
+  const rows: Array<{ id: number; outcome: string }> = [];
+  for (let i = 1; i <= count; i++) {
+    rows.push({
+      id: i,
+      outcome: i === 84 && row84Outcome !== undefined ? row84Outcome : `Settled in row ${i}`,
+    });
+  }
+  return rows;
+}
+
+Deno.test("History tables point at the body: decision-record stored count cases (Appendix D)", () => {
+  // Stored count 83; 84 rows; row 84 quotes existing heading -> pass
+  const pass84 = lintDesignDoc(
+    historyDoc({ decisionRows: makeDecisionRows(84, 'Uses "The model-label rule".') }),
+    "test.md",
+    { decisionRowCount: 83 },
+  );
+  assertEquals(pass84.valid, true, JSON.stringify(pass84.violations));
+
+  // Stored count 83; row 84 quotes unknown heading -> fail naming row 84 and No Such Section
+  const unknownHeading = lintDesignDoc(
+    historyDoc({ decisionRows: makeDecisionRows(84, 'Uses "No Such Section".') }),
+    "test.md",
+    { decisionRowCount: 83 },
+  );
+  assertEquals(unknownHeading.valid, false);
+  assertStringIncludes(unknownHeading.violations[0].message, "row 84");
+  assertStringIncludes(unknownHeading.violations[0].message, "No Such Section");
+
+  // Stored count 83; row 84 has no quoted text -> fail naming row 84
+  const noQuotes = lintDesignDoc(
+    historyDoc({ decisionRows: makeDecisionRows(84, "Plain unquoted outcome.") }),
+    "test.md",
+    { decisionRowCount: 83 },
+  );
+  assertEquals(noQuotes.valid, false);
+  assertStringIncludes(noQuotes.violations[0].message, "row 84");
+
+  // Stored count 83; row 83 has no quoted text -> pass (not after count)
+  const row83Only = lintDesignDoc(
+    historyDoc({ decisionRows: makeDecisionRows(83) }),
+    "test.md",
+    { decisionRowCount: 83 },
+  );
+  assertEquals(row83Only.valid, true, JSON.stringify(row83Only.violations));
+
+  // Typographic double quotes pass
+  const curlyQuotes = lintDesignDoc(
+    historyDoc({ decisionRows: makeDecisionRows(84, "Uses \u201CThe model-label rule\u201D.") }),
+    "test.md",
+    { decisionRowCount: 83 },
+  );
+  assertEquals(curlyQuotes.valid, true, JSON.stringify(curlyQuotes.violations));
+
+  // Case-insensitive heading match passes
+  const caseInsensitive = lintDesignDoc(
+    historyDoc({ decisionRows: makeDecisionRows(84, 'Uses "the model-label rule".') }),
+    "test.md",
+    { decisionRowCount: 83 },
+  );
+  assertEquals(caseInsensitive.valid, true, JSON.stringify(caseInsensitive.violations));
+
+  // Single quotes do not satisfy double-quote requirement
+  const singleQuotes = lintDesignDoc(
+    historyDoc({ decisionRows: makeDecisionRows(84, "Uses 'The model-label rule'.") }),
+    "test.md",
+    { decisionRowCount: 83 },
+  );
+  assertEquals(singleQuotes.valid, false);
+  assertStringIncludes(singleQuotes.violations[0].message, "row 84");
+
+  // All recognized decision-record heading styles are checked
+  for (
+    const heading of ["Decision record", "Decisions record", "7. Decision log", "Decisions"]
+  ) {
+    const res = lintDesignDoc(
+      historyDoc({
+        decisionHeading: heading,
+        decisionRows: makeDecisionRows(84, "No quoted section"),
+      }),
+      "test.md",
+      { decisionRowCount: 83 },
+    );
+    assertEquals(res.valid, false, `Expected failure for heading "${heading}"`);
+    assertStringIncludes(res.violations[0].message, "row 84");
+  }
+
+  // No stored count -> no decision row checked
+  const noStoredCount = lintDesignDoc(
+    historyDoc({ decisionRows: makeDecisionRows(84, "Unquoted outcome.") }),
+    "test.md",
+  );
+  assertEquals(noStoredCount.valid, true, JSON.stringify(noStoredCount.violations));
+
+  // No decision record and no revision table -> pass
+  const noTables = lintDesignDoc(
+    historyDoc({ revisionSection: "" }),
+    "test.md",
+  );
+  assertEquals(noTables.valid, true, JSON.stringify(noTables.violations));
+});
+
+Deno.test("History tables point at the body: 5-column and legacy revision-row checks (Appendix D)", () => {
+  // 5-column pass
+  const valid5Col = lintDesignDoc(historyDoc({}), "test.md");
+  assertEquals(valid5Col.valid, true, JSON.stringify(valid5Col.violations));
+
+  // 5-column with backticked heading title in link and document
+  const backtickHeading = lintDesignDoc(
+    historyDoc({
+      extraHeadings: "\n## The `/design-issue` workflow\n\nWorkflow details.\n",
+      revisionSection: `## Revision History
+
+| Version | Date | Epic / Issue | Why | Added / Modified Requirements |
+|---|---|---|---|---|
+| 1.18.0 | ${TODAY} | [Issue](https://example.com/1) | Clarified approval rules. | Modified: [The \`/design-issue\` workflow](#the-design-issue-workflow) |`,
+    }),
+    "test.md",
+  );
+  assertEquals(backtickHeading.valid, true, JSON.stringify(backtickHeading.violations));
+
+  // 5-column unknown heading link -> fail naming 1.18.0 and No Such Section
+  const unknownLink = lintDesignDoc(
+    historyDoc({
+      revisionSection: `## Revision History
+
+| Version | Date | Epic / Issue | Why | Added / Modified Requirements |
+|---|---|---|---|---|
+| 1.18.0 | ${TODAY} | [Issue](https://example.com/1) | Clarified approval rules. | Added: [No Such Section](#no-such-section) |`,
+    }),
+    "test.md",
+  );
+  assertEquals(unknownLink.valid, false);
+  assertStringIncludes(unknownLink.violations[0].message, "1.18.0");
+  assertStringIncludes(unknownLink.violations[0].message, "No Such Section");
+
+  // 5-column wrong slug -> fail naming 1.18.0 and #wrong-slug
+  const wrongSlug = lintDesignDoc(
+    historyDoc({
+      revisionSection: `## Revision History
+
+| Version | Date | Epic / Issue | Why | Added / Modified Requirements |
+|---|---|---|---|---|
+| 1.18.0 | ${TODAY} | [Issue](https://example.com/1) | Clarified approval rules. | Added: [The model-label rule](#wrong-slug) |`,
+    }),
+    "test.md",
+  );
+  assertEquals(wrongSlug.valid, false);
+  assertStringIncludes(wrongSlug.violations[0].message, "1.18.0");
+  assertStringIncludes(wrongSlug.violations[0].message, "#wrong-slug");
+
+  // 5-column missing Added:/Modified: label -> fail naming 1.18.0
+  const missingLabel = lintDesignDoc(
+    historyDoc({
+      revisionSection: `## Revision History
+
+| Version | Date | Epic / Issue | Why | Added / Modified Requirements |
+|---|---|---|---|---|
+| 1.18.0 | ${TODAY} | [Issue](https://example.com/1) | Clarified approval rules. | [The model-label rule](#the-model-label-rule) |`,
+    }),
+    "test.md",
+  );
+  assertEquals(missingLabel.valid, false);
+  assertStringIncludes(missingLabel.violations[0].message, "1.18.0");
+
+  // 5-column Why contains backtick span -> fail naming 1.18.0 and `scripts/handle-agy-tasks.sh`
+  const backtickInWhy = lintDesignDoc(
+    historyDoc({
+      revisionSection: `## Revision History
+
+| Version | Date | Epic / Issue | Why | Added / Modified Requirements |
+|---|---|---|---|---|
+| 1.18.0 | ${TODAY} | [Issue](https://example.com/1) | Fixes \`scripts/handle-agy-tasks.sh\` in setup. | Modified: [The model-label rule](#the-model-label-rule) |`,
+    }),
+    "test.md",
+  );
+  assertEquals(backtickInWhy.valid, false);
+  assertStringIncludes(backtickInWhy.violations[0].message, "1.18.0");
+  assertStringIncludes(backtickInWhy.violations[0].message, "`scripts/handle-agy-tasks.sh`");
+
+  // 5-column Why contains repo paths -> fail naming 1.18.0 and each offending path
+  const pathsInWhy = lintDesignDoc(
+    historyDoc({
+      revisionSection: `## Revision History
+
+| Version | Date | Epic / Issue | Why | Added / Modified Requirements |
+|---|---|---|---|---|
+| 1.18.0 | ${TODAY} | [Issue](https://example.com/1) | Updates src/design-issue/lint_doc.ts and skills/design-issue/SKILL.md. | Modified: [The model-label rule](#the-model-label-rule) |`,
+    }),
+    "test.md",
+  );
+  assertEquals(pathsInWhy.valid, false);
+  assertStringIncludes(pathsInWhy.violations[0].message, "1.18.0");
+  assertStringIncludes(pathsInWhy.violations[0].message, "src/design-issue/lint_doc.ts");
+  assertStringIncludes(pathsInWhy.violations[0].message, "skills/design-issue/SKILL.md");
+
+  // 5-column Why contains CLI long flag -> fail naming 1.18.0 and --author
+  const flagInWhy = lintDesignDoc(
+    historyDoc({
+      revisionSection: `## Revision History
+
+| Version | Date | Epic / Issue | Why | Added / Modified Requirements |
+|---|---|---|---|---|
+| 1.18.0 | ${TODAY} | [Issue](https://example.com/1) | Accepts --author after the issue argument. | Modified: [The model-label rule](#the-model-label-rule) |`,
+    }),
+    "test.md",
+  );
+  assertEquals(flagInWhy.valid, false);
+  assertStringIncludes(flagInWhy.violations[0].message, "1.18.0");
+  assertStringIncludes(flagInWhy.violations[0].message, "--author");
+
+  // 5-column Why contains hooks/ and .github/ paths -> fail naming 1.18.0 and both paths
+  const hooksAndGhPaths = lintDesignDoc(
+    historyDoc({
+      revisionSection: `## Revision History
+
+| Version | Date | Epic / Issue | Why | Added / Modified Requirements |
+|---|---|---|---|---|
+| 1.18.0 | ${TODAY} | [Issue](https://example.com/1) | Updated hooks/agy-model-guard.sh and .github/workflows/ci.yml. | Modified: [The model-label rule](#the-model-label-rule) |`,
+    }),
+    "test.md",
+  );
+  assertEquals(hooksAndGhPaths.valid, false);
+  assertStringIncludes(hooksAndGhPaths.violations[0].message, "1.18.0");
+  assertStringIncludes(hooksAndGhPaths.violations[0].message, "hooks/agy-model-guard.sh");
+  assertStringIncludes(hooksAndGhPaths.violations[0].message, ".github/workflows/ci.yml");
+
+  // Legacy 4-column Summary quoting heading containing backticks passes
+  const legacyBacktickHeading = lintDesignDoc(
+    historyDoc({
+      extraHeadings: "\n## The `/design-issue` workflow\n\nWorkflow details.\n",
+      revisionSection: `## Revision History
+
+| Version | Date | Epic / Issue | Summary |
+|---|---|---|---|
+| 1.18.0 | ${TODAY} | [Issue](https://example.com/1) | Clarified approval handling in \u201CThe \`/design-issue\` workflow\u201D. |`,
+    }),
+    "test.md",
+  );
+  assertEquals(legacyBacktickHeading.valid, true, JSON.stringify(legacyBacktickHeading.violations));
+
+  // Legacy 4-column Summary without quoted heading fails naming version
+  const legacyNoHeading = lintDesignDoc(
+    historyDoc({
+      revisionSection: `## Revision History
+
+| Version | Date | Epic / Issue | Summary |
+|---|---|---|---|
+| 1.18.0 | ${TODAY} | [Issue](https://example.com/1) | Clarified approval handling. |`,
+    }),
+    "test.md",
+  );
+  assertEquals(legacyNoHeading.valid, false);
+  assertStringIncludes(legacyNoHeading.violations[0].message, "1.18.0");
+
+  // Older revision row carrying code-review tokens and "—" in Added / Modified Requirements passes
+  const olderRowUntouched = lintDesignDoc(
+    historyDoc({
+      revisionSection: `## Revision History
+
+| Version | Date | Epic / Issue | Why | Added / Modified Requirements |
+|---|---|---|---|---|
+| 1.17.0 | 2026-10-15 | [Old](https://example.com/0) | Fixes \`scripts/handle-agy-tasks.sh\` with --author. | — |
+| 1.18.0 | ${TODAY} | [Issue](https://example.com/1) | Clarified approval rules. | Modified: [The model-label rule](#the-model-label-rule) |`,
+    }),
+    "test.md",
+  );
+  assertEquals(olderRowUntouched.valid, true, JSON.stringify(olderRowUntouched.violations));
+});
+
+Deno.test("History tables point at the body: unreadable Gate 1 record refuses naming its path", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "lint-doc-corrupt-record-" });
+  try {
+    const docPath = path.join(tempDir, "sample-design.md");
+    const stateDir = path.join(tempDir, "state");
+    await Deno.mkdir(stateDir, { recursive: true });
+    await Deno.writeTextFile(docPath, historyDoc({}));
+
+    const { getGate1RecordPath } = await import("../src/design-issue/gate1_record.ts");
+    const recordPath = getGate1RecordPath(docPath, stateDir);
+    await Deno.writeTextFile(recordPath, "{not valid json");
+
+    await assertRejects(
+      () => lintDesignDocFile(docPath, { stateDir }),
+      Error,
+      recordPath,
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});

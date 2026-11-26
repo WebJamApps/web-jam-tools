@@ -61,7 +61,7 @@ Normal content.
 
   assertStringIncludes(html, "<details>\n  <summary>Rule 1</summary>");
   assertStringIncludes(html, "<details>\n  <summary>Rule 2</summary>");
-  assertStringIncludes(html, "<h3>Normal H3</h3>");
+  assertStringIncludes(html, '<h3 id="normal-h3">Normal H3</h3>');
 });
 
 Deno.test("renderDesignDoc implements all seven layout rules", () => {

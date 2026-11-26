@@ -153,7 +153,7 @@ Deno.test("citation-location: a citation inside the ## Revision History table is
 
 | Version | Date | Epic / Issue | Summary |
 |---|---|---|---|
-| 1.0.0 | ${TODAY} | [some epic](https://github.com/WebJamApps/web-jam-tools/issues/1025) | web-jam-tools#1025 initial design. |
+| 1.0.0 | ${TODAY} | [some epic](https://github.com/WebJamApps/web-jam-tools/issues/1025) | web-jam-tools#1025 initial design in "What it is". |
 `),
     "test.md",
   );

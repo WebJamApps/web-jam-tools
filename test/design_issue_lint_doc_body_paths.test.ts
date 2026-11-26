@@ -21,7 +21,9 @@ function buildDoc(options: {
     ? ""
     : `\n## Where Things Live\n\n${options.whereThingsLive ?? ""}\n`;
   const appendixSection = options.appendix ? `\n## Appendix — Extra\n\n${options.appendix}\n` : "";
-  const extraRevRow = options.revisionExtraRow ? `\n${options.revisionExtraRow}` : "";
+  const revisionRows = options.revisionExtraRow
+    ? `${options.revisionExtraRow}\n| 1.0.1 | ${TODAY} | Initial design in "What it is" |`
+    : `| 1.0.0 | ${TODAY} | Initial design in "What it is" |`;
 
   return `# Test Feature Design
 
@@ -29,7 +31,7 @@ function buildDoc(options: {
 
 | Version | Date | Summary |
 |---|---|---|
-| 1.0.0 | ${TODAY} | Initial design |${extraRevRow}
+${revisionRows}
 
 ## What it is
 
@@ -284,7 +286,7 @@ Deno.test("body paths skips revision table and Appendix sections", () => {
   const doc = buildDoc({
     body: "No runtime paths in body.",
     whereThingsLive: null,
-    revisionExtraRow: "| 1.0.1 | " + TODAY + " | Documented `/var/log/rev-only.log` move |",
+    revisionExtraRow: "| 1.0.0 | " + TODAY + " | Documented `/var/log/rev-only.log` move |",
     appendix: "Case fixture mentions `/etc/appendix-only.conf`.",
   });
   const result = lintDesignDoc(doc, "test.md");

@@ -1923,3 +1923,60 @@ Deno.test("verifyReplyTypedByJosh matches the reply exactly as it will be stored
     await Deno.remove(tempDir, { recursive: true });
   }
 });
+
+Deno.test("approveGate1Record stores decisionRowCount (84 rows vs 0 rows) and openGate1Record preserves it", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-decision-count-" });
+  try {
+    const stateDir = path.join(tempDir, "state");
+    const rows = Array.from({ length: 84 }, (_, i) => `| ${i + 1} | D${i + 1} | Settled |`).join(
+      "\n",
+    );
+    const docWith84 = `${MINIMAL_DESIGN_DOC}
+
+## Appendix C — Decision Record
+
+| # | Decision | Outcome |
+|---|---|---|
+${rows}
+`;
+    const docPath84 = path.join(tempDir, "doc84.md");
+    await Deno.writeTextFile(docPath84, docWith84);
+    await openGate1Record(docPath84, docWith84, { stateDir });
+    const approved84 = await approveGate1Record(docPath84, "approved", { stateDir });
+    assertEquals(approved84.record.decisionRowCount, 84);
+
+    // Re-presenting keeps the stored decisionRowCount so lint_doc can check rows > 84
+    const reopened = await openGate1Record(docPath84, docWith84 + "\nExtra.\n", { stateDir });
+    assertEquals(reopened.record.decisionRowCount, 84);
+
+    // Document with no decision record stores 0
+    const docPath0 = path.join(tempDir, "doc0.md");
+    await Deno.writeTextFile(docPath0, MINIMAL_DESIGN_DOC);
+    await openGate1Record(docPath0, MINIMAL_DESIGN_DOC, { stateDir });
+    const approved0 = await approveGate1Record(docPath0, "approved", { stateDir });
+    assertEquals(approved0.record.decisionRowCount, 0);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("loadGate1Record refuses malformed decisionRowCount", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-bad-decision-count-" });
+  try {
+    const stateDir = path.join(tempDir, "state");
+    const docPath = path.join(tempDir, "doc.md");
+    await Deno.writeTextFile(docPath, MINIMAL_DESIGN_DOC);
+    const { recordPath } = await openGate1Record(docPath, MINIMAL_DESIGN_DOC, { stateDir });
+    const raw = JSON.parse(await Deno.readTextFile(recordPath));
+    raw.decisionRowCount = -1;
+    await Deno.writeTextFile(recordPath, JSON.stringify(raw));
+
+    await assertRejects(
+      () => loadGate1Record(docPath, { stateDir }),
+      Gate1RecordError,
+      "malformed decisionRowCount",
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});

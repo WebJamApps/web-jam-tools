@@ -1,24 +1,15 @@
 import * as path from "jsr:@std/path@^1.0.0";
 import type { OtherDesignSweepResult } from "../src/design-issue/gate1_record.ts";
+import { slugify } from "../src/design-issue/lint_doc.ts";
 import { PLAN_TABLE_HEADER } from "../src/design-issue/plan_table.ts";
+
+export { slugify };
 
 export interface RenderDesignDocOptions {
   /** Render as a Gate 2 issue plan page (file row order, total row count, pager opens on "All"). */
   isPlanPage?: boolean;
   /** Render the Gate 1 cross-design sweep summary table when present. */
   otherDesignSweep?: OtherDesignSweepResult;
-}
-
-/**
- * Converts a text heading into a URL-friendly slug.
- */
-export function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\s-]/g, "")
-    .replace(/[\s_-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
 }
 
 /**
@@ -245,9 +236,9 @@ function orderTableRows(
   return rows.toReversed().sort((a, b) => provedDate(b).localeCompare(provedDate(a)));
 }
 
-function renderOtherDesignSweepSection(sweep: OtherDesignSweepResult): string {
+function renderOtherDesignSweepSection(sweep: OtherDesignSweepResult, slug?: string): string {
   const title = "Other designs checked for changed rulings";
-  const slug = slugify(title);
+  const headingSlug = slug ?? slugify(title);
   const termsHtml = sweep.terms.map((t) => `<code>${escapeHtml(t)}</code>`).join(", ");
   let contentHtml: string;
   if (sweep.entries.length === 0) {
@@ -299,7 +290,7 @@ function renderOtherDesignSweepSection(sweep: OtherDesignSweepResult): string {
   }
   return (
     `<section class="other-design-sweep" id="other-designs-checked">\n` +
-    `<h2 id="${slug}">${escapeHtml(title)}</h2>\n` +
+    `<h2 id="${headingSlug}">${escapeHtml(title)}</h2>\n` +
     `<p><strong>Changed terms:</strong> ${termsHtml}</p>\n` +
     `${contentHtml}\n` +
     `</section>`
@@ -318,67 +309,23 @@ export function renderDesignDoc(
   let hasDocumentTitle = false;
   const tocEntries: Array<{ title: string; slug: string }> = [];
   const usedSlugs = new Set<string>();
-
-  // Pass 1: Extract document title and H2 TOC entries.
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (line.startsWith("# ") && documentTitle === fallbackTitle) {
-      documentTitle = line.substring(2).trim();
-      hasDocumentTitle = true;
-    } else if (line.startsWith("## ")) {
-      const headingText = line.substring(3).trim();
-      const cleanTitle = headingText
-        .replace(/[*_`[\]]/g, "")
-        .replace(/\([^)]*\)/g, "")
-        .trim();
-      const baseSlug = slugify(cleanTitle) || "section";
-      let slug = baseSlug;
-      let counter = 1;
-      while (usedSlugs.has(slug)) {
-        slug = `${baseSlug}-${counter++}`;
-      }
-      usedSlugs.add(slug);
-      tocEntries.push({ title: cleanTitle || headingText, slug });
-    }
-  }
-
-  if (options?.otherDesignSweep && !options.isPlanPage) {
-    const sweepTitle = "Other designs checked for changed rulings";
-    const baseSlug = slugify(sweepTitle);
+  const allocateSlug = (headingText: string): string => {
+    const baseSlug = slugify(headingText) || "section";
     let slug = baseSlug;
-    let counter = 1;
+    let counter = 2;
     while (usedSlugs.has(slug)) {
       slug = `${baseSlug}-${counter++}`;
     }
     usedSlugs.add(slug);
-    tocEntries.push({ title: sweepTitle, slug });
-  }
+    return slug;
+  };
 
-  // Generate TOC HTML
-  let tocHtml = "";
-  if (tocEntries.length > 0) {
-    tocHtml =
-      `<button type="button" class="nav-restore-btn" id="nav-restore-btn" aria-label="Restore section navigation" title="Restore section navigation">▶ Sections</button>\n` +
-      `<nav class="toc">\n` +
-      `  <div class="toc-header">\n` +
-      `    <h2>Sections</h2>\n` +
-      `    <button type="button" class="nav-collapse-btn" id="nav-collapse-btn" aria-label="Collapse section navigation" title="Collapse section navigation">◀</button>\n` +
-      `  </div>\n  <ul>\n`;
-    for (const entry of tocEntries) {
-      tocHtml += `    <li><a href="#${entry.slug}">${escapeHtml(entry.title)}</a></li>\n`;
-    }
-    tocHtml += `  </ul>\n</nav>`;
-  }
-
-  // Pass 2: Parse blocks into body HTML
+  // Parse blocks into body HTML while collecting H2 TOC entries and allocating deterministic
+  // heading anchors in document order across H2, H3, and H4.
   const bodyHtmlParts: string[] = [];
   let inAppendix = false;
   let inAppendixDetails = false;
-  let h2Count = 0;
   let tableHeading = "";
-  if (!hasDocumentTitle) {
-    bodyHtmlParts.push(`<h1>${escapeHtml(documentTitle)}</h1>`);
-  }
 
   let i = 0;
   while (i < lines.length) {
@@ -429,15 +376,22 @@ export function renderDesignDoc(
         tableHeading = text;
 
         if (level === 1) {
+          if (!hasDocumentTitle) {
+            documentTitle = text;
+            hasDocumentTitle = true;
+          }
           bodyHtmlParts.push(`<h1>${parseInlineMarkdown(text)}</h1>`);
         } else if (level === 2) {
           if (inAppendixDetails) {
             bodyHtmlParts.push(`</div>\n</details>`);
             inAppendixDetails = false;
           }
-          const entry = tocEntries[h2Count];
-          const slug = entry ? entry.slug : slugify(text);
-          h2Count++;
+          const cleanTitle = text
+            .replace(/[*_`[\]]/g, "")
+            .replace(/\([^)]*\)/g, "")
+            .trim();
+          const slug = allocateSlug(text);
+          tocEntries.push({ title: cleanTitle || text, slug });
 
           inAppendix = /\bappendix\b/i.test(text);
           bodyHtmlParts.push(
@@ -455,8 +409,12 @@ export function renderDesignDoc(
             );
             inAppendixDetails = true;
           } else {
-            bodyHtmlParts.push(`<h3>${parseInlineMarkdown(text)}</h3>`);
+            const slug = allocateSlug(text);
+            bodyHtmlParts.push(`<h3 id="${slug}">${parseInlineMarkdown(text)}</h3>`);
           }
+        } else if (level === 4) {
+          const slug = allocateSlug(text);
+          bodyHtmlParts.push(`<h4 id="${slug}">${parseInlineMarkdown(text)}</h4>`);
         } else {
           const hTag = `h${level}`;
           bodyHtmlParts.push(`<${hTag}>${parseInlineMarkdown(text)}</${hTag}>`);
@@ -589,8 +547,31 @@ export function renderDesignDoc(
     bodyHtmlParts.push(`</div>\n</details>`);
   }
 
+  if (!hasDocumentTitle) {
+    bodyHtmlParts.unshift(`<h1>${escapeHtml(documentTitle)}</h1>`);
+  }
+
   if (options?.otherDesignSweep && !options.isPlanPage) {
-    bodyHtmlParts.push(renderOtherDesignSweepSection(options.otherDesignSweep));
+    const sweepTitle = "Other designs checked for changed rulings";
+    const sweepSlug = allocateSlug(sweepTitle);
+    tocEntries.push({ title: sweepTitle, slug: sweepSlug });
+    bodyHtmlParts.push(renderOtherDesignSweepSection(options.otherDesignSweep, sweepSlug));
+  }
+
+  // Generate TOC HTML
+  let tocHtml = "";
+  if (tocEntries.length > 0) {
+    tocHtml =
+      `<button type="button" class="nav-restore-btn" id="nav-restore-btn" aria-label="Restore section navigation" title="Restore section navigation">▶ Sections</button>\n` +
+      `<nav class="toc">\n` +
+      `  <div class="toc-header">\n` +
+      `    <h2>Sections</h2>\n` +
+      `    <button type="button" class="nav-collapse-btn" id="nav-collapse-btn" aria-label="Collapse section navigation" title="Collapse section navigation">◀</button>\n` +
+      `  </div>\n  <ul>\n`;
+    for (const entry of tocEntries) {
+      tocHtml += `    <li><a href="#${entry.slug}">${escapeHtml(entry.title)}</a></li>\n`;
+    }
+    tocHtml += `  </ul>\n</nav>`;
   }
 
   const bodyHtml = bodyHtmlParts.join("\n\n");

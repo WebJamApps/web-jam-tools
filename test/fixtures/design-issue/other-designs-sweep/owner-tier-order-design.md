@@ -2,10 +2,10 @@
 
 ## Revision History
 
-| Version | Date       | Epic / Issue                                                               | Summary                         |
-| ------- | ---------- | -------------------------------------------------------------------------- | ------------------------------- |
-| 1.0.0   | 2026-10-02 | [Initial tier order](https://github.com/WebJamApps/web-jam-tools/issues/1) | Initial order.                  |
-| 1.1.0   | 2026-11-21 | [Update shared lane](https://github.com/WebJamApps/web-jam-tools/issues/2) | Hydrogen joins the shared lane. |
+| Version | Date       | Epic / Issue                                                               | Summary                               |
+| ------- | ---------- | -------------------------------------------------------------------------- | ------------------------------------- |
+| 1.0.0   | 2026-10-02 | [Initial tier order](https://github.com/WebJamApps/web-jam-tools/issues/1) | Initial order.                        |
+| 1.1.0   | 2026-11-21 | [Update shared lane](https://github.com/WebJamApps/web-jam-tools/issues/2) | Hydrogen joins "Shared lane routing". |
 
 ## Shared lane routing
 

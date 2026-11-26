@@ -244,6 +244,7 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
   const lintResult = lintDesignDoc(markdownContent, absDocPath, {
     nowImpl: () => now,
     premiseRows: record?.premiseRows ?? [],
+    decisionRowCount: record?.decisionRowCount,
   });
   if (!lintResult.valid) {
     const violationLines = lintResult.violations
