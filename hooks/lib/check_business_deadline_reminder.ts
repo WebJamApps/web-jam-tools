@@ -246,7 +246,9 @@ export function parseDeadlines(markdown: string): ParseResult {
       const kvMatch = line.match(/^-\s*([^:]+):(.*)$/);
       if (kvMatch) {
         const key = kvMatch[1].replace(/[*_]/g, "").trim().toLowerCase();
-        const field = BLOCK_KEYS[key];
+        // Own keys only: a label such as "Constructor" must not resolve to an
+        // Object.prototype property.
+        const field = Object.hasOwn(BLOCK_KEYS, key) ? BLOCK_KEYS[key] : undefined;
         if (field) {
           currentBlockData[field] = kvMatch[2].replace(/^[*_]+/, "").trim();
         }

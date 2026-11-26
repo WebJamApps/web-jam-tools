@@ -499,3 +499,21 @@ Deno.test("outcome: unreadable list path proceeds silently", async () => {
     assertEquals(res.stdout, "");
   });
 });
+
+Deno.test("block bullet labelled like an Object.prototype property is ignored", () => {
+  const result = parseDeadlines(
+    "## Case\n- Due: 2028-01-31\n- Constructor: x\n- __proto__: y\n- toString: z\n",
+  );
+  assertEquals(result.malformed, []);
+  assertEquals(result.entries.length, 1);
+  assertEquals(Object.keys(result.entries[0]).sort(), [
+    "amount",
+    "confirmation",
+    "dueDate",
+    "item",
+    "lastPaidDate",
+    "paidThrough",
+    "warnDays",
+    "wherePaid",
+  ]);
+});
