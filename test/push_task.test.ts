@@ -1235,6 +1235,141 @@ Deno.test("resolveFixRun looks up the named repository before enforcing an open 
   }
 });
 
+// --- CircleCI build and job links in a typed fix-pr call (web-jam-tools#1920) ---
+
+const CIRCLE_WF = "b42fe7f4-6da1-4ef9-9375-ec142b60a3af";
+const CIRCLE_JOB = "110ce2eb-8f67-4d16-98d7-cbde1e29a323";
+
+function circleDeps(
+  args: string,
+  build: Record<string, unknown> | "fail",
+  fetched: string[] = [],
+) {
+  return {
+    readSkillCall: () =>
+      Promise.resolve({ name: "fix-pr", arguments: args, text: "/fix-pr " + args }),
+    runGit: () => Promise.resolve({ code: 0, stdout: `https://github.com/${targetRepo}.git` }),
+    lookupPullRequest: (ref: PullRequestRef) =>
+      Promise.resolve(ref.number === 1318 ? targetPr : null),
+    targetResolver: {
+      circleToken: null,
+      fetch: ((input: string | URL | Request) => {
+        const url = String(input);
+        fetched.push(url);
+        if (build === "fail") return Promise.reject(new TypeError("network down"));
+        if (url.includes("/api/v2/")) {
+          return Promise.resolve(Response.json({
+            items: [{ id: CIRCLE_JOB, job_number: 2856, project_slug: `gh/${targetRepo}` }],
+          }));
+        }
+        return Promise.resolve(Response.json(build));
+      }) as typeof fetch,
+      runGh: (ghArgs: string[]) =>
+        Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify(ghArgs[1] === "view" ? targetPr : [targetPr]),
+        }),
+    },
+  };
+}
+
+const build2856 = {
+  username: "WebJamApps",
+  reponame: "web-jam-tools",
+  branch: "probe-branch",
+  pull_requests: [{ url: `https://github.com/${targetRepo}/pull/1318` }],
+  workflows: { workflow_id: CIRCLE_WF, job_id: CIRCLE_JOB },
+};
+
+Deno.test("push: a typed CircleCI build or job link resolves to its open pull request's fix run", async () => {
+  for (
+    const link of [
+      `for https://circleci.com/gh/${targetRepo}/2856, wait for CI`,
+      `https://app.circleci.com/workflow/${CIRCLE_WF}/job/${CIRCLE_JOB}`,
+      `https://app.circleci.com/pipelines/gh/${targetRepo}/2779/details?workflowId=${CIRCLE_WF}&job=${CIRCLE_JOB}&buildNumber=2856`,
+    ]
+  ) {
+    const fetched: string[] = [];
+    const run = await resolveFixRun("fix-pr/1318", undefined, circleDeps(link, build2856, fetched));
+    assertEquals(run, {
+      kind: "active",
+      pullRequest: { repo: targetRepo, number: 1318 },
+      headRefName: "probe-branch",
+    }, link);
+    assertEquals(fetched.every((url) => url.startsWith("https://circleci.com/api/")), true);
+  }
+
+  let refspec = "";
+  const code = await runPush(["--force-with-lease", "--fix-comment", "c.md"], undefined, {
+    branch: "fix-pr/1318",
+    ...circleDeps(`https://circleci.com/gh/${targetRepo}/2856`, build2856),
+    prepareComment: () => Promise.resolve(),
+    postComment: () => Promise.resolve(0),
+    confirmForce: () => {
+      throw new Error("an active fix run never asks");
+    },
+    spawnPush: (args) => {
+      refspec = args.at(-1)!;
+      return Promise.resolve(0);
+    },
+  });
+  assertEquals(code, 0);
+  assertEquals(refspec, "refs/heads/fix-pr/1318:refs/heads/probe-branch");
+});
+
+Deno.test("push: a dev build link is refused and an unresolvable link grants no fix run", async () => {
+  const link = `https://circleci.com/gh/${targetRepo}/2853`;
+  const dev = await resolveFixRun(
+    "probe-branch",
+    undefined,
+    circleDeps(link, { ...build2856, branch: "dev", pull_requests: [] }),
+  );
+  assertEquals(dev.kind, "refused");
+  for (const build of ["fail" as const, { ...build2856, pull_requests: [], branch: "gone" }]) {
+    const deps = circleDeps(link, build);
+    deps.targetResolver.runGh = () => Promise.resolve({ code: 0, stdout: "[]" });
+    assertEquals(await resolveFixRun("probe-branch", undefined, deps), { kind: "none" });
+    // With no fix run, the fix comment and the throwaway branch are both refused.
+    const pushes: string[][] = [];
+    const spawnPush = (args: string[]) => {
+      pushes.push(args);
+      return Promise.resolve(0);
+    };
+    assertEquals(
+      await runPush(["--fix-comment", "c.md"], undefined, {
+        branch: "probe-branch",
+        ...deps,
+        spawnPush,
+      }),
+      1,
+    );
+    assertEquals(await runPush([], undefined, { branch: "fix-pr/1318", ...deps, spawnPush }), 1);
+    assertEquals(pushes, []);
+  }
+  // Two targets in one call refuse before any lookup.
+  const fetched: string[] = [];
+  const both = await resolveFixRun(
+    "probe-branch",
+    undefined,
+    circleDeps(`web-jam-tools#1318 ${link}`, build2856, fetched),
+  );
+  assertEquals(both, {
+    kind: "refused",
+    reason: "the typed fix-pr call names more than one pull request",
+  });
+  assertEquals(fetched, []);
+});
+
+Deno.test("deno.json grants push and fix-pr:resolve-target CircleCI's host and token only", async () => {
+  const tasks = JSON.parse(await Deno.readTextFile(SHARED_CONFIG_PATH)).tasks;
+  assertStringIncludes(tasks.push, "--allow-net=circleci.com ");
+  assertStringIncludes(tasks.push, ",CIRCLECI_TOKEN ");
+  assertEquals(
+    tasks["fix-pr:resolve-target"],
+    "deno run --allow-net=circleci.com --allow-env=CIRCLECI_TOKEN --allow-run=gh,git scripts/resolve-fix-pr-target.ts",
+  );
+});
+
 const fixtureThread = "12345678-1234-5678-abcd-123456789abc";
 type Surface = "claude" | "agy" | "codex";
 

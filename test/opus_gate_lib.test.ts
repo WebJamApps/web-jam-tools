@@ -685,10 +685,24 @@ Deno.test("fix-pr: only a named PR in a typed skill call approves, including wra
     "$fix-pr " + args,
     "<command-name>/fix-pr</command-name>\n<command-args>" + args +
     "</command-args>",
+    // web-jam-tools#1920: the shared parser finds the target anywhere, CircleCI links included.
+    "/fix-pr please rebase (WebJamApps/web-jam-tools#1318): and wait for CI.",
+    "/fix-pr for pull request #1318",
+    "/fix-pr 1318, fix step 2",
+    "/fix-pr for https://circleci.com/gh/WebJamApps/web-jam-tools/2856, wait for CI",
+    "/fix-pr https://app.circleci.com/pipelines/gh/WebJamApps/web-jam-tools/2779/details?workflowId=b42fe7f4-6da1-4ef9-9375-ec142b60a3af&job=110ce2eb-8f67-4d16-98d7-cbde1e29a323&buildNumber=2856&jobType=build#step-119-",
+    "/fix-pr https://app.circleci.com/workflow/b42fe7f4-6da1-4ef9-9375-ec142b60a3af/job/110ce2eb-8f67-4d16-98d7-cbde1e29a323",
   ];
   const refuses = [
     "/fix-pr",
     "/fix-pr use a Fable helper",
+    "/fix-pr fix step 2",
+    "/fix-pr 1318 and 1319",
+    "/fix-pr web-jam-tools#1318 web-jam-tools#1319",
+    "/fix-pr web-jam-tools#1318 https://circleci.com/gh/WebJamApps/web-jam-tools/2856",
+    "/fix-pr https://circleci.com/api/private/output/raw/github/WebJamApps/web-jam-tools/2856/output/101/0?token=abc",
+    "/fix-pr https://app.circleci.com/pipelines/gh/WebJamApps/web-jam-tools",
+    "/fix-pr http://circleci.com/gh/WebJamApps/web-jam-tools/2856",
     "/fix-pr https://github.com/WebJamApps/web-jam-tools/issues/1318",
     "/fix-pr web-jam-tools#0",
     "/fix-pr -1318",
@@ -741,6 +755,19 @@ Deno.test("task grants: a typed /work-issue or /fix-pr covers edits in its own r
     [human("/fix-pr WebJamApps/JaMmusic#5"), [MUSIC_FILE], "allow"],
     [human("/fix-pr JaMmusic#5"), [TOOLS_FILE], "deny"],
     [human("/fix-pr webjamapps/WEB-JAM-TOOLS#1318"), [TOOLS_FILE], "allow"],
+    // A CircleCI link binds to the repository in its path; a Checks link to the folder typed in.
+    [human("/fix-pr https://circleci.com/gh/WebJamApps/JaMmusic/412"), [MUSIC_FILE], "allow"],
+    [human("/fix-pr https://circleci.com/gh/WebJamApps/JaMmusic/412"), [TOOLS_FILE], "deny"],
+    [
+      {
+        ...human(
+          "/fix-pr https://app.circleci.com/workflow/b42fe7f4-6da1-4ef9-9375-ec142b60a3af/job/110ce2eb-8f67-4d16-98d7-cbde1e29a323",
+        ),
+        cwd: "/work/JaMmusic",
+      },
+      [TOOLS_FILE],
+      "deny",
+    ],
     [{ ...human("/fix-pr 1318"), cwd: "/work/JaMmusic" }, [MUSIC_FILE], "allow"],
     [{ ...human("/fix-pr 1318"), cwd: "/work/JaMmusic" }, [TOOLS_FILE], "deny"],
     // A bare number typed outside any repository, or with no folder recorded, names none.

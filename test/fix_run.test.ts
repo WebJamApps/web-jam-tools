@@ -7,8 +7,18 @@
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { join } from "@std/path";
-import { checkFixRun, readTypedSkillCall } from "../hooks/lib/fix_run.ts";
+import {
+  checkFixRun,
+  fixPrInstructions,
+  NAMES_MORE_THAN_ONE,
+  NAMES_NO_PULL_REQUEST,
+  parseFixPrTarget,
+  readTypedSkillCall,
+  resolveFixPrTarget,
+  type TargetResolution,
+} from "../hooks/lib/fix_run.ts";
 import { runPush } from "../scripts/push.ts";
+import { resolveTargetCli } from "../scripts/resolve-fix-pr-target.ts";
 import { resolveAntigravityWriteContext } from "../scripts/write_issue_approval_token.ts";
 
 const DENO_CONFIG_PATH = new URL("../deno.json", import.meta.url).pathname;
@@ -593,4 +603,532 @@ Deno.test("checkFixRun ends a terminal PR only when its number matches the typed
     }
     assertEquals(checkFixRun(call, checkoutRepo, "feat/other", null), { kind: "none" });
   }
+});
+
+// --- Shared /fix-pr target parser and CircleCI resolution (web-jam-tools#1920) ---
+// Design: fix-pr-design-2026-10-10.md rev 1.10.0, "Parsing the pull request target anywhere in the
+// call" and "Accepting CircleCI build and job links".
+
+const CHECKOUT = "WebJamApps/web-jam-tools";
+const WF = "b42fe7f4-6da1-4ef9-9375-ec142b60a3af";
+const JOB = "110ce2eb-8f67-4d16-98d7-cbde1e29a323";
+const BRANCH_1907 = "agy/1894-fix";
+const PR_URL_1907 = "https://github.com/WebJamApps/web-jam-tools/pull/1907";
+
+type Outcome = { pr: number; repo?: string } | { build: number } | { refused: string };
+
+function outcomeOf(args: string): Outcome {
+  const parsed = parseFixPrTarget(args);
+  if (!parsed.ok) return { refused: parsed.reason };
+  const target = parsed.target;
+  if (target.kind === "pull-request") {
+    return { pr: target.number, repo: target.repo ?? CHECKOUT };
+  }
+  if (target.kind === "circleci-build") return { build: target.buildNumber };
+  throw new Error(`unexpected job target for ${args}`);
+}
+
+const PR = (pr: number): Outcome => ({ pr, repo: CHECKOUT });
+const MORE = { refused: NAMES_MORE_THAN_ONE };
+const NONE = { refused: NAMES_NO_PULL_REQUEST };
+
+Deno.test("target parser: all 22 literal cases of 'Parsing the pull request target anywhere in the call'", () => {
+  const cases: [string, Outcome][] = [
+    ['for web-jam-tools#1932 "accounting skill: keep the books in rustledger"', PR(1932)],
+    ['web-jam-tools#1937, with "add the jq fail-closed fix" after it.', PR(1937)],
+    ["please rebase (WebJamApps/web-jam-tools#1937): and wait for CI.", PR(1937)],
+    ['check "https://github.com/WebJamApps/web-jam-tools/pull/1937", then push!', PR(1937)],
+    ["for https://circleci.com/gh/WebJamApps/web-jam-tools/2856, wait for CI", { build: 2856 }],
+    ["web-jam-tools#1937 fix step 2 and wait 5 minutes", PR(1937)],
+    ["web-jam-tools#1937 https://github.com/WebJamApps/web-jam-tools/pull/1937", PR(1937)],
+    [
+      "web-jam-tools#1937 (see https://github.com/WebJamApps/web-jam-tools/issues/1422)",
+      PR(1937),
+    ],
+    ["1937, fix step 2", PR(1937)],
+    ["#1937: bump version", PR(1937)],
+    ["for 1937, bump version", PR(1937)],
+    ["for pull request #1937", PR(1937)],
+    ["web-jam-tools#1937 and web-jam-tools#1938", MORE],
+    ["for web-jam-tools#1422, fix web-jam-tools#1937", MORE],
+    [
+      "https://github.com/WebJamApps/web-jam-tools/pull/1937 https://github.com/WebJamApps/web-jam-tools/pull/1938",
+      MORE,
+    ],
+    ["web-jam-tools#1937 https://circleci.com/gh/WebJamApps/web-jam-tools/2856", MORE],
+    ["1937 and 1938", MORE],
+    ["1937, 1938", MORE],
+    ["fix step 2", NONE],
+    ["https://github.com/WebJamApps/web-jam-tools/issues/1422", NONE],
+    ["use a Fable helper", NONE],
+    ["", NONE],
+  ];
+  assertEquals(cases.length, 22);
+  for (const [args, expected] of cases) assertEquals(outcomeOf(args), expected, args);
+});
+
+Deno.test("target parser: pairwise and self-collision rules across the five key sources", () => {
+  const ghUrl = (n: number) => `https://github.com/WebJamApps/web-jam-tools/pull/${n}`;
+  const v1 = (n: number) => `https://circleci.com/gh/WebJamApps/web-jam-tools/${n}`;
+  const checks = (job: string) => `https://app.circleci.com/workflow/${WF}/job/${job}`;
+  const OTHER_JOB = "220ce2eb-8f67-4d16-98d7-cbde1e29a323";
+  const cases: [string, Outcome | "job"][] = [
+    // 1 & 1, 2 & 2, 1 & 2: the same { repo, number } collapses, case-insensitively.
+    [`${ghUrl(1937)} ${ghUrl(1937)}`, PR(1937)],
+    ["web-jam-tools#1937 WebJamApps/web-jam-tools#1937", PR(1937)],
+    [`webjamapps/WEB-JAM-TOOLS#1937 ${ghUrl(1937)}`, {
+      pr: 1937,
+      repo: "webjamapps/WEB-JAM-TOOLS",
+    }],
+    // Different targets in any GitHub pairing refuse.
+    [`${ghUrl(1937)} ${ghUrl(1938)}`, MORE],
+    ["web-jam-tools#1937 JaMmusic#1937", MORE],
+    [`web-jam-tools#1937 ${ghUrl(1938)}`, MORE],
+    // 3 & 3 list forms refuse; a lone repeat after a non-list word is prose.
+    ["for 1937 & 1938", MORE],
+    ["#1937 and #1938", MORE],
+    ["1937, #1938", MORE],
+    ["1937 then 1938", PR(1937)],
+    // An explicit source skips source 3, so prose digits never collide.
+    ["1938 web-jam-tools#1937", PR(1937)],
+    [`fix 1938 ${v1(2856)}`, { build: 2856 }],
+    // 4 & 4, 5 & 5: identical targets collapse, distinct ones refuse.
+    [`${v1(2856)} ${v1(2856)}`, { build: 2856 }],
+    [`${v1(2856)} ${v1(2857)}`, MORE],
+    [`${checks(JOB)} ${checks(JOB)}`, "job"],
+    [`${checks(JOB)} ${checks(OTHER_JOB)}`, MORE],
+    // 4 & 5, and any GitHub target alongside any CircleCI link, refuse synchronously.
+    [`${v1(2856)} ${checks(JOB)}`, MORE],
+    [`${ghUrl(1907)} ${checks(JOB)}`, MORE],
+    [`web-jam-tools#1907 ${v1(2856)}`, MORE],
+    // Bare numbers only first or after the closed lead-in words, and only safe positive integers.
+    ["please fix 1937", NONE],
+    ["wait 5 minutes", NONE],
+    ["FOR PR 1937", PR(1937)],
+    ["0", { refused: "'0' is not a valid pull request number" }],
+    ["9007199254740993", { refused: "'9007199254740993' is not a valid pull request number" }],
+    ["web-jam-tools#0", { refused: "'web-jam-tools#0' does not name a valid pull request" }],
+    ["1937suffix", NONE],
+    ["-1937", NONE],
+    // Every closed punctuation character trims from its own side, repeatedly.
+    ["“‘(<[web-jam-tools#1937]>)’”!?.,;:", PR(1937)],
+    ["web-jam-tools#1937)", PR(1937)],
+  ];
+  for (const [args, expected] of cases) {
+    if (expected === "job") {
+      const parsed = parseFixPrTarget(args);
+      assertEquals(parsed.ok && parsed.target.kind, "circleci-job", args);
+    } else {
+      assertEquals(outcomeOf(args), expected, args);
+    }
+  }
+});
+
+Deno.test("target parser: CircleCI URL shapes, hosts and malformed links", () => {
+  const details = `https://app.circleci.com/pipelines/gh/WebJamApps/web-jam-tools/2779/details`;
+  const builds: [string, Record<string, unknown>][] = [
+    [`https://circleci.com/github/WebJamApps/web-jam-tools/2856/`, {}],
+    [`${details}?jobType=build&buildNumber=2856#step-119-`, {}],
+    [`${details}?workflowId=${WF}&job=${JOB}&buildNumber=2856`, { workflowId: WF, jobId: JOB }],
+    [
+      `https://app.circleci.com/pipelines/github/WebJamApps/web-jam-tools/2779/workflows/${WF}/jobs/2856`,
+      { workflowId: WF },
+    ],
+  ];
+  for (const [url, extra] of builds) {
+    assertEquals(parseFixPrTarget(url), {
+      ok: true,
+      target: { kind: "circleci-build", repo: CHECKOUT, buildNumber: 2856, ...extra },
+    }, url);
+  }
+  assertEquals(
+    parseFixPrTarget(`https://app.circleci.com/workflows/${WF.toUpperCase()}/jobs/${JOB}`),
+    {
+      ok: true,
+      target: { kind: "circleci-job", repo: null, workflowId: WF, jobId: JOB },
+    },
+  );
+  assertEquals(parseFixPrTarget(`${details}?workflowId=${WF}&job=${JOB}`), {
+    ok: true,
+    target: { kind: "circleci-job", repo: CHECKOUT, workflowId: WF, jobId: JOB },
+  });
+  const refusals: [string, string][] = [
+    [`${details}?buildNumber=2856&buildNumber=2857`, "repeats the 'buildNumber'"],
+    [`${details}?workflowId=${WF}&workflowId=${WF}&job=${JOB}`, "repeats the 'workflowId'"],
+    [`${details}?workflowId=${WF}`, "names no build or job"],
+    [`${details}?workflowId=nope&job=${JOB}`, "malformed 'workflowId'"],
+    [`${details}?buildNumber=0`, "malformed 'buildNumber'"],
+    [`https://app.circleci.com/workflow/${WF}/job/not-a-uuid`, "malformed workflow or job id"],
+    [
+      "https://circleci.com/api/private/output/raw/github/WebJamApps/web-jam-tools/2856/output/101/0?token=abc",
+      "signed CircleCI log URL",
+    ],
+    ["https://circleci.com/api/v1.1/project/github/WebJamApps/web-jam-tools/2856", "CircleCI API"],
+    ["https://app.circleci.com/pipelines/gh/WebJamApps/web-jam-tools", "names no build or job"],
+    ["https://circleci.com/gh/WebJamApps/web-jam-tools", "names no build or job"],
+    ["https://circleci.com/gh/../../2856", "names no build or job"],
+    ["https://circleci.com/gh/WebJamApps/web-jam-tools/0", "malformed repository or build"],
+    [
+      "https://evil.example.com/pipelines/gh/WebJamApps/web-jam-tools/1/details?buildNumber=2856",
+      "not a CircleCI host",
+    ],
+    ["http://circleci.com/gh/WebJamApps/web-jam-tools/2856", "must use https"],
+    [
+      "https://user:pass@circleci.com/gh/WebJamApps/web-jam-tools/2856",
+      "must not carry credentials",
+    ],
+    ["https://circleci.com:8443/gh/WebJamApps/web-jam-tools/2856", "must not name a port"],
+    ["http://github.com/WebJamApps/web-jam-tools/pull/1937", "plain https link"],
+  ];
+  for (const [url, reason] of refusals) {
+    const parsed = parseFixPrTarget(`please ${url} now`);
+    assertEquals(parsed.ok, false, url);
+    if (!parsed.ok) assertStringIncludes(parsed.reason, reason, url);
+  }
+  // Ordinary links in the prose of a call are not targets.
+  assertEquals(outcomeOf("web-jam-tools#1937 see https://example.com/docs/5"), PR(1937));
+});
+
+interface FakeWorld {
+  builds?: Record<number, unknown>;
+  workflowJobs?: unknown;
+  prs?: Record<number, Record<string, unknown>>;
+  openOnBranch?: number[];
+  fail?: "500" | "redirect" | "timeout" | "json";
+  ghFails?: boolean;
+}
+
+interface FakeRequest {
+  url: string;
+  token: string | null;
+  redirect: RequestRedirect | undefined;
+}
+
+function openPr(number: number, changes: Record<string, unknown> = {}) {
+  return {
+    number,
+    state: "OPEN",
+    headRefName: BRANCH_1907,
+    headRepository: { nameWithOwner: CHECKOUT },
+    isCrossRepository: false,
+    ...changes,
+  };
+}
+
+function build2856(changes: Record<string, unknown> = {}) {
+  return {
+    username: "WebJamApps",
+    reponame: "web-jam-tools",
+    branch: BRANCH_1907,
+    pull_requests: [{ head_sha: "abc", url: PR_URL_1907 }],
+    workflows: { workflow_id: WF, job_id: JOB },
+    ...changes,
+  };
+}
+
+function fakeDeps(world: FakeWorld, requests: FakeRequest[] = [], ghCalls: string[][] = []) {
+  const prs: Record<number, Record<string, unknown>> = world.prs ?? { 1907: openPr(1907) };
+  return {
+    circleToken: "secret-token",
+    checkoutRepo: () => Promise.resolve(CHECKOUT),
+    fetch: ((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const headers = new Headers(init?.headers);
+      requests.push({ url, token: headers.get("Circle-Token"), redirect: init?.redirect });
+      if (world.fail === "timeout") {
+        return Promise.reject(new DOMException("timed out", "TimeoutError"));
+      }
+      if (world.fail === "redirect") return Promise.reject(new TypeError("redirect not allowed"));
+      if (world.fail === "500") return Promise.resolve(new Response("oops", { status: 500 }));
+      if (world.fail === "json") return Promise.resolve(new Response("{not json", { status: 200 }));
+      const v2 = url.match(/\/api\/v2\/workflow\/([^/]+)\/job$/);
+      if (v2) return Promise.resolve(Response.json(world.workflowJobs));
+      const v1 = url.match(/\/api\/v1\.1\/project\/github\/[^/]+\/[^/]+\/(\d+)$/);
+      const body = v1 ? world.builds?.[Number(v1[1])] : undefined;
+      return Promise.resolve(
+        body ? Response.json(body) : new Response("not found", { status: 404 }),
+      );
+    }) as typeof fetch,
+    runGh: (args: string[]) => {
+      ghCalls.push(args);
+      if (world.ghFails) return Promise.resolve({ code: 1, stdout: "" });
+      if (args[1] === "view") {
+        const pr = prs[Number(args[2])];
+        return Promise.resolve(
+          pr ? { code: 0, stdout: JSON.stringify(pr) } : { code: 1, stdout: "" },
+        );
+      }
+      const list = (world.openOnBranch ?? []).map((n) => prs[n] ?? openPr(n));
+      return Promise.resolve({ code: 0, stdout: JSON.stringify(list) });
+    },
+  };
+}
+
+const V2_2856 = {
+  items: [{ id: JOB, job_number: 2856, project_slug: "gh/WebJamApps/web-jam-tools" }],
+};
+const RESOLVED_1907 = { repo: CHECKOUT, number: 1907, branch: BRANCH_1907, build: 2856 };
+
+Deno.test("CircleCI resolution: all 17 cases of 'Accepting CircleCI build and job links'", async () => {
+  const details = "https://app.circleci.com/pipelines/gh/WebJamApps/web-jam-tools/2779/details";
+  const v1 = "https://circleci.com/gh/WebJamApps/web-jam-tools/2856";
+  const cases: [string, FakeWorld, typeof RESOLVED_1907 | string][] = [
+    [
+      `${details}?workflowId=${WF}&job=${JOB}&buildNumber=2856&jobType=build#step-119-`,
+      { builds: { 2856: build2856() } },
+      RESOLVED_1907,
+    ],
+    [
+      `https://app.circleci.com/pipelines/github/WebJamApps/web-jam-tools/2779/workflows/${WF}/jobs/2856`,
+      { builds: { 2856: build2856() } },
+      RESOLVED_1907,
+    ],
+    [
+      v1,
+      { builds: { 2856: build2856({ pull_requests: [] }) }, openOnBranch: [1907] },
+      RESOLVED_1907,
+    ],
+    [
+      `https://app.circleci.com/workflow/${WF}/job/${JOB}`,
+      { workflowJobs: V2_2856, builds: { 2856: build2856() } },
+      RESOLVED_1907,
+    ],
+    [
+      `${details}?workflowId=${WF}&job=${JOB}`,
+      { workflowJobs: V2_2856, builds: { 2856: build2856() } },
+      RESOLVED_1907,
+    ],
+    [
+      `${details}?workflowId=${WF}&job=00000000-0000-0000-0000-000000000000&buildNumber=2856`,
+      { builds: { 2856: build2856() } },
+      "does not match its build",
+    ],
+    [`${details}?buildNumber=2856&buildNumber=2857`, {}, "repeats the 'buildNumber'"],
+    [
+      "https://circleci.com/gh/WebJamApps/web-jam-tools/2853",
+      { builds: { 2853: build2856({ branch: "dev", pull_requests: [] }) } },
+      "protected branch 'dev'",
+    ],
+    [
+      v1,
+      { builds: { 2856: build2856({ pull_requests: [] }) }, openOnBranch: [] },
+      "no open pull request",
+    ],
+    [
+      v1,
+      { builds: { 2856: build2856({ pull_requests: [] }) }, openOnBranch: [1907, 1908] },
+      "more than one open pull request",
+    ],
+    [
+      v1,
+      { builds: { 2856: build2856() }, prs: { 1907: openPr(1907, { state: "CLOSED" }) } },
+      "no open pull request",
+    ],
+    [
+      v1,
+      { builds: { 2856: build2856() }, prs: { 1907: openPr(1907, { state: "MERGED" }) } },
+      "no open pull request",
+    ],
+    [
+      v1,
+      { builds: { 2856: build2856() }, prs: { 1907: openPr(1907, { isCrossRepository: true }) } },
+      "another repository (a fork)",
+    ],
+    ["https://circleci.com/gh/WebJamApps/JaMmusic/412", {}, "not this checkout's"],
+    [
+      "https://circleci.com/api/private/output/raw/github/WebJamApps/web-jam-tools/2856/output/101/0?token=abc",
+      {},
+      "signed CircleCI log URL",
+    ],
+    ["https://app.circleci.com/pipelines/gh/WebJamApps/web-jam-tools", {}, "names no build or job"],
+    [
+      "https://evil.example.com/pipelines/gh/WebJamApps/web-jam-tools/1/details?buildNumber=2856",
+      {},
+      "not a CircleCI host",
+    ],
+    ["http://circleci.com/gh/WebJamApps/web-jam-tools/2856", {}, "must use https"],
+    [
+      "https://user:pass@circleci.com/gh/WebJamApps/web-jam-tools/2856",
+      {},
+      "must not carry credentials",
+    ],
+    [v1, { fail: "500" }, "HTTP 500"],
+    [v1, { fail: "redirect" }, "could not be reached"],
+    [v1, { fail: "timeout" }, "could not be reached"],
+  ];
+  for (const [arg, world, expected] of cases) {
+    const requests: FakeRequest[] = [];
+    const result = await resolveTargetCli([arg], fakeDeps(world, requests));
+    if (typeof expected === "string") {
+      assertEquals(result.ok, false, arg);
+      if (!result.ok) assertStringIncludes(result.reason, expected, arg);
+    } else {
+      assertEquals(result, { ok: true, target: expected }, arg);
+    }
+    for (const request of requests) {
+      // The token reaches CircleCI's API only, redirects are errors, and no step log is fetched.
+      assertEquals(request.url.startsWith("https://circleci.com/api/"), true, request.url);
+      assertEquals(request.token, "secret-token");
+      assertEquals(request.redirect, "error");
+      assertEquals(/output/.test(request.url), false, request.url);
+    }
+  }
+});
+
+Deno.test("CircleCI resolution fails closed on malformed metadata, gh failures and conflicts", async () => {
+  const v1 = "https://circleci.com/gh/WebJamApps/web-jam-tools/2856";
+  const checks = `https://app.circleci.com/workflow/${WF}/job/${JOB}`;
+  const cases: [string, FakeWorld, TargetResolution["kind"], string][] = [
+    [v1, { fail: "json" }, "unknown", "malformed JSON"],
+    [v1, { builds: { 2856: [] } }, "unknown", "malformed build metadata"],
+    [v1, { builds: { 2856: build2856({ username: "Someone" }) } }, "refused", "another repository"],
+    [v1, { builds: { 2856: build2856({ branch: "" }) } }, "refused", "names no branch"],
+    [v1, { builds: { 2856: build2856({ branch: "main" }) } }, "refused", "protected branch 'main'"],
+    [
+      v1,
+      { builds: { 2856: build2856({ pull_requests: "x" }) } },
+      "unknown",
+      "malformed pull request",
+    ],
+    [v1, { builds: { 2856: build2856() }, ghFails: true }, "unknown", "GitHub could not be read"],
+    [
+      v1,
+      { builds: { 2856: build2856({ pull_requests: [] }) }, openOnBranch: [1907], ghFails: true },
+      "unknown",
+      "GitHub could not be read",
+    ],
+    [
+      v1,
+      { builds: { 2856: build2856() }, prs: { 1907: openPr(1907, { headRefName: "other" }) } },
+      "unknown",
+      "no open pull request",
+    ],
+    [checks, { workflowJobs: { items: [] } }, "refused", "no single job"],
+    [checks, { workflowJobs: {} }, "unknown", "malformed workflow job"],
+    [
+      checks,
+      {
+        workflowJobs: {
+          items: [{ id: JOB, job_number: null, project_slug: "gh/WebJamApps/web-jam-tools" }],
+        },
+      },
+      "unknown",
+      "no GitHub project or build number",
+    ],
+    [
+      `https://app.circleci.com/pipelines/gh/WebJamApps/JaMmusic/2779/details?workflowId=${WF}&job=${JOB}`,
+      { workflowJobs: V2_2856 },
+      "refused",
+      "does not match its workflow's project",
+    ],
+  ];
+  for (const [arg, world, kind, reason] of cases) {
+    const result = await resolveFixPrTarget(arg, CHECKOUT, fakeDeps(world));
+    assertEquals(result.kind, kind, `${arg} ${JSON.stringify(world)}`);
+    if (result.kind !== "resolved") assertStringIncludes(result.reason, reason, arg);
+  }
+  // A GitHub target needs no lookup; a bare number needs a readable checkout.
+  assertEquals(await resolveFixPrTarget("1907", CHECKOUT, fakeDeps({})), {
+    kind: "resolved",
+    ref: { repo: CHECKOUT, number: 1907 },
+  });
+  assertEquals((await resolveFixPrTarget("1907", null, fakeDeps({}))).kind, "refused");
+  // Without a token, no Circle-Token header is sent.
+  const requests: FakeRequest[] = [];
+  await resolveFixPrTarget(v1, CHECKOUT, {
+    ...fakeDeps({ builds: { 2856: build2856() } }, requests),
+    circleToken: null,
+  });
+  assertEquals(requests.map((r) => r.token), [null]);
+});
+
+Deno.test("fix-pr:resolve-target verifies the GitHub pull request it resolves", async () => {
+  const run = (arg: string, world: FakeWorld, checkout: string | null = CHECKOUT) =>
+    resolveTargetCli([arg], { ...fakeDeps(world), checkoutRepo: () => Promise.resolve(checkout) });
+  assertEquals(await run("web-jam-tools#1907", {}), {
+    ok: true,
+    target: { repo: CHECKOUT, number: 1907, branch: BRANCH_1907, build: null },
+  });
+  const refusals: [string, FakeWorld, string, string | null][] = [
+    [
+      "web-jam-tools#1907",
+      { prs: { 1907: openPr(1907, { state: "MERGED" }) } },
+      "is MERGED",
+      CHECKOUT,
+    ],
+    [
+      "web-jam-tools#1907",
+      { prs: { 1907: openPr(1907, { isCrossRepository: true }) } },
+      "fork",
+      CHECKOUT,
+    ],
+    [
+      "web-jam-tools#1907",
+      { prs: { 1907: openPr(1907, { headRefName: "dev" }) } },
+      "protected",
+      CHECKOUT,
+    ],
+    ["web-jam-tools#1907", { prs: { 1907: { number: 1908 } } }, "malformed", CHECKOUT],
+    ["web-jam-tools#1907", { ghFails: true }, "could not be read", CHECKOUT],
+    ["JaMmusic#5", {}, "not this checkout's", CHECKOUT],
+    ["1907", {}, "needs a checkout", null],
+    ["--from-session", {}, "not supported", CHECKOUT],
+    ["", {}, "names no pull request", CHECKOUT],
+  ];
+  for (const [arg, world, reason, checkout] of refusals) {
+    const result = await run(arg, world, checkout);
+    assertEquals(result.ok, false, arg);
+    if (!result.ok) assertStringIncludes(result.reason, reason, arg);
+  }
+  // Explicit-argument mode with no readable checkout still resolves a named target.
+  assertEquals((await run("web-jam-tools#1907", {}, null)).ok, true);
+});
+
+Deno.test("checkFixRun takes a resolved CircleCI target and reads one without as no fix run", () => {
+  const call = {
+    name: "fix-pr",
+    arguments: "https://circleci.com/gh/WebJamApps/web-jam-tools/2856",
+    text: "",
+  };
+  const pr = openPr(1907);
+  assertEquals(checkFixRun(call, CHECKOUT, BRANCH_1907, pr), { kind: "none" });
+  assertEquals(
+    checkFixRun(call, CHECKOUT, "fix-pr/1907", pr, {
+      kind: "resolved",
+      ref: { repo: CHECKOUT, number: 1907 },
+      branch: BRANCH_1907,
+      build: 2856,
+    }),
+    { kind: "active", pullRequest: { repo: CHECKOUT, number: 1907 }, headRefName: BRANCH_1907 },
+  );
+  assertEquals(
+    checkFixRun(call, CHECKOUT, BRANCH_1907, null, { kind: "refused", reason: "dev build" }),
+    { kind: "refused", reason: "dev build" },
+  );
+  assertEquals(
+    checkFixRun(call, CHECKOUT, BRANCH_1907, null, { kind: "unknown", reason: "HTTP 500" }),
+    { kind: "none" },
+  );
+  assertEquals(
+    checkFixRun({ ...call, arguments: "1937 and 1938" }, CHECKOUT, BRANCH_1907, pr).kind,
+    "refused",
+  );
+});
+
+Deno.test("fixPrInstructions leaves what Josh asked once the target's mentions are removed", () => {
+  const cases: [string, string][] = [
+    ["web-jam-tools#1318 use a Fable helper", "use a Fable helper"],
+    [
+      "use a Fable helper on https://circleci.com/gh/WebJamApps/web-jam-tools/2856.",
+      "use a Fable helper on",
+    ],
+    [
+      "web-jam-tools#1318 https://github.com/WebJamApps/web-jam-tools/pull/1318 wait for CI",
+      "wait for CI",
+    ],
+    ["for 1318, bump version", "for bump version"],
+    ["fix step 2", "fix step 2"],
+    ["1318 and 1319", "1318 and 1319"],
+  ];
+  for (const [args, expected] of cases) assertEquals(fixPrInstructions(args), expected, args);
 });
