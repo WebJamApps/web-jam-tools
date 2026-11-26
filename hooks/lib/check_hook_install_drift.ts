@@ -321,54 +321,79 @@ export async function checkStatusLineUnregistered(
   }
 }
 
+// Claude Code's registration arrays in scripts/install-hooks.sh — every hook
+// listed in one of these belongs in ~/.claude/settings.json.
+export const CLAUDE_CODE_HOOK_ARRAYS = [
+  "SESSION_START_HOOKS",
+  "SESSION_END_HOOKS",
+  "STOP_HOOKS",
+  "SUBAGENT_START_HOOKS",
+  "SUBAGENT_STOP_HOOKS",
+  "PRE_TOOL_USE_HOOKS",
+  "POST_TOOL_USE_HOOKS",
+] as const;
+
+/**
+ * Returns the `.sh` script basenames listed in one bash array of
+ * scripts/install-hooks.sh, whether each item is a `matcher::script.sh` pair or
+ * a bare script name, and whether the array is written on one line or many.
+ * The array name is matched at the start of a line, so `STOP_HOOKS` never
+ * reads `SUBAGENT_STOP_HOOKS` and `PRE_TOOL_USE_HOOKS` never reads
+ * `CODEX_ONLY_PRE_TOOL_USE_HOOKS`.
+ */
+export function readInstallerHookArray(
+  installerContent: string,
+  arrayName: string,
+): string[] {
+  const multi = installerContent.match(
+    new RegExp(`^${arrayName}=\\([ \\t]*\\n([\\s\\S]*?)\\n[ \\t]*\\)`, "m"),
+  );
+  const single = multi ? null : installerContent.match(
+    new RegExp(`^${arrayName}=\\((.*)\\)[ \\t]*$`, "m"),
+  );
+  const body = multi?.[1] ?? single?.[1];
+  if (body === undefined) return [];
+
+  const scripts: string[] = [];
+  for (const rawLine of body.split("\n")) {
+    const line = rawLine.replace(/(^|\s)#.*$/, "");
+    for (const m of line.matchAll(/"([^"]*)"|'([^']*)'|([^\s"']+)/g)) {
+      const item = m[1] ?? m[2] ?? m[3];
+      const sep = item.lastIndexOf("::");
+      const script = path.basename((sep === -1 ? item : item.slice(sep + 2)).trim());
+      if (script.endsWith(".sh")) scripts.push(script);
+    }
+  }
+  return scripts;
+}
+
 export function extractExpectedHooksFromInstaller(
   installerContent: string,
 ): Set<string> {
   const expected = new Set<string>();
-
-  const sessionMatch = installerContent.match(/SESSION_START_HOOKS=\(([^)]+)\)/);
-  if (sessionMatch) {
-    for (const token of sessionMatch[1].trim().split(/\s+/)) {
-      if (token.endsWith(".sh")) expected.add(token);
+  for (const arrayName of CLAUDE_CODE_HOOK_ARRAYS) {
+    for (const script of readInstallerHookArray(installerContent, arrayName)) {
+      expected.add(script);
     }
   }
-
-  const stopMatch = installerContent.match(/STOP_HOOKS=\(([^)]+)\)/);
-  if (stopMatch) {
-    for (const token of stopMatch[1].trim().split(/\s+/)) {
-      if (token.endsWith(".sh")) expected.add(token);
-    }
-  }
-
-  const preMatch = installerContent.match(/PRE_TOOL_USE_HOOKS=\(([\s\S]*?)\n\)/);
-  if (preMatch) {
-    const lines = preMatch[1].split("\n");
-    for (const line of lines) {
-      const clean = line.replace(/#.*$/, "").trim().replace(/^["']|["']$/g, "");
-      const sep = clean.indexOf("::");
-      if (sep !== -1) {
-        const scriptName = clean.slice(sep + 2).trim();
-        if (scriptName.endsWith(".sh")) expected.add(scriptName);
-      }
-    }
-  }
-
-  const postMatch = installerContent.match(
-    /POST_TOOL_USE_HOOKS=\(([\s\S]*?)\n\)/,
-  );
-  if (postMatch) {
-    const lines = postMatch[1].split("\n");
-    for (const line of lines) {
-      const clean = line.replace(/#.*$/, "").trim().replace(/^["']|["']$/g, "");
-      const sep = clean.indexOf("::");
-      if (sep !== -1) {
-        const scriptName = clean.slice(sep + 2).trim();
-        if (scriptName.endsWith(".sh")) expected.add(scriptName);
-      }
-    }
-  }
-
   return expected;
+}
+
+/**
+ * Scripts listed in any `AGY_ONLY_*_HOOKS` or `CODEX_ONLY_*_HOOKS` array of
+ * scripts/install-hooks.sh — registered on agy or Codex, never in Claude
+ * Code's settings.json unless a Claude Code array also lists them.
+ */
+export function extractSurfaceOnlyHooksFromInstaller(
+  installerContent: string,
+): Set<string> {
+  const surfaceOnly = new Set<string>();
+  for (const m of installerContent.matchAll(/^((?:AGY|CODEX)_ONLY_[A-Z0-9_]*_HOOKS)=\(/gm)) {
+    for (const script of readInstallerHookArray(installerContent, m[1])) {
+      surfaceOnly.add(script);
+    }
+  }
+  return surfaceOnly;
 }
 
 export function getRegisteredHookBasenames(settingsPath: string): Set<string> {
@@ -427,13 +452,20 @@ export async function checkUnregisteredHooks(
     }
   }
 
+  let surfaceOnly = new Set<string>();
   if (installerContent) {
     const fromInstaller = extractExpectedHooksFromInstaller(installerContent);
     for (const h of fromInstaller) expectedHooks.add(h);
+    surfaceOnly = extractSurfaceOnlyHooksFromInstaller(installerContent);
   }
 
-  // 2. Also check hooks on remoteRef (excluding agy-only and Codex-only hooks;
-  //    Codex hooks register in the Codex hooks.json, never settings.json)
+  // 2. Also check hooks on remoteRef, so a script committed to hooks/ but not
+  //    yet added to any installer array is still caught. agy-*/codex-* helpers
+  //    and scripts the installer lists only in AGY_ONLY_*_HOOKS or
+  //    CODEX_ONLY_*_HOOKS never belong in settings.json. Step 1 already added
+  //    every Claude Code array, so a script listed in both kinds stays expected.
+  const skipInScan = (base: string) =>
+    base.startsWith("agy-") || base.startsWith("codex-") || surfaceOnly.has(base);
   const gitLsHooks = await runGit(
     ["ls-tree", "--name-only", remoteRef, "hooks/"],
     repoDir,
@@ -443,13 +475,7 @@ export async function checkUnregisteredHooks(
       const trimmed = line.trim();
       if (!trimmed || !trimmed.endsWith(".sh")) continue;
       const base = path.basename(trimmed);
-      if (
-        base.startsWith("agy-") ||
-        base.startsWith("codex-") ||
-        base === "block-agy-gmail-send-delete.sh"
-      ) {
-        continue;
-      }
+      if (skipInScan(base)) continue;
       expectedHooks.add(base);
     }
   } else {
@@ -458,13 +484,7 @@ export async function checkUnregisteredHooks(
     if (tryExistsSync(localHooksDir)) {
       for (const entry of Deno.readDirSync(localHooksDir)) {
         if (entry.isFile && entry.name.endsWith(".sh")) {
-          if (
-            entry.name.startsWith("agy-") ||
-            entry.name.startsWith("codex-") ||
-            entry.name === "block-agy-gmail-send-delete.sh"
-          ) {
-            continue;
-          }
+          if (skipInScan(entry.name)) continue;
           expectedHooks.add(entry.name);
         }
       }
