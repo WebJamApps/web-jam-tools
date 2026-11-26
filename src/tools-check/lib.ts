@@ -186,19 +186,41 @@ export function classifyInstallHooksOutput(
   const unknownDrifts: string[] = [];
   const unknownErrors: string[] = [];
 
-  for (const line of stderrLines) {
-    if (line === "error: drift detected") continue;
+  type Category = "codex" | "agy" | "claude" | "unknown";
+  const pushToCategory = (category: Category, isError: boolean, text: string) => {
+    if (category === "codex") {
+      if (isError) codexErrors.push(text);
+      else codexDrifts.push(text);
+    } else if (category === "agy") {
+      if (isError) agyErrors.push(text);
+      else agyDrifts.push(text);
+    } else if (category === "claude") {
+      if (isError) claudeErrors.push(text);
+      else claudeDrifts.push(text);
+    } else {
+      if (isError) unknownErrors.push(text);
+      else unknownDrifts.push(text);
+    }
+  };
+
+  let lastCategory: Category | null = null;
+  let lastWasError = false;
+
+  for (const rawLine of result.stderr.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line === "error: drift detected") continue;
+    const isIndented = rawLine !== rawLine.trimStart();
+    if (isIndented && lastCategory !== null && !line.startsWith("error:")) {
+      pushToCategory(lastCategory, lastWasError, line);
+      continue;
+    }
+
     const isError = line.startsWith("error:");
     const isCodex = line.includes("Codex REAPER") ||
       line.includes("codex safety rules") ||
       /\.codex\/hooks\.json/i.test(line);
-    if (isCodex) {
-      if (isError) codexErrors.push(line);
-      else codexDrifts.push(line);
-      continue;
-    }
-
-    const isAgy = line.includes("agy-skill-run") ||
+    const isAgy = !isCodex && (
+      line.includes("agy-skill-run") ||
       line.includes("agy-prompt-watch") ||
       line.includes("agy hooks file") ||
       line.includes("agy allow-list") ||
@@ -206,14 +228,10 @@ export function classifyInstallHooksOutput(
       line.includes("cannot read agy") ||
       line.includes(".gemini/") ||
       line.startsWith("hooks.json:") ||
-      line.includes("--forbid-lifecycle-hooks");
-    if (isAgy) {
-      if (isError) agyErrors.push(line);
-      else agyDrifts.push(line);
-      continue;
-    }
-
-    const isClaude = line.startsWith("settings.json:") ||
+      line.includes("--forbid-lifecycle-hooks")
+    );
+    const isClaude = !isCodex && !isAgy && (
+      line.startsWith("settings.json:") ||
       line.includes("settings.json") ||
       line.includes("hook script") ||
       line.includes("orphaned symlink") ||
@@ -223,15 +241,13 @@ export function classifyInstallHooksOutput(
       line.includes("update-scripts script") ||
       line.includes("rules pointer") ||
       line.includes("core.hooksPath") ||
-      line.startsWith("drift:");
-    if (isClaude) {
-      if (isError) claudeErrors.push(line);
-      else claudeDrifts.push(line);
-      continue;
-    }
+      line.startsWith("drift:")
+    );
 
-    if (isError) unknownErrors.push(line);
-    else unknownDrifts.push(line);
+    const category: Category = isCodex ? "codex" : isAgy ? "agy" : isClaude ? "claude" : "unknown";
+    lastCategory = category;
+    lastWasError = isError;
+    pushToCategory(category, isError, line);
   }
 
   const decideRow = (
@@ -571,7 +587,10 @@ export async function runToolsCheck(
     ? buildChildEnv(deps, homeDir, options.env)
     : undefined;
 
-  const needHooks = toolFilter === "all" || toolFilter === "claude" || toolFilter === "agy";
+  // install-hooks.sh --check verifies Claude settings, agy hooks.json, AND Codex REAPER/safety-rules,
+  // so run it for --tool codex as well to keep Codex outcomes identical across --tool all and --tool codex.
+  const needHooks = toolFilter === "all" || toolFilter === "claude" || toolFilter === "agy" ||
+    toolFilter === "codex";
   const needClaude = toolFilter === "all" || toolFilter === "claude";
   const needAgy = toolFilter === "all" || toolFilter === "agy";
   const needCodex = toolFilter === "all" || toolFilter === "codex";

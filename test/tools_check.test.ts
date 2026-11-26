@@ -251,7 +251,7 @@ Deno.test("each table row reports ok, drifted (with diff + installer command), a
   }
 });
 
-Deno.test("classifiers fail closed with could-not-tell and never mark uninspected checks as ok", () => {
+Deno.test("classifiers fail closed with could-not-tell and never mark uninspected checks as ok", async () => {
   const repo = "/home/tester/WebJamApps/web-jam-tools";
 
   // Spawn failures across every checker
@@ -317,6 +317,57 @@ Deno.test("classifiers fail closed with could-not-tell and never mark uninspecte
   assertEquals(codexReaperOnly.claude.outcome, "ok");
   assertEquals(codexReaperOnly.agyHooks.outcome, "ok");
   assertEquals(codexReaperOnly.codexDetails.drifts.length, 1);
+
+  // Claude-only autoMode/skillOverrides diff has indented continuation lines that must stay
+  // attached to Claude Code rather than turning agy hooks.json into could-not-tell.
+  const claudeAutoModeDrift = classifyInstallHooksOutput(
+    {
+      code: 1,
+      stdout:
+        "hooks.json: SessionStart, SessionEnd, Stop, PreToolUse, PostToolUse hooks and permissions.deny / permissions.ask / permissions.allow already up to date (no-op)",
+      stderr: [
+        "settings.json: autoMode differs from the versioned config",
+        "  - allow: old-rule",
+        "  + allow: new-rule",
+        "error: drift detected",
+      ].join("\n"),
+    },
+    repo,
+  );
+  assertEquals(claudeAutoModeDrift.claude.outcome, "drifted");
+  assertEquals(claudeAutoModeDrift.claude.details, [
+    "settings.json: autoMode differs from the versioned config",
+    "- allow: old-rule",
+    "+ allow: new-rule",
+  ]);
+  assertEquals(claudeAutoModeDrift.agyHooks.outcome, "ok");
+
+  // --tool codex still runs install-hooks.sh --check so Codex REAPER drift matches --tool all.
+  const codexReaperFailResponses = allOkResponses();
+  codexReaperFailResponses["install-hooks.sh --check"] = {
+    code: 1,
+    stdout: [
+      "settings.json: SessionStart, SessionEnd, Stop, PreToolUse, PostToolUse hooks and permissions.deny / permissions.ask / permissions.allow already up to date (no-op)",
+      "hooks.json: SessionStart, SessionEnd, Stop, PreToolUse, PostToolUse hooks and permissions.deny / permissions.ask / permissions.allow already up to date (no-op)",
+    ].join("\n"),
+    stderr: [
+      "hooks.json: missing Codex REAPER SessionStart hook WJT_SURFACE=codex '/home/tester/.claude/hooks/codex-reaper-startup-check.sh'",
+      "error: drift detected",
+    ].join("\n"),
+  };
+  const allCodexReport = await runToolsCheck(
+    { tool: "all" },
+    makeStubDeps(codexReaperFailResponses).deps,
+  );
+  const onlyCodexReport = await runToolsCheck(
+    { tool: "codex" },
+    makeStubDeps(codexReaperFailResponses).deps,
+  );
+  const allCodexRow = allCodexReport.rows.find((r) => r.tool === "Codex");
+  assertEquals(onlyCodexReport.rows.length, 1);
+  assertEquals(onlyCodexReport.rows[0], allCodexRow);
+  assertEquals(onlyCodexReport.rows[0].outcome, "drifted");
+  assertStringIncludes(onlyCodexReport.rows[0].remediation ?? "", "scripts/install-hooks.sh");
 
   assertEquals(
     classifyInstallSkillsOutput(
