@@ -21,8 +21,11 @@ import {
   checkUnregisteredHooks,
   detectDrift,
   extractExpectedAgyHooksFromInstaller,
+  extractExpectedHooksFromInstaller,
   extractScriptPathFromCommand,
+  extractSurfaceOnlyHooksFromInstaller,
   formatDriftMessage,
+  readInstallerHookArray,
 } from "../hooks/lib/check_hook_install_drift.ts";
 
 const REPO_ROOT = path.resolve(
@@ -1063,4 +1066,295 @@ Deno.test("extractExpectedAgyHooksFromInstaller honours the installer's agy skip
   const expected = extractExpectedAgyHooksFromInstaller(real);
   assert(!expected.has("haiku-only-gmail-gate.sh"));
   assert(expected.has("block-agy-gmail-send-delete.sh"));
+});
+
+// --- Claude Code drift check and surface-only hooks (web-jam-tools#1968) ---
+//
+// The ten literal cases of "Claude Code drift check and surface-only hooks" in
+// hooks-design-2026-09-15.md (revision 3.10.0). scripts/install-hooks.sh is
+// the single source of truth for which scripts belong in Claude Code's
+// settings.json; no script filename is hardcoded in the checker.
+
+interface InstallerArrays {
+  sessionStart?: string[];
+  sessionEnd?: string[];
+  subagentStart?: string[];
+  subagentStop?: string[];
+  pre?: string[];
+  codexOnlyPre?: string[];
+  agyOnlyPre?: string[];
+}
+
+/** An installer laid out like the real one: Claude Code arrays first, surface-only arrays after. */
+function installerFixture(a: InstallerArrays): string {
+  // An empty array is written "(" then ")" on the next line, as bash and the
+  // real installer write it.
+  const multi = (name: string, items: string[] = []) =>
+    `${name}=(\n${items.map((i) => `  "${i}"\n`).join("")})\n`;
+  return `SESSION_START_HOOKS=(${["hook1.sh", ...(a.sessionStart ?? [])].join(" ")})\n` +
+    `SESSION_END_HOOKS=(${(a.sessionEnd ?? []).join(" ")})\n` +
+    `STOP_HOOKS=()\n` +
+    `SUBAGENT_START_HOOKS=(${(a.subagentStart ?? []).join(" ")})\n` +
+    `SUBAGENT_STOP_HOOKS=(${(a.subagentStop ?? []).join(" ")})\n` +
+    multi("PRE_TOOL_USE_HOOKS", ["Bash::hook2.sh", ...(a.pre ?? [])]) +
+    multi("CODEX_ONLY_PRE_TOOL_USE_HOOKS", a.codexOnlyPre) +
+    multi("POST_TOOL_USE_HOOKS") +
+    multi("AGY_ONLY_PRE_TOOL_USE_HOOKS", a.agyOnlyPre);
+}
+
+/** Writes hook scripts and the installer into the sandbox repo and moves origin/dev to them. */
+async function commitToDev(sb: Sandbox, scripts: string[], installer: string): Promise<void> {
+  for (const name of scripts) {
+    await Deno.writeTextFile(path.join(sb.repoDir, "hooks", name), "#!/bin/bash\nexit 0\n");
+  }
+  await Deno.writeTextFile(path.join(sb.repoDir, "scripts/install-hooks.sh"), installer);
+  for (
+    const args of [
+      ["add", "."],
+      ["commit", "-m", "fixture"],
+      ["update-ref", "refs/remotes/origin/dev", "HEAD"],
+    ]
+  ) {
+    const out = await new Deno.Command("git", {
+      args,
+      cwd: sb.repoDir,
+      stdout: "piped",
+      stderr: "piped",
+    })
+      .output();
+    if (!out.success) throw new Error(new TextDecoder().decode(out.stderr));
+  }
+}
+
+/** checkUnregisteredHooks through the git ls-tree scan and through the local-directory fallback. */
+async function unregisteredBothWays(sb: Sandbox): Promise<[string[], string[]]> {
+  return [
+    await checkUnregisteredHooks(sb.repoDir, "origin/dev", sb.settingsPath),
+    await checkUnregisteredHooks(sb.repoDir, "no-such-ref", sb.settingsPath),
+  ];
+}
+
+Deno.test("drift case: block-codex-gmail-write.sh in CODEX_ONLY_PRE_TOOL_USE_HOOKS only is not reported", async () => {
+  const sb = await createSandbox();
+  try {
+    await commitToDev(
+      sb,
+      ["block-codex-gmail-write.sh"],
+      installerFixture({ codexOnlyPre: ["mcp__codex_apps__gmail_.*::block-codex-gmail-write.sh"] }),
+    );
+    assertEquals(await unregisteredBothWays(sb), [[], []]);
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+Deno.test("drift case: block-agy-gmail-send-delete.sh in AGY_ONLY_PRE_TOOL_USE_HOOKS only is not reported", async () => {
+  const sb = await createSandbox();
+  try {
+    await commitToDev(
+      sb,
+      ["block-agy-gmail-send-delete.sh"],
+      installerFixture({
+        agyOnlyPre: ["mcp__gmail__.*|send_email::block-agy-gmail-send-delete.sh"],
+      }),
+    );
+    assertEquals(await unregisteredBothWays(sb), [[], []]);
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+Deno.test("drift case: a new Codex-only hook with no codex- prefix is not reported (no hardcoded names)", async () => {
+  const sb = await createSandbox();
+  try {
+    await commitToDev(
+      sb,
+      ["block-future-codex-guard.sh"],
+      installerFixture({ codexOnlyPre: ["Bash::block-future-codex-guard.sh"] }),
+    );
+    assertEquals(await unregisteredBothWays(sb), [[], []]);
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+Deno.test("drift case: block-personal-numbers-read.sh in both PRE_TOOL_USE_HOOKS and AGY_ONLY stays expected", async () => {
+  const sb = await createSandbox();
+  try {
+    await commitToDev(
+      sb,
+      ["block-personal-numbers-read.sh"],
+      installerFixture({
+        pre: ["Bash|Read::block-personal-numbers-read.sh"],
+        agyOnlyPre: ["view_file|read_file::block-personal-numbers-read.sh"],
+      }),
+    );
+    // Missing from settings.json -> reported on both scan paths.
+    assertEquals(await unregisteredBothWays(sb), [
+      ["block-personal-numbers-read.sh"],
+      ["block-personal-numbers-read.sh"],
+    ]);
+
+    // Registered -> quiet.
+    const settings = JSON.parse(await Deno.readTextFile(sb.settingsPath));
+    settings.hooks.PreToolUse.push({
+      matcher: "Bash|Read",
+      hooks: [{ type: "command", command: "$HOME/.claude/hooks/block-personal-numbers-read.sh" }],
+    });
+    await Deno.writeTextFile(sb.settingsPath, JSON.stringify(settings, null, 2));
+    assertEquals(await unregisteredBothWays(sb), [[], []]);
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+Deno.test("drift case: SESSION_END_HOOKS and SUBAGENT_*_HOOKS scripts are expected", () => {
+  const expected = extractExpectedHooksFromInstaller(installerFixture({
+    sessionEnd: ["prune-permission-allows-on-session-end.sh"],
+    subagentStart: ["track-subagent-start.sh"],
+    subagentStop: ["track-subagent-stop.sh"],
+  }));
+  assert(expected.has("prune-permission-allows-on-session-end.sh"));
+  assert(expected.has("track-subagent-start.sh"));
+  assert(expected.has("track-subagent-stop.sh"));
+});
+
+Deno.test("drift case: agy-/codex- helper scripts in no Claude Code array are prefix-skipped", async () => {
+  const sb = await createSandbox();
+  try {
+    await commitToDev(
+      sb,
+      ["agy-skill-run-hook.sh", "codex-reaper-startup-check.sh"],
+      installerFixture({}),
+    );
+    // agy-hook-shim.sh is already in the sandbox's hooks/ directory.
+    assertEquals(await unregisteredBothWays(sb), [[], []]);
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+Deno.test("drift case: codex-reaper-startup-check.sh listed in SESSION_START_HOOKS overrides the prefix skip", async () => {
+  const sb = await createSandbox();
+  try {
+    await commitToDev(
+      sb,
+      ["codex-reaper-startup-check.sh"],
+      installerFixture({ sessionStart: ["codex-reaper-startup-check.sh"] }),
+    );
+    assertEquals(await unregisteredBothWays(sb), [
+      ["codex-reaper-startup-check.sh"],
+      ["codex-reaper-startup-check.sh"],
+    ]);
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+Deno.test("drift case: hook3.sh in hooks/ but in no installer array is reported", async () => {
+  const sb = await createSandbox();
+  try {
+    await commitToDev(sb, ["hook3.sh"], installerFixture({}));
+    assertEquals(await unregisteredBothWays(sb), [["hook3.sh"], ["hook3.sh"]]);
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+Deno.test("drift case: live scripts/install-hooks.sh separates Claude Code hooks from surface-only hooks", async () => {
+  const installer = await Deno.readTextFile(path.join(REPO_ROOT, "scripts/install-hooks.sh"));
+  const expected = extractExpectedHooksFromInstaller(installer);
+  for (
+    const name of [
+      "prune-permission-allows-on-session-end.sh",
+      "track-subagent-start.sh",
+      "track-subagent-stop.sh",
+      "block-personal-numbers-read.sh",
+    ]
+  ) {
+    assert(expected.has(name), `expected ${name} in Claude Code's set`);
+  }
+  for (
+    const name of [
+      "block-codex-gmail-write.sh",
+      "block-agy-gmail-send-delete.sh",
+      "agy-model-guard.sh",
+    ]
+  ) {
+    assert(!expected.has(name), `${name} must not be in Claude Code's set`);
+  }
+  const surfaceOnly = extractSurfaceOnlyHooksFromInstaller(installer);
+  for (
+    const name of [
+      "block-codex-gmail-write.sh",
+      "block-agy-gmail-send-delete.sh",
+      "agy-model-guard.sh",
+    ]
+  ) {
+    assert(surfaceOnly.has(name), `${name} must be in the surface-only set`);
+  }
+});
+
+Deno.test("readInstallerHookArray anchors array names so STOP_HOOKS never reads SUBAGENT_STOP_HOOKS", () => {
+  const installer =
+    `SUBAGENT_STOP_HOOKS=(track-subagent-stop.sh)\nSTOP_HOOKS=(stop-a.sh stop-b.sh)\n` +
+    `CODEX_ONLY_PRE_TOOL_USE_HOOKS=(\n  "Bash::codex-only.sh"\n)\nPRE_TOOL_USE_HOOKS=(\n  "Bash::claude.sh" # trailing note\n)\n`;
+  assertEquals(readInstallerHookArray(installer, "STOP_HOOKS"), ["stop-a.sh", "stop-b.sh"]);
+  assertEquals(readInstallerHookArray(installer, "PRE_TOOL_USE_HOOKS"), ["claude.sh"]);
+  assertEquals(readInstallerHookArray(installer, "SESSION_END_HOOKS"), []);
+});
+
+Deno.test("readInstallerHookArray stops an empty multi-line array at its own closing paren", () => {
+  const installer =
+    `POST_TOOL_USE_HOOKS=(\n)\nAGY_ONLY_PRE_TOOL_USE_HOOKS=(\n  ".*::agy-model-guard.sh"\n)\n` +
+    `CODEX_ONLY_PRE_TOOL_USE_HOOKS=(\n)\nPRE_TOOL_USE_HOOKS=(\n  "Bash::claude.sh"\n)\n`;
+  assertEquals(readInstallerHookArray(installer, "POST_TOOL_USE_HOOKS"), []);
+  assertEquals(readInstallerHookArray(installer, "AGY_ONLY_PRE_TOOL_USE_HOOKS"), [
+    "agy-model-guard.sh",
+  ]);
+  assertEquals(readInstallerHookArray(installer, "CODEX_ONLY_PRE_TOOL_USE_HOOKS"), []);
+  assert(!extractExpectedHooksFromInstaller(installer).has("agy-model-guard.sh"));
+  assertEquals([...extractSurfaceOnlyHooksFromInstaller(installer)], ["agy-model-guard.sh"]);
+});
+
+Deno.test("readInstallerHookArray reads arrays whose declaration line carries a trailing comment", () => {
+  const installer = `STOP_HOOKS=(stop-a.sh) # Stop event (Claude Code)\n` +
+    `PRE_TOOL_USE_HOOKS=( # matcher::script\n  "Bash::claude.sh"\n) # end\n`;
+  assertEquals(readInstallerHookArray(installer, "STOP_HOOKS"), ["stop-a.sh"]);
+  assertEquals(readInstallerHookArray(installer, "PRE_TOOL_USE_HOOKS"), ["claude.sh"]);
+});
+
+Deno.test("hooks/hook-install-drift-reminder.sh stays quiet end-to-end for a Codex-only hook", async () => {
+  const sb = await createSandbox();
+  try {
+    await commitToDev(
+      sb,
+      ["block-codex-gmail-write.sh"],
+      installerFixture({ codexOnlyPre: ["mcp__codex_apps__gmail_.*::block-codex-gmail-write.sh"] }),
+    );
+    const env = {
+      CLAUDE_HOOKS_REPO_DIR: sb.repoDir,
+      CLAUDE_SETTINGS_PATH: sb.settingsPath,
+      AGY_HOOKS_PATH: sb.agyHooksPath,
+      HOOKS_REMOTE_REF: "origin/dev",
+      CLAUDE_HOME: sb.homeDir,
+    };
+    const quiet = await runHookScript(env);
+    assertEquals(quiet.code, 0, quiet.stderr);
+    assertEquals(quiet.stdout.trim(), "");
+
+    // A genuinely unregistered Claude Code hook is still reported end-to-end.
+    await commitToDev(
+      sb,
+      ["hook3.sh"],
+      installerFixture({ codexOnlyPre: ["mcp__codex_apps__gmail_.*::block-codex-gmail-write.sh"] }),
+    );
+    const drift = await runHookScript(env);
+    assertEquals(drift.code, 0, drift.stderr);
+    const msg = JSON.parse(drift.stdout).systemMessage as string;
+    assert(msg.includes("• hook3.sh"), msg);
+    assert(!msg.includes("block-codex-gmail-write.sh"), msg);
+  } finally {
+    await sb.cleanup();
+  }
 });
