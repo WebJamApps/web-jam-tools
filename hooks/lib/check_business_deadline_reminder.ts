@@ -58,6 +58,110 @@ function isAbsentValue(val: string | undefined): boolean {
   return lower === "" || lower === "-" || lower === "none" || lower === "n/a" || lower === "unpaid";
 }
 
+const DEFAULT_WARN_DAYS = 30;
+
+// What may follow a leading date or year: nothing, whitespace, `.`, `,`, `;`,
+// `—`, a parenthetical note, or a `-` that does not continue the number.
+const NOTE_BOUNDARY = /^(?:$|\s|[.,;—(]|-(?!\d))/;
+
+/** A leading valid YYYY-MM-DD date with an optional trailing note, else null. */
+export function parseDateField(raw: string): string | null {
+  const m = raw.match(/^(\d{4}-\d{2}-\d{2})([\s\S]*)$/);
+  if (!m || !NOTE_BOUNDARY.test(m[2]) || !isValidDate(m[1])) return null;
+  return m[1];
+}
+
+/** A leading valid YYYY-MM-DD date or YYYY year with an optional trailing note, else null. */
+export function parsePaidThrough(raw: string): string | null {
+  const m = raw.match(/^(\d{4}-\d{2}-\d{2}|\d{4})([\s\S]*)$/);
+  if (!m || !NOTE_BOUNDARY.test(m[2])) return null;
+  if (m[1].length === 4) return m[1];
+  return isValidDate(m[1]) ? m[1] : null;
+}
+
+/** A non-negative integer optionally followed by `day`, `days`, `days ahead` or `days before`, else null. */
+export function parseWarnDays(raw: string): number | null {
+  const m = raw.match(/^(\d+)(?:\s+days?(?:\s+(?:ahead|before))?)?$/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+interface RawFields {
+  dueDate?: string;
+  amount?: string;
+  wherePaid?: string;
+  warnDays?: string;
+  lastPaidDate?: string;
+  confirmation?: string;
+  paidThrough?: string;
+}
+
+/** Validates one entry's raw fields; table rows and heading blocks share it. */
+function buildEntry(item: string, raw: RawFields): DeadlineEntry | MalformedEntry {
+  const dueRaw = cleanCell(raw.dueDate);
+  if (!dueRaw) return { item, reason: "missing due date" };
+  const dueDate = parseDateField(dueRaw);
+  if (!dueDate) return { item, reason: `invalid due date: '${dueRaw}'` };
+
+  const warnRaw = cleanCell(raw.warnDays);
+  let warnDays = DEFAULT_WARN_DAYS;
+  if (!isAbsentValue(warnRaw)) {
+    const parsed = parseWarnDays(warnRaw);
+    if (parsed === null) return { item, reason: `invalid warn days: '${warnRaw}'` };
+    warnDays = parsed;
+  }
+
+  const lastPaidRaw = cleanCell(raw.lastPaidDate);
+  let lastPaidDate: string | undefined;
+  if (!isAbsentValue(lastPaidRaw)) {
+    const parsed = parseDateField(lastPaidRaw);
+    if (!parsed) return { item, reason: `invalid last paid date: '${lastPaidRaw}'` };
+    lastPaidDate = parsed;
+  }
+
+  const paidThroughRaw = cleanCell(raw.paidThrough);
+  let paidThrough: string | undefined;
+  if (!isAbsentValue(paidThroughRaw)) {
+    const parsed = parsePaidThrough(paidThroughRaw);
+    if (!parsed) return { item, reason: `invalid paid through: '${paidThroughRaw}'` };
+    paidThrough = parsed;
+  }
+
+  const optional = (v: string | undefined) => {
+    const c = cleanCell(v);
+    return isAbsentValue(c) ? undefined : c;
+  };
+  return {
+    item,
+    dueDate,
+    amount: optional(raw.amount),
+    wherePaid: optional(raw.wherePaid),
+    warnDays,
+    lastPaidDate,
+    confirmation: optional(raw.confirmation),
+    paidThrough,
+  };
+}
+
+const BLOCK_KEYS: Record<string, keyof RawFields> = {
+  "due": "dueDate",
+  "due date": "dueDate",
+  "when": "dueDate",
+  "amount": "amount",
+  "where": "wherePaid",
+  "where paid": "wherePaid",
+  "warn": "warnDays",
+  "warn days": "warnDays",
+  "last paid": "lastPaidDate",
+  "last paid date": "lastPaidDate",
+  "last payment": "lastPaidDate",
+  "paid": "lastPaidDate",
+  "confirmation": "confirmation",
+  "conf": "confirmation",
+  "paid through": "paidThrough",
+  "paid cycle": "paidThrough",
+  "paid for": "paidThrough",
+};
+
 /**
  * Parses markdown text into deadline entries and flags malformed rows.
  */
@@ -65,45 +169,19 @@ export function parseDeadlines(markdown: string): ParseResult {
   const entries: DeadlineEntry[] = [];
   const malformed: MalformedEntry[] = [];
 
+  const record = (item: string, raw: RawFields) => {
+    const result = buildEntry(item, raw);
+    if ("reason" in result) malformed.push(result);
+    else entries.push(result);
+  };
+
   const lines = markdown.split(/\r?\n/);
   let currentBlockItem: string | null = null;
-  let currentBlockData: Partial<DeadlineEntry> = {};
+  let currentBlockData: RawFields = {};
 
   const flushBlock = () => {
     if (!currentBlockItem) return;
-    const item = currentBlockItem;
-    const dueDate = cleanCell(currentBlockData.dueDate);
-    if (!dueDate) {
-      malformed.push({ item, reason: "missing due date" });
-    } else if (!isValidDate(dueDate)) {
-      malformed.push({ item, reason: `invalid due date: '${dueDate}'` });
-    } else {
-      let warnDays = 30;
-      if (currentBlockData.warnDays !== undefined) {
-        warnDays = currentBlockData.warnDays;
-      }
-      const lastPaid = cleanCell(currentBlockData.lastPaidDate);
-      const paidThrough = cleanCell(currentBlockData.paidThrough);
-      if (lastPaid && !isAbsentValue(lastPaid) && !isValidDate(lastPaid)) {
-        malformed.push({ item, reason: `invalid last paid date: '${lastPaid}'` });
-      } else if (
-        paidThrough && !isAbsentValue(paidThrough) && !isValidDate(paidThrough) &&
-        !/^\d{4}$/.test(paidThrough)
-      ) {
-        malformed.push({ item, reason: `invalid paid through: '${paidThrough}'` });
-      } else {
-        entries.push({
-          item,
-          dueDate,
-          amount: currentBlockData.amount,
-          wherePaid: currentBlockData.wherePaid,
-          warnDays,
-          lastPaidDate: isAbsentValue(lastPaid) ? undefined : lastPaid,
-          confirmation: currentBlockData.confirmation,
-          paidThrough: isAbsentValue(paidThrough) ? undefined : paidThrough,
-        });
-      }
-    }
+    record(currentBlockItem, currentBlockData);
     currentBlockItem = null;
     currentBlockData = {};
   };
@@ -141,51 +219,14 @@ export function parseDeadlines(markdown: string): ParseResult {
         continue;
       }
 
-      const dueDate = cleanCell(cells[1]);
-      if (!dueDate || !isValidDate(dueDate)) {
-        malformed.push({ item, reason: `invalid due date: '${dueDate}'` });
-        continue;
-      }
-
-      const amount = cleanCell(cells[2]);
-      const wherePaid = cleanCell(cells[3]);
-      const warnRaw = cleanCell(cells[4]);
-
-      let warnDays = 30;
-      if (warnRaw && !isAbsentValue(warnRaw)) {
-        if (/^\d+$/.test(warnRaw)) {
-          warnDays = parseInt(warnRaw, 10);
-        } else {
-          malformed.push({ item, reason: `invalid warn days: '${warnRaw}'` });
-          continue;
-        }
-      }
-
-      const lastPaidDate = cleanCell(cells[5]);
-      if (lastPaidDate && !isAbsentValue(lastPaidDate) && !isValidDate(lastPaidDate)) {
-        malformed.push({ item, reason: `invalid last paid date: '${lastPaidDate}'` });
-        continue;
-      }
-
-      const confirmation = cleanCell(cells[6]);
-      const paidThroughRaw = cleanCell(cells[7]);
-      const paidThrough = isAbsentValue(paidThroughRaw) ? undefined : paidThroughRaw;
-      if (
-        paidThrough && !isValidDate(paidThrough) && !/^\d{4}$/.test(paidThrough)
-      ) {
-        malformed.push({ item, reason: `invalid paid through: '${paidThrough}'` });
-        continue;
-      }
-
-      entries.push({
-        item,
-        dueDate,
-        amount: isAbsentValue(amount) ? undefined : amount,
-        wherePaid: isAbsentValue(wherePaid) ? undefined : wherePaid,
-        warnDays,
-        lastPaidDate: isAbsentValue(lastPaidDate) ? undefined : lastPaidDate,
-        confirmation: isAbsentValue(confirmation) ? undefined : confirmation,
-        paidThrough,
+      record(item, {
+        dueDate: cells[1],
+        amount: cells[2],
+        wherePaid: cells[3],
+        warnDays: cells[4],
+        lastPaidDate: cells[5],
+        confirmation: cells[6],
+        paidThrough: cells[7],
       });
       continue;
     }
@@ -199,30 +240,17 @@ export function parseDeadlines(markdown: string): ParseResult {
       continue;
     }
 
-    // Key-value pairs inside block format
+    // Key-value bullets inside block format. The key's `*`/`_` emphasis is
+    // stripped whether the colon sits outside (`**Due**:`) or inside (`**Due:**`).
     if (currentBlockItem && line.startsWith("-")) {
-      const kvMatch = line.match(/^-\s*[*_]*([A-Za-z\s]+)[*_]*\s*:\s*(.+)$/);
+      const kvMatch = line.match(/^-\s*([^:]+):(.*)$/);
       if (kvMatch) {
-        const key = kvMatch[1].trim().toLowerCase();
-        const val = kvMatch[2].trim();
-        if (key === "due" || key === "due date" || key === "when") {
-          currentBlockData.dueDate = val;
-        } else if (key === "amount") {
-          currentBlockData.amount = isAbsentValue(val) ? undefined : val;
-        } else if (key === "where" || key === "where paid") {
-          currentBlockData.wherePaid = isAbsentValue(val) ? undefined : val;
-        } else if (key === "warn" || key === "warn days") {
-          if (/^\d+$/.test(val)) {
-            currentBlockData.warnDays = parseInt(val, 10);
-          } else {
-            malformed.push({ item: currentBlockItem, reason: `invalid warn days: '${val}'` });
-          }
-        } else if (key === "last paid" || key === "last paid date" || key === "paid") {
-          currentBlockData.lastPaidDate = isAbsentValue(val) ? undefined : val;
-        } else if (key === "confirmation" || key === "conf") {
-          currentBlockData.confirmation = isAbsentValue(val) ? undefined : val;
-        } else if (key === "paid through" || key === "paid cycle" || key === "paid for") {
-          currentBlockData.paidThrough = isAbsentValue(val) ? undefined : val;
+        const key = kvMatch[1].replace(/[*_]/g, "").trim().toLowerCase();
+        // Own keys only: a label such as "Constructor" must not resolve to an
+        // Object.prototype property.
+        const field = Object.hasOwn(BLOCK_KEYS, key) ? BLOCK_KEYS[key] : undefined;
+        if (field) {
+          currentBlockData[field] = kvMatch[2].replace(/^[*_]+/, "").trim();
         }
       }
     }
