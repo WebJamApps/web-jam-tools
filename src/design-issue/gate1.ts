@@ -356,7 +356,10 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
 
   const htmlPath = resolveHtmlPath(absDocPath);
   const fallbackTitle = path.basename(absDocPath, path.extname(absDocPath));
-  const renderedHtml = renderDesignDoc(markdownContent, fallbackTitle, { otherDesignSweep });
+  const renderedHtml = renderDesignDoc(markdownContent, fallbackTitle, {
+    otherDesignSweep,
+    docDir: path.dirname(absDocPath),
+  });
 
   if (!renderedHtml || renderedHtml.trim() === "") {
     throw new Error(`Rendered HTML for ${absDocPath} is empty`);

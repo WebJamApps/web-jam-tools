@@ -6,7 +6,7 @@
 // 3. Section navigation collapse and restore controls (AC5)
 // 4. Revision table retained without a version/date subtitle
 
-import { assert, assertEquals, assertFalse, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertFalse, assertMatch, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
 import {
   computeTablePagination,
@@ -249,9 +249,12 @@ function makeRowsTable(rowCount: number): string {
   return `# Pagination Test\n\n## Big Table\n\n${header}${rows}\n`;
 }
 
-function renderedRows(markdown: string): string[][][] {
+function renderedRows(
+  markdown: string,
+  options?: Parameters<typeof renderDesignDoc>[2],
+): string[][][] {
   return Array.from(
-    renderDesignDoc(markdown).matchAll(/<tbody>([\s\S]*?)<\/tbody>/g),
+    renderDesignDoc(markdown, undefined, options).matchAll(/<tbody>([\s\S]*?)<\/tbody>/g),
     (body) =>
       Array.from(
         body[1].matchAll(/<tr>([\s\S]*?)<\/tr>/g),
@@ -288,11 +291,10 @@ for (
     "## Both surfaces",
   ]
 ) {
-  Deno.test(`History ordering: ${heading} keeps file order`, () => {
-    assertEquals(
-      renderedRows(`${heading}\n\n| Entry |\n|---|\n| First |\n| Second |`),
-      [[["First"], ["Second"]]],
-    );
+  Deno.test(`Table ordering: ${heading} shows bottom row first on design pages and file order on plan pages`, () => {
+    const md = `${heading}\n\n| Entry |\n|---|\n| First |\n| Second |`;
+    assertEquals(renderedRows(md), [[["Second"], ["First"]]]);
+    assertEquals(renderedRows(md, { isPlanPage: true }), [[["First"], ["Second"]]]);
   });
 }
 
@@ -335,14 +337,13 @@ Deno.test("Premises with equal Proved dates show bottom row first and empty date
   );
 });
 
-Deno.test("History ordering ends at the next heading and ignores headings in fenced examples", () => {
-  assertEquals(
-    renderedRows(`## Decisions
+Deno.test("Premises sorting ends at the next heading and ignores headings in fenced examples", () => {
+  const md = `## Load-bearing premises
 
-| Entry |
-|---|
-| Old |
-| New |
+| Premise | Proved |
+|---|---|
+| Old | 2026-10-01 |
+| New | 2026-10-10 |
 
 ### Other table
 
@@ -352,20 +353,37 @@ Deno.test("History ordering ends at the next heading and ignores headings in fen
 | Second |
 
 \`\`\`md
-## Revision History
+## Load-bearing premises
 \`\`\`
 
-| Entry |
-|---|
-| One |
-| Two |`),
-    [[["New"], ["Old"]], [["First"], ["Second"]], [["One"], ["Two"]]],
+| Premise | Proved |
+|---|---|
+| First | 2026-10-01 |
+| Second | 2026-10-10 |`;
+  // Every design-doc table reverses when it is not a Load-bearing premises table with Proved;
+  // under `### Other table`, the 2-column Proved table at the end is NOT under Load-bearing
+  // premises (the fenced heading is ignored), so only bottom-row-first reversal applies (here
+  // also yielding Second then First), while plan pages keep file order everywhere.
+  assertEquals(
+    renderedRows(md),
+    [
+      [["New", "2026-10-10"], ["Old", "2026-10-01"]],
+      [["Second"], ["First"]],
+      [["Second", "2026-10-10"], ["First", "2026-10-01"]],
+    ],
+  );
+  assertEquals(
+    renderedRows(md, { isPlanPage: true }),
+    [
+      [["Old", "2026-10-01"], ["New", "2026-10-10"]],
+      [["First"], ["Second"]],
+      [["First", "2026-10-01"], ["Second", "2026-10-10"]],
+    ],
   );
 });
 
-Deno.test("Premises tables without Proved keep file order; formatted dates sort normally", () => {
-  assertEquals(
-    renderedRows(`## Load-bearing premises
+Deno.test("Premises tables without Proved show bottom row first on design pages; formatted dates sort normally", () => {
+  const md = `## Load-bearing premises
 
 | Entry |
 |---|
@@ -378,10 +396,23 @@ Deno.test("Premises tables without Proved keep file order; formatted dates sort 
 |---|---|
 | Old | \`2026-10-01\` |
 | Empty | |
-| New | **2026-10-12** |`),
+| New | **2026-10-12** |`;
+  assertEquals(
+    renderedRows(md),
+    [
+      [["Second"], ["First"]],
+      [["New", "<strong>2026-10-12</strong>"], ["Old", "<code>2026-10-01</code>"], ["Empty", ""]],
+    ],
+  );
+  assertEquals(
+    renderedRows(md, { isPlanPage: true }),
     [
       [["First"], ["Second"]],
-      [["New", "<strong>2026-10-12</strong>"], ["Old", "<code>2026-10-01</code>"], ["Empty", ""]],
+      [
+        ["Old", "<code>2026-10-01</code>"],
+        ["Empty", ""],
+        ["New", "<strong>2026-10-12</strong>"],
+      ],
     ],
   );
 });
@@ -1055,6 +1086,11 @@ Deno.test("Plan page: only the Gate 2 table starts on all, and the revision hist
   const regularHtml = renderDesignDoc(md);
   assertEquals(regularHtml.includes('class="plan-table-total"'), false);
   assertEquals(regularHtml.includes('data-default-size="all"'), false);
+  assertEquals(
+    regularHtml.indexOf("Second revision") < regularHtml.indexOf("First revision"),
+    true,
+  );
+  assertEquals(regularHtml.indexOf("Item 12") < regularHtml.indexOf("Item 1</td>"), true);
 });
 
 Deno.test("Gate 1 page renders otherDesignSweep table with revised, noted, and unreadable-noted entries", () => {
@@ -1215,4 +1251,171 @@ Appendix subsection.
   );
   assertStringIncludes(html, "openDetailsForHash");
   assertStringIncludes(html, 'window.addEventListener("hashchange", openDetailsForHash)');
+});
+
+Deno.test("Revision table is placed first directly under the title on design pages even when written lower down", () => {
+  const md = `# My Design Doc
+
+Intro paragraph that sat above sections.
+
+## Overview
+
+\`\`\`md
+## Revision History
+\`\`\`
+
+Overview body.
+
+## Revision History
+
+| Version | Date | Summary |
+|---|---|---|
+| 1.0.0 | 2026-10-01 | Initial |
+| 1.1.0 | 2026-10-20 | Latest |
+
+## Appendix A
+
+Appendix body.
+`;
+  const html = renderDesignDoc(md);
+  const mainContent = html.split("<main>")[1]?.split("</main>")[0] ?? "";
+  const h1Pos = mainContent.indexOf("<h1>My Design Doc</h1>");
+  const revPos = mainContent.indexOf('<h2 id="revision-history">Revision History</h2>');
+  const overviewPos = mainContent.indexOf('<h2 id="overview">Overview</h2>');
+  const appendixPos = mainContent.indexOf('<h2 id="appendix-a">Appendix A</h2>');
+
+  assert(h1Pos >= 0 && revPos > h1Pos, "Revision History follows H1");
+  assert(revPos < overviewPos && overviewPos < appendixPos, "Revision History precedes Overview");
+  // The text directly between <h1>...</h1> and <h2 id="revision-history"> has no other section.
+  assertFalse(mainContent.slice(h1Pos, revPos).includes("<h2"));
+
+  // TOC lists Revision History first, matching body order.
+  const tocSection = html.split('<nav class="toc">')[1]?.split("</nav>")[0] ?? "";
+  assert(
+    tocSection.indexOf('href="#revision-history"') < tocSection.indexOf('href="#overview"'),
+  );
+
+  // Latest revision row is shown first.
+  assert(mainContent.indexOf("1.1.0") < mainContent.indexOf("1.0.0"));
+
+  // Fenced example remained in Overview's code block rather than being hoisted.
+  assertStringIncludes(
+    mainContent.slice(overviewPos, appendixPos),
+    '<pre><code class="language-md">## Revision History</code></pre>',
+  );
+
+  // Also works with fallbackTitle when markdown has no H1.
+  const noH1Html = renderDesignDoc(
+    `## Overview
+
+Text.
+
+## Revision History
+
+| Version | Date |
+|---|---|
+| 1.0.0 | 2026-10-01 |
+`,
+    "Fallback Doc Title",
+  );
+  const noH1Main = noH1Html.split("<main>")[1]?.split("</main>")[0] ?? "";
+  assert(
+    noH1Main.indexOf("<h1>Fallback Doc Title</h1>") <
+      noH1Main.indexOf('<h2 id="revision-history">Revision History</h2>'),
+  );
+  assert(
+    noH1Main.indexOf('<h2 id="revision-history">Revision History</h2>') <
+      noH1Main.indexOf('<h2 id="overview">Overview</h2>'),
+  );
+});
+
+Deno.test("Images on the rendered page: renders local images beside doc and leaves remote, outside, non-image, and raw HTML as text", () => {
+  const rootDir = Deno.makeTempDirSync({ prefix: "render-doc-images-" });
+  const docDir = path.join(rootDir, "design");
+  const subImgDir = path.join(docDir, "img");
+  const otherDir = path.join(rootDir, "other");
+  const outDir = path.join(rootDir, "output");
+  Deno.mkdirSync(subImgDir, { recursive: true });
+  Deno.mkdirSync(otherDir, { recursive: true });
+  Deno.mkdirSync(outDir, { recursive: true });
+
+  try {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const jpgBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
+    const webpBytes = new Uint8Array([0x52, 0x49, 0x46, 0x46]);
+    const svgContent = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"></svg>';
+    Deno.writeFileSync(path.join(docDir, "gigs-gig-page-phone.png"), pngBytes);
+    Deno.writeTextFileSync(path.join(subImgDir, "diagram.svg"), svgContent);
+    Deno.writeFileSync(path.join(docDir, "photo.jpg"), jpgBytes);
+    Deno.writeFileSync(path.join(docDir, "pic.webp"), webpBytes);
+    Deno.writeFileSync(path.join(otherDir, "a.png"), pngBytes);
+    Deno.writeTextFileSync(path.join(docDir, "a.js"), "console.log(1);");
+    Deno.symlinkSync(path.join(otherDir, "a.png"), path.join(docDir, "escaped-link.png"));
+
+    const md = `# Images Test
+
+## Mockups
+
+![phone](gigs-gig-page-phone.png)
+
+![diagram](img/diagram.svg)
+
+![photo](photo.jpg)
+
+![pic](pic.webp)
+
+![remote](https://example.com/a.png)
+
+![outside](../other/a.png)
+
+![symlink](escaped-link.png)
+
+![script](a.js)
+
+<img src="gigs-gig-page-phone.png" onerror="alert(1)">
+
+![a "quoted" alt](gigs-gig-page-phone.png)
+`;
+    const mdPath = path.join(docDir, "doc.md");
+    const htmlPath = path.join(outDir, "doc.html");
+    Deno.writeTextFileSync(mdPath, md);
+    renderDesignDocFile(mdPath, htmlPath);
+    const html = Deno.readTextFileSync(htmlPath);
+    const main = html.split("<main>")[1]?.split("</main>")[0] ?? "";
+
+    // Sized to the page via stylesheet
+    assertStringIncludes(html, "img, svg {\n      max-width: 100%;\n    }");
+    assertStringIncludes(html, "img {\n      height: auto;\n    }");
+
+    // Valid local images render as <img> with embedded data URIs from files beside the doc
+    assertMatch(main, /<img src="data:image\/png;base64,[^"]+" alt="phone">/);
+    assertMatch(main, /<img src="data:image\/svg\+xml;base64,[^"]+" alt="diagram">/);
+    assertMatch(main, /<img src="data:image\/jpeg;base64,[^"]+" alt="photo">/);
+    assertMatch(main, /<img src="data:image\/webp;base64,[^"]+" alt="pic">/);
+
+    // Quoted alt attribute is HTML-escaped
+    assertMatch(
+      main,
+      /<img src="data:image\/png;base64,[^"]+" alt="a &quot;quoted&quot; alt">/,
+    );
+
+    // Remote, outside-folder, escaping symlink, and non-image paths render as literal text (no <img> or <a>)
+    assertStringIncludes(main, "![remote](https://example.com/a.png)");
+    assertStringIncludes(main, "![outside](../other/a.png)");
+    assertStringIncludes(main, "![symlink](escaped-link.png)");
+    assertStringIncludes(main, "![script](a.js)");
+    assertFalse(main.includes('https://example.com/a.png">'));
+    assertFalse(main.includes('<a href="https://example.com/a.png"'));
+    assertFalse(main.includes('<a href="../other/a.png"'));
+    assertFalse(main.includes('<a href="a.js"'));
+
+    // Raw <img> HTML stays escaped
+    assertStringIncludes(
+      main,
+      "&lt;img src=&quot;gigs-gig-page-phone.png&quot; onerror=&quot;alert(1)&quot;&gt;",
+    );
+    assertFalse(main.includes('onerror="alert(1)"'));
+  } finally {
+    Deno.removeSync(rootDir, { recursive: true });
+  }
 });

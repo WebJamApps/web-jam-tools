@@ -10,6 +10,8 @@ export interface RenderDesignDocOptions {
   isPlanPage?: boolean;
   /** Render the Gate 1 cross-design sweep summary table when present. */
   otherDesignSweep?: OtherDesignSweepResult;
+  /** Directory containing the Markdown document, used to resolve local image files safely. */
+  docDir?: string;
 }
 
 /**
@@ -69,10 +71,94 @@ function hasClosingSvg(lines: string[], startIndex: number): boolean {
   return false;
 }
 
+const ALLOWED_IMAGE_MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+};
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
 /**
- * Parses inline Markdown elements (code spans, links, bold, italic).
+ * Renders Markdown image syntax (`![alt](target)`) as an `<img>` for `.png`, `.jpg`, `.webp`, or
+ * `.svg` files within `docDir` (or a safe relative path under the document's folder). Remote URLs,
+ * paths escaping the document folder, and non-image extensions are never loaded and stay escaped
+ * plain text.
  */
-export function parseInlineMarkdown(text: string): string {
+function renderMarkdownImage(
+  fullMatch: string,
+  alt: string,
+  rawTarget: string,
+  docDir?: string,
+): string {
+  const target = rawTarget.trim();
+  if (
+    !target ||
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(target) ||
+    target.startsWith("/") ||
+    target.includes("\\")
+  ) {
+    return escapeHtml(fullMatch);
+  }
+
+  const ext = path.extname(target).toLowerCase();
+  const mimeType = ALLOWED_IMAGE_MIME_TYPES[ext];
+  if (!mimeType) {
+    return escapeHtml(fullMatch);
+  }
+
+  const virtualBase = "/doc-root";
+  const virtualResolved = path.resolve(virtualBase, target);
+  const virtualRel = path.relative(virtualBase, virtualResolved);
+  if (
+    !virtualRel ||
+    virtualRel === "." ||
+    virtualRel.startsWith("..") ||
+    path.isAbsolute(virtualRel)
+  ) {
+    return escapeHtml(fullMatch);
+  }
+
+  let srcAttr = escapeHtml(virtualRel);
+  if (docDir) {
+    const resolvedDocDir = path.resolve(docDir);
+    const resolvedFile = path.resolve(resolvedDocDir, target);
+    const rel = path.relative(resolvedDocDir, resolvedFile);
+    if (!rel || rel === "." || rel.startsWith("..") || path.isAbsolute(rel)) {
+      return escapeHtml(fullMatch);
+    }
+    try {
+      const realDocDir = Deno.realPathSync(resolvedDocDir);
+      const realFile = Deno.realPathSync(resolvedFile);
+      const realRel = path.relative(realDocDir, realFile);
+      if (!realRel || realRel === "." || realRel.startsWith("..") || path.isAbsolute(realRel)) {
+        return escapeHtml(fullMatch);
+      }
+      const stat = Deno.statSync(realFile);
+      if (stat.isFile) {
+        const bytes = Deno.readFileSync(realFile);
+        srcAttr = `data:${mimeType};base64,${toBase64(bytes)}`;
+      }
+    } catch {
+      // Missing/unreadable file keeps the validated relative path (`design:lint-doc` checks existence).
+    }
+  }
+
+  return `<img src="${srcAttr}" alt="${escapeHtml(alt)}">`;
+}
+
+/**
+ * Parses inline Markdown elements (code spans, images, links, bold, italic).
+ */
+export function parseInlineMarkdown(text: string, docDir?: string): string {
   const codeSpans: string[] = [];
   let placeholderText = text.replace(/`([^`]+)`/g, (_match, codeContent) => {
     const idx = codeSpans.length;
@@ -103,6 +189,18 @@ export function parseInlineMarkdown(text: string): string {
       const idx = brTags.length;
       brTags.push("<br>");
       return `%%BRTAG${idx}%%`;
+    },
+  );
+
+  // Images: ![alt](target). Run before escapeHtml and links so alt quotes are escaped cleanly and
+  // rejected images remain plain text instead of becoming `[alt](url)` hyperlinks.
+  const imgBlocks: string[] = [];
+  placeholderText = placeholderText.replace(
+    /!\[([^\]]*)\]\(([^)\r\n]+)\)/g,
+    (fullMatch, alt, target) => {
+      const idx = imgBlocks.length;
+      imgBlocks.push(renderMarkdownImage(fullMatch, alt, target, docDir));
+      return `%%IMGBLOCK${idx}%%`;
     },
   );
 
@@ -162,6 +260,14 @@ export function parseInlineMarkdown(text: string): string {
     },
   );
 
+  // Restore images
+  placeholderText = placeholderText.replace(
+    /%%IMGBLOCK(\d+)%%/g,
+    (_match, idxStr) => {
+      return imgBlocks[parseInt(idxStr, 10)];
+    },
+  );
+
   // Restore <br> tags
   placeholderText = placeholderText.replace(
     /%%BRTAG(\d+)%%/g,
@@ -208,7 +314,10 @@ function isPlanTableHeader(headers: string[]): boolean {
   );
 }
 
-/** Orders only the history tables, leaving all other tables (and all plan-page tables) in file order. */
+/**
+ * Orders every table on a design-document page newest first (Premises by `Proved` date with ties
+ * broken bottom-row-first; every other table reversed). Gate 2 plan pages keep file order.
+ */
 function orderTableRows(
   heading: string,
   headers: string[],
@@ -218,22 +327,100 @@ function orderTableRows(
   if (options?.isPlanPage) return rows;
   const plainText = (text: string) => text.replace(/[*_`]/g, "").trim();
   const title = plainText(heading);
-  if (
-    /^revision history$/i.test(title) ||
-    /\b(?:decisions? record|decision log)\b|^decisions$/i.test(title)
-  ) {
-    return rows.toReversed();
+  if (/^load-bearing premises$/i.test(title)) {
+    const provedColumn = headers.findIndex((header) => /^proved$/i.test(plainText(header)));
+    if (provedColumn >= 0) {
+      const provedDate = (row: string[]) => {
+        const value = plainText(row[provedColumn] ?? "");
+        return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+      };
+      // Stable sorting after reversing gives bottom-row-first order for equal dates.
+      return rows.toReversed().sort((a, b) => provedDate(b).localeCompare(provedDate(a)));
+    }
   }
-  if (!/^load-bearing premises$/i.test(title)) return rows;
+  return rows.toReversed();
+}
 
-  const provedColumn = headers.findIndex((header) => /^proved$/i.test(plainText(header)));
-  if (provedColumn < 0) return rows;
-  const provedDate = (row: string[]) => {
-    const value = plainText(row[provedColumn] ?? "");
-    return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
-  };
-  // Stable sorting after reversing gives bottom-row-first order for equal dates.
-  return rows.toReversed().sort((a, b) => provedDate(b).localeCompare(provedDate(a)));
+/**
+ * Places the `## Revision History` section directly under the document title (`# ...`) and before
+ * every other section, regardless of where it sits in the Markdown file. Ignores headings inside
+ * fenced code blocks.
+ */
+function hoistRevisionHistorySection(lines: string[]): string[] {
+  let inFence = false;
+  let revStart = -1;
+  let revEnd = lines.length;
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (trimmed.startsWith("```")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+
+    if (revStart === -1) {
+      if (trimmed.startsWith("## ")) {
+        const heading = trimmed.substring(3).replace(/[*_`]/g, "").trim();
+        if (/^revision history$/i.test(heading)) {
+          revStart = i;
+        }
+      }
+    } else if (/^#{1,2}\s+/.test(trimmed)) {
+      revEnd = i;
+      break;
+    }
+  }
+
+  if (revStart === -1) return lines;
+
+  const revSection = lines.slice(revStart, revEnd);
+  while (revSection.length > 0 && revSection[revSection.length - 1].trim() === "") {
+    revSection.pop();
+  }
+
+  const before = lines.slice(0, revStart);
+  const after = lines.slice(revEnd);
+  while (after.length > 0 && after[0].trim() === "") {
+    after.shift();
+  }
+  const remaining = before.length > 0 && after.length > 0
+    ? [
+      ...before,
+      ...(before[before.length - 1].trim() === "" ? [] : [""]),
+      ...after,
+    ]
+    : [...before, ...after];
+
+  // Find first H1 heading outside fenced code blocks in remaining lines.
+  inFence = false;
+  let h1Idx = -1;
+  for (let i = 0; i < remaining.length; i++) {
+    const trimmed = remaining[i].trim();
+    if (trimmed.startsWith("```")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (trimmed.startsWith("# ")) {
+      h1Idx = i;
+      break;
+    }
+  }
+
+  if (h1Idx === -1) {
+    while (remaining.length > 0 && remaining[0].trim() === "") {
+      remaining.shift();
+    }
+    return remaining.length > 0 ? [...revSection, "", ...remaining] : revSection;
+  }
+
+  const head = remaining.slice(0, h1Idx + 1);
+  const tail = remaining.slice(h1Idx + 1);
+  while (tail.length > 0 && tail[0].trim() === "") {
+    tail.shift();
+  }
+  return tail.length > 0 ? [...head, "", ...revSection, "", ...tail] : [...head, "", ...revSection];
 }
 
 function renderOtherDesignSweepSection(sweep: OtherDesignSweepResult, slug?: string): string {
@@ -272,8 +459,7 @@ function renderOtherDesignSweepSection(sweep: OtherDesignSweepResult, slug?: str
         `</tr>`
       );
     }).join("\n");
-    contentHtml =
-      `<div class="table-wrapper">\n` +
+    contentHtml = `<div class="table-wrapper">\n` +
       `<table>\n` +
       `<thead>\n` +
       `<tr>\n` +
@@ -303,7 +489,9 @@ export function renderDesignDoc(
   fallbackTitle: string = "Design Document",
   options?: RenderDesignDocOptions,
 ): string {
-  const lines = markdownContent.split(/\r?\n/);
+  const rawLines = markdownContent.split(/\r?\n/);
+  const lines = options?.isPlanPage ? rawLines : hoistRevisionHistorySection(rawLines);
+  const docDir = options?.docDir;
 
   let documentTitle = fallbackTitle;
   let hasDocumentTitle = false;
@@ -380,7 +568,7 @@ export function renderDesignDoc(
             documentTitle = text;
             hasDocumentTitle = true;
           }
-          bodyHtmlParts.push(`<h1>${parseInlineMarkdown(text)}</h1>`);
+          bodyHtmlParts.push(`<h1>${parseInlineMarkdown(text, docDir)}</h1>`);
         } else if (level === 2) {
           if (inAppendixDetails) {
             bodyHtmlParts.push(`</div>\n</details>`);
@@ -395,7 +583,7 @@ export function renderDesignDoc(
 
           inAppendix = /\bappendix\b/i.test(text);
           bodyHtmlParts.push(
-            `<h2 id="${slug}">${parseInlineMarkdown(text)}</h2>`,
+            `<h2 id="${slug}">${parseInlineMarkdown(text, docDir)}</h2>`,
           );
         } else if (level === 3) {
           const slug = allocateSlug(text);
@@ -405,19 +593,19 @@ export function renderDesignDoc(
             }
             bodyHtmlParts.push(
               `<details id="${slug}">\n  <summary>${
-                parseInlineMarkdown(text)
+                parseInlineMarkdown(text, docDir)
               }</summary>\n  <div class="appendix-content">`,
             );
             inAppendixDetails = true;
           } else {
-            bodyHtmlParts.push(`<h3 id="${slug}">${parseInlineMarkdown(text)}</h3>`);
+            bodyHtmlParts.push(`<h3 id="${slug}">${parseInlineMarkdown(text, docDir)}</h3>`);
           }
         } else if (level === 4) {
           const slug = allocateSlug(text);
           bodyHtmlParts.push(`<h4 id="${slug}">${parseInlineMarkdown(text)}</h4>`);
         } else {
           const hTag = `h${level}`;
-          bodyHtmlParts.push(`<${hTag}>${parseInlineMarkdown(text)}</${hTag}>`);
+          bodyHtmlParts.push(`<${hTag}>${parseInlineMarkdown(text, docDir)}</${hTag}>`);
         }
         i++;
         continue;
@@ -462,13 +650,13 @@ export function renderDesignDoc(
           : "";
         tableHtml += `<div${wrapperAttrs}>\n<table>\n<thead>\n<tr>\n`;
         for (const cell of headerCells) {
-          tableHtml += `  <th>${parseInlineMarkdown(cell)}</th>\n`;
+          tableHtml += `  <th>${parseInlineMarkdown(cell, docDir)}</th>\n`;
         }
         tableHtml += `</tr>\n</thead>\n<tbody>\n`;
         for (const row of bodyRows) {
           tableHtml += `<tr>\n`;
           for (const cell of row) {
-            tableHtml += `  <td>${parseInlineMarkdown(cell)}</td>\n`;
+            tableHtml += `  <td>${parseInlineMarkdown(cell, docDir)}</td>\n`;
           }
           tableHtml += `</tr>\n`;
         }
@@ -488,7 +676,7 @@ export function renderDesignDoc(
         i++;
       }
       const quoteContent = quoteLines
-        .map((l) => parseInlineMarkdown(l))
+        .map((l) => parseInlineMarkdown(l, docDir))
         .join("<br>\n");
       bodyHtmlParts.push(`<blockquote>${quoteContent}</blockquote>`);
       continue;
@@ -513,7 +701,7 @@ export function renderDesignDoc(
       }
       let listHtml = `<${tag}>\n`;
       for (const item of listItems) {
-        listHtml += `  <li>${parseInlineMarkdown(item)}</li>\n`;
+        listHtml += `  <li>${parseInlineMarkdown(item, docDir)}</li>\n`;
       }
       listHtml += `</${tag}>`;
       bodyHtmlParts.push(listHtml);
@@ -539,7 +727,7 @@ export function renderDesignDoc(
     }
     if (paragraphLines.length > 0) {
       const paraText = paragraphLines.join("\n");
-      bodyHtmlParts.push(`<p>${parseInlineMarkdown(paraText)}</p>`);
+      bodyHtmlParts.push(`<p>${parseInlineMarkdown(paraText, docDir)}</p>`);
     }
   }
 
@@ -684,6 +872,10 @@ export function renderDesignDoc(
 
     img, svg {
       max-width: 100%;
+    }
+
+    img {
+      height: auto;
     }
 
     th {
@@ -1168,7 +1360,11 @@ export function renderDesignDocFile(
 ): void {
   const content = Deno.readTextFileSync(inputPath);
   const fallbackTitle = path.basename(inputPath, path.extname(inputPath));
-  const html = renderDesignDoc(content, fallbackTitle, options);
+  const resolvedOptions: RenderDesignDocOptions = {
+    ...options,
+    docDir: options?.docDir ?? path.dirname(path.resolve(inputPath)),
+  };
+  const html = renderDesignDoc(content, fallbackTitle, resolvedOptions);
   Deno.writeTextFileSync(outputPath, html);
 }
 
