@@ -88,9 +88,10 @@ function toBase64(bytes: Uint8Array): string {
 }
 
 /**
- * Renders Markdown image syntax (`![alt](target)`) as an `<img>` for `.png`, `.jpg`, `.webp`, or
- * `.svg` files within `docDir` (or a safe relative path under the document's folder). Remote URLs,
- * paths escaping the document folder, and non-image extensions are never loaded and stay escaped
+ * Renders Markdown image syntax (`![alt](target)`) as an embedded `data:` URI `<img>` only when the
+ * target `.png`, `.jpg`, `.webp`, or `.svg` file exists inside `docDir` and is readable as a
+ * regular file. Remote URLs, paths escaping the document folder (literal or percent-encoded),
+ * missing files, omitted `docDir`, and non-image extensions are never loaded and stay escaped
  * plain text.
  */
 function renderMarkdownImage(
@@ -101,6 +102,7 @@ function renderMarkdownImage(
 ): string {
   const target = rawTarget.trim();
   if (
+    !docDir ||
     !target ||
     /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(target) ||
     target.startsWith("/") ||
@@ -115,44 +117,31 @@ function renderMarkdownImage(
     return escapeHtml(fullMatch);
   }
 
-  const virtualBase = "/doc-root";
-  const virtualResolved = path.resolve(virtualBase, target);
-  const virtualRel = path.relative(virtualBase, virtualResolved);
-  if (
-    !virtualRel ||
-    virtualRel === "." ||
-    virtualRel.startsWith("..") ||
-    path.isAbsolute(virtualRel)
-  ) {
+  const resolvedDocDir = path.resolve(docDir);
+  const resolvedFile = path.resolve(resolvedDocDir, target);
+  const rel = path.relative(resolvedDocDir, resolvedFile);
+  if (!rel || rel === "." || rel.startsWith("..") || path.isAbsolute(rel)) {
     return escapeHtml(fullMatch);
   }
 
-  let srcAttr = escapeHtml(virtualRel);
-  if (docDir) {
-    const resolvedDocDir = path.resolve(docDir);
-    const resolvedFile = path.resolve(resolvedDocDir, target);
-    const rel = path.relative(resolvedDocDir, resolvedFile);
-    if (!rel || rel === "." || rel.startsWith("..") || path.isAbsolute(rel)) {
+  try {
+    const realDocDir = Deno.realPathSync(resolvedDocDir);
+    const realFile = Deno.realPathSync(resolvedFile);
+    const realRel = path.relative(realDocDir, realFile);
+    if (!realRel || realRel === "." || realRel.startsWith("..") || path.isAbsolute(realRel)) {
       return escapeHtml(fullMatch);
     }
-    try {
-      const realDocDir = Deno.realPathSync(resolvedDocDir);
-      const realFile = Deno.realPathSync(resolvedFile);
-      const realRel = path.relative(realDocDir, realFile);
-      if (!realRel || realRel === "." || realRel.startsWith("..") || path.isAbsolute(realRel)) {
-        return escapeHtml(fullMatch);
-      }
-      const stat = Deno.statSync(realFile);
-      if (stat.isFile) {
-        const bytes = Deno.readFileSync(realFile);
-        srcAttr = `data:${mimeType};base64,${toBase64(bytes)}`;
-      }
-    } catch {
-      // Missing/unreadable file keeps the validated relative path (`design:lint-doc` checks existence).
+    const stat = Deno.statSync(realFile);
+    if (stat.isFile) {
+      const bytes = Deno.readFileSync(realFile);
+      const srcAttr = `data:${mimeType};base64,${toBase64(bytes)}`;
+      return `<img src="${srcAttr}" alt="${escapeHtml(alt)}">`;
     }
+  } catch {
+    // Missing or unreadable files are never emitted as relative <img> tags; keep escaped plain text.
   }
 
-  return `<img src="${srcAttr}" alt="${escapeHtml(alt)}">`;
+  return escapeHtml(fullMatch);
 }
 
 /**
@@ -602,7 +591,7 @@ export function renderDesignDoc(
           }
         } else if (level === 4) {
           const slug = allocateSlug(text);
-          bodyHtmlParts.push(`<h4 id="${slug}">${parseInlineMarkdown(text)}</h4>`);
+          bodyHtmlParts.push(`<h4 id="${slug}">${parseInlineMarkdown(text, docDir)}</h4>`);
         } else {
           const hTag = `h${level}`;
           bodyHtmlParts.push(`<${hTag}>${parseInlineMarkdown(text, docDir)}</${hTag}>`);

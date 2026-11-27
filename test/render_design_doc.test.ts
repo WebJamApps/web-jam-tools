@@ -1364,9 +1364,15 @@ Deno.test("Images on the rendered page: renders local images beside doc and leav
 
 ![pic](pic.webp)
 
+#### Heading image ![head-phone](gigs-gig-page-phone.png)
+
 ![remote](https://example.com/a.png)
 
 ![outside](../other/a.png)
+
+![encoded](%2e%2e/other/a.png)
+
+![missing](nope.png)
 
 ![symlink](escaped-link.png)
 
@@ -1392,6 +1398,10 @@ Deno.test("Images on the rendered page: renders local images beside doc and leav
     assertMatch(main, /<img src="data:image\/svg\+xml;base64,[^"]+" alt="diagram">/);
     assertMatch(main, /<img src="data:image\/jpeg;base64,[^"]+" alt="photo">/);
     assertMatch(main, /<img src="data:image\/webp;base64,[^"]+" alt="pic">/);
+    assertMatch(
+      main,
+      /<h4 id="heading-image-head-phonegigs-gig-page-phonepng">Heading image <img src="data:image\/png;base64,[^"]+" alt="head-phone"><\/h4>/,
+    );
 
     // Quoted alt attribute is HTML-escaped
     assertMatch(
@@ -1399,15 +1409,28 @@ Deno.test("Images on the rendered page: renders local images beside doc and leav
       /<img src="data:image\/png;base64,[^"]+" alt="a &quot;quoted&quot; alt">/,
     );
 
-    // Remote, outside-folder, escaping symlink, and non-image paths render as literal text (no <img> or <a>)
+    // Remote, outside-folder (literal and percent-encoded), missing, escaping symlink, and non-image
+    // paths render as literal text (no <img> or <a>)
     assertStringIncludes(main, "![remote](https://example.com/a.png)");
     assertStringIncludes(main, "![outside](../other/a.png)");
+    assertStringIncludes(main, "![encoded](%2e%2e/other/a.png)");
+    assertStringIncludes(main, "![missing](nope.png)");
     assertStringIncludes(main, "![symlink](escaped-link.png)");
     assertStringIncludes(main, "![script](a.js)");
+    assertFalse(main.includes('src="%2e%2e/other/a.png"'));
+    assertFalse(main.includes('src="nope.png"'));
     assertFalse(main.includes('https://example.com/a.png">'));
     assertFalse(main.includes('<a href="https://example.com/a.png"'));
     assertFalse(main.includes('<a href="../other/a.png"'));
+    assertFalse(main.includes('<a href="%2e%2e/other/a.png"'));
+    assertFalse(main.includes('<a href="nope.png"'));
     assertFalse(main.includes('<a href="a.js"'));
+
+    // Without docDir, even a relative image filename is never emitted as a live <img>
+    assertEquals(
+      parseInlineMarkdown("![phone](gigs-gig-page-phone.png)"),
+      "![phone](gigs-gig-page-phone.png)",
+    );
 
     // Raw <img> HTML stays escaped
     assertStringIncludes(
