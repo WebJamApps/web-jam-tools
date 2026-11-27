@@ -668,6 +668,32 @@ Deno.test("create refuses and creates nothing when Found N event(s) count disagr
   }
 });
 
+Deno.test("create refuses and creates nothing when the 28-day window returns the 250-event maximum", async () => {
+  const startMs = FIXED_NOW.getTime() + 86_400_000;
+  const crowded: StoredEvent[] = Array.from({ length: 250 }, (_, i) => {
+    const s = new Date(startMs + i * 2 * 3_600_000);
+    const e = new Date(s.getTime() + 15 * 60_000);
+    return {
+      id: `evt-busy-${i}`,
+      summary: `Busy ${i}`,
+      start: { dateTime: s.toISOString(), timeZone: "America/New_York" },
+      end: { dateTime: e.toISOString(), timeZone: "America/New_York" },
+    };
+  });
+  const fx = await createFixture({ initialEvents: crowded });
+  try {
+    const code = await runIssueReminder(
+      ["create", "--repo", "WebJamApps/web-jam-tools", "--issue", "10", "--days", "TU,FR"],
+      fx.deps,
+    );
+    assertEquals(code, 1);
+    assertMatch(fx.err.join("\n"), /returned 250 events.*may be incomplete/);
+    assertEquals((await fx.readState()).createCalls.length, 0);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 Deno.test("create succeeds when an all-day event sits on a Tuesday within 28 days", async () => {
   const allDay: StoredEvent = {
     id: "evt-all-day",

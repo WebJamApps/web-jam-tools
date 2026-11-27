@@ -18,6 +18,8 @@ export const EVENT_DURATION_MINUTES = 15;
 export const OVERLAP_WINDOW_DAYS = 28;
 export const LIST_EXPANSION_DAYS = 14;
 export const LIST_DISCOVERY_QUERY = "github.com/WebJamApps";
+/** The Google server's `getCalendarEvents` cap; a reply this long may be cut short. */
+export const CALENDAR_MAX_RESULTS = 250;
 const MCP_CALL_TIMEOUT_MS = 30_000;
 const CANONICAL_WEEKDAYS: readonly DayCode[] = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
 
@@ -1037,6 +1039,11 @@ async function runCreate(
       maxResults: 250,
     });
     const windowEvents = parseCalendarEventsText(windowText);
+    if (windowEvents.length >= CALENDAR_MAX_RESULTS) {
+      throw new Error(
+        `Refused: the calendar returned ${windowEvents.length} events for the next ${OVERLAP_WINDOW_DAYS} days, the most one request can return, so the list may be incomplete and a free slot cannot be confirmed.`,
+      );
+    }
     const windowDup = windowEvents.find((ev) => eventMatchesIssue(ev, cmd.repo, cmd.issue));
     if (windowDup) {
       throw new Error(
