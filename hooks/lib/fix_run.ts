@@ -32,6 +32,11 @@ export {
 
 export type SessionEnv = (name: string) => string | undefined;
 
+/** True for the fix-pr skill, typed bare or through a plugin namespace (`webjam-tasks:fix-pr`). */
+export function isFixPrSkill(name: string): boolean {
+  return name.split(":").at(-1) === "fix-pr";
+}
+
 /** Read only human calls in this conversation; plain replies preserve the newest skill. */
 export function latestTypedSkillCall(context: ResolvedWriteContext): CodexSkillCall | null {
   if (context.isSubagentInvocation || !context.ownConversationId) return null;
@@ -458,7 +463,7 @@ export function checkFixRun(
   pr: PullRequestState | null,
   resolution?: TargetResolution,
 ): FixRun {
-  if (call?.name.split(":").at(-1) !== "fix-pr") return { kind: "none" };
+  if (!call || !isFixPrSkill(call.name)) return { kind: "none" };
   const target = resolution ?? resolveSynchronously(call.arguments, checkoutRepo);
   if (target.kind === "refused") return { kind: "refused", reason: target.reason };
   if (target.kind === "unknown") return { kind: "none" };

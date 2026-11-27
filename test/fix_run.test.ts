@@ -1075,7 +1075,7 @@ Deno.test("fix-pr:resolve-target verifies the GitHub pull request it resolves", 
     ["web-jam-tools#1907", { ghFails: true }, "could not be read", CHECKOUT],
     ["JaMmusic#5", {}, "not this checkout's", CHECKOUT],
     ["1907", {}, "needs a checkout", null],
-    ["--from-session", {}, "not supported", CHECKOUT],
+    ["--repo-dir", {}, "not supported", CHECKOUT],
     ["", {}, "names no pull request", CHECKOUT],
   ];
   for (const [arg, world, reason, checkout] of refusals) {
@@ -1085,6 +1085,231 @@ Deno.test("fix-pr:resolve-target verifies the GitHub pull request it resolves", 
   }
   // Explicit-argument mode with no readable checkout still resolves a named target.
   assertEquals((await run("web-jam-tools#1907", {}, null)).ok, true);
+});
+
+Deno.test("fix-pr:resolve-target --from-session: the three guard outcomes", async () => {
+  const typed = (name: string, args: string) => ({
+    name,
+    arguments: args,
+    text: `/${name} ${args}`,
+  });
+  const sessionEnv = (values: Record<string, string>) => (name: string) => values[name];
+  const claudeEnv = sessionEnv({ CLAUDE_CODE_SESSION_ID: "s-1" });
+  const repoDirs: (string | undefined)[] = [];
+  const run = (
+    args: string[],
+    call: ReturnType<typeof typed> | null,
+    world: FakeWorld = {},
+    options: { checkout?: string | null; env?: (name: string) => string | undefined } = {},
+  ) =>
+    resolveTargetCli(args, {
+      ...fakeDeps(world),
+      checkoutRepo: (repoDir?: string) => {
+        repoDirs.push(repoDir);
+        return Promise.resolve(options.checkout === undefined ? CHECKOUT : options.checkout);
+      },
+      readSkillCall: () => Promise.resolve(call),
+      env: options.env ?? claudeEnv,
+    });
+  const fromSession = ["--from-session"];
+  const withRepoDir = ["--from-session", "--repo-dir", "/tmp/fix-pr-1907"];
+
+  // (a) The condition holds: the newest typed call is fix-pr and names one open same-repo PR.
+  const resolved = { repo: CHECKOUT, number: 1907, branch: BRANCH_1907, build: null };
+  assertEquals(await run(fromSession, typed("fix-pr", "web-jam-tools#1907 bump version")), {
+    ok: true,
+    target: resolved,
+  });
+  assertEquals(await run(withRepoDir, typed("webjam-tasks:fix-pr", "1907")), {
+    ok: true,
+    target: resolved,
+  });
+  assertEquals(repoDirs.at(-1), "/tmp/fix-pr-1907");
+  assertEquals(
+    await run(
+      ["--from-session", "--repo-dir=/tmp/fix-pr-1907"],
+      typed("fix-pr", "https://circleci.com/gh/WebJamApps/web-jam-tools/2856, wait for CI"),
+      { builds: { 2856: build2856() } },
+    ),
+    { ok: true, target: RESOLVED_1907 },
+  );
+  assertEquals(repoDirs.at(-1), "/tmp/fix-pr-1907");
+
+  // Without --repo-dir no checkout is read, so a named target in another repository resolves
+  // there rather than being bound to the working directory's web-jam-tools checkout.
+  const readsBefore = repoDirs.length;
+  const jamPr = openPr(1479, {
+    headRefName: "agy/1478-legal-pages",
+    headRepository: { nameWithOwner: "WebJamApps/JaMmusic" },
+  });
+  assertEquals(
+    await run(fromSession, typed("fix-pr", "JaMmusic#1479"), { prs: { 1479: jamPr } }),
+    {
+      ok: true,
+      target: {
+        repo: "WebJamApps/JaMmusic",
+        number: 1479,
+        branch: "agy/1478-legal-pages",
+        build: null,
+      },
+    },
+  );
+  assertEquals(repoDirs.length, readsBefore, "--from-session without --repo-dir reads no checkout");
+
+  // (b) The condition does not hold, and (c) it cannot be determined: both refuse.
+  const refusals: [string[], ReturnType<typeof typed> | null, FakeWorld, string, {
+    checkout?: string | null;
+    env?: (name: string) => string | undefined;
+  }][] = [
+    [fromSession, typed("work-issue", "web-jam-tools#1945"), {}, "'work-issue', not fix-pr", {}],
+    [
+      fromSession,
+      typed("fix-pr", "web-jam-tools#1907 and web-jam-tools#1908"),
+      {},
+      "more than one",
+      {},
+    ],
+    [fromSession, typed("fix-pr", "use a Fable helper"), {}, "names no pull request", {}],
+    [
+      fromSession,
+      typed("fix-pr", "web-jam-tools#1907"),
+      { prs: { 1907: openPr(1907, { state: "MERGED" }) } },
+      "is MERGED",
+      {},
+    ],
+    [
+      fromSession,
+      typed("fix-pr", "web-jam-tools#1907"),
+      { prs: { 1907: openPr(1907, { state: "CLOSED" }) } },
+      "is CLOSED",
+      {},
+    ],
+    [
+      fromSession,
+      typed("fix-pr", "web-jam-tools#1907"),
+      { prs: { 1907: openPr(1907, { isCrossRepository: true }) } },
+      "fork",
+      {},
+    ],
+    [
+      fromSession,
+      typed("fix-pr", "web-jam-tools#1907"),
+      { prs: { 1907: openPr(1907, { headRefName: "main" }) } },
+      "protected",
+      {},
+    ],
+    [
+      fromSession,
+      typed("fix-pr", "https://circleci.com/gh/WebJamApps/web-jam-tools/2853"),
+      { builds: { 2853: build2856({ branch: "dev", pull_requests: [] }) } },
+      "protected branch 'dev'",
+      {},
+    ],
+    [
+      fromSession,
+      typed(
+        "fix-pr",
+        "https://circleci.com/api/private/output/raw/github/WebJamApps/web-jam-tools/2856/output/101/0",
+      ),
+      {},
+      "signed CircleCI log URL",
+      {},
+    ],
+    [withRepoDir, typed("fix-pr", "JaMmusic#5"), {}, "not this checkout's", {}],
+    // A bare number with no --repo-dir has no checkout to resolve against, even though the
+    // fake checkout reader would answer web-jam-tools if it were asked.
+    [fromSession, typed("fix-pr", "1907"), {}, "needs a checkout", {}],
+    [withRepoDir, typed("fix-pr", "1907"), {}, "could not be read", { checkout: null }],
+    [
+      fromSession,
+      typed("fix-pr", "web-jam-tools#1907"),
+      { ghFails: true },
+      "could not be read",
+      {},
+    ],
+    [
+      fromSession,
+      typed("fix-pr", "https://circleci.com/gh/WebJamApps/web-jam-tools/2856"),
+      { fail: "500" },
+      "HTTP 500",
+      {},
+    ],
+    [
+      fromSession,
+      typed("fix-pr", "https://circleci.com/gh/WebJamApps/web-jam-tools/2856"),
+      { builds: { 2856: build2856({ pull_requests: [] }) }, openOnBranch: [1907, 1908] },
+      "more than one open pull request",
+      {},
+    ],
+    [fromSession, null, {}, "no session is named", { env: sessionEnv({}) }],
+    [fromSession, null, {}, "helper's turn", {}],
+    [fromSession, null, {}, "unattended", { env: sessionEnv({ WJT_UNATTENDED: "1" }) }],
+    [
+      fromSession,
+      null,
+      {},
+      "cannot be told",
+      { env: sessionEnv({ CODEX_THREAD_ID: "t", CLAUDE_CODE_SESSION_ID: "s" }) },
+    ],
+    [["--from-session", "web-jam-tools#1907"], typed("fix-pr", "1907"), {}, "is not accepted", {}],
+    [["--from-session", "--from-session"], typed("fix-pr", "1907"), {}, "more than once", {}],
+    [["--from-session", "--repo-dir"], typed("fix-pr", "1907"), {}, "requires a repository", {}],
+    [
+      ["--from-session", "--repo-dir", "/a", "--repo-dir", "/b"],
+      typed("fix-pr", "1907"),
+      {},
+      "more than once",
+      {},
+    ],
+  ];
+  for (const [args, call, world, reason, options] of refusals) {
+    const result = await run(args, call, world, options);
+    const label = `${args.join(" ")} ${call?.text ?? "(no call)"}`;
+    assertEquals(result.ok, false, label);
+    if (!result.ok) assertStringIncludes(result.reason, reason, label);
+  }
+});
+
+Deno.test("readTypedSkillCall refuses a Claude Code helper's turn, so --from-session refuses", async () => {
+  const home = await Deno.makeTempDir();
+  const id = "12345678-1234-5678-abcd-123456789abc";
+  try {
+    await Deno.mkdir(`${home}/.claude/projects/probe`, { recursive: true });
+    const write = (sidechain: boolean) =>
+      Deno.writeTextFile(
+        `${home}/.claude/projects/probe/${id}.jsonl`,
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-11-26T01:00:00Z",
+          origin: { kind: "human" },
+          isSidechain: sidechain,
+          message: { role: "user", content: "/fix-pr web-jam-tools#1907" },
+        }) + "\n",
+      );
+    const env = (name: string) =>
+      ({ HOME: home, CLAUDE_CODE_SESSION_ID: id } as Record<string, string>)[name];
+    const realHome = Deno.env.get("HOME");
+    Deno.env.set("HOME", home);
+    try {
+      await write(false);
+      const call = await readTypedSkillCall(env);
+      assertEquals(call?.name, "fix-pr");
+      assertEquals(
+        (await resolveTargetCli(["--from-session"], { ...fakeDeps({}), env })).ok,
+        true,
+      );
+      await write(true);
+      assertEquals(await readTypedSkillCall(env), null);
+      const refused = await resolveTargetCli(["--from-session"], { ...fakeDeps({}), env });
+      assertEquals(refused.ok, false);
+      if (!refused.ok) assertStringIncludes(refused.reason, "helper's turn");
+    } finally {
+      if (realHome === undefined) Deno.env.delete("HOME");
+      else Deno.env.set("HOME", realHome);
+    }
+  } finally {
+    await Deno.remove(home, { recursive: true });
+  }
 });
 
 Deno.test("checkFixRun takes a resolved CircleCI target and reads one without as no fix run", () => {
