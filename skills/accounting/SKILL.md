@@ -191,15 +191,15 @@ Check the year's books with `deno task accounting:verify`, which runs `rledger c
 
 The 2026 books are rebuilt once, as "The move from Wave" in the design sets out:
 
-1. Josh saves the two business accounts' 2026 history under `~/Dropbox/financial-private/` (for
-   example in `checking/` and `credit-card/`) and runs the download cleaner on those folders in
-   his own terminal.
+1. The checking and credit card downloads for 2026 sit in their own folders under
+   `~/Dropbox/financial-private/`, such as `checking/` and `credit-card/`. Josh cleans each folder
+   with the download cleaner in his own terminal.
 2. Wave's 2026 export holds no Social Security, bank account or card numbers, so it does not go
    through the cleaner. Josh saves it directly into `statements/2026/`, where its categories stay
    intact for comparison.
-3. The agent builds the year from the clean bank and card files, checks it against Wave's export,
-   categories included, and lists every difference and every line it cannot categorize for Josh
-   to rule on. Wave itself is left untouched as the old record.
+3. The agent builds the year from the clean bank and card files and compares the result with
+   Wave's export, categories included. Each mismatch, and each line it cannot place in a category,
+   goes to Josh for a ruling. Wave itself is left untouched as the old record.
 
 ## Tasks Reference
 
