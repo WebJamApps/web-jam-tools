@@ -32,6 +32,7 @@ import {
   formatGate1Status,
   getGate1Status,
   recordSweepNote,
+  syncApprovedCopyOnMatch,
 } from "./gate1_record.ts";
 import { verifyReplyTypedByJosh } from "./gate1_reply.ts";
 import { runLintDocCli } from "./lint_doc.ts";
@@ -263,6 +264,9 @@ Options:
     log(`[design:gate1-approve] Gate 1 approved for ${result.record.docPath}`);
     log(`[design:gate1-approve] Recorded reply: "${result.record.reply}"`);
     log(`[design:gate1-approve] Fingerprint: ${result.record.approvedFingerprint}`);
+    if (result.copyWarning) {
+      errorLog(`[design:gate1-approve] Warning: the approval is saved. ${result.copyWarning}`);
+    }
     return 0;
   } catch (err) {
     errorLog(`[design:gate1-approve] Error: ${err instanceof Error ? err.message : String(err)}`);
@@ -442,6 +446,7 @@ Options:
 }
 
 export interface MatchDesignCliOptions extends ResolveCanonicalDesignDocOptions {
+  stateDir?: string;
   log?: (msg: string) => void;
   errorLog?: (msg: string) => void;
 }
@@ -455,7 +460,7 @@ export async function runMatchDesignCli(
 
   const flags = parseArgs(args, {
     boolean: ["help"],
-    string: ["topic", "theme", "dropbox-dir"],
+    string: ["topic", "theme", "dropbox-dir", "state-dir"],
     alias: {
       h: "help",
     },
@@ -471,12 +476,15 @@ Finds a design document from a path, an issue's body or a whole topic.
 Uncertain results list candidates for Josh to choose from.
 
 This is the canonical-document precondition of a design run: it runs before any decision is
-put to Josh, whether or not the run will ever create a document.
+put to Josh, whether or not the run will ever create a document. When resolving an approved
+document whose content still matches its Gate 1 approval fingerprint, takes or refreshes the
+temporary approved copy beside the Gate 1 record.
 
 Options:
   --topic <topic>       Look up a path, issue citation or whole topic
   --theme <theme>       Scope search to specific theme directory
   --dropbox-dir <path>  Override the design-documents root (also DESIGN_DOCS_ROOT)
+  --state-dir <path>    Override Gate 1 state directory
   -h, --help            Show this help message
 
 Exit codes:
@@ -501,6 +509,11 @@ Exit codes:
       theme: flags.theme || options?.theme,
       dropboxDir: flags["dropbox-dir"] || options?.dropboxDir,
     });
+    if (resolution.outcome === "existing-document" && resolution.match) {
+      await syncApprovedCopyOnMatch(resolution.match.path, undefined, {
+        stateDir: flags["state-dir"] || options?.stateDir,
+      });
+    }
   } catch (err) {
     if (err instanceof DesignDocResolutionRefusal) {
       errorLog(`[design:match-design] ${err.message}`);

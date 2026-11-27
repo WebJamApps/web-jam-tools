@@ -36,9 +36,11 @@ import { runCandidatesCli } from "../src/design-issue/candidates.ts";
 import { runCli, runGate1Cli, runMatchDesignCli } from "../src/design-issue/cli.ts";
 import {
   approveGate1Record,
+  getGate1ApprovedCopyPath,
   getGate1RecordPath,
   getGate1Status,
   loadGate1Record,
+  openGate1Record,
   recordSweepNote,
 } from "../src/design-issue/gate1_record.ts";
 import {
@@ -2399,4 +2401,52 @@ Deno.test("skills/design-issue/SKILL.md covers single-owner and Checking the oth
     skillText,
     'deno task design:sweep-note <doc.md> <other.md> --reason "<why>"',
   );
+});
+
+Deno.test("runMatchDesignCli manages temporary approved copy with --state-dir and fails closed on corrupt record", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "match-design-copy-cli-" });
+  const dropboxDir = path.join(tempDir, "dropbox");
+  const themeDir = path.join(dropboxDir, "Token_Savings");
+  const stateDir = path.join(tempDir, "state");
+  await Deno.mkdir(themeDir, { recursive: true });
+  await Deno.mkdir(stateDir, { recursive: true });
+
+  try {
+    const docPath = path.join(themeDir, "sample-topic-design.md");
+    const approvedText = "# Sample Topic\n\nApproved body.\n";
+    await Deno.writeTextFile(docPath, approvedText);
+    const copyPath = getGate1ApprovedCopyPath(docPath, stateDir);
+
+    await openGate1Record(docPath, approvedText, { stateDir });
+    await approveGate1Record(docPath, "i approve", { stateDir });
+    await assertRejects(() => Deno.stat(copyPath), Deno.errors.NotFound);
+
+    const codeCopy = await runMatchDesignCli(
+      ["sample-topic", "--dropbox-dir", dropboxDir, "--state-dir", stateDir],
+      { log: () => {}, errorLog: () => {} },
+    );
+    assertEquals(codeCopy, 0);
+    assertEquals(await Deno.readTextFile(copyPath), approvedText);
+
+    // Replace stale copy when document still matches approvedFingerprint
+    await Deno.writeTextFile(copyPath, "# Stale copy\n");
+    const codeReplace = await runMatchDesignCli(
+      [docPath, "--dropbox-dir", dropboxDir, "--state-dir", stateDir],
+      { log: () => {}, errorLog: () => {} },
+    );
+    assertEquals(codeReplace, 0);
+    assertEquals(await Deno.readTextFile(copyPath), approvedText);
+
+    // Corrupt Gate 1 record fails closed (exit 2)
+    await Deno.writeTextFile(getGate1RecordPath(docPath, stateDir), "{broken json");
+    const errors: string[] = [];
+    const codeFail = await runMatchDesignCli(
+      [docPath, "--dropbox-dir", dropboxDir, "--state-dir", stateDir],
+      { log: () => {}, errorLog: (m) => errors.push(m) },
+    );
+    assertEquals(codeFail, 2);
+    assertStringIncludes(errors.join("\n"), "could not tell");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
 });

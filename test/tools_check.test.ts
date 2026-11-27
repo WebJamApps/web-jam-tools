@@ -712,14 +712,87 @@ Deno.test("end-to-end real fixture: OK, Drifted, and Could not tell per row, wri
   }
 });
 
-Deno.test("deno.json registers read-only tools:check without --allow-write or blanket permissions (Rule 12, Rule 21)", async () => {
+Deno.test("deno.json registers tools:check with scoped read-only installer checks and scoped state cleanup (Rule 12, Rule 21)", async () => {
   const denoJson = JSON.parse(await Deno.readTextFile(join(REPO_ROOT, "deno.json")));
   const task: unknown = denoJson.tasks?.["tools:check"];
   assert(typeof task === "string", "deno.json must register 'tools:check'");
   assertStringIncludes(task, "src/tools-check/cli.ts");
-  assert(!task.includes("--allow-write"), "tools:check must remain strictly read-only");
-  assert(!task.includes("-A") && !task.includes("--allow-all"), "tools:check must not use -A");
+  assert(
+    task.includes("--allow-write=$HOME/.claude/state/design-gate1,/tmp "),
+    "tools:check --allow-write must be scoped strictly to $HOME/.claude/state/design-gate1,/tmp",
+  );
+  assert(!task.includes("--allow-write ") && !task.includes("-A") && !task.includes("--allow-all"));
   assertStringIncludes(task, "--allow-read=");
   assertStringIncludes(task, "--allow-env=");
   assertStringIncludes(task, "--allow-run=bash,deno");
+});
+
+Deno.test("tools:check prunes orphaned .approved.md copies, keeps live ones, and fails closed on unreadable state", async () => {
+  const { hashDocPath } = await import("../src/design-issue/gate1_record.ts");
+  const root = await Deno.makeTempDir({ prefix: "tools-check-approved-copy-" });
+  const home = join(root, "home");
+  const stateDir = join(home, ".claude", "state", "design-gate1");
+  const dropboxDir = join(home, "Dropbox", "web-jam-llms", "Token_Savings");
+  await Deno.mkdir(stateDir, { recursive: true });
+  await Deno.mkdir(dropboxDir, { recursive: true });
+
+  try {
+    const liveDoc = join(dropboxDir, "live-design.md");
+    const missingDoc = join(dropboxDir, "deleted-design.md");
+    const orphanNoRecordDoc = join(dropboxDir, "orphan-no-record-design.md");
+    await Deno.writeTextFile(liveDoc, "# Live\n");
+
+    const liveHash = hashDocPath(liveDoc);
+    const missingHash = hashDocPath(missingDoc);
+    const orphanNoRecordHash = hashDocPath(orphanNoRecordDoc);
+
+    const liveRecordPath = join(stateDir, `${liveHash}.json`);
+    const liveCopyPath = join(stateDir, `${liveHash}.approved.md`);
+    const missingRecordPath = join(stateDir, `${missingHash}.json`);
+    const missingCopyPath = join(stateDir, `${missingHash}.approved.md`);
+    const orphanNoRecordCopyPath = join(stateDir, `${orphanNoRecordHash}.approved.md`);
+
+    await Deno.writeTextFile(liveRecordPath, JSON.stringify({ docPath: liveDoc }));
+    await Deno.writeTextFile(liveCopyPath, "# Live\n");
+    await Deno.writeTextFile(missingRecordPath, JSON.stringify({ docPath: missingDoc }));
+    await Deno.writeTextFile(missingCopyPath, "# Deleted\n");
+    await Deno.writeTextFile(orphanNoRecordCopyPath, "# Gone without record\n");
+
+    const { deps } = makeStubDeps(allOkResponses(), { HOME: home, PATH: "/usr/bin:/bin" });
+    const report = await runToolsCheck({ homeDir: home }, deps);
+    assertEquals(report.ok, true, formatToolsCheckReport(report));
+    assertEquals(report.rows.length, 6);
+    assertEquals(
+      (report.prunedApprovedCopies ?? []).sort(),
+      [missingCopyPath, orphanNoRecordCopyPath].sort(),
+    );
+
+    // Live copy remains; both orphaned copies are deleted
+    assertEquals(await Deno.readTextFile(liveCopyPath), "# Live\n");
+    let missingStillThere = true;
+    try {
+      await Deno.stat(missingCopyPath);
+    } catch (err) {
+      if (err instanceof Deno.errors.NotFound) missingStillThere = false;
+    }
+    assertEquals(missingStillThere, false);
+    let noRecordStillThere = true;
+    try {
+      await Deno.stat(orphanNoRecordCopyPath);
+    } catch (err) {
+      if (err instanceof Deno.errors.NotFound) noRecordStillThere = false;
+    }
+    assertEquals(noRecordStillThere, false);
+
+    // Outcome 3: corrupt companion record fails closed without deleting copy
+    await Deno.writeTextFile(liveRecordPath, "{broken json");
+    const errReport = await runToolsCheck({ homeDir: home }, deps);
+    assertEquals(errReport.ok, false);
+    assertEquals(errReport.status, "could-not-tell");
+    assertEquals((errReport.approvedCopyErrors ?? []).length, 1);
+    assertStringIncludes(formatToolsCheckReport(errReport), "COULD NOT TELL");
+    assertEquals(await Deno.readTextFile(liveCopyPath), "# Live\n");
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
 });

@@ -155,6 +155,331 @@ export function getGate1RecordPath(docPath: string, stateDir?: string): string {
   return path.join(dir, `${hash}.json`);
 }
 
+/**
+ * Resolves the absolute path to the temporary approved copy kept beside a design document's
+ * Gate 1 record while a revision is open ("The Rendered Page").
+ */
+export function getGate1ApprovedCopyPath(docPath: string, stateDir?: string): string {
+  const absDocPath = path.resolve(expandHome(docPath.trim()));
+  const hash = hashDocPath(absDocPath);
+  const dir = getGate1StateDir(stateDir);
+  return path.join(dir, `${hash}.approved.md`);
+}
+
+/**
+ * Removes `<hash>.approved.md` when present, ignoring NotFound and failing closed on other errors.
+ */
+export async function removeApprovedCopyIfPresent(copyPath: string): Promise<boolean> {
+  try {
+    await Deno.remove(copyPath);
+    return true;
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) {
+      return false;
+    }
+    throw new Gate1RecordError(
+      `Cannot remove temporary approved copy at ${copyPath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
+/** Whether anything, a symlink included, sits at `copyPath`; fails closed when that cannot be told. */
+async function approvedCopyExists(copyPath: string): Promise<boolean> {
+  try {
+    await Deno.lstat(copyPath);
+    return true;
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) {
+      return false;
+    }
+    throw new Gate1RecordError(
+      `Cannot check for a temporary approved copy at ${copyPath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
+/**
+ * Writes `content` to `copyPath` atomically inside `copyPath`'s directory, replacing any earlier
+ * copy or symlink without partial writes.
+ */
+async function writeApprovedCopyAtomic(copyPath: string, content: string): Promise<void> {
+  const dir = path.dirname(copyPath);
+  await Deno.mkdir(dir, { recursive: true });
+  const tempPath = path.join(
+    dir,
+    `.approved-tmp-${crypto.randomUUID()}.md`,
+  );
+  try {
+    await Deno.writeTextFile(tempPath, content);
+    await Deno.rename(tempPath, copyPath);
+  } catch (err) {
+    try {
+      await Deno.remove(tempPath);
+    } catch {
+      // Ignore cleanup failure for temp file.
+    }
+    throw new Gate1RecordError(
+      `Cannot write temporary approved copy at ${copyPath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
+export interface SyncApprovedCopyResult {
+  action: "copied" | "replaced" | "skipped";
+  copyPath: string;
+}
+
+/**
+ * Syncs `<hash>.approved.md` when `design:match-design` resolves an existing canonical document:
+ * - If its content matches its Gate 1 record's `approvedFingerprint`, copies the approved text
+ *   beside the record (atomically replacing any earlier copy).
+ * - If the document is already modified since approval or is open at Gate 1, keeps any existing
+ *   approved copy untouched so highlights continue comparing against the last approved baseline.
+ */
+export async function syncApprovedCopyOnMatch(
+  docPath: string,
+  content?: string,
+  options?: { stateDir?: string },
+): Promise<SyncApprovedCopyResult> {
+  const absDocPath = path.resolve(expandHome(docPath.trim()));
+  const dir = getGate1StateDir(options?.stateDir);
+  const recordPath = getGate1RecordPath(absDocPath, dir);
+  const copyPath = getGate1ApprovedCopyPath(absDocPath, dir);
+
+  const record = await readExistingRecord(recordPath);
+  if (!record?.approvedAt || !record.approvedFingerprint) {
+    return { action: "skipped", copyPath };
+  }
+
+  let docContent: string;
+  if (content !== undefined) {
+    docContent = content;
+  } else {
+    try {
+      docContent = await Deno.readTextFile(absDocPath);
+    } catch (err) {
+      throw new Gate1RecordError(
+        `Cannot read design document at ${absDocPath}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  if (computeFingerprint(docContent) !== record.approvedFingerprint) {
+    return { action: "skipped", copyPath };
+  }
+
+  const existed = await approvedCopyExists(copyPath);
+  await writeApprovedCopyAtomic(copyPath, docContent);
+  return { action: existed ? "replaced" : "copied", copyPath };
+}
+
+export interface PruneApprovedCopiesResult {
+  removed: string[];
+  kept: string[];
+  errors: Array<{ path: string; reason: string }>;
+}
+
+const EXCLUDED_PRUNE_SCAN_DIRS = new Set([
+  ".git",
+  ".trash",
+  "Trash",
+  "backups",
+  "claude-backup",
+  "node_modules",
+  "resume-records",
+]);
+
+async function collectDesignDocHashes(dropboxDir: string): Promise<Set<string>> {
+  const hashes = new Set<string>();
+  const rootStat = await Deno.stat(dropboxDir);
+  if (!rootStat.isDirectory) {
+    throw new Error(`${dropboxDir} is not a directory`);
+  }
+  async function visit(dir: string) {
+    for await (const entry of Deno.readDir(dir)) {
+      if (entry.name.startsWith(".")) continue;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory) {
+        if (!EXCLUDED_PRUNE_SCAN_DIRS.has(entry.name)) {
+          await visit(fullPath);
+        }
+      } else if (entry.isFile && entry.name.toLowerCase().endsWith(".md")) {
+        const absPath = path.resolve(fullPath);
+        hashes.add(hashDocPath(absPath));
+        try {
+          hashes.add(hashDocPath(await Deno.realPath(absPath)));
+        } catch {
+          // Non-fatal if realPath differs or is unavailable; resolved path hash already recorded.
+        }
+      }
+    }
+  }
+  await visit(path.resolve(dropboxDir));
+  return hashes;
+}
+
+/**
+ * Deletes `<hash>.approved.md` files under the Gate 1 state directory whose design document no
+ * longer exists ("The Rendered Page"), failing closed when the state folder, companion record, or
+ * design document existence check errors.
+ */
+export async function pruneOrphanedApprovedCopies(options?: {
+  stateDir?: string;
+  homeDir?: string;
+  dropboxDir?: string;
+}): Promise<PruneApprovedCopiesResult> {
+  const resolvedHome = options?.homeDir ?? Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE") ??
+    "";
+  const dir = options?.stateDir ??
+    (options?.homeDir
+      ? path.join(path.resolve(options.homeDir), ".claude", "state", "design-gate1")
+      : getGate1StateDir());
+
+  const removed: string[] = [];
+  const kept: string[] = [];
+  const errors: Array<{ path: string; reason: string }> = [];
+
+  const copyEntries: Array<{ hash: string; copyPath: string }> = [];
+  try {
+    for await (const entry of Deno.readDir(dir)) {
+      if (entry.name.endsWith(".approved.md")) {
+        copyEntries.push({
+          hash: entry.name.slice(0, -".approved.md".length),
+          copyPath: path.join(dir, entry.name),
+        });
+      }
+    }
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) {
+      return { removed, kept, errors };
+    }
+    errors.push({
+      path: dir,
+      reason: `Cannot inspect Gate 1 state directory ${dir}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    });
+    return { removed, kept, errors };
+  }
+
+  copyEntries.sort((a, b) => a.copyPath.localeCompare(b.copyPath));
+
+  let cachedDocHashes: Set<string> | null | undefined;
+  let dropboxScanError: string | null = null;
+  const resolveDropboxHashes = async (): Promise<Set<string> | null> => {
+    if (cachedDocHashes !== undefined) return cachedDocHashes;
+    const dropboxDir = options?.dropboxDir ??
+      Deno.env.get("DESIGN_DOCS_ROOT") ??
+      (resolvedHome ? path.join(resolvedHome, "Dropbox", "web-jam-llms") : "");
+    if (!dropboxDir) {
+      cachedDocHashes = null;
+      return cachedDocHashes;
+    }
+    try {
+      cachedDocHashes = await collectDesignDocHashes(dropboxDir);
+    } catch (err) {
+      if (err instanceof Deno.errors.NotFound) {
+        cachedDocHashes = new Set<string>();
+      } else {
+        dropboxScanError = err instanceof Error ? err.message : String(err);
+        cachedDocHashes = null;
+      }
+    }
+    return cachedDocHashes;
+  };
+
+  for (const { hash, copyPath } of copyEntries) {
+    const recordPath = path.join(dir, `${hash}.json`);
+    let docPath: string | null = null;
+    let recordMissing = false;
+
+    try {
+      const raw = await Deno.readTextFile(recordPath);
+      const parsed = JSON.parse(raw) as Partial<Gate1Record>;
+      if (typeof parsed.docPath !== "string" || parsed.docPath.trim() === "") {
+        errors.push({
+          path: copyPath,
+          reason: `Malformed Gate 1 record ${recordPath}: missing docPath`,
+        });
+        continue;
+      }
+      docPath = parsed.docPath;
+    } catch (err) {
+      if (err instanceof Deno.errors.NotFound) {
+        recordMissing = true;
+      } else {
+        errors.push({
+          path: copyPath,
+          reason: `Cannot read Gate 1 record ${recordPath}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        });
+        continue;
+      }
+    }
+
+    let docExists = false;
+    if (recordMissing) {
+      const hashes = await resolveDropboxHashes();
+      if (hashes === null) {
+        errors.push({
+          path: copyPath,
+          reason: dropboxScanError
+            ? `Cannot verify whether orphaned approved copy belongs to an existing design document: ${dropboxScanError}`
+            : `Cannot verify orphaned approved copy without Gate 1 record or design-documents root`,
+        });
+        continue;
+      }
+      docExists = hashes.has(hash);
+    } else {
+      try {
+        const stat = await Deno.stat(docPath!);
+        docExists = stat.isFile;
+      } catch (err) {
+        if (err instanceof Deno.errors.NotFound) {
+          docExists = false;
+        } else {
+          errors.push({
+            path: copyPath,
+            reason: `Cannot check design document ${docPath}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          });
+          continue;
+        }
+      }
+    }
+
+    if (docExists) {
+      kept.push(copyPath);
+    } else {
+      try {
+        await Deno.remove(copyPath);
+        removed.push(copyPath);
+      } catch (err) {
+        if (!(err instanceof Deno.errors.NotFound)) {
+          errors.push({
+            path: copyPath,
+            reason: `Cannot remove orphaned approved copy ${copyPath}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          });
+        }
+      }
+    }
+  }
+
+  return { removed, kept, errors };
+}
+
 const RECORD_LOCK_WAIT_MS = 10_000;
 const RECORD_LOCK_RETRY_MS = 25;
 
@@ -484,6 +809,8 @@ export async function openGate1Record(
  * - Refuses if document fingerprint has changed since it was presented
  * - Otherwise records the approving reply verbatim and current document fingerprint, and
  *   stores the document's premise rows as they stand, replacing any stored before
+ * - Once the approval is saved, a temporary approved copy that cannot be deleted is returned as
+ *   `copyWarning` rather than thrown
  */
 export async function approveGate1Record(
   docPath: string,
@@ -493,7 +820,7 @@ export async function approveGate1Record(
     /** Refuses (throws) unless Josh typed the reply after `presentedAt` (web-jam-tools#1412). */
     verifyReply?: (presentedAt: string) => Promise<unknown>;
   },
-): Promise<{ record: Gate1Record; recordPath: string }> {
+): Promise<{ record: Gate1Record; recordPath: string; copyWarning?: string }> {
   const absDocPath = path.resolve(expandHome(docPath.trim()));
 
   if (!reply || reply.trim() === "") {
@@ -610,6 +937,12 @@ export async function approveGate1Record(
     delete current.sweepNotes;
 
     await Deno.writeTextFile(recordPath, JSON.stringify(current, null, 2) + "\n");
+    try {
+      await removeApprovedCopyIfPresent(getGate1ApprovedCopyPath(absDocPath, dir));
+    } catch (err) {
+      const copyWarning = err instanceof Error ? err.message : String(err);
+      return { record: current, recordPath, copyWarning };
+    }
     return { record: current, recordPath };
   });
 }

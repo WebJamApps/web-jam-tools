@@ -8,6 +8,7 @@ import {
 } from "../src/design-issue/rename_doc.ts";
 import {
   approveGate1Record,
+  getGate1ApprovedCopyPath,
   getGate1RecordPath,
   getGate1Status,
   loadGate1Record,
@@ -395,4 +396,31 @@ Deno.test("rename CLI help succeeds and unknown flags/missing operands refuse", 
   assertEquals(await runRenameDocCli(["--help"]), 0);
   assertEquals(await runRenameDocCli([]), 1);
   assertEquals(await runRenameDocCli(["--surprise"]), 1);
+});
+
+Deno.test("planDocRename and applyDocRename move temporary .approved.md beside the Gate 1 record and refuse destination collision", async () => {
+  const f = await fixture();
+  try {
+    const oldCopy = getGate1ApprovedCopyPath(f.source, f.options.stateDir);
+    const newCopy = getGate1ApprovedCopyPath(f.target, f.options.stateDir);
+    await Deno.mkdir(f.options.stateDir, { recursive: true });
+    await Deno.writeTextFile(oldCopy, "# Baseline Approved Content\n");
+
+    // Collision on destination .approved.md refuses
+    await Deno.writeTextFile(newCopy, "# Existing destination collision\n");
+    await assertRejects(
+      () => planDocRename(f.source, NEW, f.options),
+      Error,
+      "Destination already exists",
+    );
+    await Deno.remove(newCopy);
+
+    // Clean rename moves .approved.md from old hash to new hash without modifying bytes
+    const plan = await planDocRename(f.source, NEW, f.options);
+    await applyDocRename(plan);
+    assertEquals(await Deno.readTextFile(newCopy), "# Baseline Approved Content\n");
+    await assertRejects(() => Deno.stat(oldCopy), Deno.errors.NotFound);
+  } finally {
+    await f.cleanup();
+  }
 });

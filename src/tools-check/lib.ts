@@ -1,11 +1,17 @@
 /**
- * Read-only check that Claude Code, agy, and Codex match the canonical clone.
+ * Check that Claude Code, agy, and Codex match the canonical clone.
  *
  * Implements "Each tool's live setup" in
  * ~/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md
- * by running each installer's own check mode without writing any file or running any installer.
+ * by running each installer's own check mode, which writes no file and installs nothing. The one
+ * thing this check changes: it deletes a temporary approved copy under the Gate 1 state folder
+ * whose design document no longer exists.
  */
 import { join, resolve } from "@std/path";
+import {
+  type PruneApprovedCopiesResult,
+  pruneOrphanedApprovedCopies,
+} from "../design-issue/gate1_record.ts";
 
 export type CheckOutcome = "ok" | "drifted" | "could-not-tell";
 export type ToolName = "Claude Code" | "agy" | "Codex";
@@ -26,6 +32,8 @@ export interface ToolsCheckReport {
   repoDir: string;
   homeDir: string;
   rows: ToolsCheckRow[];
+  prunedApprovedCopies?: string[];
+  approvedCopyErrors?: Array<{ path: string; reason: string }>;
 }
 
 export interface CommandOutput {
@@ -42,6 +50,11 @@ export interface ToolsCheckDeps {
   ) => Promise<CommandOutput>;
   getEnv: (key: string) => string | undefined;
   denoExecPath: string;
+  pruneApprovedCopies?: (options: {
+    homeDir: string;
+    stateDir?: string;
+    dropboxDir?: string;
+  }) => Promise<PruneApprovedCopiesResult>;
 }
 
 export interface ToolsCheckOptions {
@@ -49,6 +62,8 @@ export interface ToolsCheckOptions {
   repoDir?: string;
   tool?: ToolFilter;
   env?: Record<string, string>;
+  stateDir?: string;
+  dropboxDir?: string;
 }
 
 const OVERRIDE_ENV_KEYS = [
@@ -105,6 +120,9 @@ export const defaultToolsCheckDeps: ToolsCheckDeps = {
     }
   },
   denoExecPath: Deno.execPath(),
+  pruneApprovedCopies(options) {
+    return pruneOrphanedApprovedCopies(options);
+  },
 };
 
 function nonEmptyLines(text: string): string[] {
@@ -654,17 +672,27 @@ export async function runToolsCheck(
     homeDir,
   ];
 
-  const [hooksOut, claudeSkillsOut, agyConfigOut, agySkillsOut, codexOut] = await Promise.all([
-    needHooks ? deps.runCmd(hooksArgs, { cwd: repoDir, env: childEnv }) : Promise.resolve(null),
-    needClaude
-      ? deps.runCmd(buildSkillsArgs("claude"), { cwd: repoDir, env: childEnv })
-      : Promise.resolve(null),
-    needAgy ? deps.runCmd(agyConfigArgs, { cwd: repoDir, env: childEnv }) : Promise.resolve(null),
-    needAgy
-      ? deps.runCmd(buildSkillsArgs("agy"), { cwd: repoDir, env: childEnv })
-      : Promise.resolve(null),
-    needCodex ? deps.runCmd(codexArgs, { cwd: repoDir, env: childEnv }) : Promise.resolve(null),
-  ]);
+  const [hooksOut, claudeSkillsOut, agyConfigOut, agySkillsOut, codexOut, pruneResult] =
+    await Promise.all([
+      needHooks ? deps.runCmd(hooksArgs, { cwd: repoDir, env: childEnv }) : Promise.resolve(null),
+      needClaude
+        ? deps.runCmd(buildSkillsArgs("claude"), { cwd: repoDir, env: childEnv })
+        : Promise.resolve(null),
+      needAgy ? deps.runCmd(agyConfigArgs, { cwd: repoDir, env: childEnv }) : Promise.resolve(null),
+      needAgy
+        ? deps.runCmd(buildSkillsArgs("agy"), { cwd: repoDir, env: childEnv })
+        : Promise.resolve(null),
+      needCodex ? deps.runCmd(codexArgs, { cwd: repoDir, env: childEnv }) : Promise.resolve(null),
+      (deps.pruneApprovedCopies ?? defaultToolsCheckDeps.pruneApprovedCopies!)({
+        homeDir,
+        stateDir: options.stateDir ??
+          (isCustomHome ? undefined : (options.env?.DESIGN_GATE1_STATE_DIR ??
+            deps.getEnv("DESIGN_GATE1_STATE_DIR"))),
+        dropboxDir: options.dropboxDir ??
+          (options.env?.DESIGN_DOCS_ROOT ??
+            (isCustomHome ? undefined : deps.getEnv("DESIGN_DOCS_ROOT"))),
+      }),
+    ]);
 
   const rows: ToolsCheckRow[] = [];
   const hooksClassified = hooksOut ? classifyInstallHooksOutput(hooksOut, repoDir) : null;
@@ -690,17 +718,25 @@ export async function runToolsCheck(
     );
   }
 
-  const hasCouldNotTell = rows.some((r) => r.outcome === "could-not-tell");
+  const hasCouldNotTell = rows.some((r) => r.outcome === "could-not-tell") ||
+    pruneResult.errors.length > 0;
   const hasDrifted = rows.some((r) => r.outcome === "drifted");
   const status: CheckOutcome = hasCouldNotTell ? "could-not-tell" : hasDrifted ? "drifted" : "ok";
 
-  return {
+  const report: ToolsCheckReport = {
     ok: status === "ok",
     status,
     repoDir,
     homeDir,
     rows,
   };
+  if (pruneResult.removed.length > 0) {
+    report.prunedApprovedCopies = pruneResult.removed;
+  }
+  if (pruneResult.errors.length > 0) {
+    report.approvedCopyErrors = pruneResult.errors;
+  }
+  return report;
 }
 
 /** Formats the report as human-readable rows showing status, diffs/reasons, and remediation commands. */
@@ -728,9 +764,28 @@ export function formatToolsCheckReport(report: ToolsCheckReport): string {
     }
   }
 
+  if (report.prunedApprovedCopies && report.prunedApprovedCopies.length > 0) {
+    lines.push(
+      `[PRUNED] removed ${report.prunedApprovedCopies.length} orphaned Gate 1 approved cop${
+        report.prunedApprovedCopies.length === 1 ? "y" : "ies"
+      }:`,
+    );
+    for (const copyPath of report.prunedApprovedCopies) {
+      lines.push(`  - ${copyPath}`);
+    }
+  }
+
+  if (report.approvedCopyErrors && report.approvedCopyErrors.length > 0) {
+    lines.push("[COULD NOT TELL] Gate 1 approved copy cleanup");
+    for (const err of report.approvedCopyErrors) {
+      lines.push(`  - ${err.path}: ${err.reason}`);
+    }
+  }
+
   const okCount = report.rows.filter((r) => r.outcome === "ok").length;
   const driftedCount = report.rows.filter((r) => r.outcome === "drifted").length;
-  const couldNotTellCount = report.rows.filter((r) => r.outcome === "could-not-tell").length;
+  const couldNotTellCount = report.rows.filter((r) => r.outcome === "could-not-tell").length +
+    (report.approvedCopyErrors?.length ?? 0);
 
   lines.push("");
   if (report.ok) {
