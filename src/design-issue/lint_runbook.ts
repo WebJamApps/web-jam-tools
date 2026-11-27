@@ -1,9 +1,11 @@
 // src/design-issue/lint_runbook.ts
-// Linter for manual verification runbooks checking against required format (web-jam-tools#743).
+// Linter for manual verification runbooks checking against required format (web-jam-tools#743)
+// and rendering dark-mode HTML pages on pass while refusing dated filenames (web-jam-tools#1564).
 
 import { parseArgs } from "@std/cli/parse-args";
 import * as path from "@std/path";
-import { expandHome } from "./gate1.ts";
+import { renderDesignDoc, type RenderDesignDocOptions } from "../../scripts/render_design_doc.ts";
+import { expandHome, resolveHtmlPath } from "./gate1.ts";
 
 export interface LintRunbookViolation {
   rule: string;
@@ -16,11 +18,25 @@ export interface LintRunbookResult {
   runbookPath: string;
   valid: boolean;
   violations: LintRunbookViolation[];
+  htmlPath?: string;
 }
 
 export interface LintRunbookOptions {
   runbookPath: string;
   json?: boolean;
+}
+
+export interface LintRunbookValidationOptions {
+  /** Reject runbook filenames that carry a date (enforced by `deno task design:lint-runbook`). */
+  rejectDatedFilename?: boolean;
+}
+
+export interface LintAndRenderRunbookOptions extends LintRunbookValidationOptions {
+  renderImpl?: (
+    markdownContent: string,
+    fallbackTitle?: string,
+    options?: RenderDesignDocOptions,
+  ) => string;
 }
 
 interface StepBlock {
@@ -108,15 +124,50 @@ function findLinePlaceholders(line: string): string[] {
 }
 
 /**
- * Checks a runbook markdown string against the required format rules:
- * 1. Fails if the runbook lacks an H1 title or if the title carries a personal name.
- * 2. Fails if the runbook lacks sequentially numbered `## STEP N` headings starting at 1.
- * 3. Fails if a step contains placeholders instead of literal commands.
- * 4. Fails if a step is missing what it proves or what a correct result looks like.
- * 5. Fails if a step carries more than one action (multiple command blocks, sub-steps, or multiple surfaces).
+ * Returns the matched date substring when a runbook's file basename carries a date
+ * (such as `2026-10-25`, `2026_10_25`, `2026.10.25`, `10-25-2026`, `2026-10`, or compact
+ * `20261025`), ignoring directory components so dated parent folders do not trigger false
+ * positives and 8-digit non-year IDs (not starting with `19` or `20`) are ignored.
  */
-export function lintRunbook(content: string, runbookPath: string = ""): LintRunbookResult {
+export function findDateInRunbookFilename(runbookPath: string): string | null {
+  const trimmed = runbookPath.trim();
+  if (!trimmed) return null;
+  const basename = path.basename(trimmed);
+  if (!basename) return null;
+  const match = basename.match(
+    /(?:\d{4}[-_.]\d{2}[-_.]\d{2}|\d{2}[-_.]\d{2}[-_.]\d{4}|\d{4}[-_.]\d{2}|(?:19|20)\d{6})/,
+  );
+  return match ? match[0] : null;
+}
+
+/**
+ * Checks a runbook markdown string against the required format rules:
+ * 1. Fails if `rejectDatedFilename` is enabled and the runbook filename carries a date.
+ * 2. Fails if the runbook lacks an H1 title or if the title carries a personal name.
+ * 3. Fails if the runbook lacks sequentially numbered `## STEP N` headings starting at 1.
+ * 4. Fails if a step contains placeholders instead of literal commands.
+ * 5. Fails if a step is missing what it proves or what a correct result looks like.
+ * 6. Fails if a step carries more than one action (multiple command blocks, sub-steps, or multiple surfaces).
+ */
+export function lintRunbook(
+  content: string,
+  runbookPath: string = "",
+  options?: LintRunbookValidationOptions,
+): LintRunbookResult {
   const violations: LintRunbookViolation[] = [];
+
+  if (options?.rejectDatedFilename && runbookPath.trim() !== "") {
+    const matchedDate = findDateInRunbookFilename(runbookPath);
+    if (matchedDate) {
+      violations.push({
+        rule: "no-dated-runbook-name",
+        message: `Runbook filename must not carry a date (found "${matchedDate}" in "${
+          path.basename(runbookPath)
+        }"); use <topic>-runbook.md`,
+      });
+    }
+  }
+
   const lines = content.split(/\r?\n/);
 
   let inCodeBlock = false;
@@ -398,9 +449,12 @@ export function lintRunbook(content: string, runbookPath: string = ""): LintRunb
 }
 
 /**
- * Reads and lints a runbook file from disk.
+ * Resolves and reads a runbook file from disk, failing closed when the path is missing,
+ * not a regular file, unreadable, invalid UTF-8, or empty.
  */
-export async function lintRunbookFile(filePath: string): Promise<LintRunbookResult> {
+async function readRunbookFile(
+  filePath: string,
+): Promise<{ absPath: string; content: string }> {
   if (!filePath || filePath.trim() === "") {
     throw new Error("Runbook path is required");
   }
@@ -409,7 +463,12 @@ export async function lintRunbookFile(filePath: string): Promise<LintRunbookResu
 
   let content: string;
   try {
-    content = await Deno.readTextFile(absPath);
+    const stat = await Deno.stat(absPath);
+    if (!stat.isFile) {
+      throw new Error("path is not a regular file");
+    }
+    const rawBytes = await Deno.readFile(absPath);
+    content = new TextDecoder("utf-8", { fatal: true }).decode(rawBytes);
   } catch (err) {
     throw new Error(
       `Runbook not found or cannot be read at ${absPath}: ${
@@ -422,13 +481,122 @@ export async function lintRunbookFile(filePath: string): Promise<LintRunbookResu
     throw new Error(`Runbook at ${absPath} is empty`);
   }
 
-  return lintRunbook(content, absPath);
+  return { absPath, content };
+}
+
+/**
+ * Reads and lints a runbook file from disk, failing closed when the path is missing,
+ * not a regular file, unreadable, invalid UTF-8, or empty.
+ */
+export async function lintRunbookFile(
+  filePath: string,
+  options?: LintRunbookValidationOptions,
+): Promise<LintRunbookResult> {
+  const { absPath, content } = await readRunbookFile(filePath);
+  return lintRunbook(content, absPath, options);
+}
+
+/**
+ * Removes a stale sibling `.html` file when a runbook check fails or cannot render/write,
+ * ignoring missing files and non-file paths (such as directories).
+ */
+async function removeStaleHtmlIfFile(htmlPath: string): Promise<void> {
+  try {
+    const stat = await Deno.lstat(htmlPath);
+    if (stat.isFile || stat.isSymlink) {
+      await Deno.remove(htmlPath);
+    }
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) {
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Lints a runbook file (refusing dated filenames by default) and renders a dark-mode
+ * HTML page beside it when valid. Removes any existing sibling HTML on any non-pass outcome.
+ */
+export async function lintAndRenderRunbookFile(
+  filePath: string,
+  options?: LintAndRenderRunbookOptions,
+): Promise<LintRunbookResult> {
+  let absPath = "";
+  let content = "";
+  try {
+    ({ absPath, content } = await readRunbookFile(filePath));
+  } catch (err) {
+    if (filePath && filePath.trim() !== "") {
+      const candidatePath = path.resolve(expandHome(filePath.trim()));
+      const isDir = await Deno.stat(candidatePath).then((s) => s.isDirectory).catch(() => false);
+      if (!isDir) {
+        await removeStaleHtmlIfFile(resolveHtmlPath(candidatePath)).catch(() => {});
+      }
+    }
+    throw err;
+  }
+
+  const result = lintRunbook(content, absPath, {
+    rejectDatedFilename: options?.rejectDatedFilename ?? true,
+  });
+
+  const htmlPath = resolveHtmlPath(result.runbookPath);
+
+  if (!result.valid) {
+    await removeStaleHtmlIfFile(htmlPath);
+    return result;
+  }
+
+  const fallbackTitle = path.basename(
+    result.runbookPath,
+    path.extname(result.runbookPath),
+  );
+  const render = options?.renderImpl ?? renderDesignDoc;
+
+  let renderedHtml: string;
+  try {
+    renderedHtml = render(content, fallbackTitle, {
+      docDir: path.dirname(result.runbookPath),
+    });
+
+    if (!renderedHtml || renderedHtml.trim() === "") {
+      throw new Error(`Rendered HTML for ${result.runbookPath} is empty`);
+    }
+    if (!/<html\b[^>]*\bdata-theme=["']dark["']/i.test(renderedHtml)) {
+      throw new Error(
+        `Rendered HTML for ${result.runbookPath} is missing dark mode (data-theme="dark")`,
+      );
+    }
+  } catch (err) {
+    await removeStaleHtmlIfFile(htmlPath);
+    throw err;
+  }
+
+  try {
+    await Deno.writeTextFile(htmlPath, renderedHtml);
+  } catch (err) {
+    await removeStaleHtmlIfFile(htmlPath).catch(() => {});
+    throw new Error(
+      `Cannot write rendered runbook HTML to ${htmlPath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+
+  return {
+    ...result,
+    htmlPath,
+  };
 }
 
 /**
  * CLI runner for deno task design:lint-runbook <runbook.md>.
  */
-export async function runLintRunbookCli(args: string[]): Promise<number> {
+export async function runLintRunbookCli(
+  args: string[],
+  options?: LintAndRenderRunbookOptions,
+): Promise<number> {
   const flags = parseArgs(args, {
     boolean: ["help", "json"],
     string: ["runbook", "doc"],
@@ -445,12 +613,14 @@ export async function runLintRunbookCli(args: string[]): Promise<number> {
   if (flags.help) {
     console.log(`Usage: deno task design:lint-runbook <runbook.md> [options]
 
-Checks a manual verification runbook against required format rules:
+Checks a manual verification runbook against required format rules and renders a dark-mode HTML page on pass:
+  - Refuses a runbook whose filename carries a date (use <topic>-runbook.md).
   - Fails if the runbook lacks an H1 title or if the title carries a personal name.
   - Fails if the runbook lacks sequentially numbered '## STEP N' headings starting at 1.
   - Fails if a step contains placeholders instead of literal commands.
   - Fails if a step is missing what it proves or what a correct result looks like.
   - Fails if a step carries more than one action (multiple command blocks, sub-steps, or multiple surfaces).
+  - On pass, renders <runbook>.html beside the runbook in dark mode; does not render on failure.
 
 Arguments:
   <runbook.md>      Path to runbook markdown file
@@ -465,14 +635,14 @@ Options:
   }
 
   const runbookPath = flags.runbook || flags.doc || (flags._.length > 0 ? String(flags._[0]) : "");
-  if (!runbookPath) {
+  if (!runbookPath || runbookPath.trim() === "") {
     console.error("Error: Missing required runbook path.");
     console.error("Usage: deno task design:lint-runbook <runbook.md>");
     return 1;
   }
 
   try {
-    const result = await lintRunbookFile(runbookPath);
+    const result = await lintAndRenderRunbookFile(runbookPath, options);
 
     if (flags.json) {
       console.log(JSON.stringify(result, null, 2));
@@ -480,6 +650,9 @@ Options:
       console.log(
         `[design:lint-runbook] PASS: ${result.runbookPath} satisfies all runbook format rules.`,
       );
+      if (result.htmlPath) {
+        console.log(`[design:lint-runbook] Rendered HTML: ${result.htmlPath}`);
+      }
     } else {
       console.error(
         `[design:lint-runbook] FAIL: ${result.runbookPath} has ${result.violations.length} violation(s):`,
