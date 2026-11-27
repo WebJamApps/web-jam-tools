@@ -35,9 +35,24 @@ export interface LintDocOptions {
 export interface LintDesignDocOptions {
   nowImpl?: () => Date;
   premiseRows?: PremiseRow[];
+  decisionRowCount?: number;
   stateDir?: string;
   dropboxDir?: string;
   designDocsRoot?: string;
+}
+
+/**
+ * Converts a text heading into a URL-friendly slug.
+ * Shared with `scripts/render_design_doc.ts` so link-anchor validation and HTML rendering
+ * produce identical slugs.
+ */
+export function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, "")
+    .replace(/[\s_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 /** A half-open character range `[start, end)` on a single line that is a mention (inline code
@@ -899,16 +914,412 @@ function validateLoadBearingPremisesTable(
 }
 
 /**
+ * Extracts `##`, `###`, and `####` headings outside fenced code blocks and tracks the valid
+ * `#slug` anchors each heading produces (matching `scripts/render_design_doc.ts`).
+ */
+export function collectDocumentHeadings(lines: string[]): Map<string, Set<string>> {
+  const headings = new Map<string, Set<string>>();
+  const usedSlugs = new Set<string>();
+  let inCodeBlock = false;
+
+  for (const line of lines) {
+    if (/^\s*```/.test(line) || /^\s*~~~/.test(line)) {
+      inCodeBlock = !inCodeBlock;
+      continue;
+    }
+    if (inCodeBlock) continue;
+
+    const match = line.match(/^\s*(#{2,4})\s+(.+?)\s*$/);
+    if (!match) continue;
+
+    const headingText = match[2].replace(/\s+#+\s*$/, "").trim();
+    if (!headingText) continue;
+
+    const baseSlug = slugify(headingText) || "section";
+    let slug = baseSlug;
+    let counter = 2;
+    while (usedSlugs.has(slug)) {
+      slug = `${baseSlug}-${counter++}`;
+    }
+    usedSlugs.add(slug);
+
+    let key = headings.get(headingText.toLowerCase());
+    if (!key) {
+      key = new Set<string>();
+      headings.set(headingText.toLowerCase(), key);
+    }
+    key.add(slug);
+  }
+
+  return headings;
+}
+
+const DECISION_RECORD_HEADING_REGEX = /\b(?:decisions?\s+record|decision\s+log)\b|^decisions$/i;
+
+export interface DecisionRecordDataRow {
+  rowIndex: number; // 1-based data row index across decision-record tables
+  line: string;
+  lineNum: number;
+  outcomeCell: string;
+}
+
+/**
+ * Reads data rows from every decision-record table in the document (under headings matching
+ * `Decision record`, `Decisions record`, `Decision log`, or `Decisions` as a whole, matching
+ * `scripts/render_design_doc.ts`).
+ */
+export function readDecisionRecordDataRows(lines: string[]): DecisionRecordDataRow[] {
+  const results: DecisionRecordDataRow[] = [];
+  let inCodeBlock = false;
+  let inDecisionSection = false;
+  let currentHeader: TableRow | null = null;
+  let outcomeColIdx = -1;
+  let rowIndex = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*```/.test(line) || /^\s*~~~/.test(line)) {
+      inCodeBlock = !inCodeBlock;
+      currentHeader = null;
+      outcomeColIdx = -1;
+      continue;
+    }
+    if (inCodeBlock) continue;
+
+    const headingMatch = line.match(/^\s*#{1,6}\s+(.+?)\s*$/);
+    if (headingMatch) {
+      const headingText = headingMatch[1]
+        .replace(/\s+#+\s*$/, "")
+        .replace(/[*_`]/g, "")
+        .trim();
+      inDecisionSection = DECISION_RECORD_HEADING_REGEX.test(headingText);
+      currentHeader = null;
+      outcomeColIdx = -1;
+      continue;
+    }
+
+    if (!inDecisionSection) continue;
+
+    if (!line.trim().startsWith("|")) {
+      currentHeader = null;
+      outcomeColIdx = -1;
+      continue;
+    }
+
+    const cells = splitTableRow(line);
+    if (cells.length === 0 || isTableSeparatorRow(cells)) continue;
+
+    if (!currentHeader) {
+      currentHeader = { line, lineNum: i + 1, cells };
+      outcomeColIdx = currentHeader.cells.findIndex((c) =>
+        /\boutcome\b/i.test(stripCellDecoration(c))
+      );
+      continue;
+    }
+
+    rowIndex++;
+    const outcomeCell = outcomeColIdx !== -1
+      ? (cells[outcomeColIdx] ?? "")
+      : (cells[cells.length - 1] ?? "");
+    results.push({ rowIndex, line, lineNum: i + 1, outcomeCell });
+  }
+
+  return results;
+}
+
+function extractDoubleQuotedSpans(text: string): string[] {
+  const spans: string[] = [];
+  const regex = new RegExp(
+    `"([^"]+)"|${CURLY_DOUBLE_OPEN}([^${CURLY_DOUBLE_CLOSE}]+)${CURLY_DOUBLE_CLOSE}`,
+    "g",
+  );
+  for (const match of text.matchAll(regex)) {
+    const value = (match[1] ?? match[2] ?? "").trim();
+    if (value) spans.push(value);
+  }
+  return spans;
+}
+
+function validateDecisionRecordRows(
+  lines: string[],
+  docHeadings: Map<string, Set<string>>,
+  decisionRowCount: number | undefined,
+): LintViolation[] {
+  if (decisionRowCount === undefined) return [];
+  const rows = readDecisionRecordDataRows(lines);
+  const violations: LintViolation[] = [];
+
+  for (const row of rows) {
+    if (row.rowIndex <= decisionRowCount) continue;
+    const quotedSpans = extractDoubleQuotedSpans(row.outcomeCell);
+    if (quotedSpans.length === 0) {
+      violations.push({
+        rule: "history-table-must-point-at-body",
+        message:
+          `Decision record row ${row.rowIndex} outcome has no double-quoted heading name — cite at least one existing heading in double quotation marks.`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+      continue;
+    }
+
+    const hasValidHeading = quotedSpans.some((q) => docHeadings.has(q.toLowerCase()));
+    if (!hasValidHeading) {
+      violations.push({
+        rule: "history-table-must-point-at-body",
+        message: `Decision record row ${row.rowIndex} outcome quotes unknown heading(s) (${
+          quotedSpans.map((q) => `"${q}"`).join(", ")
+        }) — cite an existing heading in the document.`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+    }
+  }
+
+  return violations;
+}
+
+const REPO_PATH_TOKEN_REGEX =
+  /(?:^|[\s(\["'“‘])((?:scripts|src|skills|hooks|test|docs|git-hooks|\.github)\/[^\s)\]"'”’>,;]*)/g;
+const CLI_LONG_FLAG_REGEX = /(?:^|[\s(\["'“‘])(--[a-z][a-z0-9-]*)(?=$|[\s.,;:!?)\]"'”’>=])/g;
+
+function validateMarkdownSectionLink(
+  linkText: string,
+  href: string,
+  rawVersion: string,
+  lineNum: number,
+  line: string,
+  docHeadings: Map<string, Set<string>>,
+): LintViolation | null {
+  if (!href.startsWith("#")) {
+    return {
+      rule: "history-table-must-point-at-body",
+      message:
+        `Revision History row ${rawVersion} uses non-anchor link "${href}" for "${linkText}" — use a clickable section link (#slug).`,
+      line: lineNum,
+      lineContent: line,
+    };
+  }
+  const slug = href.slice(1);
+  const validSlugs = docHeadings.get(linkText.trim().toLowerCase());
+  if (!validSlugs) {
+    return {
+      rule: "history-table-must-point-at-body",
+      message:
+        `Revision History row ${rawVersion} links unknown section heading "${linkText}" (${href}) — link an existing ##, ###, or #### heading in the document.`,
+      line: lineNum,
+      lineContent: line,
+    };
+  }
+  if (!validSlugs.has(slug)) {
+    return {
+      rule: "history-table-must-point-at-body",
+      message:
+        `Revision History row ${rawVersion} link for "${linkText}" uses broken anchor #${slug} (expected #${
+          slugify(linkText)
+        }).`,
+      line: lineNum,
+      lineContent: line,
+    };
+  }
+  return null;
+}
+
+function stripHeadingMentionsForCodeReviewScan(
+  cellText: string,
+  docHeadings: Map<string, Set<string>>,
+): string {
+  let remaining = cellText.replace(
+    /\[([^\]]+)\]\((#[^)\s]+)\)/g,
+    (full, linkText) => (docHeadings.has(String(linkText).trim().toLowerCase()) ? " " : full),
+  );
+  const quoteRegex = new RegExp(
+    `"([^"]+)"|${CURLY_DOUBLE_OPEN}([^${CURLY_DOUBLE_CLOSE}]+)${CURLY_DOUBLE_CLOSE}`,
+    "g",
+  );
+  remaining = remaining.replace(quoteRegex, (full, straight, curly) => {
+    const inner = String(straight ?? curly ?? "").trim().toLowerCase();
+    return docHeadings.has(inner) ? " " : full;
+  });
+  return remaining;
+}
+
+function findCodeReviewArtifacts(
+  cellText: string,
+  docHeadings: Map<string, Set<string>>,
+): string[] {
+  const remaining = stripHeadingMentionsForCodeReviewScan(cellText, docHeadings);
+  const offending: string[] = [];
+
+  const backtickRanges = computeBacktickSpanRanges(remaining);
+  for (const r of backtickRanges) {
+    offending.push(remaining.slice(r.start, r.end));
+  }
+
+  let withoutBackticks = "";
+  let cursor = 0;
+  for (const r of backtickRanges) {
+    withoutBackticks += remaining.slice(cursor, r.start) + " ";
+    cursor = r.end;
+  }
+  withoutBackticks += remaining.slice(cursor);
+
+  REPO_PATH_TOKEN_REGEX.lastIndex = 0;
+  let pathMatch: RegExpExecArray | null;
+  while ((pathMatch = REPO_PATH_TOKEN_REGEX.exec(withoutBackticks)) !== null) {
+    const cleaned = pathMatch[1].replace(/[.,;:!?]+$/, "");
+    if (cleaned) offending.push(cleaned);
+  }
+
+  CLI_LONG_FLAG_REGEX.lastIndex = 0;
+  let flagMatch: RegExpExecArray | null;
+  while ((flagMatch = CLI_LONG_FLAG_REGEX.exec(withoutBackticks)) !== null) {
+    offending.push(flagMatch[1]);
+  }
+
+  return offending;
+}
+
+function validateNewestRevisionHistoryRow(
+  newestRow: TableRow,
+  rawVersion: string,
+  headerRow: TableRow,
+  docHeadings: Map<string, Set<string>>,
+): LintViolation[] {
+  const violations: LintViolation[] = [];
+  const reqColIdx = headerRow.cells.findIndex((c) =>
+    /^added\s*\/\s*modified\s+requirements$/i.test(stripCellDecoration(c))
+  );
+  const whyColIdx = headerRow.cells.findIndex((c) => /^why$/i.test(stripCellDecoration(c)));
+  const summaryColIdx = headerRow.cells.findIndex((c) => /^summary$/i.test(stripCellDecoration(c)));
+
+  if (reqColIdx !== -1) {
+    const reqCell = newestRow.cells[reqColIdx] ?? "";
+    const links = Array.from(reqCell.matchAll(/\[([^\]]+)\]\(([^)]+)\)/g));
+    if (links.length === 0) {
+      violations.push({
+        rule: "history-table-must-point-at-body",
+        message:
+          `Revision History row ${rawVersion} 'Added / Modified Requirements' must carry at least one clickable section link labeled 'Added:' or 'Modified:'${
+            reqCell.trim() ? ` (found "${reqCell.trim()}")` : ""
+          }.`,
+        line: newestRow.lineNum,
+        lineContent: newestRow.line,
+      });
+    } else {
+      const clauses = reqCell.split(";").map((c) => c.trim()).filter(Boolean);
+      for (const clause of clauses) {
+        if (!/^(?:added|modified)\s*:/i.test(clause)) {
+          violations.push({
+            rule: "history-table-must-point-at-body",
+            message:
+              `Revision History row ${rawVersion} 'Added / Modified Requirements' clause "${clause}" must be preceded by 'Added:' or 'Modified:'.`,
+            line: newestRow.lineNum,
+            lineContent: newestRow.line,
+          });
+        }
+      }
+
+      for (const m of links) {
+        const err = validateMarkdownSectionLink(
+          m[1],
+          m[2],
+          rawVersion,
+          newestRow.lineNum,
+          newestRow.line,
+          docHeadings,
+        );
+        if (err) violations.push(err);
+      }
+
+      const leftover = reqCell
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, " ")
+        .replace(/\b(?:added|modified)\s*:/gi, " ")
+        .replace(/\b(?:and)\b/gi, " ")
+        .replace(/[,;&\s]+/g, "")
+        .trim();
+      if (leftover.length > 0) {
+        violations.push({
+          rule: "history-table-must-point-at-body",
+          message:
+            `Revision History row ${rawVersion} 'Added / Modified Requirements' contains unlinked text ("${leftover}") — use clickable [Heading Text](#slug) links.`,
+          line: newestRow.lineNum,
+          lineContent: newestRow.line,
+        });
+      }
+    }
+  } else if (summaryColIdx !== -1) {
+    const summaryCell = newestRow.cells[summaryColIdx] ?? "";
+    const links = Array.from(summaryCell.matchAll(/\[([^\]]+)\]\(([^)]+)\)/g));
+    let hasValidLink = false;
+    let hasBrokenLink = false;
+    for (const m of links) {
+      const err = validateMarkdownSectionLink(
+        m[1],
+        m[2],
+        rawVersion,
+        newestRow.lineNum,
+        newestRow.line,
+        docHeadings,
+      );
+      if (err) {
+        hasBrokenLink = true;
+        violations.push(err);
+      } else {
+        hasValidLink = true;
+      }
+    }
+    const quotedSpans = extractDoubleQuotedSpans(summaryCell);
+    const hasValidQuotedHeading = quotedSpans.some((q) => docHeadings.has(q.toLowerCase()));
+    if (!hasValidLink && !hasValidQuotedHeading && !hasBrokenLink) {
+      const unknownDetail = quotedSpans.length > 0
+        ? ` (quoted text ${
+          quotedSpans.map((q) => `"${q}"`).join(", ")
+        } matches no heading in the document)`
+        : "";
+      violations.push({
+        rule: "history-table-must-point-at-body",
+        message:
+          `Revision History row ${rawVersion} Summary must name at least one existing heading in double quotation marks or via a clickable section link${unknownDetail}.`,
+        line: newestRow.lineNum,
+        lineContent: newestRow.line,
+      });
+    }
+  }
+
+  const proseCell = whyColIdx !== -1
+    ? (newestRow.cells[whyColIdx] ?? "")
+    : (reqColIdx === -1 && summaryColIdx !== -1 ? (newestRow.cells[summaryColIdx] ?? "") : null);
+  if (proseCell !== null) {
+    const offending = findCodeReviewArtifacts(proseCell, docHeadings);
+    if (offending.length > 0) {
+      violations.push({
+        rule: "revision-history-code-review-detail",
+        message: `Revision History row ${rawVersion} contains code-review detail (${
+          offending.join(", ")
+        }) — the revision table is for human readers (state why the design changed and link added/modified requirement headings, not code-review detail).`,
+        line: newestRow.lineNum,
+        lineContent: newestRow.line,
+      });
+    }
+  }
+
+  return violations;
+}
+
+/**
  * Validates the `## Revision History` table:
  * - Table must have at least one data row
  * - Table must have a 'Version' column and a 'Date' column
  * - Every version must parse as a semantic version (MAJOR.MINOR.PATCH)
  * - Every date must parse as an ISO date (YYYY-MM-DD)
  * - Rows must be ordered oldest to newest (not newest-first)
+ * - Newest row must satisfy "History tables point at the body" (links/quotes and no code-review tokens)
  */
 function validateRevisionHistoryTable(
   tableLines: Array<{ line: string; lineNum: number }>,
   headingLineNum: number,
+  docHeadings: Map<string, Set<string>>,
 ): LintViolation[] {
   const violations: LintViolation[] = [];
   const rows = tableLines
@@ -1061,6 +1472,18 @@ function validateRevisionHistoryTable(
         break;
       }
     }
+  }
+
+  const newestParsed = parsedRows[parsedRows.length - 1];
+  if (newestParsed) {
+    violations.push(
+      ...validateNewestRevisionHistoryRow(
+        newestParsed.row,
+        newestParsed.rawVersion || "(unknown)",
+        headerRow,
+        docHeadings,
+      ),
+    );
   }
 
   return violations;
@@ -1450,15 +1873,18 @@ export function lintDesignDoc(
     });
   }
 
-  // 10. Check Revision History table if section is present (web-jam-tools#892)
+  // 10. Check Revision History table and new decision-record rows ("History tables point at the body")
+  const docHeadings = collectDocumentHeadings(lines);
   if (revisionHistoryHeadingFound) {
     violations.push(
       ...validateRevisionHistoryTable(
         revisionHistoryTableLines,
         revisionHistoryHeadingLineNum,
+        docHeadings,
       ),
     );
   }
+  violations.push(...validateDecisionRecordRows(lines, docHeadings, options.decisionRowCount));
 
   // 10. Body-path check ("Paths the design names"): every path named in the body outside
   // fenced code blocks, the revision table, Load-bearing Premises, Appendix* sections, and
@@ -1834,7 +2260,11 @@ export async function lintDesignDocFile(
   }
 
   const record = await loadGate1Record(absPath, { stateDir: options.stateDir });
-  return lintDesignDoc(content, absPath, { ...options, premiseRows: record?.premiseRows ?? [] });
+  return lintDesignDoc(content, absPath, {
+    ...options,
+    premiseRows: record?.premiseRows ?? [],
+    decisionRowCount: options.decisionRowCount ?? record?.decisionRowCount,
+  });
 }
 
 /**
@@ -1878,6 +2308,9 @@ Checks a design document against the skill's body rules:
     exactly match a stored Gate 1 row. An unreadable record refuses the check.
   - Fails if the document names a target issue it was invoked on but carries no verbatim
     blockquote of that issue's directive lines.
+  - Fails if the newest Revision History row lacks valid section links/headings or carries code-review
+    tokens (backtick spans, repo paths, CLI long flags), or if new decision-record rows after the
+    stored Gate 1 count fail to name an existing heading in double quotation marks.
   - Fails if the document's body names a path not covered by "Where Things Live".
   - Fails if the document's body shares a run of 12 or more consecutive words with another design
     document's body. When another design document cannot be read, refuses naming it.
