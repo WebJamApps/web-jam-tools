@@ -61,12 +61,26 @@ Deno.test("extractDirectCommandHookScripts extracts Claude and agy direct comman
   assert(direct.has("block-production-media-change.sh"));
   assert(direct.has("scan-output-for-secrets.sh"));
 
+  // Must include the prompt hook (Claude Code UserPromptSubmit, agy PreInvocation)
+  assert(direct.has("block-personal-numbers-prompt.sh"));
+
   // Must include agy direct command wrapper
   assert(direct.has("agy-hook-shim.sh"));
 
   // Deliberately must NOT include bash-invoked targets or non-direct scripts
   assert(!direct.has("agy-model-guard.sh"));
   assert(!direct.has("block-agy-gmail-send-delete.sh"));
+});
+
+Deno.test("extractDirectCommandHookScripts reads each prompt hook array on its own", () => {
+  assertEquals(
+    [...extractDirectCommandHookScripts("USER_PROMPT_SUBMIT_HOOKS=(claude.sh)\n")],
+    ["claude.sh"],
+  );
+  assertEquals(
+    [...extractDirectCommandHookScripts("AGY_ONLY_PRE_INVOCATION_HOOKS=(agy.sh)\n")],
+    ["agy.sh"],
+  );
 });
 
 Deno.test("getGitTrackedModes reads tracked modes from git index", async () => {

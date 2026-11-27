@@ -147,6 +147,8 @@ Deno.test("fresh home: exact nested registrations, matcher fidelity, sandbox and
         undefined,
         "require-clear-communication.sh",
       ]],
+      // The prompt check is a UserPromptSubmit hook on Codex (web-jam-tools#1861).
+      UserPromptSubmit: [[undefined, "block-personal-numbers-prompt.sh"]],
     };
     const hooks = config.hooks as Record<string, { matcher?: string; hooks: unknown[] }[]>;
     for (const event of EVENTS) {

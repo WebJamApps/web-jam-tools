@@ -55,6 +55,7 @@ const GROUP_HEADERS: Record<Event, RegExp> = {
   PreToolUse: /^\s*\[\[\s*hooks\s*\.\s*PreToolUse\s*\]\]\s*(?:#.*)?$/,
   PostToolUse: /^\s*\[\[\s*hooks\s*\.\s*PostToolUse\s*\]\]\s*(?:#.*)?$/,
   Stop: /^\s*\[\[\s*hooks\s*\.\s*Stop\s*\]\]\s*(?:#.*)?$/,
+  UserPromptSubmit: /^\s*\[\[\s*hooks\s*\.\s*UserPromptSubmit\s*\]\]\s*(?:#.*)?$/,
 };
 
 const HANDLER_HEADERS: Record<Event, RegExp> = {
@@ -62,6 +63,7 @@ const HANDLER_HEADERS: Record<Event, RegExp> = {
   PreToolUse: /^\s*\[\[\s*hooks\s*\.\s*PreToolUse\s*\.\s*hooks\s*\]\]\s*(?:#.*)?$/,
   PostToolUse: /^\s*\[\[\s*hooks\s*\.\s*PostToolUse\s*\.\s*hooks\s*\]\]\s*(?:#.*)?$/,
   Stop: /^\s*\[\[\s*hooks\s*\.\s*Stop\s*\.\s*hooks\s*\]\]\s*(?:#.*)?$/,
+  UserPromptSubmit: /^\s*\[\[\s*hooks\s*\.\s*UserPromptSubmit\s*\.\s*hooks\s*\]\]\s*(?:#.*)?$/,
 };
 
 /** Line ranges [start, end) of the installer's own hook tables for one event. */

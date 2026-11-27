@@ -1,6 +1,13 @@
 import { join } from "@std/path";
 
-export const EVENTS = ["SessionStart", "PreToolUse", "PostToolUse", "Stop"] as const;
+// UserPromptSubmit carries the prompt check (web-jam-tools#1861).
+export const EVENTS = [
+  "SessionStart",
+  "PreToolUse",
+  "PostToolUse",
+  "Stop",
+  "UserPromptSubmit",
+] as const;
 export type Event = typeof EVENTS[number];
 export interface Registration {
   matcher?: string;
@@ -49,7 +56,13 @@ const EXCLUDED_CODEX_HOOKS = new Set<string>([
 ]);
 
 export function readHookRegistrations(source: string, home: string): Record<Event, Registration[]> {
-  const arrays = ["SESSION_START_HOOKS", "PRE_TOOL_USE_HOOKS", "POST_TOOL_USE_HOOKS", "STOP_HOOKS"];
+  const arrays = [
+    "SESSION_START_HOOKS",
+    "PRE_TOOL_USE_HOOKS",
+    "POST_TOOL_USE_HOOKS",
+    "STOP_HOOKS",
+    "USER_PROMPT_SUBMIT_HOOKS",
+  ];
   return Object.fromEntries(EVENTS.map((event, index) => {
     const entries = arrayEntries(source, arrays[index]);
     if (event === "PreToolUse") {

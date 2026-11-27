@@ -329,6 +329,7 @@ export const CLAUDE_CODE_HOOK_ARRAYS = [
   "STOP_HOOKS",
   "SUBAGENT_START_HOOKS",
   "SUBAGENT_STOP_HOOKS",
+  "USER_PROMPT_SUBMIT_HOOKS",
   "PRE_TOOL_USE_HOOKS",
   "POST_TOOL_USE_HOOKS",
 ] as const;
@@ -580,7 +581,8 @@ export function extractExpectedAgyHooksFromInstaller(
 
   // Same-event coverage as install-hooks.sh's merge_agy_pre_tool_use_args /
   // merge_agy_post_tool_use_args: PRE_TOOL_USE_HOOKS + AGY_ONLY_PRE_TOOL_USE_HOOKS
-  // + POST_TOOL_USE_HOOKS. SESSION_START_HOOKS/STOP_HOOKS are intentionally
+  // + POST_TOOL_USE_HOOKS, plus the flat AGY_ONLY_PRE_INVOCATION_HOOKS read
+  // below. SESSION_START_HOOKS/STOP_HOOKS are intentionally
   // excluded — agy's hooks.json never gets a SessionStart or Stop entry
   // (--forbid-lifecycle-hooks, web-jam-tools#432 finding 9).
   const arrayNames = [
@@ -601,6 +603,11 @@ export function extractExpectedAgyHooksFromInstaller(
         if (scriptName.endsWith(".sh")) expected.add(scriptName);
       }
     }
+  }
+
+  // PreInvocation items are bare script names, not matcher::script pairs.
+  for (const script of readInstallerHookArray(installerContent, "AGY_ONLY_PRE_INVOCATION_HOOKS")) {
+    expected.add(script);
   }
 
   // Honour the installer's own agy skips (`[ "$name" = "x.sh" ] && continue`
@@ -628,9 +635,19 @@ export function getRegisteredAgyHookBasenames(agyHooksPath: string): Set<string>
     const data = JSON.parse(raw);
     if (!data.hooks || typeof data.hooks !== "object") return registered;
 
-    for (const bucket of Object.values(data.hooks)) {
+    for (const [eventName, bucket] of Object.entries(data.hooks)) {
       if (!Array.isArray(bucket)) continue;
       for (const entry of bucket) {
+        // PreInvocation entries are flat { type, command } and run the hook
+        // directly, so the hook is the FIRST token (arguments follow it). A
+        // nested one is not counted: agy rejects it.
+        if (eventName === "PreInvocation") {
+          if (entry && typeof entry.command === "string") {
+            const base = path.basename(entry.command.trim().split(/\s+/)[0]);
+            if (base.endsWith(".sh")) registered.add(base);
+          }
+          continue;
+        }
         if (!entry || !Array.isArray(entry.hooks)) continue;
         for (const hook of entry.hooks) {
           if (hook && typeof hook.command === "string") {

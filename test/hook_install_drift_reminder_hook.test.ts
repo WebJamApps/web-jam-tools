@@ -25,6 +25,7 @@ import {
   extractScriptPathFromCommand,
   extractSurfaceOnlyHooksFromInstaller,
   formatDriftMessage,
+  getRegisteredAgyHookBasenames,
   readInstallerHookArray,
 } from "../hooks/lib/check_hook_install_drift.ts";
 
@@ -1066,6 +1067,29 @@ Deno.test("extractExpectedAgyHooksFromInstaller honours the installer's agy skip
   const expected = extractExpectedAgyHooksFromInstaller(real);
   assert(!expected.has("haiku-only-gmail-gate.sh"));
   assert(expected.has("block-agy-gmail-send-delete.sh"));
+});
+
+Deno.test("agy drift covers flat PreInvocation hooks", async () => {
+  assertEquals(
+    [...extractExpectedAgyHooksFromInstaller("AGY_ONLY_PRE_INVOCATION_HOOKS=(prompt.sh)\n")],
+    ["prompt.sh"],
+  );
+
+  const file = await Deno.makeTempFile({ suffix: ".json" });
+  try {
+    const command = "$HOME/.claude/hooks/prompt.sh --surface agy";
+    const write = (entry: unknown) =>
+      Deno.writeTextFile(file, JSON.stringify({ hooks: { PreInvocation: [entry] } }));
+
+    await write({ type: "command", command });
+    assertEquals([...getRegisteredAgyHookBasenames(file)], ["prompt.sh"]);
+
+    // agy rejects a nested entry, so it does not count as registered.
+    await write({ hooks: [{ type: "command", command }] });
+    assertEquals([...getRegisteredAgyHookBasenames(file)], []);
+  } finally {
+    await Deno.remove(file);
+  }
 });
 
 // --- Claude Code drift check and surface-only hooks (web-jam-tools#1968) ---

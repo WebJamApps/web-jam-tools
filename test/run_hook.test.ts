@@ -601,3 +601,50 @@ Deno.test("run_hook.sh: --discard-stdout suppresses child stdout on exit 0", asy
   assertEquals(res.code, 0);
   assertEquals(res.stdout, "");
 });
+
+// The prompt check (web-jam-tools#1861) fails closed in each tool's own refusal form.
+for (
+  const [label, surface, event, expect] of [
+    ["agy PreInvocation", "agy", "PreInvocation", "agy"],
+    ["Codex UserPromptSubmit", "codex", "UserPromptSubmit", "codex"],
+    ["Claude Code UserPromptSubmit", "claude", "UserPromptSubmit", "claude"],
+  ] as const
+) {
+  Deno.test(`run_hook.sh: missing Deno on the ${label} prompt check refuses the message`, async () => {
+    const res = await runRunner(
+      [
+        "--group",
+        "safety",
+        "--name",
+        "block-personal-numbers-prompt",
+        "--surface",
+        surface,
+        "--event",
+        event,
+        "deno",
+        "run",
+        "check.ts",
+      ],
+      "{}",
+      { PATH: "/usr/bin:/bin" },
+    );
+    const reason =
+      "BLOCKED (block-personal-numbers-prompt): safety guard could not run (Deno is unavailable on PATH), so your message was not sent.";
+    if (expect === "claude") {
+      assertEquals(res.code, 2);
+      assertEquals(res.stdout, "");
+      assert(res.stderr.includes("Refusing action (safety default: fail closed)"));
+      return;
+    }
+    assertEquals(res.code, 0);
+    assertEquals(
+      JSON.parse(res.stdout),
+      expect === "agy"
+        ? {
+          injectSteps: [{ errorMessage: { userMessage: reason } }],
+          terminationBehavior: "terminate",
+        }
+        : { decision: "block", reason },
+    );
+  });
+}

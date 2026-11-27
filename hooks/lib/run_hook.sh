@@ -104,6 +104,7 @@ if [ -z "$GROUP" ]; then
     block-human-only-credentials*|\
     block-private-folder-read*|\
     block-personal-numbers-read*|\
+    block-personal-numbers-prompt*|\
     block-production-media-change*|\
     require-approval-token-on-issue-write*|\
     block-agy-gmail-send-delete*|\
@@ -202,8 +203,33 @@ emit_workflow_note() {
   fi
 }
 
+# A prompt check (web-jam-tools#1861) refuses through a reply on stdout with exit 0 on agy
+# (PreInvocation) and Codex (UserPromptSubmit); every other safety refusal on those two is
+# unchanged, and Claude Code refuses by exit 2.
+prompt_refusal_reply() {
+  [ "$EVENT" = "PreInvocation" ] || { [ "$EVENT" = "UserPromptSubmit" ] && [ "$SURFACE" = "codex" ]; }
+}
+
+safety_exit() {
+  if [ "$SURFACE" = "agy" ] || prompt_refusal_reply; then
+    exit 0
+  fi
+  exit 2
+}
+
 emit_safety_refusal() {
   local reason="$1"
+  if prompt_refusal_reply; then
+    local escaped
+    escaped=$(printf 'BLOCKED (%s): safety guard could not run (%s), so your message was not sent.' "$NAME" "$reason" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')
+    if [ "$EVENT" = "PreInvocation" ]; then
+      printf '{"injectSteps":[{"errorMessage":{"userMessage":"%s"}}],"terminationBehavior":"terminate"}\n' "$escaped"
+    else
+      printf '{"decision":"block","reason":"%s"}\n' "$escaped"
+    fi
+    echo "BLOCKED ($NAME): safety guard could not run ($reason). Refusing the message (safety default: fail closed)." >&2
+    return
+  fi
   if [ "$SURFACE" = "agy" ]; then
     local escaped
     escaped=$(printf 'BLOCKED (%s): safety guard could not run (%s).' "$NAME" "$reason" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')
@@ -244,11 +270,7 @@ fi
 if [ -z "$DENO_BIN" ]; then
   if [ "$GROUP" = "safety" ]; then
     emit_safety_refusal "Deno is unavailable on PATH"
-    if [ "$SURFACE" = "agy" ]; then
-      exit 0
-    else
-      exit 2
-    fi
+    safety_exit
   else
     note="$(get_workflow_note "$NAME: Deno is unavailable on PATH; proceeding via workflow default.")"
     emit_workflow_note "$note" "$EVENT"
@@ -297,11 +319,7 @@ elif [ "$STATUS" -eq 2 ]; then
 elif [ "$STATUS" -eq 124 ]; then
   if [ "$GROUP" = "safety" ]; then
     emit_safety_refusal "checker timed out after $TIMEOUT"
-    if [ "$SURFACE" = "agy" ]; then
-      exit 0
-    else
-      exit 2
-    fi
+    safety_exit
   else
     if [ "$NAME" = "check-issue-citation-on-write" ]; then
       note="$(get_workflow_note "issue-citation guard: citation check could not run (checker timed out after $TIMEOUT); proceeding via workflow default.")"
@@ -315,11 +333,7 @@ else
   if [ "$GROUP" = "safety" ]; then
     cat "$STDERR_FILE" >&2
     emit_safety_refusal "checker failed with exit code $STATUS"
-    if [ "$SURFACE" = "agy" ]; then
-      exit 0
-    else
-      exit 2
-    fi
+    safety_exit
   else
     if [ "$NAME" = "check-issue-citation-on-write" ]; then
       note="$(get_workflow_note "issue-citation guard: citation check could not run (checker exited $STATUS); proceeding via workflow default.")"
