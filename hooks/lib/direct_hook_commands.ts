@@ -10,9 +10,11 @@
  *    - STOP_HOOKS (direct invocation: $HOME/.claude/hooks/<name>)
  *    - PRE_TOOL_USE_HOOKS (direct invocation: $HOME/.claude/hooks/<name>)
  *    - POST_TOOL_USE_HOOKS (direct invocation: $HOME/.claude/hooks/<name>)
+ *    - USER_PROMPT_SUBMIT_HOOKS (direct invocation: $HOME/.claude/hooks/<name>)
  *
  * 2. agy / Antigravity surface (hooks.json):
  *    - Direct command invoked by agy: hooks/agy-hook-shim.sh (via agy_shim_arg)
+ *    - AGY_ONLY_PRE_INVOCATION_HOOKS (direct invocation: $HOME/.claude/hooks/<name> --surface agy)
  *
  * Deliberately excludes scripts invoked via `bash <path>` (such as the target hooks
  * wrapped by agy-hook-shim.sh: agy-model-guard.sh, block-agy-gmail-send-delete.sh),
@@ -21,6 +23,7 @@
  */
 
 import * as path from "jsr:@std/path@^1.0.0";
+import { readInstallerHookArray } from "./check_hook_install_drift.ts";
 
 /**
  * Parse scripts/install-hooks.sh to extract the set of hook script basenames
@@ -106,6 +109,14 @@ export function extractDirectCommandHookScripts(
         const scriptName = clean.slice(sep + 2).trim();
         if (scriptName.endsWith(".sh")) directHooks.add(scriptName);
       }
+    }
+  }
+
+  // 5b. Prompt hooks: Claude Code UserPromptSubmit and agy PreInvocation, both
+  // run as a literal direct command (web-jam-tools#1861).
+  for (const arrayName of ["USER_PROMPT_SUBMIT_HOOKS", "AGY_ONLY_PRE_INVOCATION_HOOKS"]) {
+    for (const script of readInstallerHookArray(installerContent, arrayName)) {
+      directHooks.add(script);
     }
   }
 
