@@ -92,6 +92,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   // PreToolUse guard (web-jam-tools#1860) — refuses an agent read of a file
   // holding a Social Security, card, routing or bank account number.
   "block-personal-numbers-read.sh",
+  // UserPromptSubmit / agy PreInvocation check (web-jam-tools#1861) — refuses a
+  // typed message holding one of those numbers before the model sees it.
+  "block-personal-numbers-prompt.sh",
   // PreToolUse guard (web-jam-tools#1580) — refuses changing existing production
   // media or removing/moving lead-sheet documents in ~/Dropbox/joshandmariamusic.
   "block-production-media-change.sh",
