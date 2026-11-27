@@ -895,3 +895,234 @@ Deno.test("edit-issue: setPriority accepts both new I_ and legacy MDU6 node IDs 
     assertEquals(calls.some((cmd) => cmd[2] === "graphql"), false);
   }
 });
+
+const TYPE_AND_PARENT_BASE = ["--repo", "WebJamApps/web-jam-tools", "--issue", "10"];
+
+const REPO_ISSUE_TYPES = [
+  { id: "IT_task", name: "Task" },
+  { id: "IT_bug", name: "Bug" },
+  { id: "IT_feature", name: "Feature" },
+  { id: "IT_epic", name: "Epic" },
+];
+
+/** Fake gh endpoints for `--type` and `--parent` tests. */
+function nativeFieldDeps(options: {
+  childNodeId?: string;
+  parentNodeId?: string;
+  readBackType?: string | null;
+  readBackParentUrl?: string | null;
+} = {}) {
+  const calls: string[][] = [];
+  const childNodeId = options.childNodeId ?? "I_child10";
+  const parentNodeId = options.parentNodeId ?? "I_parent20";
+  const deps = fakeDeps({
+    runCmd: (cmd) => {
+      calls.push(cmd);
+      let stdout: string;
+      if (cmd.at(-1) === ".node_id") {
+        stdout = cmd[2] === "repos/WebJamApps/web-jam-tools/issues/10"
+          ? `${childNodeId}\n`
+          : `${parentNodeId}\n`;
+      } else if (cmd[2] === "graphql") {
+        const query = cmd[4] ?? "";
+        if (query.includes("issueTypes")) {
+          stdout = JSON.stringify({
+            data: { repository: { issueTypes: { nodes: REPO_ISSUE_TYPES } } },
+          });
+        } else if (query.includes("updateIssue")) {
+          stdout = JSON.stringify({ data: { updateIssue: { clientMutationId: null } } });
+        } else if (query.includes("addSubIssue")) {
+          stdout = JSON.stringify({
+            data: { addSubIssue: { issue: { id: parentNodeId }, subIssue: { id: childNodeId } } },
+          });
+        } else {
+          throw new Error(`Unexpected graphql query: ${query}`);
+        }
+      } else if (cmd.at(-1) === ".type") {
+        stdout = options.readBackType === null
+          ? "null"
+          : JSON.stringify({ name: options.readBackType ?? "Task" });
+      } else if (cmd.at(-1) === ".parent_issue_url") {
+        stdout = options.readBackParentUrl === null ? "null" : (options.readBackParentUrl ??
+          "https://api.github.com/repos/WebJamApps/web-jam-tools/issues/20");
+      } else {
+        throw new Error(`Unexpected command: ${cmd.join(" ")}`);
+      }
+      return Promise.resolve({ code: 0, stdout, stderr: "" });
+    },
+  });
+  return { calls, deps };
+}
+
+for (const typeName of ["Task", "Bug", "Feature", "Epic"]) {
+  Deno.test(`edit-issue: sets and reads back native --type ${typeName}`, async () => {
+    const { calls, deps } = nativeFieldDeps({ readBackType: typeName });
+    const result = await capturedRun([...TYPE_AND_PARENT_BASE, "--type", typeName], deps);
+    assertEquals(result.code, 0, result.errors.join("\n"));
+    assertEquals(calls.length, 4);
+    assertEquals(calls[0], [
+      "gh",
+      "api",
+      "repos/WebJamApps/web-jam-tools/issues/10",
+      "--jq",
+      ".node_id",
+    ]);
+    assertStringIncludes(calls[1][4], "issueTypes");
+    assertStringIncludes(calls[2][4], "updateIssue");
+    assertStringIncludes(calls[2][4], `issueTypeId: "IT_${typeName.toLowerCase()}"`);
+    assertEquals(calls[3], [
+      "gh",
+      "api",
+      "repos/WebJamApps/web-jam-tools/issues/10",
+      "--jq",
+      ".type",
+    ]);
+    assertStringIncludes(result.logs.join("\n"), `Type to ${typeName}; read-back verified`);
+    assertEquals(result.errors, []);
+  });
+}
+
+for (
+  const args of [["--type", "task"], ["--type", "Story"], ["--type"], [
+    "--type",
+    "Task",
+    "--type",
+    "Bug",
+  ]]
+) {
+  Deno.test(`edit-issue: refuses invalid/duplicate ${args.join(" ")} before any call`, async () => {
+    const { calls, deps } = nativeFieldDeps();
+    const result = await capturedRun([...TYPE_AND_PARENT_BASE, ...args], deps);
+    assertEquals(result.code, 1);
+    assertEquals(calls, []);
+  });
+}
+
+Deno.test("edit-issue: --type Task mismatch returning Bug exits 1 naming both values", async () => {
+  const { deps } = nativeFieldDeps({ readBackType: "Bug" });
+  const result = await capturedRun([...TYPE_AND_PARENT_BASE, "--type", "Task"], deps);
+  assertEquals(result.code, 1);
+  assertStringIncludes(result.errors.join("\n"), '"Task"');
+  assertStringIncludes(result.errors.join("\n"), '"Bug"');
+  assertEquals(result.logs, []);
+});
+
+Deno.test("edit-issue: --type Task accepts legacy node ID MDU6SXNzdWUxNjEzNDY2MTU3", async () => {
+  const { calls, deps } = nativeFieldDeps({
+    childNodeId: "MDU6SXNzdWUxNjEzNDY2MTU3",
+    readBackType: "Task",
+  });
+  const result = await capturedRun([...TYPE_AND_PARENT_BASE, "--type", "Task"], deps);
+  assertEquals(result.code, 0, result.errors.join("\n"));
+  assertStringIncludes(calls[2][4], 'id: "MDU6SXNzdWUxNjEzNDY2MTU3"');
+});
+
+Deno.test("edit-issue: --type Task with 404 node ID stops before any mutation", async () => {
+  const { calls, deps } = nativeFieldDeps({
+    childNodeId: "gh: Not Found (HTTP 404)",
+  });
+  const result = await capturedRun([...TYPE_AND_PARENT_BASE, "--type", "Task"], deps);
+  assertEquals(result.code, 1);
+  assertEquals(calls.length, 1);
+  assertEquals(calls.some((cmd) => cmd[2] === "graphql"), false);
+  assertStringIncludes(result.errors.join("\n"), "could not resolve the issue node ID");
+});
+
+Deno.test("edit-issue: --parent 20 links under issue 20 and reads back", async () => {
+  const { calls, deps } = nativeFieldDeps({
+    readBackParentUrl: "https://api.github.com/repos/WebJamApps/web-jam-tools/issues/20",
+  });
+  const result = await capturedRun([...TYPE_AND_PARENT_BASE, "--parent", "20"], deps);
+  assertEquals(result.code, 0, result.errors.join("\n"));
+  assertEquals(calls.length, 4);
+  assertEquals(calls[0], [
+    "gh",
+    "api",
+    "repos/WebJamApps/web-jam-tools/issues/10",
+    "--jq",
+    ".node_id",
+  ]);
+  assertEquals(calls[1], [
+    "gh",
+    "api",
+    "repos/WebJamApps/web-jam-tools/issues/20",
+    "--jq",
+    ".node_id",
+  ]);
+  assertStringIncludes(calls[2][4], "addSubIssue");
+  assertStringIncludes(calls[2][4], 'issueId: "I_parent20"');
+  assertStringIncludes(calls[2][4], 'subIssueId: "I_child10"');
+  assertEquals(
+    calls[3],
+    ["gh", "api", "repos/WebJamApps/web-jam-tools/issues/10", "--jq", ".parent_issue_url"],
+  );
+  assertStringIncludes(
+    result.logs.join("\n"),
+    "Parent to WebJamApps/web-jam-tools#20; read-back verified",
+  );
+});
+
+Deno.test("edit-issue: --parent WebJamApps/JaMmusic#20 links across repositories and reads back", async () => {
+  const { calls, deps } = nativeFieldDeps({
+    readBackParentUrl: "https://api.github.com/repos/WebJamApps/JaMmusic/issues/20",
+  });
+  const result = await capturedRun(
+    [...TYPE_AND_PARENT_BASE, "--parent", "WebJamApps/JaMmusic#20"],
+    deps,
+  );
+  assertEquals(result.code, 0, result.errors.join("\n"));
+  assertEquals(calls[1], ["gh", "api", "repos/WebJamApps/JaMmusic/issues/20", "--jq", ".node_id"]);
+  assertStringIncludes(
+    result.logs.join("\n"),
+    "Parent to WebJamApps/JaMmusic#20; read-back verified",
+  );
+});
+
+for (
+  const args of [
+    ["--parent", "10"],
+    ["--parent", "WebJamApps/web-jam-tools#10"],
+    ["--parent", "0"],
+    ["--parent", "abc"],
+    ["--parent"],
+    ["--parent", "20", "--parent", "21"],
+  ]
+) {
+  Deno.test(`edit-issue: refuses invalid/self/duplicate ${args.join(" ")} before any call`, async () => {
+    const { calls, deps } = nativeFieldDeps();
+    const result = await capturedRun([...TYPE_AND_PARENT_BASE, ...args], deps);
+    assertEquals(result.code, 1);
+    assertEquals(calls, []);
+  });
+}
+
+Deno.test("edit-issue: --parent 20 with read-back returning no parent exits 1 naming the issue", async () => {
+  const { deps } = nativeFieldDeps({ readBackParentUrl: null });
+  const result = await capturedRun([...TYPE_AND_PARENT_BASE, "--parent", "20"], deps);
+  assertEquals(result.code, 1);
+  assertStringIncludes(result.errors.join("\n"), "WebJamApps/web-jam-tools#10");
+  assertStringIncludes(result.errors.join("\n"), "got none");
+  assertEquals(result.logs, []);
+});
+
+Deno.test("edit-issue: --type and --parent work with --dry-run and literal body flags", async () => {
+  const { calls: dryCalls, deps: dryDeps } = nativeFieldDeps();
+  const dry = await capturedRun(
+    [...TYPE_AND_PARENT_BASE, "--type", "Feature", "--parent", "20", "--dry-run"],
+    dryDeps,
+  );
+  assertEquals(dry.code, 0);
+  assertEquals(dryCalls, []);
+  assertStringIncludes(dry.logs.join("\n"), "Type to Feature");
+  assertStringIncludes(dry.logs.join("\n"), "parent WebJamApps/web-jam-tools#20");
+
+  for (const body of ["--type", "--parent"]) {
+    const { calls, deps } = footerDeps("");
+    const res = await capturedRun(
+      [...BASE, "--author", "Claude Code — Opus", "--body", body],
+      deps,
+    );
+    assertEquals(res.code, 0);
+    assertEquals(calls.filter((cmd) => cmd[1] === "api"), []);
+  }
+});

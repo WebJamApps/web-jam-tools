@@ -103,6 +103,24 @@ export const PRIORITY_MAP: Record<string, { id: number; node_id: string; name: s
   low: { id: 6835643, node_id: "IFSSO_kgDOAGhNuw", name: "Low" },
 };
 
+export const VALID_ISSUE_TYPES = ["Task", "Bug", "Feature", "Epic"] as const;
+export type IssueTypeName = (typeof VALID_ISSUE_TYPES)[number];
+
+const NEW_ISSUE_NODE_ID_RE = /^I_[A-Za-z0-9_-]+$/;
+const LEGACY_ISSUE_NODE_ID_RE =
+  /^MDU6(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})$/;
+
+/** Validate next-gen (`I_...`) or structurally valid Base64 legacy (`MDU6...`) issue node IDs. */
+export function isValidIssueNodeId(nodeId: string): boolean {
+  if (NEW_ISSUE_NODE_ID_RE.test(nodeId)) return true;
+  if (!LEGACY_ISSUE_NODE_ID_RE.test(nodeId)) return false;
+  try {
+    return atob(nodeId).length > 3;
+  } catch {
+    return false;
+  }
+}
+
 export const PRIORITY_FIELD_ID = 3909188;
 export const PRIORITY_FIELD_NODE_ID = "IFSS_kgDOADumRA";
 
@@ -118,6 +136,34 @@ export function priorityMutation(issueNodeId: string, optionNodeId: string): str
           }
         }) {
           clientMutationId
+        }
+      }
+    `;
+}
+
+/** Shared native issue-type mutation used by creation and guarded edits. */
+export function issueTypeMutation(issueNodeId: string, issueTypeId: string): string {
+  return `
+      mutation SetIssueType {
+        updateIssue(input: {
+          id: ${JSON.stringify(issueNodeId)},
+          issueTypeId: ${JSON.stringify(issueTypeId)}
+        }) {
+          clientMutationId
+        }
+      }
+    `;
+}
+
+/** Shared native sub-issue linking mutation used by creation and guarded edits. */
+export function addSubIssueMutation(parentNodeId: string, childNodeId: string): string {
+  return `
+      mutation AddSubIssue {
+        addSubIssue(input: { issueId: ${JSON.stringify(parentNodeId)}, subIssueId: ${
+    JSON.stringify(childNodeId)
+  } }) {
+          issue { id }
+          subIssue { id }
         }
       }
     `;
@@ -992,16 +1038,7 @@ export async function createIssueAndVerify(
       throw new Error(`Could not resolve child issue node ID for #${childNumber}`);
     }
 
-    const typeMutation = `
-      mutation SetIssueType {
-        updateIssue(input: {
-          id: "${childNodeId}",
-          issueTypeId: "${matchedType.id}"
-        }) {
-          clientMutationId
-        }
-      }
-    `;
+    const typeMutation = issueTypeMutation(childNodeId, matchedType.id);
 
     const tmRes = await deps.runCmd(["gh", "api", "graphql", "-f", `query=${typeMutation}`]);
     if (tmRes.code !== 0) {
@@ -1085,21 +1122,14 @@ export async function createIssueAndVerify(
       );
     }
 
-    const addSubIssueMutation = `
-      mutation AddSubIssue {
-        addSubIssue(input: { issueId: "${resolvedParentId}", subIssueId: "${childId}" }) {
-          issue { id }
-          subIssue { id }
-        }
-      }
-    `;
+    const subIssueQuery = addSubIssueMutation(resolvedParentId, childId);
 
     const mutRes = await deps.runCmd([
       "gh",
       "api",
       "graphql",
       "-f",
-      `query=${addSubIssueMutation}`,
+      `query=${subIssueQuery}`,
     ]);
     if (mutRes.code !== 0) {
       let errMsg = (mutRes.stderr || mutRes.stdout).trim();
