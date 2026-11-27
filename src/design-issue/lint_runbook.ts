@@ -125,15 +125,18 @@ function findLinePlaceholders(line: string): string[] {
 
 /**
  * Returns the matched date substring when a runbook's file basename carries a date
- * (such as `2026-10-25`, `2026_10_25`, `2026.10.25`, `10-25-2026`, or compact `20261025`),
- * ignoring directory components so dated parent folders do not trigger false positives.
+ * (such as `2026-10-25`, `2026_10_25`, `2026.10.25`, `10-25-2026`, `2026-10`, or compact
+ * `20261025`), ignoring directory components so dated parent folders do not trigger false
+ * positives and 8-digit non-year IDs (not starting with `19` or `20`) are ignored.
  */
 export function findDateInRunbookFilename(runbookPath: string): string | null {
   const trimmed = runbookPath.trim();
   if (!trimmed) return null;
   const basename = path.basename(trimmed);
   if (!basename) return null;
-  const match = basename.match(/(?:\d{4}[-_.]\d{2}[-_.]\d{2}|\d{2}[-_.]\d{2}[-_.]\d{4}|\d{8})/);
+  const match = basename.match(
+    /(?:\d{4}[-_.]\d{2}[-_.]\d{2}|\d{2}[-_.]\d{2}[-_.]\d{4}|\d{4}[-_.]\d{2}|(?:19|20)\d{6})/,
+  );
   return match ? match[0] : null;
 }
 
@@ -494,42 +497,86 @@ export async function lintRunbookFile(
 }
 
 /**
+ * Removes a stale sibling `.html` file when a runbook check fails or cannot render/write,
+ * ignoring missing files and non-file paths (such as directories).
+ */
+async function removeStaleHtmlIfFile(htmlPath: string): Promise<void> {
+  try {
+    const stat = await Deno.lstat(htmlPath);
+    if (stat.isFile || stat.isSymlink) {
+      await Deno.remove(htmlPath);
+    }
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) {
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
  * Lints a runbook file (refusing dated filenames by default) and renders a dark-mode
- * HTML page beside it when valid. Never writes HTML when validation fails.
+ * HTML page beside it when valid. Removes any existing sibling HTML on any non-pass outcome.
  */
 export async function lintAndRenderRunbookFile(
   filePath: string,
   options?: LintAndRenderRunbookOptions,
 ): Promise<LintRunbookResult> {
-  const { absPath, content } = await readRunbookFile(filePath);
+  let absPath = "";
+  let content = "";
+  try {
+    ({ absPath, content } = await readRunbookFile(filePath));
+  } catch (err) {
+    if (filePath && filePath.trim() !== "") {
+      const candidatePath = path.resolve(expandHome(filePath.trim()));
+      const isDir = await Deno.stat(candidatePath).then((s) => s.isDirectory).catch(() => false);
+      if (!isDir) {
+        await removeStaleHtmlIfFile(resolveHtmlPath(candidatePath)).catch(() => {});
+      }
+    }
+    throw err;
+  }
+
   const result = lintRunbook(content, absPath, {
     rejectDatedFilename: options?.rejectDatedFilename ?? true,
   });
 
+  const htmlPath = resolveHtmlPath(result.runbookPath);
+
   if (!result.valid) {
+    await removeStaleHtmlIfFile(htmlPath);
     return result;
   }
 
-  const htmlPath = resolveHtmlPath(result.runbookPath);
   const fallbackTitle = path.basename(
     result.runbookPath,
     path.extname(result.runbookPath),
   );
   const render = options?.renderImpl ?? renderDesignDoc;
-  const renderedHtml = render(content, fallbackTitle);
 
-  if (!renderedHtml || renderedHtml.trim() === "") {
-    throw new Error(`Rendered HTML for ${result.runbookPath} is empty`);
-  }
-  if (!/<html\b[^>]*\bdata-theme=["']dark["']/i.test(renderedHtml)) {
-    throw new Error(
-      `Rendered HTML for ${result.runbookPath} is missing dark mode (data-theme="dark")`,
-    );
+  let renderedHtml: string;
+  try {
+    renderedHtml = render(content, fallbackTitle, {
+      docDir: path.dirname(result.runbookPath),
+    });
+
+    if (!renderedHtml || renderedHtml.trim() === "") {
+      throw new Error(`Rendered HTML for ${result.runbookPath} is empty`);
+    }
+    if (!/<html\b[^>]*\bdata-theme=["']dark["']/i.test(renderedHtml)) {
+      throw new Error(
+        `Rendered HTML for ${result.runbookPath} is missing dark mode (data-theme="dark")`,
+      );
+    }
+  } catch (err) {
+    await removeStaleHtmlIfFile(htmlPath);
+    throw err;
   }
 
   try {
     await Deno.writeTextFile(htmlPath, renderedHtml);
   } catch (err) {
+    await removeStaleHtmlIfFile(htmlPath).catch(() => {});
     throw new Error(
       `Cannot write rendered runbook HTML to ${htmlPath}: ${
         err instanceof Error ? err.message : String(err)

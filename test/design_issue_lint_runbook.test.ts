@@ -625,6 +625,18 @@ Deno.test("findDateInRunbookFilename detects dates in basename and ignores paren
     findDateInRunbookFilename("setup-runbook-2026-02-03copy.md"),
     "2026-02-03",
   );
+  assertEquals(
+    findDateInRunbookFilename("topic-runbook-2026-10.md"),
+    "2026-10",
+  );
+  assertEquals(
+    findDateInRunbookFilename("topic-runbook-2026_10.md"),
+    "2026_10",
+  );
+  assertEquals(
+    findDateInRunbookFilename("topic-runbook-12345678.md"),
+    null,
+  );
 });
 
 Deno.test("lintRunbook rejects dated filenames when rejectDatedFilename is enabled", () => {
@@ -770,6 +782,174 @@ Deno.test("Outcome 3 (cannot tell): design:lint-runbook fails closed on unreadab
       "Cannot write rendered runbook HTML",
     );
     assertEquals(await runLintRunbookCli([blockedPath]), 1);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("design:lint-runbook removes existing sibling HTML when a re-check fails or render fails", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "lint-runbook-stale-html-" });
+  const runbookPath = path.join(tempDir, "cloudflare-setup-runbook.md");
+  const htmlPath = path.join(tempDir, "cloudflare-setup-runbook.html");
+
+  try {
+    // 1. Pass initially -> HTML is written.
+    await Deno.writeTextFile(runbookPath, COMPLIANT_RUNBOOK_BODY);
+    assertEquals(await runLintRunbookCli([runbookPath]), 0);
+    assertEquals((await Deno.stat(htmlPath)).isFile, true);
+
+    // 2. Edit into a failing state (remove Expected result) -> re-check exits 1 and removes stale HTML.
+    const failingBody = COMPLIANT_RUNBOOK_BODY.replace(
+      /\*\*Expected result:\*\*[\s\S]*$/,
+      "",
+    );
+    await Deno.writeTextFile(runbookPath, failingBody);
+    assertEquals(await runLintRunbookCli([runbookPath]), 1);
+    await assertRejects(
+      async () => {
+        await Deno.stat(htmlPath);
+      },
+      Deno.errors.NotFound,
+    );
+
+    // 3. Pass again, then fail during render (non-dark output) -> stale HTML is removed.
+    await Deno.writeTextFile(runbookPath, COMPLIANT_RUNBOOK_BODY);
+    assertEquals(await runLintRunbookCli([runbookPath]), 0);
+    assertEquals((await Deno.stat(htmlPath)).isFile, true);
+    assertEquals(
+      await runLintRunbookCli([runbookPath], {
+        renderImpl: () => '<html lang="en" data-theme="light"><body>ok</body></html>',
+      }),
+      1,
+    );
+    await assertRejects(
+      async () => {
+        await Deno.stat(htmlPath);
+      },
+      Deno.errors.NotFound,
+    );
+
+    // 4. Pass again, then empty the runbook file -> re-check exits 1 and removes stale HTML.
+    await Deno.writeTextFile(runbookPath, COMPLIANT_RUNBOOK_BODY);
+    assertEquals(await runLintRunbookCli([runbookPath]), 0);
+    assertEquals((await Deno.stat(htmlPath)).isFile, true);
+    await Deno.writeTextFile(runbookPath, "   \n");
+    assertEquals(await runLintRunbookCli([runbookPath]), 1);
+    await assertRejects(
+      async () => {
+        await Deno.stat(htmlPath);
+      },
+      Deno.errors.NotFound,
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("design:lint-runbook embeds local images beside the runbook via docDir", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "lint-runbook-local-image-" });
+  const runbookPath = path.join(tempDir, "dashboard-walkthrough-runbook.md");
+  const htmlPath = path.join(tempDir, "dashboard-walkthrough-runbook.html");
+  const imagePath = path.join(tempDir, "screenshot.png");
+
+  // Minimal valid 1x1 transparent PNG bytes.
+  const pngBytes = new Uint8Array([
+    0x89,
+    0x50,
+    0x4e,
+    0x47,
+    0x0d,
+    0x0a,
+    0x1a,
+    0x0a,
+    0x00,
+    0x00,
+    0x00,
+    0x0d,
+    0x49,
+    0x48,
+    0x44,
+    0x52,
+    0x00,
+    0x00,
+    0x00,
+    0x01,
+    0x00,
+    0x00,
+    0x00,
+    0x01,
+    0x08,
+    0x06,
+    0x00,
+    0x00,
+    0x00,
+    0x1f,
+    0x15,
+    0xc4,
+    0x89,
+    0x00,
+    0x00,
+    0x00,
+    0x0a,
+    0x49,
+    0x44,
+    0x41,
+    0x54,
+    0x78,
+    0x9c,
+    0x63,
+    0x00,
+    0x01,
+    0x00,
+    0x00,
+    0x05,
+    0x00,
+    0x01,
+    0x0d,
+    0x0a,
+    0x2d,
+    0xb4,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x49,
+    0x45,
+    0x4e,
+    0x44,
+    0xae,
+    0x42,
+    0x60,
+    0x82,
+  ]);
+  await Deno.writeFile(imagePath, pngBytes);
+
+  const runbookWithImage = `# Manual Verification Runbook: Dashboard Check
+
+![Dashboard Screenshot](screenshot.png)
+
+## STEP 1: Inspect Dashboard Setting
+
+**Command:**
+\`\`\`sh
+deno task check
+\`\`\`
+
+**What this proves:**
+Verifies dashboard configuration matches the screenshot.
+
+**Expected result:**
+Rendered screenshot appears cleanly with exit code 0.
+`;
+  await Deno.writeTextFile(runbookPath, runbookWithImage);
+
+  try {
+    const exitCode = await runLintRunbookCli([runbookPath]);
+    assertEquals(exitCode, 0);
+    const html = await Deno.readTextFile(htmlPath);
+    assertStringIncludes(html, '<img src="data:image/png;base64,');
+    assertStringIncludes(html, 'alt="Dashboard Screenshot"');
+    assert(!html.includes("![Dashboard Screenshot](screenshot.png)"));
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }
