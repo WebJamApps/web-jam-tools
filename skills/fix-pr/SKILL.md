@@ -68,8 +68,20 @@ Design section: "What happens when Josh types it".
    `git -C ~/WebJamApps/<Repo> worktree add -B <branch> /tmp/fix-pr-<number> origin/<branch>`.
    Rebase onto `origin/dev`, settle conflicts, bump the version again under the rule kept in
    `skills/pr-review/SKILL.md`, and repair formatting, lint, tests and every Must Fix item.
-3. **Check** with the same checks that repository's CI runs. Any check still failing ends the run
-   with no push; say which one and why.
+3. **Check** locally, as step 3 of "What happens when Josh types it" in the design document sets
+   out, using the commands that repository's CI names.
+   - Clean rebase and/or version re-bump, with no source or test edit and no failing CI test: only
+     the quick static checks (format, lint, types), the version comparison where the repository
+     requires one, and `deno task lint:skills` if the diff touches a skill. A conflict limited to
+     the version field of `deno.json` or an npm package file still counts as clean.
+   - Any code, test or other conflict fix: the static checks, quick shell and duplication ones
+     included, plus the test files that cover each source or test file you edited. CircleCI runs the
+     whole test and coverage suites; run them here only when Josh asks.
+   - Push now: when Josh says to push or to stop waiting, in the call or in a later message (for
+     example "push up the fix now"), drop whatever is unfinished or not yet started and push, as
+     long as nothing that ran has failed.
+   - A local check that ran and failed ends the run with no push, unless Josh overrides that failure
+     by name. Say which one failed and why.
 4. **agy only: `/learn`.** Run `/learn`; if it edits the repository's `AGENTS.md`, commit that alone
    on the branch as `chore: fold /learn updates into AGENTS.md`. No edit means no commit. Claude
    Code and Codex skip this step.
@@ -113,13 +125,17 @@ reason. Its final line is the signature, `🤖 Fixed by <tool> — <model>`. The
 the model the tool recorded for this session or its helper; a model's description of itself never
 counts. An empty file, a file without the signature, or a signature alone is refused before pushing.
 
+For the checks, name the static checks and targeted tests that passed here, what was left for
+CircleCI, and anything skipped or cut short because Josh said to push.
+
 ## Refusals
 
 Design section: "What it refuses to do". In short: no choosing or ranking models, no retry or
 hand-off after a red build, no helper Josh did not request, no push without its comment, no separate
 `/learn` push or pull request, no signature other than the recorded one, no force push outside the
 named pull request's branch, no unreadable record taken as consent, no pushing `dev` or `main`, no
-plain `--force`, no branch deletion, no merging, readying or closing, and no reviewing.
+plain `--force`, no branch deletion, no merging, readying or closing, and no reviewing. A failed
+local check also blocks the push until Josh overrides it by name.
 
 ## Per tool
 
@@ -131,3 +147,5 @@ Design section: "Both surfaces — Claude Code, agy and Codex".
 | Linked at         | `~/.claude/skills`              | `~/.gemini/config/plugins/webjam-tasks/skills` | `~/.codex/skills`           |
 | Helper on request | On Claude Code, use the Agent tool with the model named | none; the run ends before edits | a helper on the model named |
 | `/learn`          | skipped                         | step 4                                         | skipped                     |
+
+Step 3's choice of local checks and its push-now rule apply alike on all three tools.
