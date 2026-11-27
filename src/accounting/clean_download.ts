@@ -2,8 +2,10 @@
 // The download cleaner of the accounting skill (web-jam-tools#1863).
 //
 // Design: ~/Dropbox/web-jam-llms/songwriting/web-jam-music-media-design.md, "The accounting
-// skill", the bullet "The download cleaner". Josh runs it in his own terminal, outside every
-// agent, on one bank, card or Wave download saved in ~/Dropbox/financial-private/downloads/.
+// skill", the bullet "The download cleaner" (folders: web-jam-tools#1992). Josh runs it in his
+// own terminal, outside every agent, on one bank or card download under
+// ~/Dropbox/financial-private/, or on a folder there, which it walks for statement files and
+// cleans one by one, mirroring each file's subfolder under the books folder.
 // It keeps each line's date, description, amount and the bank's line id, drops everything
 // else (account, routing and card numbers included), runs the personal-number checker on what
 // it is about to write, and writes nothing when the checker finds one. It prints how many
@@ -27,6 +29,8 @@ export interface CleanOptions {
   booksDir: string;
   /** Write into `sweep/` instead of `statements/<year>/`. */
   sweep?: boolean;
+  /** The download's subfolder, mirrored under `statements/<year>/` or `sweep/`. */
+  relativeDir?: string;
 }
 
 export interface CleanResult {
@@ -670,12 +674,16 @@ export function parseDownload(text: string): CleanLine[] {
   return isOfx(text) ? parseOfxLines(text) : parseCsvLines(text);
 }
 
-/** Where the clean file goes: `statements/<year>/` by the latest line's year, or `sweep/`. */
+/**
+ * Where the clean file goes: `statements/<year>/` by the latest line's year, or `sweep/`, under
+ * the download's mirrored subfolder.
+ */
 export function outputPathFor(options: CleanOptions, lines: CleanLine[]): string {
   const name = `${path.basename(options.input).replace(/\.[^.]+$/, "")}.csv`;
-  if (options.sweep) return path.join(options.booksDir, "sweep", name);
+  const sub = options.relativeDir ?? "";
+  if (options.sweep) return path.join(options.booksDir, "sweep", sub, name);
   const year = lines.map((l) => l.date.slice(0, 4)).sort().at(-1)!;
-  return path.join(options.booksDir, "statements", year, name);
+  return path.join(options.booksDir, "statements", year, sub, name);
 }
 
 /**
@@ -747,7 +755,183 @@ export async function cleanDownload(options: CleanOptions): Promise<CleanResult>
   return { count: lines.length, outputPath };
 }
 
-const USAGE = "usage: deno task accounting:clean-download <file> [--sweep] [--books-dir <path>]";
+const USAGE =
+  "usage: deno task accounting:clean-download <file-or-folder> [--sweep] [--books-dir <path>]";
+
+/** The statement files a folder run cleans; every other file is skipped. */
+const STATEMENT_EXTENSIONS = new Set([".csv", ".ofx", ".qfx", ".qbo"]);
+
+function isStatementFile(name: string): boolean {
+  return STATEMENT_EXTENSIONS.has(path.extname(name).toLowerCase());
+}
+
+/** Whether `child` is `parent` or lies inside it. */
+function isWithin(parent: string, child: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" ||
+    (!path.isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${path.SEPARATOR}`));
+}
+
+/**
+ * The folder a download's subfolders are mirrored from: `downloads/` for a file inside it, the
+ * private folder for a file anywhere else in it, and otherwise the folder the run was given, or
+ * the file's own folder for a single file, so only its name is kept.
+ */
+export function mirrorBase(file: string, privateRoot?: string, givenFolder?: string): string {
+  if (privateRoot) {
+    const downloads = path.join(privateRoot, "downloads");
+    if (isWithin(downloads, file)) return downloads;
+    if (isWithin(privateRoot, file)) return privateRoot;
+  }
+  return givenFolder ?? path.dirname(file);
+}
+
+/** A file a folder run cleans, or an entry it refuses without reading. */
+export interface FolderEntry {
+  path: string;
+  refusal?: string;
+}
+
+async function realPathOrResolved(p: string): Promise<string> {
+  try {
+    return await Deno.realPath(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+/** Why a symlink in a folder run is refused, or undefined when it leads to a file in the private folder. */
+async function symlinkRefusal(link: string, realRoot?: string): Promise<string | undefined> {
+  let target: Deno.FileInfo;
+  let real: string;
+  try {
+    target = await Deno.stat(link);
+    real = await Deno.realPath(link);
+  } catch (error) {
+    return `it is a symlink the cleaner cannot follow (${(error as Error).name})`;
+  }
+  if (target.isDirectory) return "it is a symlink to a folder, which the cleaner never follows";
+  if (!realRoot || !isWithin(realRoot, real)) {
+    return "it is a symlink that leads outside financial-private";
+  }
+  return undefined;
+}
+
+/**
+ * The statement files under a folder, walked in sorted order: hidden files and folders are
+ * skipped, as are files that are not statements and, when the folder is the private folder
+ * itself, its `tax/` folder. A symlink to a folder, or one leading outside the private folder,
+ * is listed as refused.
+ */
+export async function statementFiles(folder: string, privateRoot?: string): Promise<FolderEntry[]> {
+  const entries: FolderEntry[] = [];
+  const skipTax = privateRoot !== undefined && path.resolve(folder) === path.resolve(privateRoot);
+  const realRoot = privateRoot ? await realPathOrResolved(privateRoot) : undefined;
+  const visit = async (dir: string, top: boolean) => {
+    const children: Deno.DirEntry[] = [];
+    for await (const child of Deno.readDir(dir)) children.push(child);
+    children.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    for (const child of children) {
+      if (child.name.startsWith(".")) continue;
+      const p = path.join(dir, child.name);
+      if (child.isSymlink) {
+        const refusal = await symlinkRefusal(p, realRoot);
+        if (refusal) entries.push({ path: p, refusal });
+        else if (isStatementFile(child.name)) entries.push({ path: p });
+      } else if (child.isDirectory) {
+        if (!(top && skipTax && child.name === "tax")) await visit(p, false);
+      } else if (child.isFile && isStatementFile(child.name)) {
+        entries.push({ path: p });
+      }
+    }
+  };
+  await visit(folder, true);
+  return entries;
+}
+
+export interface RunOptions {
+  /** The download or folder to clean. */
+  input: string;
+  booksDir: string;
+  sweep?: boolean;
+  /** `~/Dropbox/financial-private`, which subfolders are mirrored from and symlinks must stay in. */
+  privateRoot?: string;
+  log?: (line: string) => void;
+  error?: (line: string) => void;
+}
+
+function refusalReason(error: unknown): string {
+  return error instanceof CleanRefusal ? error.message : `unexpected ${(error as Error).name}`;
+}
+
+function wroteLine(result: CleanResult): string {
+  return `Wrote ${result.count} line${result.count === 1 ? "" : "s"} to ${result.outputPath}`;
+}
+
+/**
+ * Cleans one download, or every statement file in a folder, each on its own, so one refused
+ * file does not stop the rest. A folder run ends with a summary; returns the exit code, 0 only
+ * when nothing was refused.
+ */
+export async function runClean(options: RunOptions): Promise<number> {
+  const log = options.log ?? console.log;
+  const error = options.error ?? console.error;
+  const { booksDir, sweep, privateRoot } = options;
+  const input = path.resolve(options.input);
+  const refuseRun = (reason: string) => {
+    error(`clean-download refused ${options.input}: ${reason}. Nothing was written.`);
+    return 1;
+  };
+  let info: Deno.FileInfo;
+  try {
+    info = await Deno.lstat(input);
+    if (info.isSymlink && (await Deno.stat(input)).isDirectory) {
+      return refuseRun("it is a symlink to a folder, which the cleaner never follows");
+    }
+  } catch (e) {
+    return refuseRun(`could not read the file (${(e as Error).name})`);
+  }
+
+  if (!info.isDirectory) {
+    const relativeDir = path.relative(mirrorBase(input, privateRoot), path.dirname(input));
+    try {
+      log(wroteLine(await cleanDownload({ input, booksDir, sweep, relativeDir })));
+      return 0;
+    } catch (e) {
+      return refuseRun(refusalReason(e));
+    }
+  }
+
+  let entries: FolderEntry[];
+  try {
+    entries = await statementFiles(input, privateRoot);
+  } catch (e) {
+    return refuseRun(`could not read the folder (${(e as Error).name})`);
+  }
+  if (entries.length === 0) {
+    return refuseRun("it holds no statement files (.csv, .ofx, .qfx or .qbo)");
+  }
+  let cleaned = 0;
+  let refused = 0;
+  for (const entry of entries) {
+    const relativeDir = path.relative(
+      mirrorBase(entry.path, privateRoot, input),
+      path.dirname(entry.path),
+    );
+    try {
+      if (entry.refusal) throw new CleanRefusal(entry.refusal);
+      log(wroteLine(await cleanDownload({ input: entry.path, booksDir, sweep, relativeDir })));
+      cleaned++;
+    } catch (e) {
+      refused++;
+      error(
+        `clean-download refused ${entry.path}: ${refusalReason(e)}. Nothing was written for it.`,
+      );
+    }
+  }
+  log(`Summary: cleaned ${cleaned}, refused ${refused}`);
+  return refused === 0 ? 0 : 1;
+}
 
 /** The command line; returns the exit code. */
 export async function main(args: string[]): Promise<number> {
@@ -778,19 +962,8 @@ export async function main(args: string[]): Promise<number> {
     return 1;
   }
   booksDir ??= path.join(home!, "Dropbox", "web-jam-llms", "financial", "books");
-  try {
-    const result = await cleanDownload({ input, booksDir, sweep });
-    console.log(
-      `Wrote ${result.count} line${result.count === 1 ? "" : "s"} to ${result.outputPath}`,
-    );
-    return 0;
-  } catch (error) {
-    const reason = error instanceof CleanRefusal
-      ? error.message
-      : `unexpected ${(error as Error).name}`;
-    console.error(`clean-download refused ${input}: ${reason}. Nothing was written.`);
-    return 1;
-  }
+  const privateRoot = home ? path.join(home, "Dropbox", "financial-private") : undefined;
+  return await runClean({ input, booksDir, sweep, privateRoot });
 }
 
 if (import.meta.main) Deno.exit(await main(Deno.args));

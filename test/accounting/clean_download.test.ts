@@ -12,6 +12,7 @@ import {
   normalizeDate,
   parseCsvLines,
   parseOfxLines,
+  runClean,
 } from "../../src/accounting/clean_download.ts";
 
 const REPO_ROOT = path.fromFileUrl(new URL("../../", import.meta.url));
@@ -315,11 +316,11 @@ Deno.test("dates and amounts normalise, and anything else is refused as unreadab
   assertEquals(normalizeAmount("12.99 USD"), null);
 });
 
-Deno.test("deno.json's task reads only the downloads folder and writes only the books folder", async () => {
+Deno.test("deno.json's task reads only the private folder and writes only the books folder", async () => {
   const config = JSON.parse(await Deno.readTextFile(path.join(REPO_ROOT, "deno.json")));
   assertEquals(
     config.tasks["accounting:clean-download"],
-    "deno run --allow-env=HOME --allow-read=$HOME/Dropbox/financial-private/downloads --allow-write=$HOME/Dropbox/web-jam-llms/financial/books src/accounting/clean_download.ts",
+    "deno run --allow-env=HOME --allow-read=$HOME/Dropbox/financial-private --allow-write=$HOME/Dropbox/web-jam-llms/financial/books src/accounting/clean_download.ts",
   );
 });
 
@@ -332,17 +333,23 @@ async function denoDir(): Promise<string> {
 }
 
 Deno.test({
-  name: "the task cleans a file in the downloads folder and cannot read one outside it",
+  name: "the task cleans files anywhere in the private folder and cannot read one outside it",
   ignore: !canRun,
   fn: async () => {
     const home = await Deno.makeTempDir({ prefix: "clean-download-home-" });
     try {
-      const downloads = path.join(home, "Dropbox", "financial-private", "downloads");
+      const privateRoot = path.join(home, "Dropbox", "financial-private");
+      const downloads = path.join(privateRoot, "downloads");
       const books = path.join(home, "Dropbox", "web-jam-llms", "financial", "books");
       await Deno.mkdir(downloads, { recursive: true });
+      await Deno.mkdir(path.join(privateRoot, "checking"));
       await Deno.writeTextFile(
         path.join(downloads, "march.csv"),
         "2026-03-14,PENN STATION,22.86,1\n",
+      );
+      await Deno.writeTextFile(
+        path.join(privateRoot, "checking", "Download.csv"),
+        "2026-04-02,STRINGS,-9.50,2\n",
       );
       await Deno.writeTextFile(path.join(home, "outside.csv"), "2026-03-14,PENN STATION,22.86,1\n");
       const env = {
@@ -373,10 +380,19 @@ Deno.test({
         out.trim(),
         `Wrote 1 line to ${path.join(books, "statements", "2026", "march.csv")}`,
       );
+      const folder = await run(path.join(privateRoot, "checking"));
+      assertEquals(folder.code, 0, new TextDecoder().decode(folder.stderr));
+      assertEquals(new TextDecoder().decode(folder.stdout).trim().split("\n"), [
+        `Wrote 1 line to ${path.join(books, "statements", "2026", "checking", "Download.csv")}`,
+        "Summary: cleaned 1, refused 0",
+      ]);
       const outside = await run(path.join(home, "outside.csv"));
       assertEquals(outside.code, 1);
       assertStringIncludes(new TextDecoder().decode(outside.stderr), "could not read the file");
-      assertEquals(await filesUnder(books), [path.join("statements", "2026", "march.csv")]);
+      assertEquals((await filesUnder(books)).sort(), [
+        path.join("statements", "2026", "checking", "Download.csv"),
+        path.join("statements", "2026", "march.csv"),
+      ]);
     } finally {
       await Deno.remove(home, { recursive: true });
     }
@@ -810,6 +826,235 @@ Deno.test("XML character rules: a forbidden character or reference, or a literal
     );
   } finally {
     await f.cleanup();
+  }
+});
+
+// ---- Folder runs (web-jam-tools#1992): the literal cases of "The download cleaner" ----
+
+/** A made-up private folder holding `files`, a books folder beside it, and a run that records output. */
+async function privateTree(files: Record<string, string>) {
+  const root = await Deno.makeTempDir({ prefix: "clean-download-folders-" });
+  const privateRoot = path.join(root, "financial-private");
+  const booksDir = path.join(root, "books");
+  await Deno.mkdir(privateRoot);
+  for (const [rel, content] of Object.entries(files)) {
+    const p = path.join(privateRoot, rel);
+    await Deno.mkdir(path.dirname(p), { recursive: true });
+    await Deno.writeTextFile(p, content);
+  }
+  const out: string[] = [];
+  const err: string[] = [];
+  const run = (input: string, sweep = false) =>
+    runClean({
+      input: path.join(privateRoot, input),
+      booksDir,
+      sweep,
+      privateRoot,
+      log: (line) => out.push(line),
+      error: (line) => err.push(line),
+    });
+  const wrote = (rel: string) => `Wrote 1 line to ${path.join(booksDir, rel)}`;
+  return {
+    root,
+    privateRoot,
+    booksDir,
+    out,
+    err,
+    run,
+    wrote,
+    books: async () => (await filesUnder(booksDir)).sort(),
+    cleanup: () => Deno.remove(root, { recursive: true }),
+  };
+}
+
+const LINE = "2026-03-14,PENN STATION,22.86,1\n";
+const STATEMENTS = path.join("statements", "2026");
+
+Deno.test("a single download in downloads/ keeps its name under statements/<year>/", async () => {
+  const t = await privateTree({ "downloads/march.csv": LINE });
+  try {
+    assertEquals(await t.run("downloads/march.csv"), 0);
+    assertEquals(await t.books(), [path.join(STATEMENTS, "march.csv")]);
+    assertEquals(t.out, [t.wrote(path.join(STATEMENTS, "march.csv"))]);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+Deno.test("folder downloads/: same-named downloads in its subfolders are mirrored, never collide", async () => {
+  const t = await privateTree({
+    "downloads/checking/Download.csv": LINE,
+    "downloads/credit-card/Download.csv": "2026-03-15,STRINGS,-9.50,2\n",
+  });
+  try {
+    assertEquals(await t.run("downloads"), 0);
+    assertEquals(await t.books(), [
+      path.join(STATEMENTS, "checking", "Download.csv"),
+      path.join(STATEMENTS, "credit-card", "Download.csv"),
+    ]);
+    assertEquals(t.out, [
+      t.wrote(path.join(STATEMENTS, "checking", "Download.csv")),
+      t.wrote(path.join(STATEMENTS, "credit-card", "Download.csv")),
+      "Summary: cleaned 2, refused 0",
+    ]);
+    assertEquals(t.err, []);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+Deno.test("folder financial-private: folders beside downloads/ are mirrored; tax/, hidden and other files are skipped", async () => {
+  const t = await privateTree({
+    "checking/Download.csv": LINE,
+    "credit-card/Download.csv": "2026-03-15,STRINGS,-9.50,2\n",
+    "tax/2025.pdf": "not a statement",
+    "tax/returns.csv": LINE,
+    ".hidden.csv": LINE,
+    "notes.txt": "not a statement",
+  });
+  try {
+    assertEquals(await t.run(""), 0);
+    assertEquals(await t.books(), [
+      path.join(STATEMENTS, "checking", "Download.csv"),
+      path.join(STATEMENTS, "credit-card", "Download.csv"),
+    ]);
+    assertEquals(t.out.at(-1), "Summary: cleaned 2, refused 0");
+    assertEquals(t.err, []);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+Deno.test("--sweep on folder personal writes into sweep/personal/", async () => {
+  const t = await privateTree({ "personal/Download.csv": LINE });
+  try {
+    assertEquals(await t.run("personal", true), 0);
+    assertEquals(await t.books(), [path.join("sweep", "personal", "Download.csv")]);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+Deno.test("a refused file in a folder does not stop the rest, and nothing is written for it", async () => {
+  const t = await privateTree({
+    "mixed/good.csv": LINE,
+    "mixed/bad-ssn.csv": "2026-03-14,SSN: 123-45-6789,-5.00,9\n",
+  });
+  try {
+    assertEquals(await t.run("mixed"), 1);
+    assertEquals(await t.books(), [path.join(STATEMENTS, "mixed", "good.csv")]);
+    assertEquals(t.out, [
+      t.wrote(path.join(STATEMENTS, "mixed", "good.csv")),
+      "Summary: cleaned 1, refused 1",
+    ]);
+    assertEquals(t.err.length, 1);
+    assertStringIncludes(t.err[0], path.join("mixed", "bad-ssn.csv"));
+    assertStringIncludes(t.err[0], "Nothing was written for it.");
+    assertEquals(t.err[0].includes("123-45-6789"), false);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+Deno.test("a repeat folder run refuses every file already cleaned and overwrites nothing", async () => {
+  const t = await privateTree({
+    "downloads/checking/Download.csv": LINE,
+    "downloads/credit-card/Download.csv": LINE,
+  });
+  try {
+    assertEquals(await t.run("downloads"), 0);
+    const kept = path.join(t.booksDir, STATEMENTS, "checking", "Download.csv");
+    await Deno.writeTextFile(kept, "kept\n");
+    t.out.length = 0;
+    assertEquals(await t.run("downloads"), 1);
+    assertEquals(t.out, ["Summary: cleaned 0, refused 2"]);
+    assertEquals(t.err.length, 2);
+    for (const line of t.err) assertStringIncludes(line, "never overwrites a record");
+    assertEquals(await Deno.readTextFile(kept), "kept\n");
+  } finally {
+    await t.cleanup();
+  }
+});
+
+Deno.test("a folder holding no statement files is refused and nothing is written", async () => {
+  const t = await privateTree({ "odds/notes.txt": "x", "odds/tax/2025.pdf": "x" });
+  try {
+    assertEquals(await t.run("odds"), 1);
+    assertEquals(t.out, []);
+    assertStringIncludes(t.err.join("\n"), "holds no statement files");
+    assertEquals(await exists(t.booksDir), false);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+Deno.test({
+  name:
+    "symlinks: one to a folder or leading outside the private folder is refused; the rest are cleaned",
+  ignore: Deno.build.os === "windows",
+  fn: async () => {
+    const t = await privateTree({
+      "links/good.csv": LINE,
+      "checking/Download.csv": "2026-03-15,STRINGS,-9.50,2\n",
+    });
+    try {
+      await Deno.writeTextFile(path.join(t.root, "outside.csv"), LINE);
+      await Deno.symlink(
+        path.join(t.root, "outside.csv"),
+        path.join(t.privateRoot, "links", "outside.csv"),
+      );
+      await Deno.symlink(
+        path.join(t.privateRoot, "checking"),
+        path.join(t.privateRoot, "links", "folder-link"),
+      );
+      await Deno.symlink(
+        path.join(t.privateRoot, "checking", "Download.csv"),
+        path.join(t.privateRoot, "links", "inside.csv"),
+      );
+      assertEquals(await t.run("links"), 1);
+      assertEquals(await t.books(), [
+        path.join(STATEMENTS, "links", "good.csv"),
+        path.join(STATEMENTS, "links", "inside.csv"),
+      ]);
+      assertEquals(t.out.at(-1), "Summary: cleaned 2, refused 2");
+      assertEquals(t.err.length, 2);
+      assertStringIncludes(t.err.join("\n"), "symlink to a folder");
+      assertStringIncludes(t.err.join("\n"), "leads outside financial-private");
+
+      t.err.length = 0;
+      await Deno.symlink(
+        path.join(t.privateRoot, "checking"),
+        path.join(t.privateRoot, "checking-link"),
+      );
+      assertEquals(await t.run("checking-link"), 1);
+      assertStringIncludes(t.err.join("\n"), "symlink to a folder");
+      assertEquals(await exists(path.join(t.booksDir, STATEMENTS, "checking-link")), false);
+    } finally {
+      await t.cleanup();
+    }
+  },
+});
+
+Deno.test("a single file beside downloads/ is mirrored; outside the private folder a folder mirrors from itself", async () => {
+  const t = await privateTree({ "checking/Download.csv": LINE });
+  try {
+    assertEquals(await t.run(path.join("checking", "Download.csv")), 0);
+    assertEquals(await t.books(), [path.join(STATEMENTS, "checking", "Download.csv")]);
+
+    const outside = path.join(t.root, "elsewhere");
+    await Deno.mkdir(path.join(outside, "sub"), { recursive: true });
+    await Deno.writeTextFile(path.join(outside, "sub", "A.CSV"), LINE);
+    const code = await runClean({
+      input: outside,
+      booksDir: t.booksDir,
+      privateRoot: t.privateRoot,
+      log: () => {},
+      error: () => {},
+    });
+    assertEquals(code, 0);
+    assertEquals(await exists(path.join(t.booksDir, STATEMENTS, "sub", "A.csv")), true);
+  } finally {
+    await t.cleanup();
   }
 });
 
