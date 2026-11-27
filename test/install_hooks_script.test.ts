@@ -3288,3 +3288,76 @@ Deno.test(
     }
   },
 );
+
+// --- Personal information prompt check (web-jam-tools#1861) ---
+
+Deno.test(
+  "install-hooks.sh registers block-personal-numbers-prompt.sh under UserPromptSubmit for Claude Code and as a flat agy PreInvocation entry",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    const agyHooksPath = `${settingsDir}/agy-hooks.json`;
+    const args = [
+      INSTALL_SCRIPT,
+      "--hooks-dir",
+      hooksDir,
+      "--settings-path",
+      settingsPath,
+      "--agy-hooks-path",
+      agyHooksPath,
+      "--codex-hooks-path",
+      `${settingsDir}/codex-hooks.json`,
+    ];
+    try {
+      const res = await run("bash", args);
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+
+      // The installed hook resolves into this repository's hooks/.
+      assertEquals(
+        await Deno.realPath(`${hooksDir}/block-personal-numbers-prompt.sh`),
+        await Deno.realPath(`${HOOKS_SRC_DIR}/block-personal-numbers-prompt.sh`),
+      );
+
+      // Claude Code: one UserPromptSubmit registration, and no agy PreInvocation key.
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      assertEquals(settings.hooks.UserPromptSubmit, [
+        {
+          hooks: [{
+            type: "command",
+            command: "$HOME/.claude/hooks/block-personal-numbers-prompt.sh",
+          }],
+        },
+      ]);
+      assertEquals(settings.hooks.PreInvocation, undefined);
+
+      // agy: one flat PreInvocation entry (agy rejects the whole file for a nested one), and no
+      // UserPromptSubmit key.
+      const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
+      assertEquals(agyHooks.hooks.PreInvocation, [
+        {
+          type: "command",
+          command: "$HOME/.claude/hooks/block-personal-numbers-prompt.sh --surface agy",
+        },
+      ]);
+      assertEquals(agyHooks.hooks.UserPromptSubmit, undefined);
+
+      // A second run adds nothing, and --check reports no drift.
+      const again = await run("bash", args);
+      assertEquals(again.code, 0, again.stdout + again.stderr);
+      assertEquals(
+        JSON.parse(await Deno.readTextFile(agyHooksPath)).hooks.PreInvocation.length,
+        1,
+      );
+      assertEquals(
+        JSON.parse(await Deno.readTextFile(settingsPath)).hooks.UserPromptSubmit.length,
+        1,
+      );
+      const check = await run("bash", [...args, "--check"]);
+      assertEquals(check.code, 0, check.stdout + check.stderr);
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);

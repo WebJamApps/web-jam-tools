@@ -213,6 +213,12 @@ STOP_HOOKS=(require-issue-citation-titles.sh require-clear-communication.sh)
 SUBAGENT_START_HOOKS=(track-subagent-start.sh)
 SUBAGENT_STOP_HOOKS=(track-subagent-stop.sh)
 
+# UserPromptSubmit hooks this installer keeps registered in settings.json, and that
+# install-codex registers in Codex's config.toml (web-jam-tools#1861). Same flat,
+# no-matcher shape as STOP_HOOKS: it fires on every message Josh sends, before the
+# model sees it. agy's equivalent is AGY_ONLY_PRE_INVOCATION_HOOKS below.
+USER_PROMPT_SUBMIT_HOOKS=(block-personal-numbers-prompt.sh)
+
 # PreToolUse hooks this installer keeps registered in settings.json, as
 # "<matcher>::<script>" pairs (web-jam-tools#265 — generalized from a
 # Bash-only array so a hook can be wired to ANY PreToolUse matcher, not just
@@ -276,6 +282,12 @@ AGY_ONLY_PRE_TOOL_USE_HOOKS=(
   # reaches the PRE_TOOL_USE_HOOKS entry as Bash (web-jam-tools#1860).
   "view_file|read_file::block-personal-numbers-read.sh"
 )
+
+# agy-ONLY PreInvocation hooks (web-jam-tools#1861), merged into AGY_HOOKS_PATH as
+# flat { type, command } entries (agy's own hook contract lists PreInvocation as
+# flat, like Stop; a nested entry makes agy reject the whole hooks file). Each runs
+# as "$HOME/.claude/hooks/<name> --surface agy", so the hook replies in agy's form.
+AGY_ONLY_PRE_INVOCATION_HOOKS=(block-personal-numbers-prompt.sh)
 
 # permissions.deny patterns this installer keeps registered in settings.json
 # (web-jam-tools#308). PreToolUse hooks exit with code 2 to hard-block
@@ -895,6 +907,22 @@ for name in "${SUBAGENT_STOP_HOOKS[@]}"; do
   merge_subagent_stop_args+=('$HOME/.claude/hooks/'"$name")
 done
 
+merge_user_prompt_submit_args=()
+for name in "${USER_PROMPT_SUBMIT_HOOKS[@]}"; do
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in USER_PROMPT_SUBMIT_HOOKS)" >&2; exit 1; }
+  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
+  # shell that runs the hook later, not by this installer (see header note).
+  merge_user_prompt_submit_args+=('$HOME/.claude/hooks/'"$name")
+done
+
+merge_agy_pre_invocation_args=()
+for name in "${AGY_ONLY_PRE_INVOCATION_HOOKS[@]}"; do
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in AGY_ONLY_PRE_INVOCATION_HOOKS)" >&2; exit 1; }
+  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
+  # shell that runs the hook later, not by this installer (see header note).
+  merge_agy_pre_invocation_args+=('$HOME/.claude/hooks/'"$name"' --surface agy')
+done
+
 merge_pre_tool_use_args=()
 for entry in "${PRE_TOOL_USE_HOOKS[@]}"; do
   matcher="${entry%%::*}"
@@ -1224,11 +1252,11 @@ if [ "$CHECK_MODE" = "1" ]; then
     fi
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--subagent-start" "${merge_subagent_start_args[@]}" "--subagent-stop" "${merge_subagent_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}" "--model-settings" "${merge_model_settings_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--subagent-start" "${merge_subagent_start_args[@]}" "--subagent-stop" "${merge_subagent_stop_args[@]}" "--user-prompt-submit" "${merge_user_prompt_submit_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}" "--model-settings" "${merge_model_settings_args[@]}"; then
     DRIFT=1
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-invocation" "${merge_agy_pre_invocation_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"; then
     DRIFT=1
   fi
 
@@ -1496,9 +1524,9 @@ fi
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--subagent-start" "${merge_subagent_start_args[@]}" "--subagent-stop" "${merge_subagent_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}" "--model-settings" "${merge_model_settings_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--subagent-start" "${merge_subagent_start_args[@]}" "--subagent-stop" "${merge_subagent_stop_args[@]}" "--user-prompt-submit" "${merge_user_prompt_submit_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}" "--model-settings" "${merge_model_settings_args[@]}"
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-invocation" "${merge_agy_pre_invocation_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
 
 # Ensure agy-skill-run hook is registered last in agy hooks file (web-jam-tools#1320)
 deno eval --no-config '

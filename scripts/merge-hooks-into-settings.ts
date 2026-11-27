@@ -7,6 +7,11 @@
  * patterns, into a Claude Code settings.json. SubagentStart and SubagentStop are Claude Code
  * only (web-jam-tools#708): they are merged only when --subagent-start/--subagent-stop are
  * passed, and refused on a --forbid-lifecycle-hooks (agy) target.
+ *
+ * The prompt check (web-jam-tools#1861) adds two events, each touched only when its section is
+ * passed: --user-prompt-submit writes Claude Code's nested UserPromptSubmit entries, refused on
+ * an agy target; --pre-invocation writes agy's flat PreInvocation entries, the same flat
+ * { type, command } shape agy's Stop takes, and is accepted only on an agy target.
  */
 
 import * as path from "jsr:@std/path@^1.0.0";
@@ -23,6 +28,10 @@ export function merge(settingsPath: string, args: string[]): number {
   let subagentStartCmds: string[] = [];
   let subagentStopCmds: string[] = [];
   let subagentSectionsPassed = false;
+  let userPromptSubmitCmds: string[] = [];
+  let preInvocationCmds: string[] = [];
+  let userPromptSubmitPassed = false;
+  let preInvocationPassed = false;
   const preToolUsePairs: Array<[string, string]> = [];
   const postToolUsePairs: Array<[string, string]> = [];
   let denyPatterns: string[] = [];
@@ -75,6 +84,8 @@ export function merge(settingsPath: string, args: string[]): number {
         "--session-end",
         "--subagent-start",
         "--subagent-stop",
+        "--user-prompt-submit",
+        "--pre-invocation",
         "--pre-tool-use",
         "--post-tool-use",
         "--deny",
@@ -93,6 +104,10 @@ export function merge(settingsPath: string, args: string[]): number {
     subagentSectionsPassed = "--subagent-start" in sections || "--subagent-stop" in sections;
     subagentStartCmds = sections["--subagent-start"] || [];
     subagentStopCmds = sections["--subagent-stop"] || [];
+    userPromptSubmitPassed = "--user-prompt-submit" in sections;
+    userPromptSubmitCmds = sections["--user-prompt-submit"] || [];
+    preInvocationPassed = "--pre-invocation" in sections;
+    preInvocationCmds = sections["--pre-invocation"] || [];
     for (const pair of sections["--pre-tool-use"] || []) {
       const sep = pair.indexOf("::");
       if (sep !== -1) {
@@ -139,6 +154,22 @@ export function merge(settingsPath: string, args: string[]): number {
     );
     return 1;
   }
+  if (forbidLifecycleHooks && userPromptSubmitPassed) {
+    console.error(
+      "error: --user-prompt-submit is Claude Code only; agy's prompt check is a PreInvocation " +
+        `hook (--pre-invocation). Refusing to write ${path.basename(settingsPath)}.`,
+    );
+    return 1;
+  }
+  if (!forbidLifecycleHooks && preInvocationPassed) {
+    console.error(
+      "error: --pre-invocation is agy only and needs --forbid-lifecycle-hooks; Claude Code's " +
+        `prompt check is a UserPromptSubmit hook. Refusing to write ${
+          path.basename(settingsPath)
+        }.`,
+    );
+    return 1;
+  }
   if (forbidLifecycleHooks && hasModelSettings) {
     console.error("error: --model-settings is Claude Code only; refusing it on the agy target.");
     return 1;
@@ -181,6 +212,8 @@ export function merge(settingsPath: string, args: string[]): number {
       ...sessionEndCmds,
       ...subagentStartCmds,
       ...subagentStopCmds,
+      ...userPromptSubmitCmds,
+      ...preInvocationCmds,
     ]
   ) {
     const sp = extractScriptPath(cmd);
@@ -325,6 +358,13 @@ export function merge(settingsPath: string, args: string[]): number {
   const [addedSubagentStop, prunedSubagentStop] = subagentSectionsPassed
     ? mergeFlatHooks("SubagentStop", subagentStopCmds)
     : [[], []];
+  // Only touched when its section was passed, so neither file gains the other tool's event key.
+  const [addedUserPromptSubmit, prunedUserPromptSubmit] = userPromptSubmitPassed
+    ? mergeFlatHooks("UserPromptSubmit", userPromptSubmitCmds)
+    : [[], []];
+  const [addedPreInvocation, prunedPreInvocation, reshapedPreInvocation] = preInvocationPassed
+    ? mergeAgyFlatHooks("PreInvocation", preInvocationCmds)
+    : [[], [], 0];
 
   function mergeMatcherHooks(
     kind: string,
@@ -690,6 +730,11 @@ export function merge(settingsPath: string, args: string[]): number {
     prunedSubagentStart.length > 0 ||
     addedSubagentStop.length > 0 ||
     prunedSubagentStop.length > 0 ||
+    addedUserPromptSubmit.length > 0 ||
+    prunedUserPromptSubmit.length > 0 ||
+    addedPreInvocation.length > 0 ||
+    prunedPreInvocation.length > 0 ||
+    reshapedPreInvocation > 0 ||
     addedPreToolUse.length > 0 ||
     prunedPreToolUseStale.length > 0 ||
     prunedPreToolUseRetired.length > 0 ||
@@ -758,6 +803,25 @@ export function merge(settingsPath: string, args: string[]): number {
       }
       for (const cmd of prunedSubagentStop) {
         console.error(`${targetFilename}: has retired SubagentStop hook ${cmd}`);
+      }
+      for (const cmd of addedUserPromptSubmit) {
+        console.error(`${targetFilename}: missing UserPromptSubmit hook ${cmd}`);
+      }
+      for (const cmd of prunedUserPromptSubmit) {
+        console.error(`${targetFilename}: has retired UserPromptSubmit hook ${cmd}`);
+      }
+      for (const cmd of addedPreInvocation) {
+        console.error(`${targetFilename}: missing PreInvocation hook ${cmd}`);
+      }
+      for (const cmd of prunedPreInvocation) {
+        console.error(`${targetFilename}: has retired PreInvocation hook ${cmd}`);
+      }
+      if (reshapedPreInvocation > 0) {
+        console.error(
+          `${targetFilename}: has ${reshapedPreInvocation} nested PreInvocation entr${
+            reshapedPreInvocation === 1 ? "y" : "ies"
+          } agy rejects — the whole hooks file fails to load`,
+        );
       }
       for (const [matcher, cmd] of addedPreToolUse) {
         console.error(`${targetFilename}: missing PreToolUse hook (${matcher}) ${cmd}`);
@@ -923,6 +987,23 @@ export function merge(settingsPath: string, args: string[]): number {
   }
   for (const cmd of prunedSubagentStart) {
     console.log(`${targetFilename}: removed retired SubagentStart hook ${cmd}`);
+  }
+  for (const cmd of addedUserPromptSubmit) {
+    console.log(`${targetFilename}: added UserPromptSubmit hook ${cmd}`);
+  }
+  for (const cmd of prunedUserPromptSubmit) {
+    console.log(`${targetFilename}: removed retired UserPromptSubmit hook ${cmd}`);
+  }
+  for (const cmd of addedPreInvocation) {
+    console.log(`${targetFilename}: added PreInvocation hook ${cmd}`);
+  }
+  for (const cmd of prunedPreInvocation) {
+    console.log(`${targetFilename}: removed retired PreInvocation hook ${cmd}`);
+  }
+  if (reshapedPreInvocation > 0) {
+    console.log(
+      `${targetFilename}: flattened ${reshapedPreInvocation} nested PreInvocation entries agy rejects`,
+    );
   }
   for (const cmd of addedSubagentStop) {
     console.log(`${targetFilename}: added SubagentStop hook ${cmd}`);

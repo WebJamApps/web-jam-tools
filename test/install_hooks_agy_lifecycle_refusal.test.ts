@@ -348,3 +348,84 @@ Deno.test("install-hooks.sh --check passes on a clean sandboxed agy installation
     await Deno.remove(settingsDir, { recursive: true });
   }
 });
+
+// --- 4. The prompt check's events stay on their own tool (web-jam-tools#1861) ---
+
+async function mergeInto(path: string, args: string[]): Promise<RunResult> {
+  return await run(Deno.execPath(), [
+    "run",
+    "--allow-read",
+    "--allow-write",
+    "--allow-env",
+    MERGE_SCRIPT,
+    path,
+    ...args,
+  ]);
+}
+
+Deno.test("merge-hooks-into-settings.ts writes agy's PreInvocation flat and flattens a nested one (web-jam-tools#1861)", async () => {
+  const dir = await Deno.makeTempDir();
+  const path = `${dir}/agy_hooks.json`;
+  const cmd = "$HOME/.claude/hooks/block-personal-numbers-prompt.sh --surface agy";
+  try {
+    const res = await mergeInto(path, ["--forbid-lifecycle-hooks", "--", "--pre-invocation", cmd]);
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(JSON.parse(await Deno.readTextFile(path)).hooks.PreInvocation, [
+      { type: "command", command: cmd },
+    ]);
+
+    await Deno.writeTextFile(
+      path,
+      JSON.stringify({
+        hooks: { PreInvocation: [{ hooks: [{ type: "command", command: cmd }] }] },
+      }),
+    );
+    const check = await mergeInto(path, [
+      "--check",
+      "--forbid-lifecycle-hooks",
+      "--",
+      "--pre-invocation",
+      cmd,
+    ]);
+    assertEquals(check.code, 1);
+    assert(check.stderr.includes("nested PreInvocation entry agy rejects"), check.stderr);
+    const fix = await mergeInto(path, ["--forbid-lifecycle-hooks", "--", "--pre-invocation", cmd]);
+    assertEquals(fix.code, 0, fix.stderr);
+    assertEquals(JSON.parse(await Deno.readTextFile(path)).hooks.PreInvocation, [
+      { type: "command", command: cmd },
+    ]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("merge-hooks-into-settings.ts refuses --user-prompt-submit on agy and --pre-invocation on Claude Code (web-jam-tools#1861)", async () => {
+  const dir = await Deno.makeTempDir();
+  const agyPath = `${dir}/agy_hooks.json`;
+  const claudePath = `${dir}/settings.json`;
+  const cmd = "$HOME/.claude/hooks/block-personal-numbers-prompt.sh";
+  try {
+    const agy = await mergeInto(agyPath, [
+      "--forbid-lifecycle-hooks",
+      "--",
+      "--user-prompt-submit",
+      cmd,
+    ]);
+    assertEquals(agy.code, 1);
+    assert(agy.stderr.includes("--user-prompt-submit is Claude Code only"), agy.stderr);
+    const claude = await mergeInto(claudePath, ["--", "--pre-invocation", `${cmd} --surface agy`]);
+    assertEquals(claude.code, 1);
+    assert(claude.stderr.includes("--pre-invocation is agy only"), claude.stderr);
+    for (const path of [agyPath, claudePath]) {
+      let exists = true;
+      try {
+        await Deno.stat(path);
+      } catch {
+        exists = false;
+      }
+      assertEquals(exists, false, `${path} must not be written`);
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
