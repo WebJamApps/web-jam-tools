@@ -186,8 +186,13 @@ async function resolveFromSession(
   if (!isFixPrSkill(call.name)) {
     return refuse(`the newest skill call typed in this session is '${call.name}', not fix-pr`);
   }
+  // Only --repo-dir names a checkout to match. The task always runs with web-jam-tools as its
+  // working directory, so reading that origin without --repo-dir would bind every call to
+  // web-jam-tools: a target in another repository would be refused and a bare number would
+  // resolve there instead of being refused for lack of a checkout.
+  if (repoDir === undefined) return verifyTarget(call.arguments, null, deps);
   const checkoutRepo = await (deps.checkoutRepo ?? originRepo)(repoDir);
-  if (repoDir !== undefined && !checkoutRepo) {
+  if (!checkoutRepo) {
     return refuse(`the GitHub repository of --repo-dir '${repoDir}' could not be read`);
   }
   return verifyTarget(call.arguments, checkoutRepo, deps);

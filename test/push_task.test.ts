@@ -1728,6 +1728,27 @@ for (const surface of ["claude", "agy", "codex"] as const) {
           assertStringIncludes(result.stderr, item.reason ?? "", label);
         }
       }
+      // Without --repo-dir the task reads no checkout, although `deno task --config` runs it with
+      // web-jam-tools as its working directory: a target in another repository resolves there,
+      // and a bare number is refused for want of a checkout instead of landing on web-jam-tools.
+      const otherRepo = "WebJamApps/JaMmusic";
+      await fixture.writeSession([`/fix-pr ${otherRepo}#1318`]);
+      const elsewhere = await runResolveTarget(["--from-session"], {
+        ...fixture.shellEnv,
+        PUSH_TEST_PR: JSON.stringify({ ...targetPr, headRepository: { nameWithOwner: otherRepo } }),
+        PUSH_TEST_GH_EXIT: "0",
+      });
+      assertEquals(elsewhere.code, 0, `${surface}: ${elsewhere.stderr}`);
+      assertEquals(JSON.parse(elsewhere.stdout), { ...resolved, repo: otherRepo });
+      await fixture.writeSession(["/fix-pr 1318"]);
+      const bare = await runResolveTarget(["--from-session"], {
+        ...fixture.shellEnv,
+        PUSH_TEST_PR: JSON.stringify(targetPr),
+        PUSH_TEST_GH_EXIT: "0",
+      });
+      assertEquals(bare.code, 1, `${surface}: ${bare.stdout}`);
+      assertStringIncludes(bare.stderr, "a bare pull request number needs a checkout");
+
       // Unable to determine: no session named in the environment refuses (fail closed).
       await fixture.writeSession([fixCall.text]);
       const unnamed = await runResolveTarget(args, {

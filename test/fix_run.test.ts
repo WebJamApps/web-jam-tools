@@ -1135,6 +1135,27 @@ Deno.test("fix-pr:resolve-target --from-session: the three guard outcomes", asyn
   );
   assertEquals(repoDirs.at(-1), "/tmp/fix-pr-1907");
 
+  // Without --repo-dir no checkout is read, so a named target in another repository resolves
+  // there rather than being bound to the working directory's web-jam-tools checkout.
+  const readsBefore = repoDirs.length;
+  const jamPr = openPr(1479, {
+    headRefName: "agy/1478-legal-pages",
+    headRepository: { nameWithOwner: "WebJamApps/JaMmusic" },
+  });
+  assertEquals(
+    await run(fromSession, typed("fix-pr", "JaMmusic#1479"), { prs: { 1479: jamPr } }),
+    {
+      ok: true,
+      target: {
+        repo: "WebJamApps/JaMmusic",
+        number: 1479,
+        branch: "agy/1478-legal-pages",
+        build: null,
+      },
+    },
+  );
+  assertEquals(repoDirs.length, readsBefore, "--from-session without --repo-dir reads no checkout");
+
   // (b) The condition does not hold, and (c) it cannot be determined: both refuse.
   const refusals: [string[], ReturnType<typeof typed> | null, FakeWorld, string, {
     checkout?: string | null;
@@ -1195,6 +1216,9 @@ Deno.test("fix-pr:resolve-target --from-session: the three guard outcomes", asyn
       {},
     ],
     [withRepoDir, typed("fix-pr", "JaMmusic#5"), {}, "not this checkout's", {}],
+    // A bare number with no --repo-dir has no checkout to resolve against, even though the
+    // fake checkout reader would answer web-jam-tools if it were asked.
+    [fromSession, typed("fix-pr", "1907"), {}, "needs a checkout", {}],
     [withRepoDir, typed("fix-pr", "1907"), {}, "could not be read", { checkout: null }],
     [
       fromSession,
