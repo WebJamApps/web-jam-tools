@@ -11,9 +11,15 @@ export const ALLOWED_GOOGLE_TOOLS = new Set([
 
 export const NEW_YORK_TZ = "America/New_York";
 export const DEFAULT_TIME = "09:30";
+export const MIN_AUTO_TIME_MINUTES = 9 * 60 + 30;
+export const MAX_AUTO_TIME_MINUTES = 17 * 60;
+export const AUTO_TIME_STEP_MINUTES = 15;
 export const EVENT_DURATION_MINUTES = 15;
 export const OVERLAP_WINDOW_DAYS = 28;
+export const LIST_EXPANSION_DAYS = 14;
+export const LIST_DISCOVERY_QUERY = "github.com/WebJamApps";
 const MCP_CALL_TIMEOUT_MS = 30_000;
+const CANONICAL_WEEKDAYS: readonly DayCode[] = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
 
 export interface ClaudeGoogleDriveConfig {
   command: string;
@@ -73,6 +79,7 @@ export type ParsedCommand =
     hour: number;
     minute: number;
     timeText: string;
+    timeExplicit: boolean;
     waitingOn?: string;
   }
   | {
@@ -213,6 +220,7 @@ export function parseCliArgs(argv: string[]): ParsedCommand {
   }
 
   const days = parseDays(flags.days);
+  const timeExplicit = flags.time !== undefined;
   const time = parseTime(flags.time);
   const waitingOn = typeof flags["waiting-on"] === "string" && flags["waiting-on"].trim()
     ? flags["waiting-on"].trim()
@@ -225,6 +233,7 @@ export function parseCliArgs(argv: string[]): ParsedCommand {
     hour: time.hour,
     minute: time.minute,
     timeText: time.text,
+    timeExplicit,
     waitingOn,
   };
 }
@@ -674,30 +683,58 @@ export function computeCandidateSlots(
   return slots;
 }
 
+const EVENT_BOUNDARY_RE = /(?<=^Event ID: [^\n]+)\n\n---\n\n(?=\*\*)/m;
+
+function splitEventBlocks(body: string): string[] {
+  return body.replace(/\r\n/g, "\n").split(EVENT_BOUNDARY_RE);
+}
+
 function parseSingleEventBlock(block: string): CalendarEvent {
-  const lines = block.split(/\r?\n/);
+  const lines = block.trim().replace(/\r\n/g, "\n").split("\n");
+  let endIdx = lines.length - 1;
+  if (endIdx < 0 || !lines[endIdx].startsWith("Event ID: ")) {
+    throw new Error("Refused: calendar response included an event without an Event ID.");
+  }
+  const id = lines[endIdx].slice("Event ID: ".length).trim();
+  if (!id) {
+    throw new Error("Refused: calendar response included an event without an Event ID.");
+  }
+  endIdx--;
+
+  // Consume trailing single-line metadata from bottom up so Link:/Meeting: lines inside
+  // multi-line descriptions (e.g. Zoom invites) are never treated as metadata boundaries.
+  const trailingRecurrence: string[] = [];
+  const seenTrailing = new Set<string>();
+  while (endIdx >= 0) {
+    const line = lines[endIdx];
+    const metaMatch = line.match(/^(Link|Attendees|Meeting|Recurrence): /);
+    if (!metaMatch) break;
+    const key = metaMatch[1];
+    if (key !== "Recurrence" && seenTrailing.has(key)) break;
+    seenTrailing.add(key);
+    if (key === "Recurrence") {
+      trailingRecurrence.unshift(line.slice("Recurrence: ".length).trim());
+    }
+    endIdx--;
+  }
+
   let summary = "";
   let isAllDay = false;
   let startMs: number | undefined;
   let endMs: number | undefined;
   let startDate: string | undefined;
   let endDate: string | undefined;
-  let id = "";
   const descriptionLines: string[] = [];
   const recurrence: string[] = [];
   let inDescription = false;
 
-  for (const line of lines) {
-    if (!summary && line.startsWith("**") && line.endsWith("**") && line.length >= 4) {
-      summary = line.slice(2, -2);
-      inDescription = false;
-      continue;
-    }
+  for (let i = 0; i <= endIdx; i++) {
+    const line = lines[i];
     if (
-      inDescription &&
-      /^(Meeting|Attendees|Link|Event ID|Recurrence): /.test(line)
+      !summary && !inDescription && line.startsWith("**") && line.endsWith("**") && line.length >= 4
     ) {
-      inDescription = false;
+      summary = line.slice(2, -2);
+      continue;
     }
     if (inDescription) {
       descriptionLines.push(line);
@@ -723,20 +760,17 @@ function parseSingleEventBlock(block: string): CalendarEvent {
       }
       startMs = sMs;
       endMs = eMs;
-    } else if (line.startsWith("Description: ")) {
+    } else if (line === "Description:" || line.startsWith("Description: ")) {
       inDescription = true;
-      descriptionLines.push(line.slice("Description: ".length));
+      if (line.startsWith("Description: ")) {
+        descriptionLines.push(line.slice("Description: ".length));
+      }
     } else if (line.startsWith("Recurrence: ")) {
       recurrence.push(line.slice("Recurrence: ".length).trim());
-    } else if (line.startsWith("Event ID: ")) {
-      id = line.slice("Event ID: ".length).trim();
     }
   }
 
-  if (!id) {
-    throw new Error("Refused: calendar response included an event without an Event ID.");
-  }
-
+  const allRecurrence = [...recurrence, ...trailingRecurrence];
   return {
     id,
     summary,
@@ -746,7 +780,7 @@ function parseSingleEventBlock(block: string): CalendarEvent {
     endMs,
     startDate,
     endDate,
-    recurrence: recurrence.length > 0 ? recurrence : undefined,
+    recurrence: allRecurrence.length > 0 ? allRecurrence : undefined,
   };
 }
 
@@ -759,16 +793,30 @@ export function parseCalendarEventsText(text: string): CalendarEvent[] {
     body = body.replace(/^Event created successfully!\s*/u, "").trim();
     return body ? [parseSingleEventBlock(body)] : [];
   }
-  const foundMatch = body.match(/^Found \d+ event\(s\):\s*/u);
+  const foundMatch = body.match(/^Found (\d+) event\(s\):\s*/u);
   if (foundMatch) {
+    const expectedCount = Number(foundMatch[1]);
     body = body.slice(foundMatch[0].length).trim();
-    if (!body) return [];
-    return body.split(/\n\n---\n\n/).map((block) => parseSingleEventBlock(block.trim()));
+    if (!body) {
+      if (expectedCount !== 0) {
+        throw new Error(
+          `Refused: calendar response claimed ${expectedCount} event(s) but returned none.`,
+        );
+      }
+      return [];
+    }
+    const blocks = splitEventBlocks(body);
+    if (blocks.length !== expectedCount) {
+      throw new Error(
+        `Refused: calendar response claimed ${expectedCount} event(s) but parsed ${blocks.length}.`,
+      );
+    }
+    return blocks.map((block) => parseSingleEventBlock(block));
   }
 
   // Fallback: single formatted block (e.g., from getCalendarEvent or minimal stand-in)
   if (trimmed.includes("Event ID: ")) {
-    return trimmed.split(/\n\n---\n\n/).map((block) => parseSingleEventBlock(block.trim()));
+    return splitEventBlocks(trimmed).map((block) => parseSingleEventBlock(block));
   }
 
   throw new Error(`Refused: unrecognized calendar tool response: ${trimmed.slice(0, 120)}`);
@@ -815,6 +863,20 @@ function buildDescription(
   return lines.join("\n");
 }
 
+function hasExplicitCheckDays(events: CalendarEvent[]): boolean {
+  for (const ev of events) {
+    const descMatch = ev.description.match(/^(?:Check days|Days):\s*([A-Z,\s]+)$/im);
+    if (!descMatch) continue;
+    try {
+      parseDays(descMatch[1]);
+      return true;
+    } catch {
+      // Ignore malformed Check days line and treat as absent.
+    }
+  }
+  return false;
+}
+
 function extractDaysFromEvent(events: CalendarEvent[]): DayCode[] {
   for (const ev of events) {
     const descMatch = ev.description.match(/^(?:Check days|Days):\s*([A-Z,\s]+)$/im);
@@ -835,28 +897,102 @@ function extractDaysFromEvent(events: CalendarEvent[]): DayCode[] {
       }
     }
   }
-  const derived: DayCode[] = [];
   const seen = new Set<DayCode>();
   for (const ev of events) {
     if (ev.startMs === undefined) continue;
-    const wk = getNewYorkDateParts(new Date(ev.startMs)).weekday;
-    if (!seen.has(wk)) {
-      seen.add(wk);
-      derived.push(wk);
-    }
+    seen.add(getNewYorkDateParts(new Date(ev.startMs)).weekday);
   }
-  return derived;
+  return CANONICAL_WEEKDAYS.filter((day) => seen.has(day));
 }
 
 function extractReminderIssue(
   event: CalendarEvent,
 ): { repo: string; issue: number } | null {
-  const isReminder = event.summary.startsWith("Check on: ") ||
-    /^(?:Check days|To end this wait):/m.test(event.description);
-  if (!isReminder) return null;
+  const summaryStartsCheckOn = /^check on(?::|\s|$)/i.test(event.summary.trim());
+  const hasWaitingMarker = /^(?:Check days|To end this wait):/m.test(event.description);
+  if (!summaryStartsCheckOn && !hasWaitingMarker) return null;
   const match = event.description.match(ISSUE_URL_RE);
   if (!match) return null;
   return { repo: match[1], issue: Number(match[2]) };
+}
+
+function formatMinutesHHMM(totalMinutes: number): { hour: number; minute: number; text: string } {
+  const hour = Math.floor(totalMinutes / 60);
+  const minute = totalMinutes % 60;
+  return {
+    hour,
+    minute,
+    text: `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
+  };
+}
+
+function selectCreateSlot(
+  now: Date,
+  cmd: Extract<ParsedCommand, { subcommand: "create" }>,
+  windowEvents: CalendarEvent[],
+): { firstSlot: SlotWindow; timeText: string } {
+  if (cmd.timeExplicit) {
+    const slots = computeCandidateSlots(
+      now,
+      cmd.days,
+      cmd.hour,
+      cmd.minute,
+      OVERLAP_WINDOW_DAYS,
+    );
+    if (slots.length === 0) {
+      throw new Error(
+        `Refused: no occurrence of ${
+          cmd.days.join(",")
+        } at ${cmd.timeText} falls within the next ${OVERLAP_WINDOW_DAYS} days.`,
+      );
+    }
+    const overlap = findOverlappingTimedEvent(windowEvents, slots);
+    if (overlap) {
+      throw new Error(
+        `Refused: timed event "${
+          overlap.event.summary || overlap.event.id
+        }" overlaps ${overlap.slot.startIso} - ${overlap.slot.endIso}.`,
+      );
+    }
+    return { firstSlot: slots[0], timeText: cmd.timeText };
+  }
+
+  let lastOverlap: { event: CalendarEvent; slot: SlotWindow } | null = null;
+  let anySlots = false;
+  for (
+    let mins = MIN_AUTO_TIME_MINUTES;
+    mins <= MAX_AUTO_TIME_MINUTES;
+    mins += AUTO_TIME_STEP_MINUTES
+  ) {
+    const candidate = formatMinutesHHMM(mins);
+    const slots = computeCandidateSlots(
+      now,
+      cmd.days,
+      candidate.hour,
+      candidate.minute,
+      OVERLAP_WINDOW_DAYS,
+    );
+    if (slots.length === 0) continue;
+    anySlots = true;
+    const overlap = findOverlappingTimedEvent(windowEvents, slots);
+    if (!overlap) {
+      return { firstSlot: slots[0], timeText: candidate.text };
+    }
+    lastOverlap = overlap;
+  }
+
+  if (!anySlots) {
+    throw new Error(
+      `Refused: no occurrence of ${
+        cmd.days.join(",")
+      } falls within the next ${OVERLAP_WINDOW_DAYS} days.`,
+    );
+  }
+  throw new Error(
+    `Refused: every 15-minute slot from 09:30 through 17:00 ${NEW_YORK_TZ} overlaps a timed event within the next ${OVERLAP_WINDOW_DAYS} days (for example "${
+      lastOverlap!.event.summary || lastOverlap!.event.id
+    }").`,
+  );
 }
 
 async function runCreate(
@@ -872,15 +1008,6 @@ async function runCreate(
 
   const cfg = await loadGoogleDriveMcpConfig(deps);
   const now = deps.now();
-  const slots = computeCandidateSlots(now, cmd.days, cmd.hour, cmd.minute, OVERLAP_WINDOW_DAYS);
-  if (slots.length === 0) {
-    throw new Error(
-      `Refused: no occurrence of ${
-        cmd.days.join(",")
-      } at ${cmd.timeText} falls within the next ${OVERLAP_WINDOW_DAYS} days.`,
-    );
-  }
-  const firstSlot = slots[0];
   const windowEndIso = new Date(now.getTime() + OVERLAP_WINDOW_DAYS * 86_400_000).toISOString();
   const issueUrl = issueAddressFor(cmd.repo, cmd.issue);
 
@@ -917,14 +1044,7 @@ async function runCreate(
       );
     }
 
-    const overlap = findOverlappingTimedEvent(windowEvents, slots);
-    if (overlap) {
-      throw new Error(
-        `Refused: timed event "${
-          overlap.event.summary || overlap.event.id
-        }" overlaps ${overlap.slot.startIso} - ${overlap.slot.endIso}.`,
-      );
-    }
+    const selected = selectCreateSlot(now, cmd, windowEvents);
 
     const waitingOn = cmd.waitingOn ?? extractWaitingOnSection(issueInfo.body);
     const summary = `Check on: ${issueInfo.title}`;
@@ -933,8 +1053,8 @@ async function runCreate(
       calendarId: "primary",
       summary,
       description,
-      start: { dateTime: firstSlot.startIso, timeZone: NEW_YORK_TZ },
-      end: { dateTime: firstSlot.endIso, timeZone: NEW_YORK_TZ },
+      start: { dateTime: selected.firstSlot.startIso, timeZone: NEW_YORK_TZ },
+      end: { dateTime: selected.firstSlot.endIso, timeZone: NEW_YORK_TZ },
       recurrence: [`RRULE:FREQ=WEEKLY;BYDAY=${cmd.days.join(",")}`],
     });
     parseCalendarEventsText(createdText);
@@ -957,7 +1077,7 @@ async function runCreate(
     deps.stdout(
       `Created reminder for ${cmd.repo}#${cmd.issue} (${
         cmd.days.join(",")
-      } at ${cmd.timeText} ${NEW_YORK_TZ}): ${verified.summary} [${verified.id}]`,
+      } at ${selected.timeText} ${NEW_YORK_TZ}): ${verified.summary} [${verified.id}]`,
     );
     return 0;
   } finally {
@@ -972,7 +1092,9 @@ async function runList(
   const cfg = await loadGoogleDriveMcpConfig(deps);
   const client = await deps.connectMcp(cfg);
   try {
-    const query = cmd.repo && cmd.issue ? issueAddressFor(cmd.repo, cmd.issue) : "Check on:";
+    const query = cmd.repo && cmd.issue
+      ? issueAddressFor(cmd.repo, cmd.issue)
+      : LIST_DISCOVERY_QUERY;
     const text = await client.callTool("getCalendarEvents", {
       calendarId: "primary",
       singleEvents: false,
@@ -985,8 +1107,14 @@ async function runList(
     for (const ev of events) {
       const ref = extractReminderIssue(ev);
       if (!ref) continue;
-      if (cmd.repo && cmd.issue && (ref.repo !== cmd.repo || ref.issue !== cmd.issue)) continue;
-      const key = `${ref.repo}#${ref.issue}`;
+      if (
+        cmd.repo &&
+        cmd.issue &&
+        (ref.repo.toLowerCase() !== cmd.repo.toLowerCase() || ref.issue !== cmd.issue)
+      ) {
+        continue;
+      }
+      const key = `${ref.repo.toLowerCase()}#${ref.issue}`;
       const existing = grouped.get(key);
       if (existing) {
         existing.events.push(ev);
@@ -999,11 +1127,32 @@ async function runList(
       return 1;
     }
 
-    for (const [key, entry] of grouped) {
-      const days = extractDaysFromEvent(entry.events);
+    const now = deps.now();
+    const expandedEndIso = new Date(now.getTime() + LIST_EXPANSION_DAYS * 86_400_000).toISOString();
+
+    for (const entry of grouped.values()) {
+      let daySource = entry.events;
+      if (!hasExplicitCheckDays(entry.events)) {
+        const expandedText = await client.callTool("getCalendarEvents", {
+          calendarId: "primary",
+          timeMin: now.toISOString(),
+          timeMax: expandedEndIso,
+          singleEvents: true,
+          orderBy: "startTime",
+          query: issueAddressFor(entry.repo, entry.issue),
+          maxResults: 250,
+        });
+        const expandedEvents = parseCalendarEventsText(expandedText).filter((ev) =>
+          eventMatchesIssue(ev, entry.repo, entry.issue)
+        );
+        if (expandedEvents.length > 0) {
+          daySource = expandedEvents;
+        }
+      }
+      const days = extractDaysFromEvent(daySource);
       const dayLabel = days.length > 0 ? days.join(",") : "unknown";
       const summary = entry.events[0].summary;
-      deps.stdout(`${key} (${dayLabel}) — ${summary}`);
+      deps.stdout(`${entry.repo}#${entry.issue} (${dayLabel}) — ${summary}`);
     }
     return 0;
   } finally {

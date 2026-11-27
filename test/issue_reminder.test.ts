@@ -18,6 +18,9 @@ interface StoredEvent {
   id: string;
   summary: string;
   description?: string;
+  meeting?: string;
+  attendees?: string;
+  link?: string;
   start: { dateTime?: string; date?: string; timeZone?: string };
   end: { dateTime?: string; date?: string; timeZone?: string };
   recurrence?: string[];
@@ -49,6 +52,9 @@ function formatEvent(ev) {
     lines.push("Time: " + ev.start.dateTime + " - " + (ev.end?.dateTime || ""));
   }
   if (ev.description) lines.push("Description: " + ev.description);
+  if (ev.meeting) lines.push("Meeting: " + ev.meeting);
+  if (ev.attendees) lines.push("Attendees: " + ev.attendees);
+  if (ev.link) lines.push("Link: " + ev.link);
   lines.push("Event ID: " + ev.id);
   return lines.join("\\n");
 }
@@ -144,6 +150,16 @@ while (true) {
           );
         }
         writeState(state);
+        if (mode === "bad-count" && items.length > 0) {
+          const badText = "Found 2 event(s):\\n\\n" + formatEvent(items[0]);
+          await send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: badText }], isError: false } });
+          continue;
+        }
+        if (mode === "missing-event-id" && items.length > 0) {
+          const noIdText = "Found 1 event(s):\\n\\n**" + (items[0].summary || "Broken") + "**\\nTime: 2026-12-04T09:30:00-05:00 - 2026-12-04T10:00:00-05:00";
+          await send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: noIdText }], isError: false } });
+          continue;
+        }
         const text = items.length === 0
           ? "No events found."
           : "Found " + items.length + " event(s):\\n\\n" + items.map(formatEvent).join("\\n\\n---\\n\\n");
@@ -458,7 +474,7 @@ Deno.test("create refuses when issue 10 already has a reminder, naming event and
   }
 });
 
-Deno.test("create refuses when a timed event sits at 09:30-10:00 on a Friday within 28 days", async () => {
+Deno.test("create (no --time) auto-steps from 09:30 to 10:00 NY time on Friday conflict, reads back, prints chosen time, exits 0", async () => {
   const conflict: StoredEvent = {
     id: "evt-friday-sync",
     summary: "Friday Studio Sync",
@@ -472,6 +488,48 @@ Deno.test("create refuses when a timed event sits at 09:30-10:00 on a Friday wit
       ["create", "--repo", "WebJamApps/web-jam-tools", "--issue", "10", "--days", "TU,FR"],
       fx.deps,
     );
+    assertEquals(code, 0, fx.err.join("\n"));
+    const state = await fx.readState();
+    assertEquals(state.createCalls.length, 1);
+    const created = state.events.find((e) => e.id !== "evt-friday-sync");
+    assertEquals(created?.start, {
+      dateTime: "2026-11-17T10:00:00-05:00",
+      timeZone: "America/New_York",
+    });
+    assertEquals(created?.end, {
+      dateTime: "2026-11-17T10:15:00-05:00",
+      timeZone: "America/New_York",
+    });
+    assertEquals(fx.out.join("\n").includes("10:00"), true);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+Deno.test("create with explicit --time 09:30 refuses when a timed event sits at 09:30-10:00 on a Friday within 28 days", async () => {
+  const conflict: StoredEvent = {
+    id: "evt-friday-sync",
+    summary: "Friday Studio Sync",
+    description: "Weekly team meeting",
+    start: { dateTime: "2026-12-04T09:30:00-05:00", timeZone: "America/New_York" },
+    end: { dateTime: "2026-12-04T10:00:00-05:00", timeZone: "America/New_York" },
+  };
+  const fx = await createFixture({ initialEvents: [conflict] });
+  try {
+    const code = await runIssueReminder(
+      [
+        "create",
+        "--repo",
+        "WebJamApps/web-jam-tools",
+        "--issue",
+        "10",
+        "--days",
+        "TU,FR",
+        "--time",
+        "09:30",
+      ],
+      fx.deps,
+    );
     assertEquals(code, 1);
     assertEquals(fx.err.join("\n").includes("Friday Studio Sync"), true);
     const state = await fx.readState();
@@ -479,6 +537,134 @@ Deno.test("create refuses when a timed event sits at 09:30-10:00 on a Friday wit
     assertEquals(state.events.length, 1);
   } finally {
     await fx.cleanup();
+  }
+});
+
+Deno.test("create (no --time) refuses when every 15-minute slot from 09:30 through 17:00 overlaps a timed event within 28 days", async () => {
+  const allDayLong: StoredEvent = {
+    id: "evt-all-day-block",
+    summary: "All-Day Studio Session",
+    description: "Blocks 09:30 through 17:15",
+    start: { dateTime: "2026-12-04T09:00:00-05:00", timeZone: "America/New_York" },
+    end: { dateTime: "2026-12-04T17:15:00-05:00", timeZone: "America/New_York" },
+  };
+  const fx = await createFixture({ initialEvents: [allDayLong] });
+  try {
+    const code = await runIssueReminder(
+      ["create", "--repo", "WebJamApps/web-jam-tools", "--issue", "10", "--days", "TU,FR"],
+      fx.deps,
+    );
+    assertEquals(code, 1);
+    assertMatch(fx.err.join("\n"), /09:30 through 17:00/);
+    assertEquals((await fx.readState()).createCalls.length, 0);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+Deno.test("create (no --time) picks 17:00 when 09:30-17:00 is blocked but 17:00-17:15 is free", async () => {
+  const almostAllDay: StoredEvent = {
+    id: "evt-almost-all-day",
+    summary: "Daytime Block",
+    start: { dateTime: "2026-12-04T09:00:00-05:00", timeZone: "America/New_York" },
+    end: { dateTime: "2026-12-04T17:00:00-05:00", timeZone: "America/New_York" },
+  };
+  const fx = await createFixture({ initialEvents: [almostAllDay] });
+  try {
+    const code = await runIssueReminder(
+      ["create", "--repo", "WebJamApps/web-jam-tools", "--issue", "10", "--days", "TU,FR"],
+      fx.deps,
+    );
+    assertEquals(code, 0, fx.err.join("\n"));
+    const state = await fx.readState();
+    const created = state.events.find((e) => e.id !== "evt-almost-all-day");
+    assertEquals(created?.start, {
+      dateTime: "2026-11-17T17:00:00-05:00",
+      timeZone: "America/New_York",
+    });
+    assertEquals(fx.out.join("\n").includes("17:00"), true);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+Deno.test("create parses multi-line Zoom description with --- dividers and Link:/Meeting: lines cleanly", async () => {
+  const zoomEvent: StoredEvent = {
+    id: "evt-zoom",
+    summary: "Weekly Sync",
+    description: [
+      "Agenda notes",
+      "",
+      "---",
+      "",
+      "Join Zoom Meeting",
+      "Link: https://zoom.us/j/123456789",
+      "Meeting: 123 456 789",
+      "",
+      "---",
+      "",
+      "**Dial by your location**",
+      "Event ID: fake-in-body",
+    ].join("\n"),
+    meeting: "https://meet.google.com/abc-defg-hij",
+    attendees: "a@example.com, b@example.com",
+    link: "https://www.google.com/calendar/event?eid=zoom123",
+    start: { dateTime: "2026-11-20T11:00:00-05:00", timeZone: "America/New_York" },
+    end: { dateTime: "2026-11-20T11:30:00-05:00", timeZone: "America/New_York" },
+  };
+  const otherEvent: StoredEvent = {
+    id: "evt-other",
+    summary: "Afternoon Coffee",
+    description: "Catch up",
+    link: "https://www.google.com/calendar/event?eid=other",
+    start: { dateTime: "2026-11-20T15:00:00-05:00", timeZone: "America/New_York" },
+    end: { dateTime: "2026-11-20T15:30:00-05:00", timeZone: "America/New_York" },
+  };
+  const fx = await createFixture({ initialEvents: [zoomEvent, otherEvent] });
+  try {
+    const code = await runIssueReminder(
+      ["create", "--repo", "WebJamApps/web-jam-tools", "--issue", "10", "--days", "TU,FR"],
+      fx.deps,
+    );
+    assertEquals(code, 0, fx.err.join("\n"));
+    const state = await fx.readState();
+    assertEquals(state.createCalls.length, 1);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+Deno.test("create refuses and creates nothing when Found N event(s) count disagrees or Event ID is missing", async () => {
+  const existing: StoredEvent = {
+    id: "evt-1",
+    summary: "Some Event",
+    start: { dateTime: "2026-11-20T11:00:00-05:00", timeZone: "America/New_York" },
+    end: { dateTime: "2026-11-20T11:30:00-05:00", timeZone: "America/New_York" },
+  };
+  const fxMismatch = await createFixture({ initialEvents: [existing], mode: "bad-count" });
+  try {
+    const code = await runIssueReminder(
+      ["create", "--repo", "WebJamApps/web-jam-tools", "--issue", "10", "--days", "TU,FR"],
+      fxMismatch.deps,
+    );
+    assertEquals(code, 1);
+    assertMatch(fxMismatch.err.join("\n"), /claimed 2 event\(s\) but parsed 1/i);
+    assertEquals((await fxMismatch.readState()).createCalls.length, 0);
+  } finally {
+    await fxMismatch.cleanup();
+  }
+
+  const fxMissingId = await createFixture({ initialEvents: [existing], mode: "missing-event-id" });
+  try {
+    const code = await runIssueReminder(
+      ["create", "--repo", "WebJamApps/web-jam-tools", "--issue", "10", "--days", "TU,FR"],
+      fxMissingId.deps,
+    );
+    assertEquals(code, 1);
+    assertMatch(fxMissingId.err.join("\n"), /without an Event ID/i);
+    assertEquals((await fxMissingId.readState()).createCalls.length, 0);
+  } finally {
+    await fxMissingId.cleanup();
   }
 });
 
@@ -591,6 +777,40 @@ Deno.test("list prints two lines with issue and days for reminders 10 and 12", a
     assertEquals(fx.out[0].includes("TU,FR"), true);
     assertEquals(fx.out[1].includes("WebJamApps/web-jam-tools#12"), true);
     assertEquals(fx.out[1].includes("MO,TH"), true);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+Deno.test("list discovers older reminder without colon or Check days via 14-day expansion and ignores #boards events", async () => {
+  const events: StoredEvent[] = [
+    {
+      id: "evt-legacy-1694",
+      summary: "Check on CD Baby's answer",
+      description: `Waiting on CD Baby reply\n${issueAddressFor("WebJamApps/web-jam-tools", 10)}`,
+      link: "https://www.google.com/calendar/event?eid=legacy",
+      start: { dateTime: "2026-11-17T09:30:00-05:00", timeZone: "America/New_York" },
+      end: { dateTime: "2026-11-17T09:45:00-05:00", timeZone: "America/New_York" },
+      recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=TU,FR"],
+    },
+    {
+      id: "evt-boards",
+      summary: "Weekly board review",
+      description: "See https://github.com/orgs/WebJamApps/projects/1/views/2#boards",
+      start: { dateTime: "2026-11-18T10:00:00-05:00", timeZone: "America/New_York" },
+      end: { dateTime: "2026-11-18T10:30:00-05:00", timeZone: "America/New_York" },
+    },
+  ];
+  const fx = await createFixture({ initialEvents: events });
+  // Also run from a Wednesday to verify weekday order stays TU,FR rather than FR,TU.
+  const wedDeps: Deps = { ...fx.deps, now: () => new Date("2026-11-18T12:00:00.000Z") };
+  try {
+    const code = await runIssueReminder(["list"], wedDeps);
+    assertEquals(code, 0, fx.err.join("\n"));
+    assertEquals(fx.out.length, 1);
+    assertEquals(fx.out[0].includes("WebJamApps/web-jam-tools#10"), true);
+    assertEquals(fx.out[0].includes("TU,FR"), true);
+    assertEquals(fx.out[0].includes("Check on CD Baby's answer"), true);
   } finally {
     await fx.cleanup();
   }
@@ -734,6 +954,35 @@ Deno.test("helpers handle NY DST offsets and malformed calendar responses safely
   assertEquals(julySlots[0].endIso, "2026-07-14T09:45:00-04:00");
 
   assertEquals(parseCalendarEventsText("No events found."), []);
+
+  const zoomMulti = [
+    "Found 2 event(s):",
+    "",
+    "**Zoom Sync**",
+    "Time: 2026-11-20T10:00:00-05:00 - 2026-11-20T10:30:00-05:00",
+    "Description: Intro",
+    "",
+    "---",
+    "",
+    "Link: https://zoom.us/j/999",
+    "Meeting: 999",
+    "Link: https://www.google.com/calendar/event?eid=1",
+    "Attendees: a@example.com",
+    "Meeting: https://meet.google.com/xyz",
+    "Event ID: evt-z1",
+    "",
+    "---",
+    "",
+    "**Follow-up**",
+    "Time: 2026-11-20T11:00:00-05:00 - 2026-11-20T11:15:00-05:00",
+    "Description: https://github.com/WebJamApps/web-jam-tools/issues/10",
+    "Event ID: evt-z2",
+  ].join("\n");
+  const parsed = parseCalendarEventsText(zoomMulti);
+  assertEquals(parsed.length, 2);
+  assertEquals(parsed[0].id, "evt-z1");
+  assertEquals(parsed[0].description.includes("Link: https://zoom.us/j/999"), true);
+  assertEquals(parsed[1].id, "evt-z2");
 });
 
 Deno.test("deno.json registers issue-reminder with scoped permissions (Rule 12, Rule 21)", async () => {
