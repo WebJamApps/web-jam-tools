@@ -1,9 +1,11 @@
 /**
- * Read-only check that Claude Code, agy, and Codex match the canonical clone.
+ * Check that Claude Code, agy, and Codex match the canonical clone.
  *
  * Implements "Each tool's live setup" in
  * ~/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md
- * by running each installer's own check mode without writing any file or running any installer.
+ * by running each installer's own check mode, which writes no file and installs nothing. The one
+ * thing this check changes: it deletes a temporary approved copy under the Gate 1 state folder
+ * whose design document no longer exists.
  */
 import { join, resolve } from "@std/path";
 import {

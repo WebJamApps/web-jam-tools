@@ -2044,3 +2044,25 @@ Deno.test("temporary approved copy lifecycle: taken/replaced at match-design, pr
     await Deno.remove(tempDir, { recursive: true });
   }
 });
+
+Deno.test("approveGate1Record saves the approval and warns when the approved copy cannot be deleted", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-copy-warning-" });
+  const stateDir = path.join(tempDir, "state");
+  const docPath = path.join(tempDir, "topic-design.md");
+  try {
+    const content = "# Topic\n\nBody.\n";
+    await Deno.writeTextFile(docPath, content);
+    await openGate1Record(docPath, content, { stateDir });
+    // A non-empty directory at the copy path makes the delete fail.
+    const copyPath = getGate1ApprovedCopyPath(docPath, stateDir);
+    await Deno.mkdir(path.join(copyPath, "blocker"), { recursive: true });
+
+    const result = await approveGate1Record(docPath, "i approve", { stateDir });
+    assertEquals(result.copyWarning?.includes(copyPath), true);
+    const saved = JSON.parse(await Deno.readTextFile(result.recordPath));
+    assertEquals(saved.reply, "i approve");
+    assertEquals(saved.approvedAt, result.record.approvedAt);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});

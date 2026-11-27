@@ -264,6 +264,9 @@ Options:
     log(`[design:gate1-approve] Gate 1 approved for ${result.record.docPath}`);
     log(`[design:gate1-approve] Recorded reply: "${result.record.reply}"`);
     log(`[design:gate1-approve] Fingerprint: ${result.record.approvedFingerprint}`);
+    if (result.copyWarning) {
+      errorLog(`[design:gate1-approve] Warning: the approval is saved. ${result.copyWarning}`);
+    }
     return 0;
   } catch (err) {
     errorLog(`[design:gate1-approve] Error: ${err instanceof Error ? err.message : String(err)}`);

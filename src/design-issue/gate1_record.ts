@@ -185,6 +185,23 @@ export async function removeApprovedCopyIfPresent(copyPath: string): Promise<boo
   }
 }
 
+/** Whether anything, a symlink included, sits at `copyPath`; fails closed when that cannot be told. */
+async function approvedCopyExists(copyPath: string): Promise<boolean> {
+  try {
+    await Deno.lstat(copyPath);
+    return true;
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) {
+      return false;
+    }
+    throw new Gate1RecordError(
+      `Cannot check for a temporary approved copy at ${copyPath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
 /**
  * Writes `content` to `copyPath` atomically inside `copyPath`'s directory, replacing any earlier
  * copy or symlink without partial writes.
@@ -221,7 +238,7 @@ export interface SyncApprovedCopyResult {
 /**
  * Syncs `<hash>.approved.md` when `design:match-design` resolves an existing canonical document:
  * - If its content matches its Gate 1 record's `approvedFingerprint`, copies the approved text
- *   beside the record (removing/replacing any earlier copy).
+ *   beside the record (atomically replacing any earlier copy).
  * - If the document is already modified since approval or is open at Gate 1, keeps any existing
  *   approved copy untouched so highlights continue comparing against the last approved baseline.
  */
@@ -259,7 +276,7 @@ export async function syncApprovedCopyOnMatch(
     return { action: "skipped", copyPath };
   }
 
-  const existed = await removeApprovedCopyIfPresent(copyPath);
+  const existed = await approvedCopyExists(copyPath);
   await writeApprovedCopyAtomic(copyPath, docContent);
   return { action: existed ? "replaced" : "copied", copyPath };
 }
@@ -792,6 +809,8 @@ export async function openGate1Record(
  * - Refuses if document fingerprint has changed since it was presented
  * - Otherwise records the approving reply verbatim and current document fingerprint, and
  *   stores the document's premise rows as they stand, replacing any stored before
+ * - Once the approval is saved, a temporary approved copy that cannot be deleted is returned as
+ *   `copyWarning` rather than thrown
  */
 export async function approveGate1Record(
   docPath: string,
@@ -801,7 +820,7 @@ export async function approveGate1Record(
     /** Refuses (throws) unless Josh typed the reply after `presentedAt` (web-jam-tools#1412). */
     verifyReply?: (presentedAt: string) => Promise<unknown>;
   },
-): Promise<{ record: Gate1Record; recordPath: string }> {
+): Promise<{ record: Gate1Record; recordPath: string; copyWarning?: string }> {
   const absDocPath = path.resolve(expandHome(docPath.trim()));
 
   if (!reply || reply.trim() === "") {
@@ -918,7 +937,12 @@ export async function approveGate1Record(
     delete current.sweepNotes;
 
     await Deno.writeTextFile(recordPath, JSON.stringify(current, null, 2) + "\n");
-    await removeApprovedCopyIfPresent(getGate1ApprovedCopyPath(absDocPath, dir));
+    try {
+      await removeApprovedCopyIfPresent(getGate1ApprovedCopyPath(absDocPath, dir));
+    } catch (err) {
+      const copyWarning = err instanceof Error ? err.message : String(err);
+      return { record: current, recordPath, copyWarning };
+    }
     return { record: current, recordPath };
   });
 }
