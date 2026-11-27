@@ -9,6 +9,7 @@
 import { assert, assertEquals, assertFalse, assertMatch, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
 import {
+  computeNextChangeIndex,
   computeTablePagination,
   parseInlineMarkdown,
   renderDesignDoc,
@@ -1440,5 +1441,221 @@ Deno.test("Images on the rendered page: renders local images beside doc and leav
     assertFalse(main.includes('onerror="alert(1)"'));
   } finally {
     Deno.removeSync(rootDir, { recursive: true });
+  }
+});
+
+Deno.test("Revision highlights: highlights changed heading, paragraph, list item, table row, deletion markers, and top banner", () => {
+  const approvedMd = `# Design Doc
+
+## Revision History
+
+| Version | Date | Why |
+|---|---|---|
+| 1.0.0 | 2026-10-01 | Initial version |
+
+## Overview
+
+Unchanged intro paragraph.
+
+Paragraph that will change.
+
+Paragraph that will be deleted.
+
+- Keep bullet
+- Edit bullet
+
+## Details
+
+| Item | State |
+|---|---|
+| Row A | unchanged |
+| Row B | deleted |
+`;
+
+  const revisedMd = `# Design Doc
+
+## Revision History
+
+| Version | Date | Why |
+|---|---|---|
+| 1.0.0 | 2026-10-01 | Initial version |
+| 1.1.0 | 2026-11-26 | Updated overview |
+
+## Overview Revised
+
+Unchanged intro paragraph.
+
+Paragraph that changed in revision.
+
+- Keep bullet
+- Edited bullet
+- Added bullet
+
+## Details
+
+| Item | State |
+|---|---|
+| Row A | unchanged |
+| Row C | added |
+`;
+
+  const html = renderDesignDoc(revisedMd, "Design Doc", {
+    approvedMarkdown: approvedMd,
+    approvedAt: "2026-10-01T12:00:00.000Z",
+  });
+  const main = html.split("<main>")[1]?.split("</main>")[0] ?? "";
+
+  // Subtle dark-mode styling and transparent table containers
+  assertStringIncludes(html, "rgba(250, 204, 21, 0.085)");
+  assertStringIncludes(html, "border-left: 2px solid rgba(250, 204, 21, 0.75);");
+  assertStringIncludes(html, "box-shadow: inset 2px 0 0 rgba(250, 204, 21, 0.75);");
+  assertStringIncludes(html, "background-color: transparent;");
+  assertStringIncludes(html, "body.highlights-hidden");
+
+  // Changed heading, paragraph, list items, table rows, and deletion marker
+  assertStringIncludes(
+    main,
+    '<h2 id="overview-revised" class="rev-changed" data-rev-change="true">Overview Revised</h2>',
+  );
+  assertStringIncludes(main, "<p>Unchanged intro paragraph.</p>");
+  assertStringIncludes(
+    main,
+    '<p class="rev-changed" data-rev-change="true">Paragraph that changed in revision.</p>',
+  );
+  assertStringIncludes(
+    main,
+    '<div class="rev-removed" data-rev-change="true"><span class="rev-removed-badge">removed here</span></div>',
+  );
+  assertStringIncludes(main, "  <li>Keep bullet</li>");
+  assertStringIncludes(
+    main,
+    '  <li class="rev-changed" data-rev-change="true">Edited bullet</li>',
+  );
+  assertStringIncludes(
+    main,
+    '  <li class="rev-changed" data-rev-change="true">Added bullet</li>',
+  );
+
+  // Revision History: only the new row (1.1.0) is highlighted; old row (1.0.0) stays plain
+  assertStringIncludes(
+    main,
+    '<tr class="rev-changed" data-rev-change="true">\n  <td>1.1.0</td>',
+  );
+  assertStringIncludes(main, "<tr>\n  <td>1.0.0</td>");
+
+  // Details table: Row C is highlighted; Row A stays plain
+  assertStringIncludes(main, "<tr>\n  <td>Row A</td>");
+  assertStringIncludes(
+    main,
+    '<tr class="rev-changed" data-rev-change="true">\n  <td>Row C</td>',
+  );
+
+  // Top banner reports exact change count + date + Next change & Hide highlights buttons
+  // Changes: 1.1.0 row (1) + Overview Revised (2) + changed paragraph (3) + removed paragraph (4) + Edited bullet (5) + Added bullet (6) + Row C (7) = 7
+  assertStringIncludes(main, "7 changes since you approved this on 2026-10-01");
+  assertStringIncludes(main, 'id="rev-next-btn">Next change</button>');
+  assertStringIncludes(main, 'id="rev-toggle-btn" aria-pressed="false">Hide highlights</button>');
+});
+
+Deno.test("Revision highlights: deletion markers inside lists and tables and singular/zero banner states", () => {
+  const approvedListAndTable = `# Test
+
+## Items
+
+- First
+- Removed item
+- Last
+
+| Col |
+|---|
+| Keep |
+| Drop |
+`;
+  const revisedListAndTable = `# Test
+
+## Items
+
+- First
+- Last
+
+| Col |
+|---|
+| Keep |
+`;
+  const html = renderDesignDoc(revisedListAndTable, "Test", {
+    approvedMarkdown: approvedListAndTable,
+    approvedAt: "2026-11-20",
+  });
+  const main = html.split("<main>")[1]?.split("</main>")[0] ?? "";
+  assertStringIncludes(
+    main,
+    '<li class="rev-removed-item" data-rev-change="true"><span class="rev-removed-badge">removed here</span></li>',
+  );
+  assertStringIncludes(
+    main,
+    '<tr class="rev-removed-row" data-rev-change="true">\n  <td colspan="1"><span class="rev-removed-badge">removed here</span></td>\n</tr>',
+  );
+  assertStringIncludes(main, "2 changes since you approved this on 2026-11-20");
+
+  // Single change uses singular "1 change"
+  const singleHtml = renderDesignDoc("# Test\n\nNew text.\n", "Test", {
+    approvedMarkdown: "# Test\n\nOld text.\n",
+    approvedAt: "2026-11-20",
+  });
+  assertStringIncludes(singleHtml, "1 change since you approved this on 2026-11-20");
+
+  // Identical approved copy shows 0 changes with Next change button disabled
+  const zeroHtml = renderDesignDoc("# Test\n\nSame text.\n", "Test", {
+    approvedMarkdown: "# Test\n\nSame text.\n",
+    approvedAt: "2026-11-20",
+  });
+  assertStringIncludes(zeroHtml, "0 changes since you approved this on 2026-11-20");
+  assertStringIncludes(zeroHtml, 'id="rev-next-btn" disabled>Next change</button>');
+});
+
+Deno.test("Revision highlights: omitted approved copy and Gate 2 plan pages never render highlights or banner", () => {
+  const md = `# Plan Page
+
+## Section
+
+Updated paragraph.
+`;
+  const withoutCopy = renderDesignDoc(md);
+  const withoutMain = withoutCopy.split("<main>")[1]?.split("</main>")[0] ?? "";
+  assertFalse(withoutMain.includes('id="rev-banner"'));
+  assertFalse(withoutMain.includes("rev-changed"));
+  assertFalse(withoutMain.includes("data-rev-change"));
+  assertFalse(withoutMain.includes("since you approved this"));
+
+  const planPageWithCopy = renderDesignDoc(md, "Plan Page", {
+    isPlanPage: true,
+    approvedMarkdown: "# Plan Page\n\n## Section\n\nOld paragraph.\n",
+    approvedAt: "2026-11-20",
+  });
+  const planMain = planPageWithCopy.split("<main>")[1]?.split("</main>")[0] ?? "";
+  assertFalse(planMain.includes('id="rev-banner"'));
+  assertFalse(planMain.includes("rev-changed"));
+  assertFalse(planMain.includes("data-rev-change"));
+  assertFalse(planMain.includes("since you approved this"));
+});
+
+Deno.test("Revision highlights: computeNextChangeIndex advances and wraps cleanly in exported and embedded script", () => {
+  assertEquals(computeNextChangeIndex(-1, 3), 0);
+  assertEquals(computeNextChangeIndex(0, 3), 1);
+  assertEquals(computeNextChangeIndex(1, 3), 2);
+  assertEquals(computeNextChangeIndex(2, 3), 0);
+  assertEquals(computeNextChangeIndex(0, 0), -1);
+
+  const html = renderDesignDoc("# Doc\n\nAfter.\n", "Doc", {
+    approvedMarkdown: "# Doc\n\nBefore.\n",
+    approvedAt: "2026-11-20",
+  });
+  const embedded = html.match(/var computeNext = ([\s\S]*?);\s*var changes =/);
+  assert(embedded, "Generated HTML must include computeNext helper");
+  const computeEmbedded = new Function(
+    `return (${embedded[1]});`,
+  )() as typeof computeNextChangeIndex;
+  for (const [idx, total] of [[-1, 4], [0, 4], [3, 4], [0, 0]] as const) {
+    assertEquals(computeEmbedded(idx, total), computeNextChangeIndex(idx, total));
   }
 });

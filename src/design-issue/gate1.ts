@@ -10,6 +10,7 @@ import { renderDesignDoc } from "../../scripts/render_design_doc.ts";
 import { lintDesignDoc, presentingDay, stripCellDecoration, toLocalIsoDate } from "./lint_doc.ts";
 import { verifyCitations, type VerifyCitationsResult } from "./verify_citations.ts";
 import {
+  getGate1ApprovedCopyPath,
   loadGate1Record,
   openGate1Record,
   type OtherDesignSweepResult,
@@ -354,11 +355,29 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
     };
   }
 
+  const copyPath = getGate1ApprovedCopyPath(absDocPath, options.stateDir);
+  let approvedMarkdown: string | undefined;
+  try {
+    approvedMarkdown = await Deno.readTextFile(copyPath);
+  } catch (err) {
+    if (!(err instanceof Deno.errors.NotFound)) {
+      throw new Error(
+        `Cannot read temporary approved copy at ${copyPath}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+  const approvedAt = record?.approvedAt ??
+    (record?.premiseRowsSource === "approval" ? record.premiseRowsStoredAt : undefined);
+
   const htmlPath = resolveHtmlPath(absDocPath);
   const fallbackTitle = path.basename(absDocPath, path.extname(absDocPath));
   const renderedHtml = renderDesignDoc(markdownContent, fallbackTitle, {
     otherDesignSweep,
     docDir: path.dirname(absDocPath),
+    approvedMarkdown,
+    approvedAt,
   });
 
   if (!renderedHtml || renderedHtml.trim() === "") {
