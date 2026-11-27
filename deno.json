@@ -29,7 +29,7 @@
     "gitleaks": "bash scripts/gitleaks.sh",
     "install-skills": "deno run --allow-env --allow-run --allow-read --allow-write scripts/install-skills.ts",
     "install-codex": "deno run --allow-env=HOME --allow-read --allow-write scripts/install-codex.ts",
-    "tools:check": "deno run --no-prompt --allow-env=HOME,USERPROFILE,PATH,TMPDIR,CODEX_HOME,CLAUDE_SETTINGS_PATH,AGY_HOOKS_PATH,AGY_SETTINGS_PATH,CLAUDE_HOOKS_DIR,CLAUDE_SKILLS_DEST,AGY_SKILLS_DEST,AGY_MCP_CONFIG_PATH,AGY_MCP_SRC_CONFIG,CODEX_HOOKS_PATH,BIN_DIR,AGENTS_MD_PATH,AGY_SAFETY_RULES_PATH,CODEX_SAFETY_RULES_PATH --allow-read=.,/tmp,$HOME/WebJamApps/web-jam-tools --allow-run=bash,deno src/tools-check/cli.ts",
+    "tools:check": "deno run --no-prompt --allow-env=HOME,USERPROFILE,PATH,TMPDIR,CODEX_HOME,CLAUDE_SETTINGS_PATH,AGY_HOOKS_PATH,AGY_SETTINGS_PATH,CLAUDE_HOOKS_DIR,CLAUDE_SKILLS_DEST,AGY_SKILLS_DEST,AGY_MCP_CONFIG_PATH,AGY_MCP_SRC_CONFIG,CODEX_HOOKS_PATH,BIN_DIR,AGENTS_MD_PATH,AGY_SAFETY_RULES_PATH,CODEX_SAFETY_RULES_PATH,DESIGN_GATE1_STATE_DIR,DESIGN_DOCS_ROOT --allow-read=.,/tmp,$HOME/WebJamApps/web-jam-tools,$HOME/.claude/state/design-gate1,$HOME/Dropbox/web-jam-llms --allow-write=$HOME/.claude/state/design-gate1,/tmp --allow-run=bash,deno src/tools-check/cli.ts",
     "lint:skills": "deno run -A src/skills-lint/cli.ts",
     "lint:skill-surfaces": "deno run --allow-read scripts/lint-skill-surfaces.ts",
     "post-pr-review": "deno run --allow-read --allow-run --allow-env scripts/post-pr-review.ts",

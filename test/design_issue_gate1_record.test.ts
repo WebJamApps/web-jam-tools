@@ -11,6 +11,7 @@ import {
   computeFingerprint,
   formatGate1Status,
   Gate1RecordError,
+  getGate1ApprovedCopyPath,
   getGate1RecordPath,
   getGate1StateDir,
   getGate1Status,
@@ -18,6 +19,7 @@ import {
   loadGate1Record,
   openGate1Record,
   recordSweepNote,
+  syncApprovedCopyOnMatch,
   withGate1RecordLock,
 } from "../src/design-issue/gate1_record.ts";
 import { lintDesignDoc, toLocalIsoDate } from "../src/design-issue/lint_doc.ts";
@@ -1975,6 +1977,68 @@ Deno.test("loadGate1Record refuses malformed decisionRowCount", async () => {
       () => loadGate1Record(docPath, { stateDir }),
       Gate1RecordError,
       "malformed decisionRowCount",
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("temporary approved copy lifecycle: taken/replaced at match-design, preserved across edits, deleted on gate1-approve", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-approved-copy-" });
+  const stateDir = path.join(tempDir, "state");
+  const docPath = path.join(tempDir, "topic-design.md");
+  try {
+    const v1 = "# Topic\n\nApproved v1 content.\n";
+    await Deno.writeTextFile(docPath, v1);
+    const copyPath = getGate1ApprovedCopyPath(docPath, stateDir);
+    assertEquals(copyPath.endsWith(".approved.md"), true);
+
+    // Unpresented/unapproved doc skips copy creation
+    const skippedUnpresented = await syncApprovedCopyOnMatch(docPath, v1, { stateDir });
+    assertEquals(skippedUnpresented.action, "skipped");
+    await assertRejects(() => Deno.stat(copyPath), Deno.errors.NotFound);
+
+    // Present & approve v1 -> no copy left on disk after approval
+    await openGate1Record(docPath, v1, { stateDir });
+    await approveGate1Record(docPath, "i approve v1", { stateDir });
+    await assertRejects(() => Deno.stat(copyPath), Deno.errors.NotFound);
+
+    // Match when document still matches approvedFingerprint -> copy taken beside Gate 1 record
+    const copied = await syncApprovedCopyOnMatch(docPath, undefined, { stateDir });
+    assertEquals(copied.action, "copied");
+    assertEquals(await Deno.readTextFile(copyPath), v1);
+
+    // Earlier stale copy left on disk while document still matches approvedFingerprint -> replaced
+    await Deno.writeTextFile(copyPath, "# Stale older copy\n");
+    const replaced = await syncApprovedCopyOnMatch(docPath, undefined, { stateDir });
+    assertEquals(replaced.action, "replaced");
+    assertEquals(await Deno.readTextFile(copyPath), v1);
+
+    // Edit document for v2 -> match preserves approved v1 copy instead of overwriting it
+    const v2 = "# Topic\n\nRevised v2 content.\n";
+    await Deno.writeTextFile(docPath, v2);
+    const skippedEdited = await syncApprovedCopyOnMatch(docPath, undefined, { stateDir });
+    assertEquals(skippedEdited.action, "skipped");
+    assertEquals(await Deno.readTextFile(copyPath), v1);
+
+    // Present v2 (open Gate 1 clears approvedFingerprint) -> copy still preserved; failed approve keeps it
+    await openGate1Record(docPath, v2, { stateDir });
+    assertEquals(await Deno.readTextFile(copyPath), v1);
+    await assertRejects(
+      () => approveGate1Record(docPath, "", { stateDir }),
+      Gate1RecordError,
+    );
+    assertEquals(await Deno.readTextFile(copyPath), v1);
+
+    // Approve v2 -> temporary approved copy deleted
+    await approveGate1Record(docPath, "i approve v2", { stateDir });
+    await assertRejects(() => Deno.stat(copyPath), Deno.errors.NotFound);
+
+    // Corrupt Gate 1 record fails closed on syncApprovedCopyOnMatch
+    await Deno.writeTextFile(getGate1RecordPath(docPath, stateDir), "{not valid json");
+    await assertRejects(
+      () => syncApprovedCopyOnMatch(docPath, undefined, { stateDir }),
+      Gate1RecordError,
     );
   } finally {
     await Deno.remove(tempDir, { recursive: true });

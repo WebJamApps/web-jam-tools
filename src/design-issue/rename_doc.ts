@@ -6,6 +6,7 @@ import { expandHome, isDesignDocFilename } from "./gate1.ts";
 import {
   carryGate1Record,
   computeFingerprint,
+  getGate1ApprovedCopyPath,
   getGate1RecordPath,
   loadGate1Record,
 } from "./gate1_record.ts";
@@ -179,6 +180,7 @@ export async function planDocRename(
   await reserve(target);
   await reserve(target.replace(/\.md$/i, ".html"));
   await reserve(getGate1RecordPath(target, options.stateDir));
+  await reserve(getGate1ApprovedCopyPath(target, options.stateDir));
   const before = await remember(source);
   const addWrite = (file: string, previous: string, next: string) => {
     if (next !== previous) {
@@ -233,6 +235,18 @@ export async function planDocRename(
     else addWrite(recordFile, raw, rewritten);
   }
   await carryRecord(source, before, replace(before), target);
+  const oldApprovedCopy = getGate1ApprovedCopyPath(source, options.stateDir);
+  if (await exists(oldApprovedCopy)) {
+    const copyText = await remember(oldApprovedCopy);
+    addMove(
+      oldApprovedCopy,
+      getGate1ApprovedCopyPath(target, options.stateDir),
+      copyText,
+      copyText,
+    );
+  } else {
+    plan.absent.add(oldApprovedCopy);
+  }
   const home = Deno.env.get("HOME") || "/home/joshua";
   const dropbox = path.resolve(
     expandHome(options.dropboxDir ?? path.join(home, "Dropbox/web-jam-llms")),
