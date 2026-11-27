@@ -1464,6 +1464,11 @@ Deno.test("History tables point at the body: unreadable Gate 1 record refuses na
       Error,
       recordPath,
     );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
 // --- Revision table first-section rule (web-jam-tools#1562) ---
 
 Deno.test("revision-history-not-first-section: refuses Revision History after another section and accepts it first", async () => {
@@ -1476,7 +1481,7 @@ Design content.
 
 | Version | Date | Summary |
 |---|---|---|
-| 1.0.0 | ${TODAY} | Initial design |
+| 1.0.0 | ${TODAY} | Added "What it is". |
 
 ## Both surfaces
 | Mechanism | Claude Code | agy | Codex |
@@ -1502,7 +1507,7 @@ Intro section.
 
 | Version | Date | Summary |
 |---|---|---|
-| 1.0.0 | ${TODAY} | Initial design |
+| 1.0.0 | ${TODAY} | Added "Overview". |
 
 ## Both surfaces
 Parity details across Claude Code, agy, and Codex.
@@ -1527,7 +1532,7 @@ Short summary under the title before the first section heading.
 
 | Version | Date | Summary |
 |---|---|---|
-| 1.0.0 | ${TODAY} | Initial design |
+| 1.0.0 | ${TODAY} | Added "What it is". |
 
 ## What it is
 Design content.
