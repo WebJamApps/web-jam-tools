@@ -1079,6 +1079,33 @@ Deno.test("edit-issue: --parent WebJamApps/JaMmusic#20 links across repositories
 });
 
 for (
+  const { args, parent } of [
+    { args: ["--parent", "#20"], parent: "WebJamApps/web-jam-tools#20" },
+    { args: ["--parent", "JaMmusic#20"], parent: "WebJamApps/JaMmusic#20" },
+    { args: ["--parent=20"], parent: "WebJamApps/web-jam-tools#20" },
+  ]
+) {
+  Deno.test(`edit-issue: ${args.join(" ")} links under ${parent} and reads back`, async () => {
+    const [repo, number] = parent.split("#");
+    const { calls, deps } = nativeFieldDeps({
+      readBackParentUrl: `https://api.github.com/repos/${repo}/issues/${number}`,
+    });
+    const result = await capturedRun([...TYPE_AND_PARENT_BASE, ...args], deps);
+    assertEquals(result.code, 0, result.errors.join("\n"));
+    assertEquals(calls[1], ["gh", "api", `repos/${repo}/issues/${number}`, "--jq", ".node_id"]);
+    assertStringIncludes(result.logs.join("\n"), `Parent to ${parent}; read-back verified`);
+  });
+}
+
+Deno.test("edit-issue: --type=Bug sets and reads back the type", async () => {
+  const { calls, deps } = nativeFieldDeps({ readBackType: "Bug" });
+  const result = await capturedRun([...TYPE_AND_PARENT_BASE, "--type=Bug"], deps);
+  assertEquals(result.code, 0, result.errors.join("\n"));
+  assertStringIncludes(calls[2][4], 'issueTypeId: "IT_bug"');
+  assertStringIncludes(result.logs.join("\n"), "Type to Bug; read-back verified");
+});
+
+for (
   const args of [
     ["--parent", "10"],
     ["--parent", "WebJamApps/web-jam-tools#10"],
