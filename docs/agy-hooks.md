@@ -152,10 +152,9 @@ depend on agy-native payload fields Claude Code's hook payload doesn't carry):
 ## 5. Gmail model choice and the session guard
 
 The session guard permits Hydrogen, Argon, Neon and Sonnet at high; it supplies no Gmail-specific cost
-confirmation or action approval. The chosen-model workflow and expensive-model question are owned
-by `~/Dropbox/web-jam-llms/AI_Misbehaves/hooks-design-2026-09-15.md`, “Gmail model choice and
-connections”. Their implementation is tracked separately by web-jam-tools#1225
-"skills/handle-gmails: use the chosen model and ask the Astra or Opus cost question".
+confirmation or action approval. The chosen-model workflow and expensive-model question are specified
+in `~/Dropbox/web-jam-llms/AI_Misbehaves/gmail-design.md`, “Gmail model choice and connections”, and
+carried out by `skills/handle-gmails/SKILL.md`.
 The Gmail fence remains separate from model selection. This guard change adds no Gmail connection.
 
 ## 6. Antigravity Gmail MCP setup
