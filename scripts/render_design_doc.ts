@@ -625,9 +625,7 @@ function parseMarkdownBlocks(
       const items: string[] = [];
       while (i < lines.length) {
         const itemLine = lines[i].trim();
-        const m = ordered
-          ? itemLine.match(/^(\d+)\.\s+(.*)$/)
-          : itemLine.match(/^([-*+])\s+(.*)$/);
+        const m = ordered ? itemLine.match(/^(\d+)\.\s+(.*)$/) : itemLine.match(/^([-*+])\s+(.*)$/);
         if (m) {
           items.push(m[2]);
           i++;
@@ -714,7 +712,9 @@ function diffSequence<T>(
 
   let prevA = -1;
   let prevB = -1;
-  for (const [ai, bi] of [...matches, [oldItems.length, newItems.length]] as Array<[number, number]>) {
+  for (
+    const [ai, bi] of [...matches, [oldItems.length, newItems.length]] as Array<[number, number]>
+  ) {
     const removedCount = ai - prevA - 1;
     const addedCount = bi - prevB - 1;
     if (removedCount > 0 && addedCount === 0) {
@@ -873,13 +873,13 @@ function diffParsedBlocks(
         ] as Array<[number, number]>
       ) {
         const subOldCount = subA - subPrevA - 1;
-        const subNewCount = subC - subPrevC - 1;
-        if (subOldCount > 0 && subNewCount === 0) {
+        // Approved blocks with no counterpart were deleted, whether or not unpairable new blocks
+        // of another kind landed in the same gap: mark the deletion, then show what replaced it.
+        if (subOldCount > 0) {
           out.push({ kind: "removedMarker" });
-        } else {
-          for (let k = subPrevC + 1; k < subC; k++) {
-            out.push(toChangedRenderable(newSlice[k]));
-          }
+        }
+        for (let k = subPrevC + 1; k < subC; k++) {
+          out.push(toChangedRenderable(newSlice[k]));
         }
         if (subC < newSlice.length) {
           out.push(pairModifiedBlock(oldSlice[subA], newSlice[subC]));
@@ -1001,7 +1001,9 @@ export function renderDesignDoc(
             documentTitle = text;
             hasDocumentTitle = true;
           }
-          bodyHtmlParts.push(`<h1${changeAttrs(changed)}>${parseInlineMarkdown(text, docDir)}</h1>`);
+          bodyHtmlParts.push(
+            `<h1${changeAttrs(changed)}>${parseInlineMarkdown(text, docDir)}</h1>`,
+          );
         } else if (level === 2) {
           if (inAppendixDetails) {
             bodyHtmlParts.push(`</div>\n</details>`);
@@ -1146,7 +1148,8 @@ export function renderDesignDoc(
       ? `${changeCount} ${changeWord} since you approved this on ${dateLabel}`
       : `${changeCount} ${changeWord} since you approved this`;
     const nextDisabled = changeCount === 0 ? " disabled" : "";
-    const bannerHtml = `<div class="rev-banner" id="rev-banner" role="region" aria-label="Revision changes">\n` +
+    const bannerHtml =
+      `<div class="rev-banner" id="rev-banner" role="region" aria-label="Revision changes">\n` +
       `  <span class="rev-banner-text">${escapeHtml(summaryText)}</span>\n` +
       `  <div class="rev-banner-actions">\n` +
       `    <button type="button" class="rev-banner-btn" id="rev-next-btn"${nextDisabled}>Next change</button>\n` +
@@ -1686,13 +1689,22 @@ export function renderDesignDoc(
 
     (function() {
       var DEFAULT_PAGE_SIZE = 10;
+      var computeRowModel = ${computePagerRowModel.toString()};
       var computePagination = ${computeTablePagination.toString()};
       var tables = document.querySelectorAll(".table-wrapper > table");
       for (var t = 0; t < tables.length; t++) {
         (function(table) {
           var tbody = table.querySelector("tbody");
           if (!tbody) return;
-          var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
+          var allRows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
+          // "removed here" marker rows are not table rows: only data rows are counted and paged.
+          var rowModel = computeRowModel(allRows.map(function(r) {
+            return r.classList.contains("rev-removed-row");
+          }));
+          var rows = rowModel.dataRowIndexes.map(function(i) { return allRows[i]; });
+          var markers = rowModel.markers.map(function(m) {
+            return { tr: allRows[m.rowIndex], anchor: m.anchor };
+          });
           if (rows.length <= DEFAULT_PAGE_SIZE) return;
 
           var wrapper = table.closest(".table-wrapper");
@@ -1759,6 +1771,16 @@ export function renderDesignDoc(
               }
             }
 
+            for (var k = 0; k < markers.length; k++) {
+              var markerVisible = markers[k].anchor >= state.startIdx && markers[k].anchor < state.endIdx;
+              markers[k].tr.style.display = markerVisible ? "" : "none";
+              if (markerVisible) {
+                markers[k].tr.classList.remove("table-pager-hidden-row");
+              } else {
+                markers[k].tr.classList.add("table-pager-hidden-row");
+              }
+            }
+
             status.textContent = state.statusText;
             prevBtn.disabled = state.prevDisabled;
             nextBtn.disabled = state.nextDisabled;
@@ -1786,6 +1808,11 @@ export function renderDesignDoc(
 
           table._revealRow = function(tr) {
             var idx = rows.indexOf(tr);
+            if (idx === -1) {
+              for (var m = 0; m < markers.length; m++) {
+                if (markers[m].tr === tr) idx = markers[m].anchor;
+              }
+            }
             if (idx === -1) return;
             if (currentSize !== "all") {
               currentPage = Math.floor(idx / currentSize) + 1;
@@ -1930,6 +1957,42 @@ export function computeTablePagination(
     prevDisabled,
     nextDisabled,
   };
+}
+
+export interface PagerRowModel {
+  /** Positions, among all tbody rows, of the real data rows. */
+  dataRowIndexes: number[];
+  /**
+   * Each "removed here" marker row: its position among all tbody rows and the position, among
+   * the data rows, of the row it stays with (the next data row, or the last one when none follows).
+   */
+  markers: Array<{ rowIndex: number; anchor: number }>;
+}
+
+/**
+ * Splits a table body's rows into data rows and "removed here" marker rows. The pager counts and
+ * pages only the data rows, and each marker follows its anchor row onto whichever page shows it.
+ */
+export function computePagerRowModel(isMarker: readonly boolean[]): PagerRowModel {
+  const dataRowIndexes: number[] = [];
+  const markers: Array<{ rowIndex: number; anchor: number }> = [];
+  let pending: number[] = [];
+  for (let i = 0; i < isMarker.length; i++) {
+    if (isMarker[i]) {
+      pending.push(i);
+      continue;
+    }
+    dataRowIndexes.push(i);
+    for (let p = 0; p < pending.length; p++) {
+      markers.push({ rowIndex: pending[p], anchor: dataRowIndexes.length - 1 });
+    }
+    pending = [];
+  }
+  const lastAnchor = Math.max(dataRowIndexes.length - 1, 0);
+  for (let p = 0; p < pending.length; p++) {
+    markers.push({ rowIndex: pending[p], anchor: lastAnchor });
+  }
+  return { dataRowIndexes, markers };
 }
 
 export function renderDesignDocFile(

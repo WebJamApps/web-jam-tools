@@ -10,6 +10,7 @@ import { assert, assertEquals, assertFalse, assertMatch, assertStringIncludes } 
 import * as path from "@std/path";
 import {
   computeNextChangeIndex,
+  computePagerRowModel,
   computeTablePagination,
   parseInlineMarkdown,
   renderDesignDoc,
@@ -1658,4 +1659,99 @@ Deno.test("Revision highlights: computeNextChangeIndex advances and wraps cleanl
   for (const [idx, total] of [[-1, 4], [0, 4], [3, 4], [0, 0]] as const) {
     assertEquals(computeEmbedded(idx, total), computeNextChangeIndex(idx, total));
   }
+});
+
+Deno.test("Revision highlights: a deleted block replaced by a block of another kind still gets a removed marker", () => {
+  const removedMarker =
+    '<div class="rev-removed" data-rev-change="true"><span class="rev-removed-badge">removed here</span></div>';
+  const count = (html: string) => html.split(removedMarker).length - 1;
+  const render = (approvedMarkdown: string, revised: string) =>
+    renderDesignDoc(revised, "Test", { approvedMarkdown, approvedAt: "2026-11-20" });
+
+  // Approved list replaced by a paragraph: marker, then the highlighted paragraph.
+  const listToParagraph = render(
+    "# Test\n\n## Items\n\n- old a\n- old b\n",
+    "# Test\n\n## Items\n\nBrand new paragraph.\n",
+  );
+  const listMain = listToParagraph.split("<main>")[1]?.split("</main>")[0] ?? "";
+  assertEquals(count(listMain), 1);
+  assertStringIncludes(
+    listMain,
+    '<p class="rev-changed" data-rev-change="true">Brand new paragraph.</p>',
+  );
+  assertStringIncludes(listMain, "2 changes since you approved this on 2026-11-20");
+  assert(
+    listMain.indexOf(removedMarker) <
+      listMain.indexOf('<p class="rev-changed" data-rev-change="true">Brand new paragraph.</p>'),
+    "marker stands where the deleted list was, before its replacement",
+  );
+
+  // Paragraph replaced by a table, and a code block replaced by a paragraph, behave the same.
+  const paragraphToTable = render(
+    "# Test\n\n## Items\n\nOld paragraph text.\n",
+    "# Test\n\n## Items\n\n| A |\n|---|\n| 1 |\n",
+  );
+  assertEquals(count(paragraphToTable.split("<main>")[1] ?? ""), 1);
+  const codeToParagraph = render(
+    "# Test\n\n## Items\n\n```\nold code\n```\n",
+    "# Test\n\n## Items\n\nReplacement paragraph.\n",
+  );
+  assertEquals(count(codeToParagraph.split("<main>")[1] ?? ""), 1);
+
+  // Two paragraphs replaced by one still renders exactly one marker (unchanged behaviour).
+  const twoToOne = render(
+    "# Test\n\n## Items\n\nFirst old paragraph.\n\nSecond old paragraph.\n",
+    "# Test\n\n## Items\n\nOne new paragraph.\n",
+  );
+  assertEquals(count(twoToOne.split("<main>")[1] ?? ""), 1);
+});
+
+Deno.test("computePagerRowModel: marker rows are never counted and follow their anchor data row", () => {
+  assertEquals(computePagerRowModel([]), { dataRowIndexes: [], markers: [] });
+  assertEquals(computePagerRowModel([false, false]), { dataRowIndexes: [0, 1], markers: [] });
+  assertEquals(computePagerRowModel([false, true, false, true, true]), {
+    dataRowIndexes: [0, 2],
+    markers: [
+      { rowIndex: 1, anchor: 1 },
+      { rowIndex: 3, anchor: 1 },
+      { rowIndex: 4, anchor: 1 },
+    ],
+  });
+  // A leading marker stays with the first data row; only markers means nothing to page.
+  assertEquals(computePagerRowModel([true, false]), {
+    dataRowIndexes: [1],
+    markers: [{ rowIndex: 0, anchor: 0 }],
+  });
+  assertEquals(computePagerRowModel([true]), {
+    dataRowIndexes: [],
+    markers: [{ rowIndex: 0, anchor: 0 }],
+  });
+});
+
+Deno.test("Revision highlights: removed-here table rows stay out of the pager's row count", () => {
+  const rows = (n: number) => Array.from({ length: n }, (_, i) => `| Row ${i + 1} |`).join("\n");
+  const approved = `# Test\n\n## Rows\n\n| Col |\n|---|\n${rows(11)}\n`;
+  const revised = `# Test\n\n## Rows\n\n| Col |\n|---|\n${rows(10)}\n`;
+  const html = renderDesignDoc(revised, "Test", {
+    approvedMarkdown: approved,
+    approvedAt: "2026-11-20",
+  });
+  const tbody = html.split("<tbody>")[1]?.split("</tbody>")[0] ?? "";
+
+  // The marker is a real <tr>, so the table holds 11 <tr>s but only 10 data rows.
+  assertEquals(tbody.split("<tr").length - 1, 11);
+  assertEquals(tbody.split('class="rev-removed-row"').length - 1, 1);
+
+  // The page script derives its row list from the model, so the marker is not a counted row.
+  const embedded = html.match(/var computeRowModel = ([\s\S]*?);\s*var computePagination =/);
+  assert(embedded, "Generated HTML must include the computeRowModel helper");
+  const computeEmbedded = new Function(
+    `return (${embedded[1]});`,
+  )() as typeof computePagerRowModel;
+  const flags = Array.from({ length: 11 }, (_, i) => i === 10);
+  assertEquals(computeEmbedded(flags), computePagerRowModel(flags));
+  assertEquals(computePagerRowModel(flags).dataRowIndexes.length, 10);
+  assertFalse(
+    html.includes('var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));'),
+  );
 });
