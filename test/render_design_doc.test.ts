@@ -1748,9 +1748,12 @@ Deno.test("Revision highlights: removed-here table rows stay out of the pager's 
   const computeEmbedded = new Function(
     `return (${embedded[1]});`,
   )() as typeof computePagerRowModel;
-  const flags = Array.from({ length: 11 }, (_, i) => i === 10);
+  // Flags come from the rendered rows. Tables render newest first, so the deleted 11th row's
+  // marker is the first <tr> and stays with the first data row.
+  const flags = tbody.split("<tr").slice(1).map((tr) => tr.startsWith(' class="rev-removed-row"'));
   assertEquals(computeEmbedded(flags), computePagerRowModel(flags));
   assertEquals(computePagerRowModel(flags).dataRowIndexes.length, 10);
+  assertEquals(computePagerRowModel(flags).markers, [{ rowIndex: 0, anchor: 0 }]);
   assertFalse(
     html.includes('var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));'),
   );
