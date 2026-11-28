@@ -19,8 +19,10 @@ Before any Gmail tool call, ask once per invocation on the expensive models:
 - **Codex on Astra:** “Are you sure you want to do this? Astra is expensive you should probably choose a cheaper model.”
 - **Claude Code on Opus:** “This is Opus. Are you sure you want to do this? Opus is expensive; you should probably use Sonnet or Haiku.”
 - **Claude Code on Fable:** “This is Fable. Are you sure you want to do this? Fable is expensive; you should probably use Sonnet or Haiku.”
+- **agy on Opus (`Claude Opus 5.5 (High)`, which `deno task running-model` returns as `Claude Opus`):** “This is Opus. Are you sure you want to do this? Opus is expensive; you should probably use Sonnet or Hydrogen.”
 - **Other readable models:** ask nothing. This includes Haiku and Sonnet on Claude Code,
-  Sol and Luna on Codex, and every allowed agy model (including Argon and Hydrogen).
+  Sol and Luna on Codex, and every other allowed agy model, listed in
+  `~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`, “The agy model guard”.
 
 **Wait for Josh’s affirmative reply before any mailbox work on that expensive model.** A refusal
 stops that invocation. A request to change models follows his choice. Silence is not approval.

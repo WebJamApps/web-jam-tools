@@ -1,5 +1,5 @@
 // The historical hook filename now supplies context; the mail fence is independent.
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { gmailModelNote, UNKNOWN_GMAIL_MODEL_NOTE } from "../hooks/lib/gmail_model_note.ts";
 import { selectSessionModel } from "../hooks/lib/select_transcript_entry.ts";
 
@@ -131,7 +131,17 @@ const costCases = [
   ["Claude Code Sonnet", "Haiku and Sonnet on Claude Code", "ask nothing"],
   ["Claude Code Haiku", "Haiku and Sonnet on Claude Code", "ask nothing"],
   ["Claude Code unreadable", "If identity cannot be read", "proceed with that visible note"],
-  ["agy allowed model", "every allowed agy model", "ask nothing"],
+  [
+    "agy Opus",
+    "**agy on Opus (`Claude Opus 5.5 (High)`, which `deno task running-model` returns as `Claude Opus`):**",
+    "“This is Opus. Are you sure you want to do this? Opus is expensive; you should probably use Sonnet or Hydrogen.”",
+  ],
+  ["agy other allowed model", "every other allowed agy model", "ask nothing"],
+  [
+    "agy unreadable",
+    "On Claude Code, agy and Codex",
+    "“the model could not be read” and proceed with that visible note",
+  ],
   [
     "Codex Astra",
     "**Codex on Astra:**",
@@ -140,19 +150,35 @@ const costCases = [
   ["Codex Sol or Luna", "Sol and Luna on Codex", "ask nothing"],
   ["Codex unreadable", "If identity cannot be read", "proceed with that visible note"],
 ];
+
+const readSkill = () =>
+  Deno.readTextFile(new URL("../skills/handle-gmails/SKILL.md", import.meta.url));
+
+// One paragraph or one model bullet, so a case cannot pass on text belonging to another row.
+function instructionBlock(skill: string, condition: string): string {
+  const matches = skill.split(/\n\n|\n(?=- \*\*)/).filter((block) => block.includes(condition));
+  assertEquals(matches.length, 1, `expected one block containing ${condition}`);
+  return matches[0];
+}
+
 for (const [name, condition, action] of costCases) {
   Deno.test(`cost-question instruction case: ${name}`, async () => {
-    const skill = await Deno.readTextFile(
-      new URL("../skills/handle-gmails/SKILL.md", import.meta.url),
-    );
-    assertStringIncludes(skill, condition);
-    assertStringIncludes(skill, action);
+    const skill = await readSkill();
+    assertStringIncludes(instructionBlock(skill, condition), action);
     assertStringIncludes(skill, "Wait for Josh’s affirmative reply before any mailbox work");
     assertStringIncludes(skill, "A refusal\nstops that invocation.");
     assertStringIncludes(skill, "Silence is not approval.");
     assertStringIncludes(skill, "A one-off mailbox read outside this skill asks no cost question");
   });
 }
+
+Deno.test("agy models that ask nothing are pointed to, never restated", async () => {
+  const block = instructionBlock(await readSkill(), "every other allowed agy model");
+  assertStringIncludes(block, "model-tier-order-design-2026-10-02.md`, “The agy model guard”");
+  for (const name of ["Argon", "Hydrogen", "Neon", "Carbon"]) {
+    assert(!block.includes(name), `the no-question bullet restates ${name}`);
+  }
+});
 
 Deno.test("model selector CLI skips model-less records after a readable main entry", async () => {
   const file = await Deno.makeTempFile();
