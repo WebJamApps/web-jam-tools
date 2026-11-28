@@ -2,7 +2,6 @@
 name: fix-pr
 description: Fix a WebJamApps pull request that cannot merge (behind dev, conflicts, version, format, lint, tests, Must Fix items) on the model set in this terminal, then push once with a signed comment. Typed /fix-pr <repo>#<number>, a PR link, or a bare number; $fix-pr on Codex.
 metadata:
-  version: v1
   publisher: josh
 ---
 
@@ -12,10 +11,18 @@ Requirements: `~/Dropbox/web-jam-llms/Token_Savings/fix-pr-design-2026-10-10.md`
 run procedure for Claude Code, agy (Antigravity) and Codex, and it names the design section behind
 each part rather than repeating it. If the two ever disagree, stop and tell Josh; never pick one.
 
+Read each design section it names on reaching that part. If the design cannot be read, stop and name
+its path.
+
 ## Starting a run
 
-The call names exactly one pull request. On Codex the skill is spelled `$fix-pr`. Any other words in
-the call are directions to this run, for example a request for a helper or to wait for the build.
+Design sections: "What happens when Josh types it", "Parsing the pull request target anywhere in the
+call" and "Accepting CircleCI build and job links".
+
+The call names exactly one pull request: its GitHub link, `<repo>#<number>`, a number or `#<number>`
+for the repository checked out here, or a CircleCI build or job link of that pull request. On Codex
+the skill is spelled `$fix-pr`. Any other words in the call are directions to this run, for example a
+request for a helper, to wait for the build, or to fix only the Must Fix items.
 
 ## Who fixes
 
@@ -23,8 +30,10 @@ Design section: "Which model does the fix".
 
 - Whatever model runs this session does the work. Never compare it with the pull request's author,
   never sort the failure by kind, and never consult the tier order.
-- A helper exists only when the call asks for one by model. It does steps 1 to 5; this session keeps
-  step 6, since only the session Josh typed into may push. The comment then names the helper.
+- A helper exists only when the call asks for one by model. Run step 1's target check here before
+  starting it, then hand it the verified `{ repo, number, branch }`. It does the rest of steps 1 to
+  5; this session keeps step 6, since only the session Josh typed into may push. The comment then
+  names the helper.
   - On Claude Code, start it with the Agent tool, naming the model.
   - Codex: ask for a helper on the named model.
   - agy: the run stays in this session, on a model "The agy model guard" in
@@ -38,10 +47,17 @@ Design section: "Which model does the fix".
 
 Design section: "What happens when Josh types it".
 
-1. **Read.**
-   - `gh pr view <number> --repo WebJamApps/<Repo> --json number,url,state,headRefName,baseRefName,isCrossRepository,mergeable,mergeStateStatus,reviews`.
-   - Stop and refuse when it is not open, when its head is `dev` or `main`, or when
-     `isCrossRepository` is true.
+1. **Check the typed call, then read.** In this session, before any worktree, helper or edit:
+
+   ```sh
+   deno task --config ~/WebJamApps/web-jam-tools/deno.json fix-pr:resolve-target --from-session
+   ```
+
+   Add `--repo-dir <path>` when running from a checkout or when the call gives a bare number. A
+   non-zero exit ends the run: show the refusal it printed, change nothing and start no helper. On
+   success it prints `{ repo, number, branch, build }`; every later step works on that target.
+   - `gh pr view <number> --repo WebJamApps/<Repo> --json number,url,state,headRefName,baseRefName,mergeable,mergeStateStatus,reviews`,
+     to see whether the branch is behind `dev` or conflicted.
    - CI: read it only through
      `deno task --config ~/WebJamApps/web-jam-tools/deno.json ci-failure-report --repo <Repo> --branch <branch> --head <head commit>`.
      - It finds the newest build on the branch through CircleCI's v1.1 `tree/<branch>` endpoint,
@@ -53,30 +69,38 @@ Design section: "What happens when Josh types it".
      - Never fetch CircleCI logs any other way, and quote CI output only from its report.
      - When it reports `CI unknown`, or a build that has not passed, say so with its reason; never
        treat that as a passing build.
-   - Review: the Must Fix items in the latest review carrying `## PR Review Summary`.
-   - If none of this shows a problem, report that and end without changes.
-2. **Fix** in a `/tmp` worktree of the branch, never the canonical clone. First
-   `git -C ~/WebJamApps/<Repo> fetch origin dev <branch>`. Then protect any local copy of the
-   branch, because `worktree add -B` resets an existing local branch to the remote one:
-   - When `git -C ~/WebJamApps/<Repo> worktree list` shows `<branch>` checked out anywhere, stop and
-     name that worktree; never take it over.
-   - When a local `<branch>` exists and
-     `git -C ~/WebJamApps/<Repo> rev-list origin/<branch>..<branch>` lists any commit, stop and name
-     those commits: they exist nowhere else, and the reset would discard them.
+   - Review: from the latest review carrying `## PR Review Summary`, take each Must Fix item and each
+     Suggestion. Nits stay as they are, with no description edit, unless the call asks for one.
+   - Nothing to do (green build, no rebase or version bump needed, and neither a Must Fix item nor a
+     Suggestion): say so, mention any Nits, and end without changes.
+2. **Fix** in a throwaway worktree. Design section: "The fix worktree and throwaway branch".
+   1. `git -C ~/WebJamApps/<Repo> fetch origin dev <branch>`.
+   2. Run `git -C ~/WebJamApps/<Repo> worktree list`. For another worktree holding `<branch>`, run
+      `git -C <path> status --porcelain`: if it prints anything or cannot be read, stop and name that
+      worktree. A clean one does not stop the run, even when its branch has commits the remote lacks.
+      Leave it and the local `<branch>` exactly as they are.
+   3. When `/tmp/fix-pr-<number>` already exists, stop if it is dirty or unreadable. If it is a clean
+      registered worktree, remove it with
+      `git -C ~/WebJamApps/<Repo> worktree remove /tmp/fix-pr-<number>`.
+   4. Create it on its own branch:
 
-   Only then
-   `git -C ~/WebJamApps/<Repo> worktree add -B <branch> /tmp/fix-pr-<number> origin/<branch>`.
-   Rebase onto `origin/dev`, settle conflicts, bump the version again under the rule kept in
-   `skills/pr-review/SKILL.md`, and repair formatting, lint, tests and every Must Fix item.
+      ```sh
+      git -C ~/WebJamApps/<Repo> worktree add -B fix-pr/<number> /tmp/fix-pr-<number> origin/<branch>
+      ```
+
+   Inside it, rebase onto `origin/dev`, settle conflicts, bump the version again under the rule kept
+   in `skills/pr-review/SKILL.md`, repair formatting, lint and tests, answer every Must Fix item, and
+   apply every actionable Suggestion. A Suggestion that cannot be applied safely within scope stays
+   unchanged, and the comment records it with the reason.
 3. **Check** locally, as step 3 of "What happens when Josh types it" in the design document sets
    out, using the commands that repository's CI names.
    - Clean rebase and/or version re-bump, with no source or test edit and no failing CI test: only
      the quick static checks (format, lint, types), the version comparison where the repository
      requires one, and `deno task lint:skills` if the diff touches a skill. A conflict limited to
      the version field of `deno.json` or an npm package file still counts as clean.
-   - Any code, test or other conflict fix: the static checks, quick shell and duplication ones
-     included, plus the test files that cover each source or test file you edited. CircleCI runs the
-     whole test and coverage suites; run them here only when Josh asks.
+   - Any code, test or other conflict fix, a Suggestion's edit included: the static checks, quick
+     shell and duplication ones included, plus the test files that cover each source or test file
+     you edited. CircleCI runs the whole test and coverage suites; run them here only when Josh asks.
    - Push now: when Josh says to push or to stop waiting, in the call or in a later message (for
      example "push up the fix now"), drop whatever is unfinished or not yet started and push, as
      long as nothing that ran has failed.
@@ -85,9 +109,9 @@ Design section: "What happens when Josh types it".
 4. **agy only: `/learn`.** Run `/learn`; if it edits the repository's `AGENTS.md`, commit that alone
    on the branch as `chore: fold /learn updates into AGENTS.md`. No edit means no commit. Claude
    Code and Codex skip this step.
-5. **Comment file** under `/tmp`, covering what "The comment" asks for and ending with the
-   signature.
-6. **Push once** from the worktree:
+5. **Comment file** at `/tmp/fix-pr-<number>-comment.md`, holding what "The comment" asks for and
+   ending with the signature.
+6. **Push once** from the worktree, then clean up:
 
    ```sh
    deno task --config ~/WebJamApps/web-jam-tools/deno.json push --repo-dir "$PWD" --fix-comment /tmp/fix-pr-<number>-comment.md
@@ -95,6 +119,13 @@ Design section: "What happens when Josh types it".
 
    Append `--force-with-lease` after the file when step 2 rebased. If the push succeeds but posting
    fails, the command prints a `deno task post-pr-comment` line; run that line, which only posts.
+   Once the push has landed, remove the throwaway worktree and branch, and nothing else:
+
+   ```sh
+   git -C ~/WebJamApps/<Repo> worktree remove /tmp/fix-pr-<number>
+   git -C ~/WebJamApps/<Repo> branch -D fix-pr/<number>
+   ```
+
 7. **Report**: the pull request link, commits pushed, fixes made, and the CI build link from that
    push. Waiting for the build happens only on request; then report its outcome, quoting the failed
    step's output if it failed, quoted only from the `ci-failure-report` report step 1 names.
@@ -111,31 +142,42 @@ Code and Codex have no equivalent.
 
 ## Pushing
 
-Design section: "The push". The push command recognises a fix run from Josh's typed call and then
-needs no terminal confirmation for `--force-with-lease`. It refuses a fix-run push with no
-`--fix-comment`. If it cannot read the session, the typed call or the pull request, it treats the
-run as an ordinary push. Never push by any other route.
+Design section: "The push". The push command recognises a fix run from Josh's typed call, sends
+`fix-pr/<number>` to the pull request's own branch, and then needs no terminal confirmation for
+`--force-with-lease`. It refuses a fix-run push with no `--fix-comment`, and refuses a `fix-pr/*`
+branch outside a fix run. A merged or closed pull request ends the fix run. If it cannot read the
+session, the typed call or the pull request, it treats the run as an ordinary push. Never push by any
+other route.
 
 ## The comment
 
-Design section: "The comment". The file says why the pull request could not merge, what was fixed
-(naming the review finding each Must Fix answer resolves), which commits were pushed (the `/learn`
-commit included on agy), which checks ran with their results, and anything left unfixed with the
-reason. Its final line is the signature, `🤖 Fixed by <tool> — <model>`. The push command fills in
-the model the tool recorded for this session or its helper; a model's description of itself never
-counts. An empty file, a file without the signature, or a signature alone is refused before pushing.
+Design section: "The comment". The file says what kept the pull request from merging, or which
+Suggestions prompted the run; each thing fixed, naming every Must Fix item and Suggestion it answers;
+the commits pushed (the `/learn` commit included on agy); the checks run with their results; and
+anything left unfixed, a skipped Suggestion included, with the reason. Its final line is the
+signature, `🤖 Fixed by <tool> — <model>`. The push command fills in the model the tool recorded for
+this session or its helper; a model's description of itself never counts. An empty file, a file
+without the signature, or a signature alone is refused before pushing.
 
 For the checks, name the static checks and targeted tests that passed here, what was left for
 CircleCI, and anything skipped or cut short because Josh said to push.
 
 ## Refusals
 
-Design section: "What it refuses to do". In short: no choosing or ranking models, no retry or
-hand-off after a red build, no helper Josh did not request, no push without its comment, no separate
-`/learn` push or pull request, no signature other than the recorded one, no force push outside the
-named pull request's branch, no unreadable record taken as consent, no pushing `dev` or `main`, no
-plain `--force`, no branch deletion, no merging, readying or closing, and no reviewing. A failed
-local check also blocks the push until Josh overrides it by name.
+Design section: "What it refuses to do". Obey every row of its table. This run never:
+
+- picks or ranks models, starts an unrequested helper, or retries after a red build;
+- creates a worktree, starts a helper or edits a file once the step 1 check has refused;
+- acts on a call naming no pull request or two different ones, on a CircleCI link for `dev` or
+  `main`, on a signed log link, or on a project page with no build or job;
+- takes over a dirty worktree or overwrites another worktree's local branch;
+- pushes without the comment, pushes `/learn` work separately, or signs with an unrecorded name;
+- force-pushes any other branch, pushes a `fix-pr/*` branch outside its own fix run, pushes from a
+  detached HEAD, pushes `dev` or `main`, uses plain `--force`, or deletes a remote branch;
+- treats anything it could not read as Josh's yes;
+- pushes after a failed local check that Josh has not overridden by name;
+- edits descriptions to settle Nits unasked, reviews the fix, or merges, readies or closes the pull
+  request.
 
 ## Per tool
 
@@ -146,6 +188,8 @@ Design section: "Both surfaces — Claude Code, agy and Codex".
 | Call              | `/fix-pr`                       | `/fix-pr`                                      | `$fix-pr`                   |
 | Linked at         | `~/.claude/skills`              | `~/.gemini/config/plugins/webjam-tasks/skills` | `~/.codex/skills`           |
 | Helper on request | On Claude Code, use the Agent tool with the model named | none; the run ends before edits | a helper on the model named |
+| Target check      | `fix-pr:resolve-target` first   | `fix-pr:resolve-target` first                  | `fix-pr:resolve-target` first |
+| Fix worktree      | `/tmp/fix-pr-<number>` on `fix-pr/<number>` | the same                           | the same                    |
 | `/learn`          | skipped                         | step 4                                         | skipped                     |
 
 Step 3's choice of local checks and its push-now rule apply alike on all three tools.

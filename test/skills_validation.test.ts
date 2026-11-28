@@ -2595,9 +2595,19 @@ const FIX_PR_RULES: ReadonlyArray<[string, string]> = [
   ],
   ["one push per call", "This run pushes a single time."],
   [
-    "unpublished local commits",
-    "stop and name those commits: they exist nowhere else, and the reset would discard them.",
+    "typed-call check before any work",
+    "In this session, before any worktree, helper or edit:",
   ],
+  [
+    "dirty worktree guard",
+    "if it prints anything or cannot be read, stop and name that worktree.",
+  ],
+  [
+    "throwaway fix branch",
+    "worktree add -B fix-pr/<number> /tmp/fix-pr-<number> origin/<branch>",
+  ],
+  ["throwaway cleanup", "branch -D fix-pr/<number>"],
+  ["actionable Suggestions", "apply every actionable Suggestion."],
   [
     "CI build for the head commit",
     "It uses that build only when it built the pull request's head commit.",
@@ -2613,8 +2623,9 @@ const FIX_PR_RULES: ReadonlyArray<[string, string]> = [
 ];
 
 /** The fix-pr skill's load-bearing rules (web-jam-tools#1337): who fixes, who pushes, the signed
- * comment, the helper rules, the agy /learn step, exactly one push, the guard on unpublished
- * local commits, and how CI logs are found and shown. Wrapping is ignored. */
+ * comment, the helper rules, the agy /learn step, exactly one push, the typed-call check, the
+ * dirty-worktree guard, the throwaway branch, Suggestions, and how CI logs are found and shown.
+ * Wrapping is ignored. */
 export function assertFixPrSkillRules(text: string): void {
   const flat = text.replace(/\s+/g, " ");
   for (const [rule, phrase] of FIX_PR_RULES) {
@@ -2652,13 +2663,22 @@ Deno.test("fix-pr rule check fails when the helper rule is dropped (web-jam-tool
   assertThrows(() => assertFixPrSkillRules(unasked), Error, "helper he did not ask for");
 });
 
-Deno.test("fix-pr rule check fails when the guard on unpublished local commits is dropped (web-jam-tools#1337)", () => {
+Deno.test("fix-pr rule check fails when the dirty worktree guard is dropped (web-jam-tools#1998)", () => {
   const unguarded = FIX_PR_TEXT.replace(
-    /they exist nowhere else,\s+and the reset would discard them\./,
+    /if it prints anything or cannot be read,\s+stop and name that\s+worktree\./,
     "",
   );
   assert(unguarded !== FIX_PR_TEXT, "fixture must actually drop the guard");
-  assertThrows(() => assertFixPrSkillRules(unguarded), Error, "unpublished local commits");
+  assertThrows(() => assertFixPrSkillRules(unguarded), Error, "dirty worktree guard");
+});
+
+Deno.test("skills/fix-pr/SKILL.md names its design and carries no revision or version (web-jam-tools#1998)", () => {
+  assertStringIncludes(
+    FIX_PR_TEXT.replace(/\s+/g, " "),
+    "Requirements: `~/Dropbox/web-jam-llms/Token_Savings/fix-pr-design-2026-10-10.md`.",
+  );
+  assert(!FIX_PR_TEXT.includes("(revision"));
+  assert(!/^\s*version:/m.test(FIX_PR_TEXT.split("---")[1]));
 });
 
 // web-jam-tools#1954: "The version check" in pr-review-self-posting-design-2026-08-22.md —
