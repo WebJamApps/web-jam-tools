@@ -1,6 +1,6 @@
 import * as path from "jsr:@std/path@^1.0.0";
 import type { OtherDesignSweepResult } from "../src/design-issue/gate1_record.ts";
-import { slugify } from "../src/design-issue/lint_doc.ts";
+import { slugify, toLocalIsoDate } from "../src/design-issue/lint_doc.ts";
 import { PLAN_TABLE_HEADER } from "../src/design-issue/plan_table.ts";
 
 export { slugify };
@@ -12,6 +12,10 @@ export interface RenderDesignDocOptions {
   otherDesignSweep?: OtherDesignSweepResult;
   /** Directory containing the Markdown document, used to resolve local image files safely. */
   docDir?: string;
+  /** Temporary approved Markdown copy used to render subtle yellow revision highlights. */
+  approvedMarkdown?: string;
+  /** ISO timestamp or YYYY-MM-DD approval date shown in the revision banner. */
+  approvedAt?: string;
 }
 
 /**
@@ -472,39 +476,53 @@ function renderOtherDesignSweepSection(sweep: OtherDesignSweepResult, slug?: str
   );
 }
 
-/** Converts a Markdown document into a standalone HTML document adhering to design rules. */
-export function renderDesignDoc(
+type ParsedBlock =
+  | { kind: "code"; lang: string; code: string }
+  | { kind: "svg"; rawSvg: string }
+  | { kind: "heading"; level: number; text: string }
+  | { kind: "hr" }
+  | {
+    kind: "table";
+    tableHeading: string;
+    headers: string[];
+    bodyRows: string[][];
+    isGate2PlanTable: boolean;
+  }
+  | { kind: "blockquote"; quoteLines: string[] }
+  | { kind: "list"; ordered: boolean; items: string[] }
+  | { kind: "paragraph"; text: string };
+
+type DiffEntry<T> =
+  | { kind: "item"; value: T; state: "unchanged" | "changed" }
+  | { kind: "removed" };
+
+type RenderableBlock =
+  | { kind: "removedMarker" }
+  | { kind: "code"; lang: string; code: string; state: "unchanged" | "changed" }
+  | { kind: "svg"; rawSvg: string; state: "unchanged" | "changed" }
+  | { kind: "heading"; level: number; text: string; state: "unchanged" | "changed" }
+  | { kind: "hr"; state: "unchanged" | "changed" }
+  | {
+    kind: "table";
+    tableHeading: string;
+    headers: string[];
+    rows: DiffEntry<string[]>[];
+    isGate2PlanTable: boolean;
+  }
+  | { kind: "blockquote"; quoteLines: string[]; state: "unchanged" | "changed" }
+  | { kind: "list"; ordered: boolean; items: DiffEntry<string>[]; state: "unchanged" | "changed" }
+  | { kind: "paragraph"; text: string; state: "unchanged" | "changed" };
+
+function parseMarkdownBlocks(
   markdownContent: string,
-  fallbackTitle: string = "Design Document",
   options?: RenderDesignDocOptions,
-): string {
+): ParsedBlock[] {
   const rawLines = markdownContent.split(/\r?\n/);
   const lines = options?.isPlanPage ? rawLines : hoistRevisionHistorySection(rawLines);
-  const docDir = options?.docDir;
-
-  let documentTitle = fallbackTitle;
-  let hasDocumentTitle = false;
-  const tocEntries: Array<{ title: string; slug: string }> = [];
-  const usedSlugs = new Set<string>();
-  const allocateSlug = (headingText: string): string => {
-    const baseSlug = slugify(headingText) || "section";
-    let slug = baseSlug;
-    let counter = 2;
-    while (usedSlugs.has(slug)) {
-      slug = `${baseSlug}-${counter++}`;
-    }
-    usedSlugs.add(slug);
-    return slug;
-  };
-
-  // Parse blocks into body HTML while collecting H2 TOC entries and allocating deterministic
-  // heading anchors in document order across H2, H3, and H4.
-  const bodyHtmlParts: string[] = [];
-  let inAppendix = false;
-  let inAppendixDetails = false;
+  const blocks: ParsedBlock[] = [];
   let tableHeading = "";
-
   let i = 0;
+
   while (i < lines.length) {
     const line = lines[i];
 
@@ -513,7 +531,6 @@ export function renderDesignDoc(
       continue;
     }
 
-    // Fenced code block: ```
     if (line.trim().startsWith("```")) {
       const lang = line.trim().substring(3).trim();
       const codeLines: string[] = [];
@@ -522,14 +539,11 @@ export function renderDesignDoc(
         codeLines.push(lines[i]);
         i++;
       }
-      if (i < lines.length) i++; // skip closing ```
-      const escapedCode = escapeHtml(codeLines.join("\n"));
-      const codeClass = lang ? ` class="language-${escapeHtml(lang)}"` : "";
-      bodyHtmlParts.push(`<pre><code${codeClass}>${escapedCode}</code></pre>`);
+      if (i < lines.length) i++;
+      blocks.push({ kind: "code", lang, code: codeLines.join("\n") });
       continue;
     }
 
-    // Raw SVG block
     if (line.trim().startsWith("<svg") && hasClosingSvg(lines, i)) {
       const svgLines: string[] = [];
       while (i < lines.length) {
@@ -540,75 +554,28 @@ export function renderDesignDoc(
         }
         i++;
       }
-      bodyHtmlParts.push(sanitizeSvg(svgLines.join("\n")));
+      blocks.push({ kind: "svg", rawSvg: svgLines.join("\n") });
       continue;
     }
 
-    // Headings
     if (line.startsWith("#")) {
       const match = line.match(/^(#{1,6})\s+(.*)$/);
       if (match) {
         const level = match[1].length;
         const text = match[2].trim();
         tableHeading = text;
-
-        if (level === 1) {
-          if (!hasDocumentTitle) {
-            documentTitle = text;
-            hasDocumentTitle = true;
-          }
-          bodyHtmlParts.push(`<h1>${parseInlineMarkdown(text, docDir)}</h1>`);
-        } else if (level === 2) {
-          if (inAppendixDetails) {
-            bodyHtmlParts.push(`</div>\n</details>`);
-            inAppendixDetails = false;
-          }
-          const cleanTitle = text
-            .replace(/[*_`[\]]/g, "")
-            .replace(/\([^)]*\)/g, "")
-            .trim();
-          const slug = allocateSlug(text);
-          tocEntries.push({ title: cleanTitle || text, slug });
-
-          inAppendix = /\bappendix\b/i.test(text);
-          bodyHtmlParts.push(
-            `<h2 id="${slug}">${parseInlineMarkdown(text, docDir)}</h2>`,
-          );
-        } else if (level === 3) {
-          const slug = allocateSlug(text);
-          if (inAppendix) {
-            if (inAppendixDetails) {
-              bodyHtmlParts.push(`</div>\n</details>`);
-            }
-            bodyHtmlParts.push(
-              `<details id="${slug}">\n  <summary>${
-                parseInlineMarkdown(text, docDir)
-              }</summary>\n  <div class="appendix-content">`,
-            );
-            inAppendixDetails = true;
-          } else {
-            bodyHtmlParts.push(`<h3 id="${slug}">${parseInlineMarkdown(text, docDir)}</h3>`);
-          }
-        } else if (level === 4) {
-          const slug = allocateSlug(text);
-          bodyHtmlParts.push(`<h4 id="${slug}">${parseInlineMarkdown(text, docDir)}</h4>`);
-        } else {
-          const hTag = `h${level}`;
-          bodyHtmlParts.push(`<${hTag}>${parseInlineMarkdown(text, docDir)}</${hTag}>`);
-        }
+        blocks.push({ kind: "heading", level, text });
         i++;
         continue;
       }
     }
 
-    // Horizontal rule
     if (/^(---|[*]{3}|_{3})$/.test(line.trim())) {
-      bodyHtmlParts.push(`<hr>`);
+      blocks.push({ kind: "hr" });
       i++;
       continue;
     }
 
-    // Table
     if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
       const tableLines: string[] = [];
       while (
@@ -627,35 +594,18 @@ export function renderDesignDoc(
           tableLines.slice(2).map(parseTableRow),
           options,
         );
-
         const isPlanPage = Boolean(options?.isPlanPage);
-        const isGate2PlanTable = isPlanPage && isPlanTableHeader(headerCells);
-        const wrapperAttrs = isGate2PlanTable
-          ? ` class="table-wrapper" data-default-size="all"`
-          : ` class="table-wrapper"`;
-
-        let tableHtml = isGate2PlanTable
-          ? `<p class="plan-table-total">Total rows: ${bodyRows.length}</p>\n`
-          : "";
-        tableHtml += `<div${wrapperAttrs}>\n<table>\n<thead>\n<tr>\n`;
-        for (const cell of headerCells) {
-          tableHtml += `  <th>${parseInlineMarkdown(cell, docDir)}</th>\n`;
-        }
-        tableHtml += `</tr>\n</thead>\n<tbody>\n`;
-        for (const row of bodyRows) {
-          tableHtml += `<tr>\n`;
-          for (const cell of row) {
-            tableHtml += `  <td>${parseInlineMarkdown(cell, docDir)}</td>\n`;
-          }
-          tableHtml += `</tr>\n`;
-        }
-        tableHtml += `</tbody>\n</table>\n</div>`;
-        bodyHtmlParts.push(tableHtml);
+        blocks.push({
+          kind: "table",
+          tableHeading,
+          headers: headerCells,
+          bodyRows,
+          isGate2PlanTable: isPlanPage && isPlanTableHeader(headerCells),
+        });
       }
       continue;
     }
 
-    // Blockquote: lines starting with >
     if (line.trim().startsWith(">")) {
       const quoteLines: string[] = [];
       while (i < lines.length && lines[i].trim().startsWith(">")) {
@@ -664,40 +614,29 @@ export function renderDesignDoc(
         quoteLines.push(qLine);
         i++;
       }
-      const quoteContent = quoteLines
-        .map((l) => parseInlineMarkdown(l, docDir))
-        .join("<br>\n");
-      bodyHtmlParts.push(`<blockquote>${quoteContent}</blockquote>`);
+      blocks.push({ kind: "blockquote", quoteLines });
       continue;
     }
 
-    // List: unordered (- , * , + ) or ordered (\d+\. )
     const ulMatch = line.trim().match(/^([-*+])\s+(.*)$/);
     const olMatch = line.trim().match(/^(\d+)\.\s+(.*)$/);
     if (ulMatch || olMatch) {
-      const isOl = !!olMatch;
-      const tag = isOl ? "ol" : "ul";
-      const listItems: string[] = [];
+      const ordered = !!olMatch;
+      const items: string[] = [];
       while (i < lines.length) {
         const itemLine = lines[i].trim();
-        const m = isOl ? itemLine.match(/^(\d+)\.\s+(.*)$/) : itemLine.match(/^([-*+])\s+(.*)$/);
+        const m = ordered ? itemLine.match(/^(\d+)\.\s+(.*)$/) : itemLine.match(/^([-*+])\s+(.*)$/);
         if (m) {
-          listItems.push(m[2]);
+          items.push(m[2]);
           i++;
         } else {
           break;
         }
       }
-      let listHtml = `<${tag}>\n`;
-      for (const item of listItems) {
-        listHtml += `  <li>${parseInlineMarkdown(item, docDir)}</li>\n`;
-      }
-      listHtml += `</${tag}>`;
-      bodyHtmlParts.push(listHtml);
+      blocks.push({ kind: "list", ordered, items });
       continue;
     }
 
-    // Paragraph
     const paragraphLines: string[] = [];
     while (
       i < lines.length &&
@@ -715,8 +654,482 @@ export function renderDesignDoc(
       i++;
     }
     if (paragraphLines.length > 0) {
-      const paraText = paragraphLines.join("\n");
-      bodyHtmlParts.push(`<p>${parseInlineMarkdown(paraText, docDir)}</p>`);
+      blocks.push({ kind: "paragraph", text: paragraphLines.join("\n") });
+    }
+  }
+
+  return blocks;
+}
+
+/** Computes longest-common-subsequence index pairs using weighted equality matching. */
+function lcsMatchPairs<A, B>(
+  a: readonly A[],
+  b: readonly B[],
+  scoreFn: (x: A, y: B) => number,
+): Array<[number, number]> {
+  const m = a.length;
+  const n = b.length;
+  const dp: Int32Array[] = Array.from({ length: m + 1 }, () => new Int32Array(n + 1));
+
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      const s = scoreFn(a[i], b[j]);
+      if (s > 0) {
+        dp[i][j] = s + dp[i + 1][j + 1];
+      } else {
+        dp[i][j] = dp[i + 1][j] >= dp[i][j + 1] ? dp[i + 1][j] : dp[i][j + 1];
+      }
+    }
+  }
+
+  const pairs: Array<[number, number]> = [];
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    const s = scoreFn(a[i], b[j]);
+    if (s > 0 && dp[i][j] === s + dp[i + 1][j + 1]) {
+      pairs.push([i, j]);
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+  return pairs;
+}
+
+function diffSequence<T>(
+  oldItems: readonly T[],
+  newItems: readonly T[],
+  keyFn: (item: T) => string,
+): DiffEntry<T>[] {
+  const oldKeys = oldItems.map(keyFn);
+  const newKeys = newItems.map(keyFn);
+  const matches = lcsMatchPairs(oldKeys, newKeys, (a, b) => (a === b ? 1 : 0));
+  const out: DiffEntry<T>[] = [];
+
+  let prevA = -1;
+  let prevB = -1;
+  for (
+    const [ai, bi] of [...matches, [oldItems.length, newItems.length]] as Array<[number, number]>
+  ) {
+    const removedCount = ai - prevA - 1;
+    const addedCount = bi - prevB - 1;
+    if (removedCount > 0 && addedCount === 0) {
+      out.push({ kind: "removed" });
+    } else {
+      for (let k = prevB + 1; k < bi; k++) {
+        out.push({ kind: "item", value: newItems[k], state: "changed" });
+      }
+    }
+    if (bi < newItems.length) {
+      out.push({ kind: "item", value: newItems[bi], state: "unchanged" });
+    }
+    prevA = ai;
+    prevB = bi;
+  }
+
+  return out;
+}
+
+function blockEqualityKey(block: ParsedBlock): string {
+  switch (block.kind) {
+    case "heading":
+      return `H${block.level}:${block.text}`;
+    case "paragraph":
+      return `P:${block.text}`;
+    case "hr":
+      return "HR";
+    case "code":
+      return `CODE:${block.lang}:${block.code}`;
+    case "svg":
+      return `SVG:${block.rawSvg}`;
+    case "blockquote":
+      return `QUOTE:${block.quoteLines.join("\n")}`;
+    case "list":
+      return `LIST:${block.ordered ? "ol" : "ul"}:${JSON.stringify(block.items)}`;
+    case "table":
+      return `TABLE:${block.headers.join("\t")}:${JSON.stringify(block.bodyRows)}`;
+  }
+}
+
+function pairableBlockScore(a: ParsedBlock, b: ParsedBlock): number {
+  if (a.kind !== b.kind) return 0;
+  if (a.kind === "heading" && b.kind === "heading") {
+    return a.level === b.level ? 1 : 0;
+  }
+  if (a.kind === "list" && b.kind === "list") {
+    return a.ordered === b.ordered ? 2 : 0;
+  }
+  if (a.kind === "table" && b.kind === "table") {
+    const sameHeaders = a.headers.join("\t") === b.headers.join("\t");
+    if (!sameHeaders && a.tableHeading !== b.tableHeading) return 0;
+    return a.tableHeading === b.tableHeading ? 4 : 2;
+  }
+  return 1;
+}
+
+function toUnchangedRenderable(block: ParsedBlock): RenderableBlock {
+  switch (block.kind) {
+    case "table":
+      return {
+        kind: "table",
+        tableHeading: block.tableHeading,
+        headers: block.headers,
+        rows: block.bodyRows.map((row) => ({ kind: "item", value: row, state: "unchanged" })),
+        isGate2PlanTable: block.isGate2PlanTable,
+      };
+    case "list":
+      return {
+        kind: "list",
+        ordered: block.ordered,
+        items: block.items.map((item) => ({ kind: "item", value: item, state: "unchanged" })),
+        state: "unchanged",
+      };
+    default:
+      return { ...block, state: "unchanged" };
+  }
+}
+
+function toChangedRenderable(block: ParsedBlock): RenderableBlock {
+  switch (block.kind) {
+    case "table":
+      return {
+        kind: "table",
+        tableHeading: block.tableHeading,
+        headers: block.headers,
+        rows: block.bodyRows.map((row) => ({ kind: "item", value: row, state: "changed" })),
+        isGate2PlanTable: block.isGate2PlanTable,
+      };
+    case "list":
+      return {
+        kind: "list",
+        ordered: block.ordered,
+        items: block.items.map((item) => ({ kind: "item", value: item, state: "changed" })),
+        state: "changed",
+      };
+    default:
+      return { ...block, state: "changed" };
+  }
+}
+
+function pairModifiedBlock(oldBlock: ParsedBlock, newBlock: ParsedBlock): RenderableBlock {
+  if (oldBlock.kind === "table" && newBlock.kind === "table") {
+    return {
+      kind: "table",
+      tableHeading: newBlock.tableHeading,
+      headers: newBlock.headers,
+      rows: diffSequence(oldBlock.bodyRows, newBlock.bodyRows, (row) => JSON.stringify(row)),
+      isGate2PlanTable: newBlock.isGate2PlanTable,
+    };
+  }
+  if (oldBlock.kind === "list" && newBlock.kind === "list") {
+    return {
+      kind: "list",
+      ordered: newBlock.ordered,
+      items: diffSequence(oldBlock.items, newBlock.items, (item) => item),
+      state: "changed",
+    };
+  }
+  return toChangedRenderable(newBlock);
+}
+
+function diffParsedBlocks(
+  approvedBlocks: readonly ParsedBlock[],
+  currentBlocks: readonly ParsedBlock[],
+): RenderableBlock[] {
+  const approvedKeys = approvedBlocks.map(blockEqualityKey);
+  const currentKeys = currentBlocks.map(blockEqualityKey);
+  const anchors = lcsMatchPairs(approvedKeys, currentKeys, (a, b) => (a === b ? 1 : 0));
+  const out: RenderableBlock[] = [];
+
+  let prevA = -1;
+  let prevC = -1;
+  for (
+    const [nextA, nextC] of [
+      ...anchors,
+      [approvedBlocks.length, currentBlocks.length],
+    ] as Array<[number, number]>
+  ) {
+    const oldSlice = approvedBlocks.slice(prevA + 1, nextA);
+    const newSlice = currentBlocks.slice(prevC + 1, nextC);
+
+    if (oldSlice.length > 0 && newSlice.length === 0) {
+      out.push({ kind: "removedMarker" });
+    } else if (oldSlice.length === 0 && newSlice.length > 0) {
+      for (const blk of newSlice) {
+        out.push(toChangedRenderable(blk));
+      }
+    } else if (oldSlice.length > 0 && newSlice.length > 0) {
+      const subPairs = lcsMatchPairs(oldSlice, newSlice, pairableBlockScore);
+      let subPrevA = -1;
+      let subPrevC = -1;
+      for (
+        const [subA, subC] of [
+          ...subPairs,
+          [oldSlice.length, newSlice.length],
+        ] as Array<[number, number]>
+      ) {
+        const subOldCount = subA - subPrevA - 1;
+        // Approved blocks with no counterpart were deleted, whether or not unpairable new blocks
+        // of another kind landed in the same gap: mark the deletion, then show what replaced it.
+        if (subOldCount > 0) {
+          out.push({ kind: "removedMarker" });
+        }
+        for (let k = subPrevC + 1; k < subC; k++) {
+          out.push(toChangedRenderable(newSlice[k]));
+        }
+        if (subC < newSlice.length) {
+          out.push(pairModifiedBlock(oldSlice[subA], newSlice[subC]));
+        }
+        subPrevA = subA;
+        subPrevC = subC;
+      }
+    }
+
+    if (nextC < currentBlocks.length) {
+      out.push(toUnchangedRenderable(currentBlocks[nextC]));
+    }
+    prevA = nextA;
+    prevC = nextC;
+  }
+
+  return out;
+}
+
+function formatApprovalDateLabel(approvedAt?: string): string {
+  if (!approvedAt || !approvedAt.trim()) return "";
+  const trimmed = approvedAt.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return toLocalIsoDate(parsed);
+}
+
+/**
+ * Computes the next highlighted change index (0-based) for the "Next change" banner button,
+ * advancing sequentially and wrapping from the last change back to 0.
+ */
+export function computeNextChangeIndex(currentIndex: number, totalChanges: number): number {
+  if (totalChanges <= 0 || !Number.isFinite(totalChanges)) return -1;
+  if (!Number.isFinite(currentIndex) || currentIndex < 0 || currentIndex >= totalChanges - 1) {
+    return 0;
+  }
+  return currentIndex + 1;
+}
+
+/** Converts a Markdown document into a standalone HTML document adhering to design rules. */
+export function renderDesignDoc(
+  markdownContent: string,
+  fallbackTitle: string = "Design Document",
+  options?: RenderDesignDocOptions,
+): string {
+  const docDir = options?.docDir;
+  const currentBlocks = parseMarkdownBlocks(markdownContent, options);
+  const compareApproved = !options?.isPlanPage && options?.approvedMarkdown !== undefined;
+  const renderBlocks: RenderableBlock[] = compareApproved
+    ? diffParsedBlocks(
+      parseMarkdownBlocks(options.approvedMarkdown!, options),
+      currentBlocks,
+    )
+    : currentBlocks.map(toUnchangedRenderable);
+
+  let documentTitle = fallbackTitle;
+  let hasDocumentTitle = false;
+  const tocEntries: Array<{ title: string; slug: string }> = [];
+  const usedSlugs = new Set<string>();
+  const allocateSlug = (headingText: string): string => {
+    const baseSlug = slugify(headingText) || "section";
+    let slug = baseSlug;
+    let counter = 2;
+    while (usedSlugs.has(slug)) {
+      slug = `${baseSlug}-${counter++}`;
+    }
+    usedSlugs.add(slug);
+    return slug;
+  };
+
+  // Render blocks into body HTML while collecting H2 TOC entries and allocating deterministic
+  // heading anchors in document order across H2, H3, and H4.
+  const bodyHtmlParts: string[] = [];
+  let inAppendix = false;
+  let inAppendixDetails = false;
+  let changeCount = 0;
+
+  const changeAttrs = (changed: boolean): string => {
+    if (!changed) return "";
+    changeCount++;
+    return ` class="rev-changed" data-rev-change="true"`;
+  };
+
+  for (const block of renderBlocks) {
+    switch (block.kind) {
+      case "removedMarker": {
+        changeCount++;
+        bodyHtmlParts.push(
+          `<div class="rev-removed" data-rev-change="true"><span class="rev-removed-badge">removed here</span></div>`,
+        );
+        break;
+      }
+      case "code": {
+        const escapedCode = escapeHtml(block.code);
+        const codeClass = block.lang ? ` class="language-${escapeHtml(block.lang)}"` : "";
+        const preAttrs = block.state === "changed"
+          ? ` class="rev-changed" data-rev-change="true"`
+          : "";
+        if (block.state === "changed") changeCount++;
+        bodyHtmlParts.push(`<pre${preAttrs}><code${codeClass}>${escapedCode}</code></pre>`);
+        break;
+      }
+      case "svg": {
+        const sanitized = sanitizeSvg(block.rawSvg);
+        if (block.state === "changed") {
+          changeCount++;
+          bodyHtmlParts.push(`<div class="rev-changed" data-rev-change="true">${sanitized}</div>`);
+        } else {
+          bodyHtmlParts.push(sanitized);
+        }
+        break;
+      }
+      case "heading": {
+        const { level, text } = block;
+        const changed = block.state === "changed";
+        if (level === 1) {
+          if (!hasDocumentTitle) {
+            documentTitle = text;
+            hasDocumentTitle = true;
+          }
+          bodyHtmlParts.push(
+            `<h1${changeAttrs(changed)}>${parseInlineMarkdown(text, docDir)}</h1>`,
+          );
+        } else if (level === 2) {
+          if (inAppendixDetails) {
+            bodyHtmlParts.push(`</div>\n</details>`);
+            inAppendixDetails = false;
+          }
+          const cleanTitle = text
+            .replace(/[*_`[\]]/g, "")
+            .replace(/\([^)]*\)/g, "")
+            .trim();
+          const slug = allocateSlug(text);
+          tocEntries.push({ title: cleanTitle || text, slug });
+
+          inAppendix = /\bappendix\b/i.test(text);
+          bodyHtmlParts.push(
+            `<h2 id="${slug}"${changeAttrs(changed)}>${parseInlineMarkdown(text, docDir)}</h2>`,
+          );
+        } else if (level === 3) {
+          const slug = allocateSlug(text);
+          if (inAppendix) {
+            if (inAppendixDetails) {
+              bodyHtmlParts.push(`</div>\n</details>`);
+            }
+            bodyHtmlParts.push(
+              `<details id="${slug}">\n  <summary${changeAttrs(changed)}>${
+                parseInlineMarkdown(text, docDir)
+              }</summary>\n  <div class="appendix-content">`,
+            );
+            inAppendixDetails = true;
+          } else {
+            bodyHtmlParts.push(
+              `<h3 id="${slug}"${changeAttrs(changed)}>${parseInlineMarkdown(text, docDir)}</h3>`,
+            );
+          }
+        } else if (level === 4) {
+          const slug = allocateSlug(text);
+          bodyHtmlParts.push(
+            `<h4 id="${slug}"${changeAttrs(changed)}>${parseInlineMarkdown(text, docDir)}</h4>`,
+          );
+        } else {
+          const hTag = `h${level}`;
+          bodyHtmlParts.push(
+            `<${hTag}${changeAttrs(changed)}>${parseInlineMarkdown(text, docDir)}</${hTag}>`,
+          );
+        }
+        break;
+      }
+      case "hr": {
+        if (block.state === "changed") {
+          changeCount++;
+          bodyHtmlParts.push(`<hr class="rev-changed" data-rev-change="true">`);
+        } else {
+          bodyHtmlParts.push(`<hr>`);
+        }
+        break;
+      }
+      case "table": {
+        const wrapperAttrs = block.isGate2PlanTable
+          ? ` class="table-wrapper" data-default-size="all"`
+          : ` class="table-wrapper"`;
+
+        let tableHtml = block.isGate2PlanTable
+          ? `<p class="plan-table-total">Total rows: ${block.rows.length}</p>\n`
+          : "";
+        tableHtml += `<div${wrapperAttrs}>\n<table>\n<thead>\n<tr>\n`;
+        for (const cell of block.headers) {
+          tableHtml += `  <th>${parseInlineMarkdown(cell, docDir)}</th>\n`;
+        }
+        tableHtml += `</tr>\n</thead>\n<tbody>\n`;
+        for (const rowEntry of block.rows) {
+          if (rowEntry.kind === "removed") {
+            changeCount++;
+            tableHtml +=
+              `<tr class="rev-removed-row" data-rev-change="true">\n  <td colspan="${block.headers.length}"><span class="rev-removed-badge">removed here</span></td>\n</tr>\n`;
+            continue;
+          }
+          const rowAttrs = rowEntry.state === "changed"
+            ? ` class="rev-changed" data-rev-change="true"`
+            : "";
+          if (rowEntry.state === "changed") changeCount++;
+          tableHtml += `<tr${rowAttrs}>\n`;
+          for (const cell of rowEntry.value) {
+            tableHtml += `  <td>${parseInlineMarkdown(cell, docDir)}</td>\n`;
+          }
+          tableHtml += `</tr>\n`;
+        }
+        tableHtml += `</tbody>\n</table>\n</div>`;
+        bodyHtmlParts.push(tableHtml);
+        break;
+      }
+      case "blockquote": {
+        const quoteContent = block.quoteLines
+          .map((l) => parseInlineMarkdown(l, docDir))
+          .join("<br>\n");
+        bodyHtmlParts.push(
+          `<blockquote${changeAttrs(block.state === "changed")}>${quoteContent}</blockquote>`,
+        );
+        break;
+      }
+      case "list": {
+        const tag = block.ordered ? "ol" : "ul";
+        let listHtml = `<${tag}>\n`;
+        for (const itemEntry of block.items) {
+          if (itemEntry.kind === "removed") {
+            changeCount++;
+            listHtml +=
+              `  <li class="rev-removed-item" data-rev-change="true"><span class="rev-removed-badge">removed here</span></li>\n`;
+            continue;
+          }
+          const itemAttrs = itemEntry.state === "changed"
+            ? ` class="rev-changed" data-rev-change="true"`
+            : "";
+          if (itemEntry.state === "changed") changeCount++;
+          listHtml += `  <li${itemAttrs}>${parseInlineMarkdown(itemEntry.value, docDir)}</li>\n`;
+        }
+        listHtml += `</${tag}>`;
+        bodyHtmlParts.push(listHtml);
+        break;
+      }
+      case "paragraph": {
+        bodyHtmlParts.push(
+          `<p${changeAttrs(block.state === "changed")}>${
+            parseInlineMarkdown(block.text, docDir)
+          }</p>`,
+        );
+        break;
+      }
     }
   }
 
@@ -726,6 +1139,24 @@ export function renderDesignDoc(
 
   if (!hasDocumentTitle) {
     bodyHtmlParts.unshift(`<h1>${escapeHtml(documentTitle)}</h1>`);
+  }
+
+  if (compareApproved) {
+    const dateLabel = formatApprovalDateLabel(options?.approvedAt);
+    const changeWord = changeCount === 1 ? "change" : "changes";
+    const summaryText = dateLabel
+      ? `${changeCount} ${changeWord} since you approved this on ${dateLabel}`
+      : `${changeCount} ${changeWord} since you approved this`;
+    const nextDisabled = changeCount === 0 ? " disabled" : "";
+    const bannerHtml =
+      `<div class="rev-banner" id="rev-banner" role="region" aria-label="Revision changes">\n` +
+      `  <span class="rev-banner-text">${escapeHtml(summaryText)}</span>\n` +
+      `  <div class="rev-banner-actions">\n` +
+      `    <button type="button" class="rev-banner-btn" id="rev-next-btn"${nextDisabled}>Next change</button>\n` +
+      `    <button type="button" class="rev-banner-btn" id="rev-toggle-btn" aria-pressed="false">Hide highlights</button>\n` +
+      `  </div>\n` +
+      `</div>`;
+    bodyHtmlParts.unshift(bannerHtml);
   }
 
   if (options?.otherDesignSweep && !options.isPlanPage) {
@@ -1046,6 +1477,117 @@ export function renderDesignDoc(
       margin: 2rem 0;
     }
 
+    .rev-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 10px 14px;
+      margin-bottom: 1.25rem;
+      background-color: rgba(250, 204, 21, 0.085);
+      border: 1px solid rgba(250, 204, 21, 0.35);
+      border-left: 2px solid rgba(250, 204, 21, 0.8);
+      border-radius: 6px;
+      font-size: 0.92rem;
+    }
+
+    .rev-banner-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .rev-banner-btn {
+      background: transparent;
+      border: 1px solid rgba(250, 204, 21, 0.45);
+      color: var(--text-color);
+      border-radius: 4px;
+      padding: 4px 12px;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+
+    .rev-banner-btn:hover:not(:disabled) {
+      background-color: rgba(250, 204, 21, 0.14);
+    }
+
+    .rev-banner-btn:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    table,
+    .table-wrapper {
+      background-color: transparent;
+    }
+
+    .rev-changed {
+      background-color: rgba(250, 204, 21, 0.085);
+      border-left: 2px solid rgba(250, 204, 21, 0.75);
+      padding-left: 10px;
+      border-radius: 2px;
+    }
+
+    li.rev-changed {
+      padding-left: 8px;
+    }
+
+    tr.rev-changed td {
+      background-color: rgba(250, 204, 21, 0.085);
+    }
+
+    tr.rev-changed td:first-child {
+      box-shadow: inset 2px 0 0 rgba(250, 204, 21, 0.75);
+    }
+
+    [data-rev-change].rev-active:not(tr) {
+      background-color: rgba(250, 204, 21, 0.15);
+      outline: 1px solid rgba(250, 204, 21, 0.65);
+    }
+
+    tr[data-rev-change].rev-active td {
+      background-color: rgba(250, 204, 21, 0.15);
+    }
+
+    .rev-removed {
+      margin: 0.45rem 0;
+    }
+
+    .rev-removed-item {
+      list-style: none;
+      margin: 0.35rem 0;
+    }
+
+    .rev-removed-badge {
+      display: inline-block;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: #facc15;
+      background-color: rgba(250, 204, 21, 0.09);
+      border: 1px solid rgba(250, 204, 21, 0.45);
+      border-left: 2px solid rgba(250, 204, 21, 0.85);
+      border-radius: 3px;
+      padding: 1px 8px;
+    }
+
+    body.highlights-hidden .rev-changed {
+      background-color: transparent;
+      border-left-color: transparent;
+      outline: none;
+    }
+
+    body.highlights-hidden tr.rev-changed td {
+      background-color: transparent;
+      box-shadow: none;
+    }
+
+    body.highlights-hidden .rev-removed,
+    body.highlights-hidden .rev-removed-item,
+    body.highlights-hidden .rev-removed-row {
+      display: none !important;
+    }
+
     /* MEDIA QUERIES AT THE END OF THE STYLESHEET */
     @media (min-width: 1080px) {
       .layout {
@@ -1147,13 +1689,22 @@ export function renderDesignDoc(
 
     (function() {
       var DEFAULT_PAGE_SIZE = 10;
+      var computeRowModel = ${computePagerRowModel.toString()};
       var computePagination = ${computeTablePagination.toString()};
       var tables = document.querySelectorAll(".table-wrapper > table");
       for (var t = 0; t < tables.length; t++) {
         (function(table) {
           var tbody = table.querySelector("tbody");
           if (!tbody) return;
-          var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
+          var allRows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
+          // "removed here" marker rows are not table rows: only data rows are counted and paged.
+          var rowModel = computeRowModel(allRows.map(function(r) {
+            return r.classList.contains("rev-removed-row");
+          }));
+          var rows = rowModel.dataRowIndexes.map(function(i) { return allRows[i]; });
+          var markers = rowModel.markers.map(function(m) {
+            return { tr: allRows[m.rowIndex], anchor: m.anchor };
+          });
           if (rows.length <= DEFAULT_PAGE_SIZE) return;
 
           var wrapper = table.closest(".table-wrapper");
@@ -1220,6 +1771,16 @@ export function renderDesignDoc(
               }
             }
 
+            for (var k = 0; k < markers.length; k++) {
+              var markerVisible = markers[k].anchor >= state.startIdx && markers[k].anchor < state.endIdx;
+              markers[k].tr.style.display = markerVisible ? "" : "none";
+              if (markerVisible) {
+                markers[k].tr.classList.remove("table-pager-hidden-row");
+              } else {
+                markers[k].tr.classList.add("table-pager-hidden-row");
+              }
+            }
+
             status.textContent = state.statusText;
             prevBtn.disabled = state.prevDisabled;
             nextBtn.disabled = state.nextDisabled;
@@ -1245,6 +1806,20 @@ export function renderDesignDoc(
             }
           });
 
+          table._revealRow = function(tr) {
+            var idx = rows.indexOf(tr);
+            if (idx === -1) {
+              for (var m = 0; m < markers.length; m++) {
+                if (markers[m].tr === tr) idx = markers[m].anchor;
+              }
+            }
+            if (idx === -1) return;
+            if (currentSize !== "all") {
+              currentPage = Math.floor(idx / currentSize) + 1;
+              render();
+            }
+          };
+
           render();
         })(tables[t]);
       }
@@ -1267,6 +1842,48 @@ export function renderDesignDoc(
       }
       openDetailsForHash();
       window.addEventListener("hashchange", openDetailsForHash);
+    })();
+
+    (function() {
+      var banner = document.getElementById("rev-banner");
+      if (!banner) return;
+      var nextBtn = document.getElementById("rev-next-btn");
+      var toggleBtn = document.getElementById("rev-toggle-btn");
+      var computeNext = ${computeNextChangeIndex.toString()};
+      var changes = Array.prototype.slice.call(document.querySelectorAll("[data-rev-change='true']"));
+      var currentIdx = -1;
+
+      if (nextBtn) {
+        nextBtn.addEventListener("click", function() {
+          if (changes.length === 0 || document.body.classList.contains("highlights-hidden")) return;
+          if (currentIdx >= 0 && currentIdx < changes.length) {
+            changes[currentIdx].classList.remove("rev-active");
+          }
+          currentIdx = computeNext(currentIdx, changes.length);
+          if (currentIdx < 0) return;
+          var target = changes[currentIdx];
+          var det = target.closest("details");
+          if (det) det.open = true;
+          var tr = target.tagName === "TR" ? target : target.closest("tr");
+          if (tr) {
+            var tbl = tr.closest("table");
+            if (tbl && typeof tbl._revealRow === "function") tbl._revealRow(tr);
+          }
+          target.classList.add("rev-active");
+          target.scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+      }
+
+      if (toggleBtn) {
+        toggleBtn.addEventListener("click", function() {
+          var hidden = document.body.classList.toggle("highlights-hidden");
+          toggleBtn.textContent = hidden ? "Show highlights" : "Hide highlights";
+          toggleBtn.setAttribute("aria-pressed", hidden ? "true" : "false");
+          if (nextBtn) {
+            nextBtn.disabled = hidden || changes.length === 0;
+          }
+        });
+      }
     })();
   </script>
 </body>
@@ -1340,6 +1957,42 @@ export function computeTablePagination(
     prevDisabled,
     nextDisabled,
   };
+}
+
+export interface PagerRowModel {
+  /** Positions, among all tbody rows, of the real data rows. */
+  dataRowIndexes: number[];
+  /**
+   * Each "removed here" marker row: its position among all tbody rows and the position, among
+   * the data rows, of the row it stays with (the next data row, or the last one when none follows).
+   */
+  markers: Array<{ rowIndex: number; anchor: number }>;
+}
+
+/**
+ * Splits a table body's rows into data rows and "removed here" marker rows. The pager counts and
+ * pages only the data rows, and each marker follows its anchor row onto whichever page shows it.
+ */
+export function computePagerRowModel(isMarker: readonly boolean[]): PagerRowModel {
+  const dataRowIndexes: number[] = [];
+  const markers: Array<{ rowIndex: number; anchor: number }> = [];
+  let pending: number[] = [];
+  for (let i = 0; i < isMarker.length; i++) {
+    if (isMarker[i]) {
+      pending.push(i);
+      continue;
+    }
+    dataRowIndexes.push(i);
+    for (let p = 0; p < pending.length; p++) {
+      markers.push({ rowIndex: pending[p], anchor: dataRowIndexes.length - 1 });
+    }
+    pending = [];
+  }
+  const lastAnchor = Math.max(dataRowIndexes.length - 1, 0);
+  for (let p = 0; p < pending.length; p++) {
+    markers.push({ rowIndex: pending[p], anchor: lastAnchor });
+  }
+  return { dataRowIndexes, markers };
 }
 
 export function renderDesignDocFile(

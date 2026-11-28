@@ -42,6 +42,7 @@ import {
   loadGate1Record,
   openGate1Record,
   recordSweepNote,
+  syncApprovedCopyOnMatch,
 } from "../src/design-issue/gate1_record.ts";
 import {
   extractSearchableLines,
@@ -2446,6 +2447,124 @@ Deno.test("runMatchDesignCli manages temporary approved copy with --state-dir an
     );
     assertEquals(codeFail, 2);
     assertStringIncludes(errors.join("\n"), "could not tell");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("runGate1 hands temporary approved copy to renderer and preserves approval date across Gate 1 re-runs", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-approved-copy-render-" });
+  const docsRoot = path.join(tempDir, "dropbox");
+  const themeDir = path.join(docsRoot, "Token_Savings");
+  const stateDir = path.join(tempDir, "state");
+  await Deno.mkdir(themeDir, { recursive: true });
+  await Deno.mkdir(stateDir, { recursive: true });
+
+  try {
+    const docPath = path.join(themeDir, "sample-highlight-design.md");
+    const approvedDoc = `# Sample Highlight Design
+
+## Revision History
+
+| Version | Date | Epic / Issue | Why | Added / Modified Requirements |
+|---|---|---|---|---|
+| 1.0.0 | 2026-11-20 | [sample issue](https://github.com/WebJamApps/web-jam-tools/issues/1) | Initial approved baseline. | — |
+
+## Requirements
+
+Original requirement text.
+
+## Both surfaces
+
+Identical on Claude Code, agy, and Codex.
+
+## Load-bearing premises
+
+| Premise | Proof | Proved |
+|---|---|---|
+| Base fact | Checked locally | ${TODAY} |
+`;
+
+    await Deno.writeTextFile(docPath, approvedDoc);
+    await openGate1Record(docPath, approvedDoc, { stateDir });
+    await approveGate1Record(docPath, "i approve", { stateDir });
+    await syncApprovedCopyOnMatch(docPath, undefined, { stateDir });
+
+    const revisedDoc = `# Sample Highlight Design
+
+## Revision History
+
+| Version | Date | Epic / Issue | Why | Added / Modified Requirements |
+|---|---|---|---|---|
+| 1.0.0 | 2026-11-20 | [sample issue](https://github.com/WebJamApps/web-jam-tools/issues/1) | Initial approved baseline. | — |
+| 1.1.0 | 2026-11-21 | [sample issue](https://github.com/WebJamApps/web-jam-tools/issues/1) | Clarified requirement wording. | Modified: [Requirements](#requirements) |
+
+## Requirements
+
+Updated requirement text.
+
+## Both surfaces
+
+Identical on Claude Code, agy, and Codex.
+
+## Load-bearing premises
+
+| Premise | Proof | Proved |
+|---|---|---|
+| Base fact | Checked locally | ${TODAY} |
+`;
+    await Deno.writeTextFile(docPath, revisedDoc);
+
+    // First Gate 1 presentation
+    const first = await runGate1({
+      docPath,
+      dropboxDir: docsRoot,
+      stateDir,
+      noOpen: true,
+      nowImpl: () => new Date(2026, 10, 21, 12, 0, 0),
+      screenshotImpl: () => Promise.resolve({ sizeBytes: 1234 }),
+      verifyCitationsImpl: (_c, d) => Promise.resolve({ valid: true, violations: [], docPath: d }),
+    });
+    const firstHtml = await Deno.readTextFile(first.htmlPath);
+    assertStringIncludes(firstHtml, 'id="rev-banner"');
+    assertStringIncludes(firstHtml, "2 changes since you approved this on ");
+    assertStringIncludes(
+      firstHtml,
+      '<p class="rev-changed" data-rev-change="true">Updated requirement text.</p>',
+    );
+
+    // Second Gate 1 presentation before approval still keeps the approval date via premiseRowsStoredAt
+    const second = await runGate1({
+      docPath,
+      dropboxDir: docsRoot,
+      stateDir,
+      noOpen: true,
+      nowImpl: () => new Date(2026, 10, 21, 13, 0, 0),
+      screenshotImpl: () => Promise.resolve({ sizeBytes: 1234 }),
+      verifyCitationsImpl: (_c, d) => Promise.resolve({ valid: true, violations: [], docPath: d }),
+    });
+    const secondHtml = await Deno.readTextFile(second.htmlPath);
+    assertStringIncludes(secondHtml, "2 changes since you approved this on ");
+
+    // Corrupt/unreadable approved copy path (e.g. directory) fails closed
+    const copyPath = getGate1ApprovedCopyPath(docPath, stateDir);
+    await Deno.remove(copyPath);
+    await Deno.mkdir(copyPath);
+    await assertRejects(
+      () =>
+        runGate1({
+          docPath,
+          dropboxDir: docsRoot,
+          stateDir,
+          noOpen: true,
+          nowImpl: () => new Date(2026, 10, 21, 13, 0, 0),
+          screenshotImpl: () => Promise.resolve({ sizeBytes: 1234 }),
+          verifyCitationsImpl: (_c, d) =>
+            Promise.resolve({ valid: true, violations: [], docPath: d }),
+        }),
+      Error,
+      "Cannot read temporary approved copy",
+    );
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }

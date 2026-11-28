@@ -9,6 +9,8 @@
 import { assert, assertEquals, assertFalse, assertMatch, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
 import {
+  computeNextChangeIndex,
+  computePagerRowModel,
   computeTablePagination,
   parseInlineMarkdown,
   renderDesignDoc,
@@ -1441,4 +1443,318 @@ Deno.test("Images on the rendered page: renders local images beside doc and leav
   } finally {
     Deno.removeSync(rootDir, { recursive: true });
   }
+});
+
+Deno.test("Revision highlights: highlights changed heading, paragraph, list item, table row, deletion markers, and top banner", () => {
+  const approvedMd = `# Design Doc
+
+## Revision History
+
+| Version | Date | Why |
+|---|---|---|
+| 1.0.0 | 2026-10-01 | Initial version |
+
+## Overview
+
+Unchanged intro paragraph.
+
+Paragraph that will change.
+
+Paragraph that will be deleted.
+
+- Keep bullet
+- Edit bullet
+
+## Details
+
+| Item | State |
+|---|---|
+| Row A | unchanged |
+| Row B | deleted |
+`;
+
+  const revisedMd = `# Design Doc
+
+## Revision History
+
+| Version | Date | Why |
+|---|---|---|
+| 1.0.0 | 2026-10-01 | Initial version |
+| 1.1.0 | 2026-11-26 | Updated overview |
+
+## Overview Revised
+
+Unchanged intro paragraph.
+
+Paragraph that changed in revision.
+
+- Keep bullet
+- Edited bullet
+- Added bullet
+
+## Details
+
+| Item | State |
+|---|---|
+| Row A | unchanged |
+| Row C | added |
+`;
+
+  const html = renderDesignDoc(revisedMd, "Design Doc", {
+    approvedMarkdown: approvedMd,
+    approvedAt: "2026-10-01T12:00:00.000Z",
+  });
+  const main = html.split("<main>")[1]?.split("</main>")[0] ?? "";
+
+  // Subtle dark-mode styling and transparent table containers
+  assertStringIncludes(html, "rgba(250, 204, 21, 0.085)");
+  assertStringIncludes(html, "border-left: 2px solid rgba(250, 204, 21, 0.75);");
+  assertStringIncludes(html, "box-shadow: inset 2px 0 0 rgba(250, 204, 21, 0.75);");
+  assertStringIncludes(html, "background-color: transparent;");
+  assertStringIncludes(html, "body.highlights-hidden");
+
+  // Changed heading, paragraph, list items, table rows, and deletion marker
+  assertStringIncludes(
+    main,
+    '<h2 id="overview-revised" class="rev-changed" data-rev-change="true">Overview Revised</h2>',
+  );
+  assertStringIncludes(main, "<p>Unchanged intro paragraph.</p>");
+  assertStringIncludes(
+    main,
+    '<p class="rev-changed" data-rev-change="true">Paragraph that changed in revision.</p>',
+  );
+  assertStringIncludes(
+    main,
+    '<div class="rev-removed" data-rev-change="true"><span class="rev-removed-badge">removed here</span></div>',
+  );
+  assertStringIncludes(main, "  <li>Keep bullet</li>");
+  assertStringIncludes(
+    main,
+    '  <li class="rev-changed" data-rev-change="true">Edited bullet</li>',
+  );
+  assertStringIncludes(
+    main,
+    '  <li class="rev-changed" data-rev-change="true">Added bullet</li>',
+  );
+
+  // Revision History: only the new row (1.1.0) is highlighted; old row (1.0.0) stays plain
+  assertStringIncludes(
+    main,
+    '<tr class="rev-changed" data-rev-change="true">\n  <td>1.1.0</td>',
+  );
+  assertStringIncludes(main, "<tr>\n  <td>1.0.0</td>");
+
+  // Details table: Row C is highlighted; Row A stays plain
+  assertStringIncludes(main, "<tr>\n  <td>Row A</td>");
+  assertStringIncludes(
+    main,
+    '<tr class="rev-changed" data-rev-change="true">\n  <td>Row C</td>',
+  );
+
+  // Top banner reports exact change count + date + Next change & Hide highlights buttons
+  // Changes: 1.1.0 row (1) + Overview Revised (2) + changed paragraph (3) + removed paragraph (4) + Edited bullet (5) + Added bullet (6) + Row C (7) = 7
+  assertStringIncludes(main, "7 changes since you approved this on 2026-10-01");
+  assertStringIncludes(main, 'id="rev-next-btn">Next change</button>');
+  assertStringIncludes(main, 'id="rev-toggle-btn" aria-pressed="false">Hide highlights</button>');
+});
+
+Deno.test("Revision highlights: deletion markers inside lists and tables and singular/zero banner states", () => {
+  const approvedListAndTable = `# Test
+
+## Items
+
+- First
+- Removed item
+- Last
+
+| Col |
+|---|
+| Keep |
+| Drop |
+`;
+  const revisedListAndTable = `# Test
+
+## Items
+
+- First
+- Last
+
+| Col |
+|---|
+| Keep |
+`;
+  const html = renderDesignDoc(revisedListAndTable, "Test", {
+    approvedMarkdown: approvedListAndTable,
+    approvedAt: "2026-11-20",
+  });
+  const main = html.split("<main>")[1]?.split("</main>")[0] ?? "";
+  assertStringIncludes(
+    main,
+    '<li class="rev-removed-item" data-rev-change="true"><span class="rev-removed-badge">removed here</span></li>',
+  );
+  assertStringIncludes(
+    main,
+    '<tr class="rev-removed-row" data-rev-change="true">\n  <td colspan="1"><span class="rev-removed-badge">removed here</span></td>\n</tr>',
+  );
+  assertStringIncludes(main, "2 changes since you approved this on 2026-11-20");
+
+  // Single change uses singular "1 change"
+  const singleHtml = renderDesignDoc("# Test\n\nNew text.\n", "Test", {
+    approvedMarkdown: "# Test\n\nOld text.\n",
+    approvedAt: "2026-11-20",
+  });
+  assertStringIncludes(singleHtml, "1 change since you approved this on 2026-11-20");
+
+  // Identical approved copy shows 0 changes with Next change button disabled
+  const zeroHtml = renderDesignDoc("# Test\n\nSame text.\n", "Test", {
+    approvedMarkdown: "# Test\n\nSame text.\n",
+    approvedAt: "2026-11-20",
+  });
+  assertStringIncludes(zeroHtml, "0 changes since you approved this on 2026-11-20");
+  assertStringIncludes(zeroHtml, 'id="rev-next-btn" disabled>Next change</button>');
+});
+
+Deno.test("Revision highlights: omitted approved copy and Gate 2 plan pages never render highlights or banner", () => {
+  const md = `# Plan Page
+
+## Section
+
+Updated paragraph.
+`;
+  const withoutCopy = renderDesignDoc(md);
+  const withoutMain = withoutCopy.split("<main>")[1]?.split("</main>")[0] ?? "";
+  assertFalse(withoutMain.includes('id="rev-banner"'));
+  assertFalse(withoutMain.includes("rev-changed"));
+  assertFalse(withoutMain.includes("data-rev-change"));
+  assertFalse(withoutMain.includes("since you approved this"));
+
+  const planPageWithCopy = renderDesignDoc(md, "Plan Page", {
+    isPlanPage: true,
+    approvedMarkdown: "# Plan Page\n\n## Section\n\nOld paragraph.\n",
+    approvedAt: "2026-11-20",
+  });
+  const planMain = planPageWithCopy.split("<main>")[1]?.split("</main>")[0] ?? "";
+  assertFalse(planMain.includes('id="rev-banner"'));
+  assertFalse(planMain.includes("rev-changed"));
+  assertFalse(planMain.includes("data-rev-change"));
+  assertFalse(planMain.includes("since you approved this"));
+});
+
+Deno.test("Revision highlights: computeNextChangeIndex advances and wraps cleanly in exported and embedded script", () => {
+  assertEquals(computeNextChangeIndex(-1, 3), 0);
+  assertEquals(computeNextChangeIndex(0, 3), 1);
+  assertEquals(computeNextChangeIndex(1, 3), 2);
+  assertEquals(computeNextChangeIndex(2, 3), 0);
+  assertEquals(computeNextChangeIndex(0, 0), -1);
+
+  const html = renderDesignDoc("# Doc\n\nAfter.\n", "Doc", {
+    approvedMarkdown: "# Doc\n\nBefore.\n",
+    approvedAt: "2026-11-20",
+  });
+  const embedded = html.match(/var computeNext = ([\s\S]*?);\s*var changes =/);
+  assert(embedded, "Generated HTML must include computeNext helper");
+  const computeEmbedded = new Function(
+    `return (${embedded[1]});`,
+  )() as typeof computeNextChangeIndex;
+  for (const [idx, total] of [[-1, 4], [0, 4], [3, 4], [0, 0]] as const) {
+    assertEquals(computeEmbedded(idx, total), computeNextChangeIndex(idx, total));
+  }
+});
+
+Deno.test("Revision highlights: a deleted block replaced by a block of another kind still gets a removed marker", () => {
+  const removedMarker =
+    '<div class="rev-removed" data-rev-change="true"><span class="rev-removed-badge">removed here</span></div>';
+  const count = (html: string) => html.split(removedMarker).length - 1;
+  const render = (approvedMarkdown: string, revised: string) =>
+    renderDesignDoc(revised, "Test", { approvedMarkdown, approvedAt: "2026-11-20" });
+
+  // Approved list replaced by a paragraph: marker, then the highlighted paragraph.
+  const listToParagraph = render(
+    "# Test\n\n## Items\n\n- old a\n- old b\n",
+    "# Test\n\n## Items\n\nBrand new paragraph.\n",
+  );
+  const listMain = listToParagraph.split("<main>")[1]?.split("</main>")[0] ?? "";
+  assertEquals(count(listMain), 1);
+  assertStringIncludes(
+    listMain,
+    '<p class="rev-changed" data-rev-change="true">Brand new paragraph.</p>',
+  );
+  assertStringIncludes(listMain, "2 changes since you approved this on 2026-11-20");
+  assert(
+    listMain.indexOf(removedMarker) <
+      listMain.indexOf('<p class="rev-changed" data-rev-change="true">Brand new paragraph.</p>'),
+    "marker stands where the deleted list was, before its replacement",
+  );
+
+  // Paragraph replaced by a table, and a code block replaced by a paragraph, behave the same.
+  const paragraphToTable = render(
+    "# Test\n\n## Items\n\nOld paragraph text.\n",
+    "# Test\n\n## Items\n\n| A |\n|---|\n| 1 |\n",
+  );
+  assertEquals(count(paragraphToTable.split("<main>")[1] ?? ""), 1);
+  const codeToParagraph = render(
+    "# Test\n\n## Items\n\n```\nold code\n```\n",
+    "# Test\n\n## Items\n\nReplacement paragraph.\n",
+  );
+  assertEquals(count(codeToParagraph.split("<main>")[1] ?? ""), 1);
+
+  // Two paragraphs replaced by one still renders exactly one marker (unchanged behaviour).
+  const twoToOne = render(
+    "# Test\n\n## Items\n\nFirst old paragraph.\n\nSecond old paragraph.\n",
+    "# Test\n\n## Items\n\nOne new paragraph.\n",
+  );
+  assertEquals(count(twoToOne.split("<main>")[1] ?? ""), 1);
+});
+
+Deno.test("computePagerRowModel: marker rows are never counted and follow their anchor data row", () => {
+  assertEquals(computePagerRowModel([]), { dataRowIndexes: [], markers: [] });
+  assertEquals(computePagerRowModel([false, false]), { dataRowIndexes: [0, 1], markers: [] });
+  assertEquals(computePagerRowModel([false, true, false, true, true]), {
+    dataRowIndexes: [0, 2],
+    markers: [
+      { rowIndex: 1, anchor: 1 },
+      { rowIndex: 3, anchor: 1 },
+      { rowIndex: 4, anchor: 1 },
+    ],
+  });
+  // A leading marker stays with the first data row; only markers means nothing to page.
+  assertEquals(computePagerRowModel([true, false]), {
+    dataRowIndexes: [1],
+    markers: [{ rowIndex: 0, anchor: 0 }],
+  });
+  assertEquals(computePagerRowModel([true]), {
+    dataRowIndexes: [],
+    markers: [{ rowIndex: 0, anchor: 0 }],
+  });
+});
+
+Deno.test("Revision highlights: removed-here table rows stay out of the pager's row count", () => {
+  const rows = (n: number) => Array.from({ length: n }, (_, i) => `| Row ${i + 1} |`).join("\n");
+  const approved = `# Test\n\n## Rows\n\n| Col |\n|---|\n${rows(11)}\n`;
+  const revised = `# Test\n\n## Rows\n\n| Col |\n|---|\n${rows(10)}\n`;
+  const html = renderDesignDoc(revised, "Test", {
+    approvedMarkdown: approved,
+    approvedAt: "2026-11-20",
+  });
+  const tbody = html.split("<tbody>")[1]?.split("</tbody>")[0] ?? "";
+
+  // The marker is a real <tr>, so the table holds 11 <tr>s but only 10 data rows.
+  assertEquals(tbody.split("<tr").length - 1, 11);
+  assertEquals(tbody.split('class="rev-removed-row"').length - 1, 1);
+
+  // The page script derives its row list from the model, so the marker is not a counted row.
+  const embedded = html.match(/var computeRowModel = ([\s\S]*?);\s*var computePagination =/);
+  assert(embedded, "Generated HTML must include the computeRowModel helper");
+  const computeEmbedded = new Function(
+    `return (${embedded[1]});`,
+  )() as typeof computePagerRowModel;
+  // Flags come from the rendered rows. Tables render newest first, so the deleted 11th row's
+  // marker is the first <tr> and stays with the first data row.
+  const flags = tbody.split("<tr").slice(1).map((tr) => tr.startsWith(' class="rev-removed-row"'));
+  assertEquals(computeEmbedded(flags), computePagerRowModel(flags));
+  assertEquals(computePagerRowModel(flags).dataRowIndexes.length, 10);
+  assertEquals(computePagerRowModel(flags).markers, [{ rowIndex: 0, anchor: 0 }]);
+  assertFalse(
+    html.includes('var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));'),
+  );
 });
