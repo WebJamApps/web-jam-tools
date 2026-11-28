@@ -36,8 +36,11 @@ All accounting files reside in `~/Dropbox/web-jam-llms/financial/books/`:
 - `importers.toml` — the import profile for each account, read by `rledger extract`
 - `inbox/` — scanned receipts waiting to be filed
 - `receipts/<year>/` — filed receipt PDFs organized by year (e.g. `receipts/2026/2026-11-10-penn-station.pdf`)
-- `statements/<year>/` — downloaded bank and card statement files (e.g. `statements/2026/`)
-- `sweep/` — personal account statements placed temporarily during quarterly sweeps
+- `statements/<year>/` — the download cleaner's clean bank and card CSVs, mirroring each
+  download's subfolder (e.g. `statements/2026/checking/Download.csv`), and Wave's one-time 2026
+  export
+- `sweep/` — personal account statements placed temporarily during quarterly sweeps, mirrored the
+  same way
 - `closed/<year>-<month>/` — the dated copy of the books and the month's reports, saved by the close
 - `reports/<year>/` — year-to-date and annual balance sheets and profit & loss reports
 - `tax/<year>/` — quarterly penalty worksheets and the annual tax package
@@ -131,10 +134,19 @@ Check the year's books with `deno task accounting:verify`, which runs `rledger c
 ## Monthly Routine: Bank Import & Close
 
 1. **Clean downloads (Josh, in his own terminal)**: Josh gets each business account's statement
-   file and runs `deno task accounting:clean-download <file>` on it himself, as "Each month" and
-   "What never reaches an agent" in the design set out. The clean CSV
+   file and runs `deno task accounting:clean-download <file-or-folder>` on it himself, as "Each
+   month" and "What never reaches an agent" in the design set out. The clean CSV
    (`date,description,amount,id`) lands in `statements/<year>/`; an agent never opens a download as
    it was produced. An account with no downloadable file is typed in by Josh.
+   - Given a folder anywhere under `~/Dropbox/financial-private/` (for example `checking/` or
+     `credit-card/`), the cleaner cleans every `.csv`, `.ofx`, `.qfx` and `.qbo` file in it, each on
+     its own, and ends with `Summary: cleaned <N>, refused <M>`. It exits 0 only when none was
+     refused.
+   - Each clean file mirrors its download's subfolder: `checking/Download.csv` becomes
+     `statements/<year>/checking/Download.csv`, so same-named downloads never collide. Import it
+     by that path.
+   - The design's "The download cleaner" bullet holds the literal cases, including what a folder
+     run skips and refuses.
 2. **Import**: Import each clean file into the year's books with its account's profile from
    `importers.toml`:
    ```sh
@@ -174,6 +186,20 @@ Check the year's books with `deno task accounting:verify`, which runs `rledger c
    - Saves a dated copy of the books, a balance sheet and the month's income statement under
      `closed/<year>-<month>/`, then writes the books. A month already closed is refused.
    - From then on, any edit that changes that month's totals fails `rledger check`.
+
+## The Move from Wave
+
+The 2026 books are rebuilt once, as "The move from Wave" in the design sets out:
+
+1. The checking and credit card downloads for 2026 sit in their own folders under
+   `~/Dropbox/financial-private/`, such as `checking/` and `credit-card/`. Josh cleans each folder
+   with the download cleaner in his own terminal.
+2. Wave's 2026 export holds no Social Security, bank account or card numbers, so it does not go
+   through the cleaner. Josh saves it directly into `statements/2026/`, where its categories stay
+   intact for comparison.
+3. The agent builds the year from the clean bank and card files and compares the result with
+   Wave's export, categories included. Each mismatch, and each line it cannot place in a category,
+   goes to Josh for a ruling. Wave itself is left untouched as the old record.
 
 ## Tasks Reference
 
